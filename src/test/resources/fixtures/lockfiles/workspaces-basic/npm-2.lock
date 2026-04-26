@@ -1,0 +1,61 @@
+{
+  "name": "case-workspaces-basic",
+  "version": "0.0.0",
+  "lockfileVersion": 2,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "case-workspaces-basic",
+      "version": "0.0.0",
+      "workspaces": [
+        "packages/*"
+      ]
+    },
+    "node_modules/@case-ws/a": {
+      "resolved": "packages/a",
+      "link": true
+    },
+    "node_modules/@case-ws/b": {
+      "resolved": "packages/b",
+      "link": true
+    },
+    "node_modules/ms": {
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
+    },
+    "packages/a": {
+      "name": "@case-ws/a",
+      "version": "0.0.0",
+      "dependencies": {
+        "ms": "2.1.3"
+      }
+    },
+    "packages/b": {
+      "name": "@case-ws/b",
+      "version": "0.0.0",
+      "dependencies": {
+        "ms": "2.1.3"
+      }
+    }
+  },
+  "dependencies": {
+    "@case-ws/a": {
+      "version": "file:packages/a",
+      "requires": {
+        "ms": "2.1.3"
+      }
+    },
+    "@case-ws/b": {
+      "version": "file:packages/b",
+      "requires": {
+        "ms": "2.1.3"
+      }
+    },
+    "ms": {
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
+    }
+  }
+}
