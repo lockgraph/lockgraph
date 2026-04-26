@@ -1,0 +1,9 @@
+{
+  "name": "case-simple",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "ms": "2.1.3",
+    "lodash": "4.17.21"
+  }
+}

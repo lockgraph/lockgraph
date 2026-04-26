@@ -1,0 +1,166 @@
+[
+  {
+    "case": "peers-basic",
+    "adapter": "npm-1",
+    "ms": 1628,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "npm-2",
+    "ms": 284,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "npm-3",
+    "ms": 332,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "yarn-classic",
+    "ms": 3421,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "yarn-berry-v4",
+    "ms": 1492,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "pnpm-v5",
+    "ms": 1227,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "pnpm-v6",
+    "ms": 1270,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "pnpm-v9",
+    "ms": 1077,
+    "ok": true
+  },
+  {
+    "case": "peers-basic",
+    "adapter": "bun-text",
+    "ms": 180016,
+    "ok": false,
+    "error": "spawnSync /Users/antongolub/projects/gh/antongolub/lockfile/node_modules/bun/bin/bun.exe ETIMEDOUT",
+    "stderr": "Resolving dependencies\n"
+  },
+  {
+    "case": "simple",
+    "adapter": "npm-1",
+    "ms": 683,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "npm-2",
+    "ms": 243,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "npm-3",
+    "ms": 276,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "yarn-classic",
+    "ms": 1085,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "yarn-berry-v4",
+    "ms": 907,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "pnpm-v5",
+    "ms": 1206,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "pnpm-v6",
+    "ms": 285,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "pnpm-v9",
+    "ms": 189,
+    "ok": true
+  },
+  {
+    "case": "simple",
+    "adapter": "bun-text",
+    "ms": 14,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "npm-1",
+    "ms": 172,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "npm-2",
+    "ms": 567,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "npm-3",
+    "ms": 204,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "yarn-classic",
+    "ms": 497,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "yarn-berry-v4",
+    "ms": 556,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "pnpm-v5",
+    "ms": 1222,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "pnpm-v6",
+    "ms": 258,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "pnpm-v9",
+    "ms": 191,
+    "ok": true
+  },
+  {
+    "case": "workspaces-basic",
+    "adapter": "bun-text",
+    "ms": 11,
+    "ok": true
+  }
+]
