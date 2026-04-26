@@ -1,80 +1,31 @@
 {
   "name": "@antongolub/lockfile",
-  "version": "0.0.0-snapshot.42",
-  "publishConfig": {
-    "access": "public"
-  },
-  "description": "Read and write lockfiles with reasonable losses",
-  "bin": {
-    "lockf": "target/esm/cli.mjs",
-    "lockfile": "target/esm/cli.mjs"
-  },
-  "main": "./target/cjs/index.cjs",
-  "exports": {
-    ".": {
-      "types": "./target/dts/index.d.ts",
-      "require": "./target/cjs/index.cjs",
-      "import": "./target/esm/index.mjs",
-      "default": "./target/esm/index.mjs"
-    },
-    "./cli": {
-      "types": "./target/dts/cli.d.ts",
-      "require": "./target/cjs/cli.cjs",
-      "import": "./target/esm/cli.mjs",
-      "default": "./target/esm/cli.mjs"
-    },
-    "./package.json": "./package.json"
-  },
-  "module": "target/esm/index.mjs",
-  "types": "target/dts/index.d.ts",
-  "dependencies": {
-    "@semrel-extra/topo": "^1.14.0",
-    "fast-glob": "^3.3.1",
-    "js-yaml": "^4.1.0",
-    "minimist": "^1.2.8",
-    "semver": "^7.5.4"
+  "version": "0.0.0",
+  "private": true,
+  "description": "Universal lockfile model and converter for npm, yarn, pnpm, bun",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.8",
-    "@types/minimist": "^1.2.4",
-    "@types/node": "^20.8.10",
-    "@types/semver": "^7.5.4",
-    "c8": "^8.0.1",
-    "concurrently": "^8.2.2",
-    "esbuild": "^0.19.5",
-    "esbuild-node-externals": "^1.9.0",
-    "tsm": "^2.3.0",
-    "typescript": "^5.2.2",
-    "uvu": "^0.5.6"
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
   },
-  "scripts": {
-    "build": "concurrently 'npm:build:*'",
-    "build:bin": "node ./src/scripts/build.mjs --entry='./src/main/ts/cli.ts' --bundle=none",
-    "build:vendor": "node ./src/scripts/build.mjs --entry='./src/main/ts/vendor.ts' --bundle=all --format='cjs,esm'",
-    "build:index": "node ./src/scripts/build.mjs --entry='./src/main/ts/index.ts' --bundle=src --format='cjs,esm' --external='./src/main/ts/vendor,node:*' --map='../../src/main/ts/vendor:./vendor,../src/main/ts/vendor:./vendor'",
-    "build:dts": "tsc --emitDeclarationOnly --skipLibCheck --outDir target/dts",
-    "test": "yarn test:unit",
-    "test:unit": "c8 -r lcov -r text -o target/coverage -x src/scripts -x src/test uvu -r tsm -i helpers 'src/test/ts/' && uvu -i helpers 'src/test/js/'",
-    "test:debug": "DEBUG=true TEMP=temp yarn run test:unit",
-    "publish:snap": "yarn build && npm publish --no-git-tag-version --tag snapshot"
-  },
-  "files": [
-    "target/cjs",
-    "target/esm",
-    "target/dts"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/antongolub/lockfile.git"
   },
   "keywords": [
-    "lock",
     "lockfile",
     "yarn",
-    "yarnlock",
-    "yarn.lock",
-    "package-lock",
-    "npm"
+    "npm",
+    "pnpm",
+    "bun",
+    "audit",
+    "convert"
   ],
   "author": "Anton Golub <antongolub@antongolub.com>",
   "license": "MIT",
