@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { version } from './index.ts'
+import { version } from '../../main/ts/index.ts'
 
 describe('smoke', () => {
   it('toolchain works', () => {
