@@ -12,6 +12,7 @@ const HERE          = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT  = path.resolve(HERE, '../../../..')
 const TEMPLATES_DIR = path.join(HERE, 'templates')
 const LOCKFILES_DIR = path.join(HERE, 'lockfiles')
+const YARN_BIN_DIR  = path.resolve(PROJECT_ROOT, '.cache/yarn-bin')
 
 // (adapter-id) → canonical writer config. Mirrors spec/08-test-bench.md.
 const ADAPTERS = [
@@ -25,6 +26,19 @@ const ADAPTERS = [
     args: ['install', '--no-progress', '--ignore-scripts'], lockfile: 'yarn.lock' },
   { id: 'yarn-berry-v4', alias: 'pm-yarn-2',  bin: 'yarn', runtime: 'node',
     args: ['install'], lockfile: 'yarn.lock',
+    setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },
+  // ADR-0005 / C2: yarn 3+/4+ producers via downloaded .cjs (gitignored .cache/yarn-bin/).
+  { id: 'yarn-berry-v5', yarnBundle: '3.1.0',  runtime: 'yarn-bundle',
+    args: ['install'], lockfile: 'yarn.lock',
+    setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },
+  { id: 'yarn-berry-v6', yarnBundle: '3.6.4',  runtime: 'yarn-bundle',
+    args: ['install'], lockfile: 'yarn.lock',
+    setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },
+  { id: 'yarn-berry-v8', yarnBundle: '4.13.0', runtime: 'yarn-bundle',
+    args: ['install', '--mode=update-lockfile'], lockfile: 'yarn.lock',
+    setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },
+  { id: 'yarn-berry-v9', yarnBundle: '4.14.1', runtime: 'yarn-bundle',
+    args: ['install', '--mode=update-lockfile'], lockfile: 'yarn.lock',
     setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },
   { id: 'pnpm-v5',       alias: 'pm-pnpm-7',  bin: 'pnpm', runtime: 'node',
     args: ['install', '--lockfile-only'], lockfile: 'pnpm-lock.yaml' },
@@ -45,6 +59,21 @@ function resolveBinPath (alias, binName) {
   throw new Error(`bin '${binName}' not found in ${alias} (bin field: ${JSON.stringify(bin)})`)
 }
 
+// Download a yarn .cjs into .cache/yarn-bin/yarn-<version>.cjs if not already present.
+async function ensureYarnBundle (version) {
+  fs.mkdirSync(YARN_BIN_DIR, { recursive: true })
+  const dst = path.join(YARN_BIN_DIR, `yarn-${version}.cjs`)
+  if (fs.existsSync(dst) && fs.statSync(dst).size > 0) return dst
+  const url = `https://repo.yarnpkg.com/${version}/packages/yarnpkg-cli/bin/yarn.js`
+  process.stdout.write(`fetching yarn ${version} … `)
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`download failed: ${url}: HTTP ${res.status}`)
+  const body = Buffer.from(await res.arrayBuffer())
+  fs.writeFileSync(dst, body)
+  process.stdout.write(`(${body.length}b) `)
+  return dst
+}
+
 function copyDir (src, dst) {
   fs.cpSync(src, dst, { recursive: true })
 }
@@ -56,7 +85,7 @@ function listCases () {
   }).sort()
 }
 
-function runOne (caseName, adapter) {
+async function runOne (caseName, adapter) {
   if (adapter.skip) return { ok: false, skipped: true, reason: adapter.skip }
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `lockfile-fixture-${caseName}-${adapter.id}-`))
   try {
@@ -67,10 +96,16 @@ function runOne (caseName, adapter) {
       }
     }
 
-    const binPath = resolveBinPath(adapter.alias, adapter.bin)
-    const [cmd, args] = adapter.runtime === 'native'
-      ? [binPath, adapter.args]
-      : [process.execPath, [binPath, ...adapter.args]]
+    let binPath, cmd, args
+    if (adapter.runtime === 'yarn-bundle') {
+      binPath = await ensureYarnBundle(adapter.yarnBundle)
+      cmd = process.execPath
+      args = [binPath, ...adapter.args]
+    } else {
+      binPath = resolveBinPath(adapter.alias, adapter.bin)
+      cmd = adapter.runtime === 'native' ? binPath : process.execPath
+      args = adapter.runtime === 'native' ? adapter.args : [binPath, ...adapter.args]
+    }
 
     execFileSync(cmd, args, {
       cwd: tempRoot,
@@ -94,7 +129,7 @@ function runOne (caseName, adapter) {
   }
 }
 
-function main () {
+async function main () {
   const filter = process.argv.slice(2)
   const cases = listCases().filter(c => filter.length === 0 || filter.includes(c))
   const report = []
@@ -103,7 +138,7 @@ function main () {
     for (const adapter of ADAPTERS) {
       const start = Date.now()
       process.stdout.write(`[${caseName}] ${adapter.id} ... `)
-      const result = runOne(caseName, adapter)
+      const result = await runOne(caseName, adapter)
       const ms = Date.now() - start
       if (result.ok) {
         process.stdout.write(`ok (${ms}ms)\n`)
@@ -124,4 +159,4 @@ function main () {
   process.exit(fail === 0 ? 0 : 1)
 }
 
-main()
+main().catch(e => { console.error(e); process.exit(1) })
