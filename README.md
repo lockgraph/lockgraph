@@ -1,238 +1,166 @@
 # @antongolub/lockfile
-> Read and write lockfiles with reasonable losses
+
+> Universal lockfile model and converter for **npm**, **yarn**, **pnpm**, **bun**.
 
 <p><img alt="@antongolub/lockfile" src="./pics/pic.png" align="right" width="300">
-Each package manager brings its own philosophy of how to describe, store and control project dependencies.
-It <i>seems</i> acceptable for developers, but literally becomes a <strike>pain in *** ***</strike> headache for isec, devops and release engineers.
-This lib is a naive attempt to build a pm-independent, generic, extensible and reliable deps representation.
 
-The `package.json` manifest contains its own deps requirements, the `lockfile` holds the deps resolution snapshot<sup>*</sup>,
-so both of them are required to build a dependency graph. We can try to convert this data into a normalized representation for further analysis and processing (for example, to fix vulnerabilities).
-And then, if necessary, try convert it back to the original/another format.
+Each package manager brings its own philosophy of how to describe, store and
+control project dependencies. It looks acceptable to a developer staring at a
+single repo, but it becomes a real headache for IS, DevOps and release
+engineers — and impossible for any tool that needs to reason about
+dependency graphs across the ecosystem.
+
+This library models the dependency graph independent of any specific
+package manager, then projects it back into the format you need.
+Conversion is one use case; **modification** (audit-fix, override pinning,
+license filtering) is the headline.
+
 </p>
 
 ## Status
-Proof of concept. The API may change significantly ⚠️
 
-## Getting started
-### Install
-```shell
-yarn add @antongolub/lockfile@snapshot
-```
+🔒 **Contract preview, implementation in progress.** The public API
+(`parse` / `stringify`) is locked. Adapter implementations are landing
+incrementally — see [SCHEMAS.md](./SCHEMAS.md) for what's recognised.
+Not yet published; `npm install` will appear once the first adapters
+ship end-to-end.
 
-## Usage
-_tl;dr_
-```ts
-import fs from 'fs/promises'
-import {parse, analyze} from '@antongolub/lockfile'
+## Concept
 
-const lf = await fs.readFile('yarn.lock', 'utf-8')
-const pkg = await fs.readFile('package.json', 'utf-8')
+A target lockfile is **constructed** from facts gathered across whatever
+sources are available: the input lockfile bytes, project `package.json`s,
+the package-manager cache, and (opt-in) the registry. The simplest case is
+*conversion* — parse one format, stringify another. The general case is
+*construction*: assemble what the target requires from whichever source can
+supply it.
 
-const snapshot = parse(lf, pkg) // Holds JSON-friendly TEntries[]
-const idx = analyze(snapshot)   // An index to represent repo dep graphs
+Three layers, never collapsed:
 
-// idx.entries
-// idx.prod
-// idx.edges
-```
+- **Manifest** — declared constraints from `package.json`(s).
+- **Graph** — resolved package instances (peer-aware) and the edges
+  between them. The canonical internal model. Modifiers operate here.
+- **Layout** — physical projection on disk: hoisted, isolated (pnpm-style),
+  PnP, nm-linked.
+
+Conversion is **lossy by design**. We aim for *semantically equivalent*,
+not *byte-identical*. Irreducible facts (integrity hashes, resolution URLs,
+signatures) are the exception — they are never silently lost.
 
 ## API
-### JS/TS
+
 ```ts
-import { parse, format, analyze, convert } from '@antongolub/lockfile'
+import { parse, stringify } from '@antongolub/lockfile'
 
-const lf = await fs.readFile('yarn.lock', 'utf-8')
-const pkgJson = await fs.readFile('package.json', 'utf-8')
-const snapshot = parse(lf, pkgJson)
-
-const lf1 = format(snapshot)
-const lf2 = format(snapshot, 'npm-1')         // Throws err: npm v1 meta does not support workspaces
-
-const meta = await readMeta()                 // reads local package.jsons data to gather required data like `engines`, `license`, `bins`, etc
-const meta2 = await fetchMeta(snapshot)       // does the same, but from the remote registry
-const lf3 = format(snapshot, 'npm-3', {meta}) // format with options
-
-const idx = analyze(snapshot)
-idx.edges
-// [
-//  [ '', '@antongolub/npm-test@4.0.1' ],
-//  [ '@antongolub/npm-test@4.0.1', '@antongolub/npm-test@3.0.1' ],
-//  [ '@antongolub/npm-test@3.0.1', '@antongolub/npm-test@2.0.1' ],
-//  [ '@antongolub/npm-test@2.0.1', '@antongolub/npm-test@1.0.0' ]
-// ]
-
-const lf4 = await convert(lf, pkgJson, 'yarn-berry')
+const lf  = parse(rawLockfileBytes)
+const str = stringify(lf, { format: 'npm-3' })
 ```
 
-### CLI
-```shell
-npx @antongolub/lockfile@snapshot <cmd> [options]
+Two top-level operations, modelled on `JSON.parse` / `JSON.stringify`:
 
-npx @antongolub/lockfile@snapshot parse --input=yarn.lock,package.json --output=snapshot.json
-npx @antongolub/lockfile@snapshot format --input=snapshot.json --output=yarn.lock
+```ts
+parse(input: string | Uint8Array, options?: ParseOptions): Lockfile
+
+stringify(lockfile: Lockfile, options: StringifyOptions): string | Uint8Array
 ```
 
-| Command / Option | Description                                                                           |
-|------------------|---------------------------------------------------------------------------------------|
-| `parse`          | Parses lockfiles and package manifests into a snapshot                                |
-| `format`         | Formats a snapshot into a lockfile                                                    |
-| `convert`        | Converts a lockfile into another format. Shortcut for `parse` + `format`              |
-| `--input`        | A comma-separated list of files to parse: `snapshot.json` or `yarn.lock,package.json` |
-| `--output`       | A file to write the result to: `snapshot.json` or `yarn.lock`                         |
-| `--format`       | A lockfile format: `npm-1`, `npm-2`, `npm-3`, `yarn-berry`, `yarn-classic`            |
+- `parse` auto-detects the format by content sniffing. Pass
+  `{ format: '<id>' }` to skip detection. Pass `{ manifests }` for
+  formats that need extra workspace context (notably `yarn-classic`).
+- `stringify`'s `options.format` is **required** — there is no implicit
+  "same as parsed". Round-tripping is an explicit choice the caller makes.
 
-### Terms
-`nmtree` — fs projection of deps, directories structure  
-`deptree` — bounds full dep paths with their resolved packages  
-`depgraph` — describes how resolved pkgs are related with each other
+`Lockfile` is the public alias for the internal canonical-graph type.
+`FormatId` is a string-literal union — see
+[SCHEMAS.md](./SCHEMAS.md) for the full list.
 
-### Lockfiles types
-| Package manager      | Meta format | Read | Write |
-|----------------------|-------------|------|-------|
-| npm <7               | 1           | ✓    | ✓     |
-| npm >=7              | 2           | ✓    |       |
-| npm >=9              | 3           | ✓    |       | 
-| yarn 1 (classic)     | 1           | ✓    | ✓     |
-| yarn 2, 3, 4 (berry) | 5, 6, 7     | ✓    | ✓     |
+### Options
 
-### Dependency protocols
-| Type      | Supported | Example                                 | Description                                                    |
-|-----------|-----------|-----------------------------------------|----------------------------------------------------------------|
-| semver    | ✓         | `^1.2.3`                                | Resolves from the default registry                             |
-| tag       |           | `latest`                                | Resolves from the default registry                             |
-| npm       | ✓         | `npm:name@...`                          | Resolves from the npm registry                                 |
-| git       |           | `git@github.com:foo/bar.git`            | Downloads a public package from a Git repository               |
-| github    |           | `github:foo/bar`                        | Downloads a public package from GitHub                         |
-| github    | ✓         | `foo/bar`                               | Alias for the github: protocol                                 |
-| file      |           | `file:./my-package`                     | Copies the target location into the cache                      |
-| link      |           | `link:./my-folder`                      | Creates a link to the ./my-folder folder (ignore dependencies) |
-| patch     | _limited_ | `patch:left-pad@1.0.0#./my-patch.patch` | Creates a patched copy of the original package                 |
-| portal    |           | `portal:./my-folder`                    | Creates a link to the ./my-folder folder (follow dependencies) |
-| workspace | _limited_ | `workspace:*`                           | Creates a link to a package in another workspace               |
-
-https://v3.yarnpkg.com/features/protocols  
-https://yarnpkg.com/protocols  
-https://docs.npmjs.com/cli/v10/configuring-npm/package-json#dependencies
-
-### `TSnapshot`
 ```ts
-export type TSnapshot = Record<string, TEntry>
+type ParseOptions = {
+  format?:     FormatId          // skip auto-detect
+  manifests?:  Manifests         // package.jsons keyed by workspace path
+  pmConfig?:   PmConfig          // .npmrc / .yarnrc.yml / pnpm-workspace.yaml / bunfig.toml
+  installDir?: string            // path to node_modules / .pnp.cjs (refinement)
+  cache?:      CacheAdapter      // PM cache (refinement)
+  registry?:   RegistryAdapter   // network access (opt-in)
+}
 
-export type TEntry = {
-  name:       string
-  version:    string
-  ranges:     string[]
-  hashes:     {
-    sha512?:  string
-    sha256?:  string
-    sha1?:    string
-    checksum?: string
-    md5?:     string
-  }
-  source:     {
-    type:     TSourceType // npm, workspace, gh, patch, etc
-    id:       string
-    registry?: string
-  }
-  // optional pm-specific lockfile meta
-  manifest?:              TManifest
-  conditions?:            string
-  dependencies?:          TDependencies
-  dependenciesMeta?:      TDependenciesMeta
-  devDependencies?:       TDependencies
-  optionalDependencies?:  TDependencies
-  peerDependencies?:      TDependencies
-  peerDependenciesMeta?:  TDependenciesMeta
-  bin?:                   Record<string, string>
-  engines?:               Record<string, string>
-  funding?:               Record<string, string>
+type StringifyOptions = {
+  format:        FormatId        // required
+  manifests?:    Manifests
+  pmConfig?:     PmConfig
+  installDir?:   string
+  cache?:        CacheAdapter
+  registry?:     RegistryAdapter
+  onDiagnostic?: (d: Diagnostic) => void
 }
 ```
 
-### `TSnapshotIndex`
+`pmConfig` / `installDir` / `cache` / `registry` are progressive
+**refinement opt-ins**: each unlocks more information at higher cost. The
+default succeeds offline, against the lockfile bytes (and `manifests`)
+alone.
+
+### Sub-imports
+
+| Surface | Importable as | Contains |
+|---------|---------------|----------|
+| Root | `@antongolub/lockfile` | `parse`, `stringify`, plus types: `Lockfile`, `FormatId`, `ParseOptions`, `StringifyOptions`, `Manifest`, `Manifests` |
+| Modifiers | `@antongolub/lockfile/modify` | audit-fix, override-pin, license-filter |
+| Registry | `@antongolub/lockfile/registry` | adapters for live npm, file cache, frozen-from-lockfile |
+| Per-format | `@antongolub/lockfile/formats/<id>` | direct access to a single adapter (test surface; not a primary user API) |
+
+### Errors
+
+`parse` / `stringify` throw a single `LockfileError` discriminated by
+`code`:
+
 ```ts
-export interface TSnapshotIndex {
-  snapshot: TSnapshot
-  entries:  TEntry[]
-  roots:    TEntry[]
-  edges:    [string, string][]
-  tree:       Record<string, {
-    key:      string
-    chunks:   string[]
-    parents:  TEntry[]
-    id:       string
-    name:     string
-    version:  string
-    entry:    TEntry
-    depth:    number // the lowest level where the dep@ver first time occurs
-  }>
-  prod: Set<TEntry>
-  getEntryId ({name, version}: TEntry): string
-  getEntry (name: string, version?: string): TEntry | undefined,
-  getEntryByRange (name: string, range: string): TEntry | undefined
-  getEntryDeps(entry: TEntry): TEntry[]
-}
+'PARSE_FAILED' | 'FORMAT_DETECT_FAILED' | 'FORMAT_MISMATCH'
+| 'CAPABILITY_LACK' | 'MISSING_MANIFEST'
+| 'IRREDUCIBLE_LOSS' | 'INVARIANT_VIOLATION'
 ```
 
-### Caveats
-* There is an infinite number of `nmtrees` that corresponds to the specified `deptree`, but among them there is a finite set of effective (sufficient) for the target criterion — for example, nesting, size, homogeneity of versions
-* npm1: `optional: true` label is not supported yet
-* yarn berry: no idea how to resolve and inject PnP patches https://github.com/yarnpkg/berry/tree/master/packages/plugin-compat
-* npm2 and npm3 requires `engines` and `funding` data, while yarn* or npm1 does not contain it
-* many `nmtree` projections may correspond to the specified `depgraph`
-* pkg.json `resolutions` and `overrides` directives are completely ignored for now
-* pkg aliases are not _fully_ supported yet [#2](https://github.com/antongolub/lockfile/issues/2#issuecomment-1786613893)
+Reducible losses (e.g. dropped patches when emitting `npm-1` from a
+yarn-berry source) surface as `Diagnostic` events via the
+`onDiagnostic` callback, not exceptions.
 
-### Snippets
-Extracts all deps by depth:
-```ts
-const getDepsByDepth = (idx: TSnapshotIndex, depth = 0) => Object.values(idx.tree)
-  .filter(({depth: d}) => d === depth)
-  .map(({entry}) => entry)
-```
+## Schemas
 
-Get the longest dep chain:
-```ts
-const getLongestChain = (): TEntry[] => {
-  let max = 0
-  let chain: TEntry[] = []
+Every recognised lockfile schema is enumerated in
+[SCHEMAS.md](./SCHEMAS.md), with adapter ids, the schema-marker each
+carries, the package-manager versions that emit it by default, and
+permalinked sources. Use that table as the index when calling
+`parse({ format })` or `stringify({ format })`.
 
-  for (const e of Object.values(idx.tree)) {
-    if (e.depth > max) {
-      max = e.depth
-      chain = [...e.parents, e.entry]
-    }
-  }
-  return chain
-}
+## Predecessor and inspirations
 
-constole.log(
-  getLongestChain()
-    .map((e) => idx.getEntryId(e))
-    .join(' -> ')
-)
-```
+This project is the architectural successor to
+[`yarn-audit-fix`](https://github.com/antongolub/yarn-audit-fix), generalised
+beyond yarn.
 
-### Inspired by
-* [synp](https://github.com/imsnif/synp)
-* [snyk-nodejs-lockfile-parser](https://github.com/snyk/nodejs-lockfile-parser)
-* [yarn](https://github.com/yarnpkg/yarn/blob/master/src/lockfile/parse.js)
-* [yarn-lockfile](https://github.com/yarnpkg/yarn/tree/master/packages/lockfile)
+Earlier work in this space:
 
-### Refs
-* [yarn.lock](https://classic.yarnpkg.com/en/docs/yarn-lock/)
-* [package-lock-json](https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json)
-* [what-is-package-lock-json](https://snyk.io/blog/what-is-package-lock-json/)
-* [the-ultimate-guide-to-yarn-lock-lockfiles](https://www.arahansen.com/the-ultimate-guide-to-yarn-lock-lockfiles/)
-* [package-lock-json-the-complete-guide](https://medium.com/helpshift-engineering/package-lock-json-the-complete-guide-2ae40175ebdd)
-<details>
-  <summary>more</summary>
+- [synp](https://github.com/imsnif/synp)
+- [snyk-nodejs-lockfile-parser](https://github.com/snyk/nodejs-lockfile-parser)
+- [`@yarnpkg/lockfile`](https://github.com/yarnpkg/yarn/tree/master/packages/lockfile)
+- [`pnpm/lockfile-utils`](https://github.com/pnpm/pnpm/tree/main/lockfile)
 
-* [cvent/pnpm-lock-export](https://github.com/cvent/pnpm-lock-export)
-* [why-keep-package-lockjson](https://blog.npmjs.org/post/621733939456933888/npm-v7-series-why-keep-package-lockjson.html)
-* [pnpm/lockfile-utils](https://github.com/pnpm/pnpm/tree/main/lockfile/lockfile-utils)
-</details>
+## Package-manager docs
+
+- [`package-lock.json`](https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json)
+  — npm
+- [yarn lockfile (classic)](https://classic.yarnpkg.com/lang/en/docs/yarn-lock/)
+  / [yarn lockfile (berry)](https://github.com/yarnpkg/berry/blob/master/packages/yarnpkg-core/sources/Project.ts)
+- [`pnpm/spec/lockfile/`](https://github.com/pnpm/spec/tree/master/lockfile)
+  — pnpm
+- [bun lockfile](https://bun.com/docs/pm/lockfile) — bun
+
+## Compatibility
+
+- **Node ≥ 20.** No browser build planned.
+- **ESM only.** Consumers on CommonJS use dynamic `await import(…)`.
 
 ## License
+
 [MIT](./LICENSE)
