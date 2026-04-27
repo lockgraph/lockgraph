@@ -1,0 +1,46 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@sindresorhus/is':
+        specifier: 6.3.1
+        version: 6.3.1
+      '@types/node':
+        specifier: 20.11.30
+        version: 20.11.30
+      ms:
+        specifier: 2.1.3
+        version: 2.1.3
+
+packages:
+
+  '@sindresorhus/is@6.3.1':
+    resolution: {integrity: sha512-FX4MfcifwJyFOI2lPoX7PQxCqx8BG1HCho7WdiXwpEQx1Ycij0JxkfYtGK7yqNScrZGSlt6RE6sw8QYoH7eKnQ==}
+    engines: {node: '>=16'}
+
+  '@types/node@20.11.30':
+    resolution: {integrity: sha512-dHM6ZxwlmuZaRmUPfv1p+KrdD1Dci04FbdEm/9wEMouFqxYoFl5aMkt0VMAUtYRQDyYvD41WJLukhq/ha3YuTw==}
+
+  ms@2.1.3:
+    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
+  undici-types@5.26.5:
+    resolution: {integrity: sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA==}
+
+snapshots:
+
+  '@sindresorhus/is@6.3.1': {}
+
+  '@types/node@20.11.30':
+    dependencies:
+      undici-types: 5.26.5
+
+  ms@2.1.3: {}
+
+  undici-types@5.26.5: {}

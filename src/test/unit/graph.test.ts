@@ -4,6 +4,7 @@ import {
   GraphError,
   serializeNodeId,
   nameOf,
+  toTarballKey,
   type Node,
   type NodeId,
 } from '../../main/ts/graph.ts'
@@ -44,6 +45,22 @@ describe('serializeNodeId', () => {
   })
 })
 
+describe('toTarballKey', () => {
+  it('plain id is its own tarball key', () => {
+    expect(toTarballKey('lodash@4.17.21')).toBe('lodash@4.17.21')
+  })
+  it('strips peer-context', () => {
+    expect(toTarballKey('react-dom@18.0.0(react@18.0.0)')).toBe('react-dom@18.0.0')
+  })
+  it('strips nested peer-context', () => {
+    expect(toTarballKey('apollo@3.7.0(graphql@16.6.0)(react@18.0.0(react-dom@18.0.0))'))
+      .toBe('apollo@3.7.0')
+  })
+  it('keeps scoped names intact', () => {
+    expect(toTarballKey('@scope/lib@1.0.0(@scope/peer@2.0.0)')).toBe('@scope/lib@1.0.0')
+  })
+})
+
 describe('Builder + seal', () => {
   it('seals a single-node graph', () => {
     const b = newBuilder()
@@ -51,6 +68,27 @@ describe('Builder + seal', () => {
     const g = b.seal()
     expect(g.getNode('foo@1.0.0')?.name).toBe('foo')
     expect([...g.nodes()].map(x => x.id)).toEqual(['foo@1.0.0'])
+  })
+
+  it('builder setTarball populates Graph.tarballs', () => {
+    const b = newBuilder()
+    b.addNode(n('foo@1.0.0', 'foo', '1.0.0'))
+    b.setTarball('foo@1.0.0', { integrity: 'sha512-x', license: 'MIT' })
+    const g = b.seal()
+    expect(g.tarball('foo@1.0.0')?.license).toBe('MIT')
+    expect(g.tarballOf('foo@1.0.0')?.integrity).toBe('sha512-x')
+    // virt-instances of same name@version share the tarball
+    expect(g.tarballOf('foo@1.0.0')).toBe(g.tarball('foo@1.0.0'))
+  })
+
+  it('tarballs() iterates content-sorted', () => {
+    const b = newBuilder()
+    b.addNode(n('a@1.0.0', 'a', '1.0.0'))
+    b.addNode(n('b@1.0.0', 'b', '1.0.0'))
+    b.setTarball('b@1.0.0', { license: 'MIT' })
+    b.setTarball('a@1.0.0', { license: 'Apache-2.0' })
+    const g = b.seal()
+    expect([...g.tarballs()].map(([k]) => k)).toEqual(['a@1.0.0', 'b@1.0.0'])
   })
 
   it('forward-refs allowed: edge added before its target', () => {
@@ -263,12 +301,12 @@ describe('subgraph', () => {
 describe('diff', () => {
   it('detects added, removed, and changed nodes', () => {
     const b1 = newBuilder()
-    b1.addNode(n('a@1.0.0', 'a', '1.0.0', [], { payload: { license: 'MIT' } }))
+    b1.addNode(n('a@1.0.0', 'a', '1.0.0', [], { resolution: 'https://x/a-1.0.0.tgz' }))
     b1.addNode(n('b@1.0.0', 'b', '1.0.0'))
     const g1 = b1.seal()
 
     const b2 = newBuilder()
-    b2.addNode(n('a@1.0.0', 'a', '1.0.0', [], { payload: { license: 'Apache-2.0' } }))   // changed
+    b2.addNode(n('a@1.0.0', 'a', '1.0.0', [], { resolution: 'https://y/a-1.0.0.tgz' }))   // changed
     b2.addNode(n('c@1.0.0', 'c', '1.0.0'))                                  // added
     const g2 = b2.seal()
 
@@ -319,15 +357,34 @@ describe('mutate', () => {
     expect(applied).toHaveLength(2)
   })
 
-  it('replaceNode same id swaps payload', () => {
+  it('replaceNode same id swaps node fields', () => {
     const g = seed()
     const { graph: g2 } = g.mutate(m => {
-      m.replaceNode('a@1.0.0', n('a@1.0.0', 'a', '1.0.0', [], { payload: { license: 'MIT' } }))
+      m.replaceNode('a@1.0.0', n('a@1.0.0', 'a', '1.0.0', [], { resolution: 'https://x/a-1.0.0.tgz' }))
     })
-    expect(g2.getNode('a@1.0.0')?.payload?.license).toBe('MIT')
+    expect(g2.getNode('a@1.0.0')?.resolution).toBe('https://x/a-1.0.0.tgz')
     // edges preserved
     expect(g2.out('a@1.0.0').map(e => e.dst)).toEqual(['b@1.0.0'])
     expect(g2.in('a@1.0.0').map(e => e.src)).toEqual(['app@1.0.0'])
+  })
+
+  it('setTarball / removeTarball update shared payload', () => {
+    const g = seed()
+    const { graph: g2 } = g.mutate(m => {
+      m.setTarball('a@1.0.0', { license: 'MIT', integrity: 'sha512-abc' })
+    })
+    expect(g2.tarball('a@1.0.0')?.license).toBe('MIT')
+    expect(g2.tarballOf('a@1.0.0')?.integrity).toBe('sha512-abc')
+
+    const { graph: g3 } = g2.mutate(m => {
+      m.removeTarball('a@1.0.0')
+    })
+    expect(g3.tarball('a@1.0.0')).toBeUndefined()
+  })
+
+  it('removeTarball rejects on missing key', () => {
+    const g = seed()
+    expect(() => g.mutate(m => { m.removeTarball('ghost@9.9.9') })).toThrow(/missing/)
   })
 
   it('replaceNode new id rebinds incoming and outgoing edges', () => {

@@ -3,18 +3,10 @@
 
 export type NodeId = string
 
-export type EdgeKind = 'dep' | 'dev' | 'optional' | 'peer' | 'bundled'
+/** `${name}@${version}` — NodeId stripped of peerContext. Per ADR-0010. */
+export type TarballKey = string
 
-/** Cross-format pass-through facts. Per spec/02-graph.md#node-payload + 11-enrich.md per-field fill ladder. */
-export interface NodePayload {
-  integrity?:  string
-  resolution?: string
-  engines?:    Record<string, string>
-  funding?:    unknown
-  license?:    string
-  bin?:        string | Record<string, string>
-  deprecated?: string
-}
+export type EdgeKind = 'dep' | 'dev' | 'optional' | 'peer' | 'bundled'
 
 export interface Node {
   id:             NodeId
@@ -22,8 +14,21 @@ export interface Node {
   version:        string
   peerContext:    NodeId[]
   workspacePath?: string
-  payload?:       NodePayload
-  extras?:        Record<string, unknown>
+  resolution?:    string
+}
+
+/** Cross-format artefact metadata, shared across peer-virt siblings. Per ADR-0010 + 11-enrich.md. */
+export interface TarballPayload {
+  integrity?:           string
+  engines?:             Record<string, string>
+  funding?:             unknown
+  license?:             string
+  bin?:                 string | Record<string, string>
+  deprecated?:          string
+  cpu?:                 string[]
+  os?:                  string[]
+  libc?:                string[]
+  bundledDependencies?: string[]
 }
 
 export type EdgeAttrs = {
@@ -65,6 +70,8 @@ export type ChangeRecord =
   | { kind: 'edge-added';            subject: EdgeTriple }
   | { kind: 'edge-removed';          subject: EdgeTriple }
   | { kind: 'peer-context-replaced'; subject: NodeId }
+  | { kind: 'tarball-set';           subject: TarballKey }
+  | { kind: 'tarball-removed';       subject: TarballKey }
 
 export interface GraphDiff {
   addedNodes:   NodeId[]
@@ -87,6 +94,8 @@ export interface Mutator {
   addEdge(src: NodeId, dst: NodeId, kind: EdgeKind, attrs?: EdgeAttrs):     void
   removeEdge(src: NodeId, dst: NodeId, kind: EdgeKind):                     void
   replacePeerContext(id: NodeId, peers: NodeId[]):                          void
+  setTarball(key: TarballKey, payload: TarballPayload):                     void
+  removeTarball(key: TarballKey):                                           void
 }
 
 export interface Graph {
@@ -100,6 +109,9 @@ export interface Graph {
   topoSort():                                           readonly (readonly NodeId[])[]
   subgraph(seeds: NodeId | NodeId[], opts?: WalkOpts):  Graph
   diff(other: Graph):                                   GraphDiff
+  tarball(key: TarballKey):                             TarballPayload | undefined
+  tarballOf(nodeId: NodeId):                            TarballPayload | undefined
+  tarballs():                                           IterableIterator<[TarballKey, TarballPayload]>
   diagnostics():                                        readonly Diagnostic[]
   layoutHints():                                        LayoutHints | undefined
   mutate(transaction: (m: Mutator) => void):            MutateResult
@@ -108,6 +120,7 @@ export interface Graph {
 export interface Builder {
   addNode(node: Node):                                                      void
   addEdge(src: NodeId, dst: NodeId, kind: EdgeKind, attrs?: EdgeAttrs):     void
+  setTarball(key: TarballKey, payload: TarballPayload):                     void
   diagnostic(d: Diagnostic):                                                void
   layoutHints(h: LayoutHints):                                              void
   seal():                                                                   Graph
@@ -144,6 +157,19 @@ export function serializeNodeId(name: string, version: string, peerContext: read
   return `${name}@${version}` + peerContext.map(p => `(${p})`).join('')
 }
 
+/** Strips peerContext from a NodeId to derive the TarballKey (`${name}@${version}`). Per ADR-0010. */
+export function toTarballKey(id: NodeId): TarballKey {
+  // Find first depth-0 `(` — that's where peerContext begins. Scoped names are unaffected.
+  let depth = 0
+  for (let i = 0; i < id.length; i++) {
+    const c = id[i]
+    if (c === '(' && depth === 0) return id.slice(0, i)
+    if (c === '(') depth++
+    else if (c === ')') depth--
+  }
+  return id
+}
+
 // === Comparators ===
 
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
@@ -161,6 +187,7 @@ interface State {
   incoming:     Map<NodeId, Edge[]>
   byName:       Map<string, NodeId[]>
   roots:        Set<NodeId>
+  tarballs:     Map<TarballKey, TarballPayload>
   diagnostics:  Diagnostic[]
   layoutHints?: LayoutHints
 }
@@ -172,6 +199,7 @@ function emptyState(): State {
     incoming:    new Map(),
     byName:      new Map(),
     roots:       new Set(),
+    tarballs:    new Map(),
     diagnostics: [],
   }
 }
@@ -183,6 +211,7 @@ function shallowClone(s: State): State {
     incoming:    new Map(Array.from(s.incoming,    ([k, v]) => [k, v.slice()])),
     byName:      new Map(Array.from(s.byName,      ([k, v]) => [k, v.slice()])),
     roots:       new Set(s.roots),
+    tarballs:    new Map(s.tarballs),
     diagnostics: s.diagnostics.slice(),
     layoutHints: s.layoutHints,
   }
@@ -331,6 +360,22 @@ class GraphImpl implements Graph {
     return kind ? all.filter(e => e.kind === kind) : all
   }
 
+  tarball(key: TarballKey): TarballPayload | undefined {
+    return this.s.tarballs.get(key)
+  }
+
+  tarballOf(nodeId: NodeId): TarballPayload | undefined {
+    return this.s.tarballs.get(toTarballKey(nodeId))
+  }
+
+  *tarballs(): IterableIterator<[TarballKey, TarballPayload]> {
+    const keys = Array.from(this.s.tarballs.keys()).sort(cmpStr)
+    for (const k of keys) {
+      const p = this.s.tarballs.get(k)
+      if (p) yield [k, p]
+    }
+  }
+
   *walk(seeds: NodeId | NodeId[], opts?: WalkOpts): IterableIterator<NodeId> {
     const direction = opts?.direction ?? 'out'
     const kinds     = opts?.kinds
@@ -441,6 +486,13 @@ class GraphImpl implements Graph {
       for (const e of this.s.outgoing.get(id) ?? []) {
         if (reachable.has(e.dst)) b.addEdge(e.src, e.dst, e.kind, e.attrs)
       }
+    }
+    // Propagate tarballs for reachable nodes' keys
+    const keys = new Set<TarballKey>()
+    for (const id of reachable) keys.add(toTarballKey(id))
+    for (const k of keys) {
+      const p = this.s.tarballs.get(k)
+      if (p) b.setTarball(k, p)
     }
     if (this.s.layoutHints) b.layoutHints(this.s.layoutHints)
     return b.seal()
@@ -597,6 +649,16 @@ class GraphImpl implements Graph {
 
         applied.push({ kind: 'peer-context-replaced', subject: newId })
       },
+      setTarball(key, payload) {
+        next.tarballs.set(key, payload)
+        applied.push({ kind: 'tarball-set', subject: key })
+      },
+      removeTarball(key) {
+        if (!next.tarballs.delete(key)) {
+          throw new GraphError('PATCH_REJECTED', `removeTarball: ${key} missing`)
+        }
+        applied.push({ kind: 'tarball-removed', subject: key })
+      },
     }
 
     transaction(m)
@@ -639,6 +701,10 @@ export function newBuilder(): Builder {
       const e: Edge = attrs ? { src, dst, kind, attrs } : { src, dst, kind }
       pushTo(s.outgoing, src, e)
       pushTo(s.incoming, dst, e)
+    },
+    setTarball(key, payload) {
+      guard('setTarball')
+      s.tarballs.set(key, payload)
     },
     diagnostic(d) {
       guard('diagnostic')
