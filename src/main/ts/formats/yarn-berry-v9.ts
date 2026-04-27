@@ -1,0 +1,246 @@
+// yarn-berry-v9 (`__metadata.version: 9`) — parse-only adapter.
+//
+// See spec/formats/yarn-berry-v9.md and ADR-0010 for the model contract.
+//
+// Phase 2 v1 — open caveats, deliberately unhandled here:
+// - `peerDependencies` blocks are NOT translated into `peer` edges.
+//   yarn-berry-v9 emits flat lockfiles (no `virtual:` keys) for our
+//   fixtures; reconstructing peer-virt + peerContext requires a
+//   semver matcher and is deferred. peer info is preserved on disk
+//   in the lockfile bytes; it just doesn't surface in the graph yet.
+// - `patch:` resolutions and `npm:` aliases throw `IRREDUCIBLE_LOSS`
+//   per ADR-0010 until ADR-0011 extends `TarballKey`.
+// - Unknown per-entry fields (`linkType`, `languageName`, etc.) are
+//   re-derivable on emit; ignored on parse.
+
+import {
+  newBuilder,
+  GraphError,
+  type Graph,
+  type Node,
+  type EdgeKind,
+  type TarballPayload,
+  type Diagnostic,
+} from '../graph.ts'
+import { parse as parseSyml, type SymlMap, type SymlValue } from './_yarn-syml.ts'
+
+export class YarnBerryParseError extends Error {
+  readonly code: 'PARSE_FAILED' | 'FORMAT_MISMATCH' | 'IRREDUCIBLE_LOSS'
+  constructor(code: 'PARSE_FAILED' | 'FORMAT_MISMATCH' | 'IRREDUCIBLE_LOSS', message: string) {
+    super(message)
+    this.name = 'YarnBerryParseError'
+    this.code = code
+  }
+}
+
+/** Sniffer: matches yarn-berry-v9's discriminant (`__metadata.version: 9`). */
+export function check(input: string): boolean {
+  // Match the version line within the first kilobyte to keep this cheap.
+  const head = input.slice(0, 4096)
+  return /^__metadata:\s*[\r\n]+(?:[ \t]+[^\n]*[\r\n]+)*?[ \t]+version:\s*9\s*(?:[\r\n]|$)/m.test(head)
+}
+
+interface SpecPart {
+  name:     string
+  protocol: string
+  spec:     string
+}
+
+/** Parses one entry-key spec, e.g. `"foo@npm:^1.0.0"` → `{name:'foo', protocol:'npm', spec:'^1.0.0'}`. Scoped names keep the leading `@`. */
+function parseSpec(raw: string): SpecPart {
+  // First-`@`-after-scope-prefix introduces the protocol. Patch refs like
+  // `name@patch:foo@npm:1#path` contain extra `@`s in the spec part — taking
+  // the *first* separator (skipping a leading `@scope/` `@`) is the correct rule.
+  const startFrom = raw[0] === '@' ? 1 : 0
+  let sepIdx = -1
+  for (let i = startFrom; i < raw.length; i++) {
+    if (raw[i] === '@') { sepIdx = i; break }
+  }
+  if (sepIdx <= 0) {
+    throw new YarnBerryParseError('PARSE_FAILED', `bad entry-spec, no protocol separator: ${raw}`)
+  }
+  const name = raw.slice(0, sepIdx)
+  const rest = raw.slice(sepIdx + 1)
+  const colon = rest.indexOf(':')
+  if (colon < 0) {
+    throw new YarnBerryParseError('PARSE_FAILED', `bad entry-spec, no protocol colon: ${raw}`)
+  }
+  return { name, protocol: rest.slice(0, colon), spec: rest.slice(colon + 1) }
+}
+
+/** Splits a multi-spec entry-key on `, ` (yarn's separator) and parses each part. */
+function parseEntryKey(key: string): SpecPart[] {
+  return key.split(', ').map(s => parseSpec(s.trim()))
+}
+
+/** Strips `workspace:` prefix and normalises the path: `.` → '' (root project), `./pkg` → 'pkg'. */
+function workspacePathOf(spec: string): string {
+  if (spec === '.') return ''
+  if (spec.startsWith('./')) return spec.slice(2)
+  return spec
+}
+
+function asMap(v: SymlValue | undefined): SymlMap | undefined {
+  return v && typeof v === 'object' ? v : undefined
+}
+
+function asString(v: SymlValue | undefined): string | undefined {
+  return typeof v === 'string' ? v : undefined
+}
+
+/** Validates `__metadata.version: 9` and rejects unsupported resolution protocols. */
+function validateMetadata(ast: SymlMap): void {
+  const meta = asMap(ast['__metadata'])
+  if (!meta) {
+    throw new YarnBerryParseError('FORMAT_MISMATCH', `missing __metadata block`)
+  }
+  if (asString(meta['version']) !== '9') {
+    throw new YarnBerryParseError(
+      'FORMAT_MISMATCH',
+      `expected __metadata.version: 9, got ${JSON.stringify(meta['version'])}`,
+    )
+  }
+}
+
+export function parse(input: string): Graph {
+  const ast = parseSyml(input)
+  validateMetadata(ast)
+
+  const builder = newBuilder()
+  const diagnostics: Diagnostic[] = []
+
+  // Collect entries (everything except __metadata).
+  const entries: Array<{ key: string; value: SymlMap; specs: SpecPart[] }> = []
+  for (const [key, value] of Object.entries(ast)) {
+    if (key === '__metadata') continue
+    const valueMap = asMap(value)
+    if (!valueMap) {
+      diagnostics.push({
+        code:    'YARN_BERRY_BAD_ENTRY',
+        severity: 'warning',
+        message: `entry ${JSON.stringify(key)} is not a block; skipping`,
+      })
+      continue
+    }
+    const specs = parseEntryKey(key)
+    // Reject patch: / aliasing collisions early (per ADR-0010).
+    for (const s of specs) {
+      if (s.protocol === 'patch') {
+        throw new YarnBerryParseError(
+          'IRREDUCIBLE_LOSS',
+          `patch: resolutions are out of scope until ADR-0011 (entry ${JSON.stringify(key)})`,
+        )
+      }
+    }
+    entries.push({ key, value: valueMap, specs })
+  }
+
+  // First pass: add nodes. Build a spec-string → NodeId index for edge resolution.
+  const specIndex = new Map<string, string>()
+  const seenIds = new Set<string>()
+
+  for (const { key, value, specs } of entries) {
+    const first = specs[0]
+    if (!first) {
+      throw new YarnBerryParseError('PARSE_FAILED', `entry ${JSON.stringify(key)} has empty spec`)
+    }
+    const version = asString(value['version'])
+    if (version === undefined) {
+      throw new YarnBerryParseError('PARSE_FAILED', `entry ${JSON.stringify(key)} missing 'version'`)
+    }
+    const id = `${first.name}@${version}`
+
+    if (seenIds.has(id)) {
+      throw new YarnBerryParseError(
+        'IRREDUCIBLE_LOSS',
+        `two entries collapse onto NodeId ${id} — likely npm: alias or patch: collision (out of scope until ADR-0011)`,
+      )
+    }
+    seenIds.add(id)
+
+    const node: Node = {
+      id,
+      name:        first.name,
+      version,
+      peerContext: [],
+    }
+    const resolution = asString(value['resolution'])
+    if (resolution !== undefined) node.resolution = resolution
+    if (first.protocol === 'workspace') {
+      node.workspacePath = workspacePathOf(first.spec)
+    }
+    builder.addNode(node)
+
+    // Tarball payload — checksum + bin for now; engines/license aren't in v9 lockfiles per fixture probe.
+    const payload: TarballPayload = {}
+    const checksum = asString(value['checksum'])
+    if (checksum !== undefined) payload.integrity = checksum
+    const binMap = asMap(value['bin'])
+    if (binMap) {
+      const bin: Record<string, string> = {}
+      for (const [n, p] of Object.entries(binMap)) {
+        if (typeof p === 'string') bin[n] = p
+      }
+      if (Object.keys(bin).length > 0) payload.bin = bin
+    }
+    if (Object.keys(payload).length > 0) {
+      builder.setTarball(id, payload)
+    }
+
+    // Index every spec in this entry's key so dep-resolution can hit them.
+    for (const s of specs) {
+      const lookup = `${s.name}@${s.protocol}:${s.spec}`
+      specIndex.set(lookup, id)
+    }
+  }
+
+  // Second pass: edges from `dependencies` and `optionalDependencies`.
+  for (const { value, specs } of entries) {
+    const first = specs[0]
+    if (!first) continue
+    const version = asString(value['version'])
+    if (version === undefined) continue
+    const srcId = `${first.name}@${version}`
+
+    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, diagnostics)
+    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, diagnostics)
+    // peerDependencies → not yet (Phase 2 v1 limitation; see file header).
+  }
+
+  for (const d of diagnostics) builder.diagnostic(d)
+
+  try {
+    return builder.seal()
+  } catch (e) {
+    if (e instanceof GraphError) {
+      throw new YarnBerryParseError('PARSE_FAILED', `seal failed: ${e.message}`)
+    }
+    throw e
+  }
+}
+
+function addEdgesFromBlock(
+  builder: ReturnType<typeof newBuilder>,
+  srcId:   string,
+  block:   SymlMap | undefined,
+  kind:    EdgeKind,
+  index:   Map<string, string>,
+  diag:    Diagnostic[],
+): void {
+  if (!block) return
+  for (const [depName, depRange] of Object.entries(block)) {
+    if (typeof depRange !== 'string') continue
+    const lookup = `${depName}@${depRange}`
+    const dstId  = index.get(lookup)
+    if (!dstId) {
+      diag.push({
+        code:    'YARN_BERRY_UNRESOLVED_DEP',
+        subject: srcId,
+        severity: 'warning',
+        message: `dependency ${depName}=${depRange} from ${srcId} has no matching lockfile entry`,
+      })
+      continue
+    }
+    builder.addEdge(srcId, dstId, kind, { range: depRange })
+  }
+}
