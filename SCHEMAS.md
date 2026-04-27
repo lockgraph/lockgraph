@@ -58,11 +58,14 @@ straight from `6.x` to `9.0`.
 | Adapter id    | Marker                          | Default writer | Status |
 |---------------|---------------------------------|----------------|--------|
 | `bun-text`    | `bun.lock` filename + JSONC     | bun `>=1.2`    | primary bun target |
-| `bun-binary`  | `bun.lockb` filename + magic    | bun `<1.2`     | deferred for v1 |
+| `bun-binary`  | `bun.lockb` filename + magic    | bun `<1.2`     | detect-only — not parsed |
 
-bun `>=1.2` keeps a binary reader for back-compat. Older bun versions
-also recognise the binary by default; the text format (`bun.lock`) is
-opt-in below 1.2 via `--save-text-lockfile` and default from 1.2 on.
+`bun-binary` is a **permanent non-goal**: when `parse()` detects
+`bun.lockb` magic bytes it throws with a hint to migrate via bun's
+own tooling (`bun install --save-text-lockfile`). The library handles
+the resulting `bun.lock` via the `bun-text` adapter. bun's own
+binary reader stays in bun for back-compat — that is bun's
+responsibility, not ours.
 
 ## Sources
 

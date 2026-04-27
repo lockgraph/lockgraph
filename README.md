@@ -60,7 +60,7 @@ Two top-level operations, modelled on `JSON.parse` / `JSON.stringify`:
 ```ts
 parse(input: string | Uint8Array, options?: ParseOptions): Lockfile
 
-stringify(lockfile: Lockfile, options: StringifyOptions): string | Uint8Array
+stringify(lockfile: Lockfile, options: StringifyOptions): string
 ```
 
 - `parse` auto-detects the format by content sniffing. Pass
