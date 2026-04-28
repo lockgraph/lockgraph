@@ -95,20 +95,50 @@ and surfaced through the format-layer carrier, not on `Node`.
 | Locator shape | Canonical input | Hash |
 |---|---|---|
 | File-backed, e.g. `patch:lodash@npm%3A4.17.21#./patch.diff::version=4.17.21&hash=…` | patch source bytes (the `.patch` file referenced by the `#./<path>` fragment) | sha512, lower-case hex, no prefix |
-| `~builtin<compat/…>`, e.g. `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::…` | UTF-8 bytes of `<yarn-major>:<locator>`, e.g. `4:~builtin<compat/typescript>`. yarn-major sourcing per [ADR-0015 (proposed)](../decisions/0015-ambient-state-inputs-to-canonical-recipes.md) when sourceable; un-sourceable at parse time falls through to Row 3 | sha512, lower-case hex, no prefix |
-| Patch input unreachable at parse time (CI artefact stripped of `.yarn/patches/`, slim source tarball, hand-edited entry, or `~builtin<…>` with un-sourceable yarn-major) | UTF-8 bytes of the locator string verbatim | sentinel `unresolved-<sha256-hex>`; emit `warning` diagnostic |
+| `~builtin<compat/…>`, e.g. `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::…` | UTF-8 bytes of `<yarn-major>:<locator>` where `<locator>` is the bare `~builtin<…>` slice (strip `patch:<spec>#` prefix and `::<params>` suffix), e.g. `4:~builtin<compat/typescript>`. yarn-major sourcing per [ADR-0015 (proposed)](../decisions/0015-ambient-state-inputs-to-canonical-recipes.md) when sourceable; un-sourceable at parse time falls through to Row 3 | sha512, lower-case hex, no prefix |
+| Patch input unreachable at parse time (CI artefact stripped of `.yarn/patches/`, slim source tarball, hand-edited entry, or `~builtin<…>` with un-sourceable yarn-major) | UTF-8 bytes of the locator string **as recorded in the lockfile** — `::<params>` (`::version=…`, `::hash=…`, …) included | sentinel `unresolved-<sha256-hex>`; emit `warning` diagnostic |
 
-**Routing.** Row 1 fires when the locator is `patch:<spec>#<path>::…`,
-the path resolves workspace-contained, and the file bytes are
-readable. Row 2 fires when the locator is `~builtin<…>` and
-yarn-major is sourceable per ADR-0015. Row 3 fires on any locator
-that fails its shape's canonical-recipe preconditions — Row 1 with
-a missing file, Row 2 with un-sourceable yarn-major. Path-containment
-failures (`..`-escape, absolute path, symlink) are NOT a Row 3
-fall-through: they throw `LockfileError({ code: 'INVALID_INPUT' })`
-per [Path confinement](#path-confinement) and terminate the parse.
-Sentinel covers "recipe input absent"; INVALID_INPUT covers "caller
-provided malformed input".
+**Routing.**
+
+*Row 1* fires when (a) the locator shape is `patch:<spec>#<path>::…`,
+(b) the path resolves workspace-contained, and (c) the source bytes
+are readable. On (b) violation (`..`-escape, absolute path, Windows
+drive, symlink): throw `LockfileError({ code: 'INVALID_INPUT' })`
+per [Path confinement](#path-confinement) and terminate the parse —
+caller-supplied path escapes the workspace, malformed input. On (a)
+or (c) violation: fall through to Row 3 — the input is well-formed
+but the canonical recipe cannot run.
+
+*Row 2* fires when (a) the locator is `~builtin<…>` and (b)
+yarn-major is sourceable per ADR-0015. On (b) violation: fall
+through to Row 3 — recipe input absent.
+
+*Row 3* covers the residual. Sentinel covers "recipe input absent";
+INVALID_INPUT covers "caller provided malformed input".
+
+**Notes on recipe-input scope.**
+
+- *Row 2 (`<locator>`).* Bare `~builtin<…>` slice — strip the
+  `patch:<spec>#` prefix and any `::<params>` suffix. Worked
+  example: lockfile entry
+  `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::version=5.4.5&hash=abc123`
+  → extracted slice `~builtin<compat/typescript>` → fingerprint
+  input `4:~builtin<compat/typescript>` (per ADR-0011 lines
+  135-137). *Why bare slice:* yarn-berry ships one compat bundle
+  per (yarn-major, `~builtin<…>` token) regardless of the patched
+  package's version embedded in the envelope; the slice
+  disambiguates compat bundles, the envelope adds spurious version
+  dependence that would over-fragment the dedup space.
+- *Row 3 ("verbatim").* The locator string **as recorded in the
+  lockfile**, `::<params>` included. *Reject* the surface read that
+  `::<params>` should be stripped as PM-native attribution under
+  ADR-0013: ADR-0013's attribution-vs-key principle governs the
+  *canonical* namespace where input divergence breaks dedup; the
+  sentinel namespace is by design PM-native and explicitly degraded
+  per ADR-0011 lines 170-172 — two adapters reading the same
+  artefact with different input encodings produce different
+  sentinels intentionally, and sentinels do NOT participate in
+  cross-PM identity.
 
 Sentinel-keyed entries are read-only at the mutator layer per
 [02-graph.md#mutator-coherence](../02-graph.md#mutator-coherence).
