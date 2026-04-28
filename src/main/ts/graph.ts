@@ -1,10 +1,18 @@
 // L2 model — see spec/02-graph.md (gitignored locally).
 // Public surface follows spec/bindings/ts.md#graph-types.
 
+import { LockfileError } from './errors.ts'
+
 export type NodeId = string
 
 /** `${name}@${version}` — NodeId stripped of peerContext. Per ADR-0010. */
 export type TarballKey = string
+export type Patch = string
+export interface TarballKeyInputs {
+  name:    string
+  version: string
+  patch?:  Patch
+}
 
 export type EdgeKind = 'dep' | 'dev' | 'optional' | 'peer' | 'bundled'
 
@@ -13,6 +21,7 @@ export interface Node {
   name:           string
   version:        string
   peerContext:    NodeId[]
+  patch?:         Patch
   workspacePath?: string
   resolution?:    string
 }
@@ -94,8 +103,8 @@ export interface Mutator {
   addEdge(src: NodeId, dst: NodeId, kind: EdgeKind, attrs?: EdgeAttrs):     void
   removeEdge(src: NodeId, dst: NodeId, kind: EdgeKind):                     void
   replacePeerContext(id: NodeId, peers: NodeId[]):                          void
-  setTarball(key: TarballKey, payload: TarballPayload):                     void
-  removeTarball(key: TarballKey):                                           void
+  setTarball(inputs: TarballKeyInputs, payload: TarballPayload):            void
+  removeTarball(inputs: TarballKeyInputs):                                  void
 }
 
 export interface Graph {
@@ -109,7 +118,7 @@ export interface Graph {
   topoSort():                                           readonly (readonly NodeId[])[]
   subgraph(seeds: NodeId | NodeId[], opts?: WalkOpts):  Graph
   diff(other: Graph):                                   GraphDiff
-  tarball(key: TarballKey):                             TarballPayload | undefined
+  tarball(inputs: TarballKeyInputs):                    TarballPayload | undefined
   tarballOf(nodeId: NodeId):                            TarballPayload | undefined
   tarballs():                                           IterableIterator<[TarballKey, TarballPayload]>
   diagnostics():                                        readonly Diagnostic[]
@@ -120,7 +129,7 @@ export interface Graph {
 export interface Builder {
   addNode(node: Node):                                                      void
   addEdge(src: NodeId, dst: NodeId, kind: EdgeKind, attrs?: EdgeAttrs):     void
-  setTarball(key: TarballKey, payload: TarballPayload):                     void
+  setTarball(inputs: TarballKeyInputs, payload: TarballPayload):            void
   diagnostic(d: Diagnostic):                                                void
   layoutHints(h: LayoutHints):                                              void
   seal():                                                                   Graph
@@ -157,8 +166,8 @@ export function serializeNodeId(name: string, version: string, peerContext: read
   return `${name}@${version}` + peerContext.map(p => `(${p})`).join('')
 }
 
-/** Strips peerContext from a NodeId to derive the TarballKey (`${name}@${version}`). Per ADR-0010. */
-export function toTarballKey(id: NodeId): TarballKey {
+/** Strips peerContext from a NodeId to derive the ADR-0010 base key (`${name}@${version}`). */
+export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
   // Find first depth-0 `(` — that's where peerContext begins. Scoped names are unaffected.
   let depth = 0
   for (let i = 0; i < id.length; i++) {
@@ -168,6 +177,67 @@ export function toTarballKey(id: NodeId): TarballKey {
     else if (c === ')') depth--
   }
   return id
+}
+
+const PATCH_CANONICAL_RE = /^[0-9a-f]{128}$/
+const PATCH_SENTINEL_RE = /^unresolved-[0-9a-f]{64}$/
+
+export function validatePatchToken(patch: string): void {
+  if (patch.length === 0) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `patch slot must not be empty` })
+  }
+  if (patch.includes('+')) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `patch slot must not contain '+'` })
+  }
+  if (/\s/.test(patch)) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `patch slot must not contain whitespace` })
+  }
+  if (!PATCH_CANONICAL_RE.test(patch) && !PATCH_SENTINEL_RE.test(patch)) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `patch slot has invalid token shape` })
+  }
+}
+
+function isSentinelPatch(patch: string): boolean {
+  return patch.startsWith('unresolved-')
+}
+
+// ADR-0011:282-304 — sentinel-keyed mutator coherence rule.
+//
+// A 'sentinel-keyed entry' is a Node whose .patch satisfies the spec-defined
+// predicate startsWith('unresolved-'). At the Mutator layer, ANY operation
+// that modifies-or-forks the bytes of a sentinel-keyed Node throws
+// LockfileError({ code: 'IRREDUCIBLE_LOSS' }). Pure-deletion ops do NOT fork
+// siblings (ADR-0011:301-304 explicitly carves out removeTarball; the same
+// logic extends to removeNode); they are permitted. Edge-structure ops
+// (addEdge, removeEdge) do not touch the Node's bytes; permitted. Builder is
+// parse-time and must remain unguarded — that is how sentinels land in the
+// graph.
+function refuseSentinelMutation(patch: Patch | undefined, opName: string, subject: string): void {
+  if (patch !== undefined && isSentinelPatch(patch)) {
+    throw new LockfileError({
+      code: 'IRREDUCIBLE_LOSS',
+      message: `${opName}: sentinel-keyed entries refuse mutation (${subject})`,
+    })
+  }
+}
+
+export function toTarballKey(inputs: TarballKeyInputs): TarballKey {
+  const slots: string[] = []
+  if (inputs.patch !== undefined) {
+    validatePatchToken(inputs.patch)
+    slots.push(`patch=${inputs.patch}`)
+  }
+  return slots.length === 0
+    ? `${inputs.name}@${inputs.version}`
+    : `${inputs.name}@${inputs.version}+${slots.sort(cmpStr).join('+')}`
+}
+
+function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch'>): TarballKeyInputs {
+  return {
+    name: node.name,
+    version: node.version,
+    patch: node.patch,
+  }
 }
 
 // === Comparators ===
@@ -360,12 +430,13 @@ class GraphImpl implements Graph {
     return kind ? all.filter(e => e.kind === kind) : all
   }
 
-  tarball(key: TarballKey): TarballPayload | undefined {
-    return this.s.tarballs.get(key)
+  tarball(inputs: TarballKeyInputs): TarballPayload | undefined {
+    return this.s.tarballs.get(toTarballKey(inputs))
   }
 
   tarballOf(nodeId: NodeId): TarballPayload | undefined {
-    return this.s.tarballs.get(toTarballKey(nodeId))
+    const node = this.s.nodes.get(nodeId)
+    return node ? this.s.tarballs.get(toTarballKey(tarballKeyInputsOfNode(node))) : undefined
   }
 
   *tarballs(): IterableIterator<[TarballKey, TarballPayload]> {
@@ -488,11 +559,16 @@ class GraphImpl implements Graph {
       }
     }
     // Propagate tarballs for reachable nodes' keys
-    const keys = new Set<TarballKey>()
-    for (const id of reachable) keys.add(toTarballKey(id))
-    for (const k of keys) {
+    const tarballInputs = new Map<TarballKey, TarballKeyInputs>()
+    for (const id of reachable) {
+      const node = this.s.nodes.get(id)
+      if (!node) continue
+      const inputs = tarballKeyInputsOfNode(node)
+      tarballInputs.set(toTarballKey(inputs), inputs)
+    }
+    for (const [k, inputs] of tarballInputs) {
       const p = this.s.tarballs.get(k)
-      if (p) b.setTarball(k, p)
+      if (p) b.setTarball(inputs, p)
     }
     if (this.s.layoutHints) b.layoutHints(this.s.layoutHints)
     return b.seal()
@@ -557,6 +633,8 @@ class GraphImpl implements Graph {
 
     const m: Mutator = {
       addNode(node) {
+        if (node.patch !== undefined) validatePatchToken(node.patch)
+        refuseSentinelMutation(node.patch, 'addNode', node.id)
         if (next.nodes.has(node.id)) {
           throw new GraphError('PATCH_REJECTED', `addNode: ${node.id} already exists`)
         }
@@ -581,7 +659,11 @@ class GraphImpl implements Graph {
         applied.push({ kind: 'node-removed', subject: id })
       },
       replaceNode(id, newNode) {
-        if (!next.nodes.has(id)) {
+        if (newNode.patch !== undefined) validatePatchToken(newNode.patch)
+        const existing = next.nodes.get(id)
+        if (existing) refuseSentinelMutation(existing.patch, 'replaceNode', id)
+        refuseSentinelMutation(newNode.patch, 'replaceNode', newNode.id)
+        if (!existing) {
           throw new GraphError('PATCH_REJECTED', `replaceNode: ${id} missing`)
         }
         if (newNode.id === id) {
@@ -618,6 +700,7 @@ class GraphImpl implements Graph {
       replacePeerContext(id, peers) {
         const old = next.nodes.get(id)
         if (!old) throw new GraphError('PATCH_REJECTED', `replacePeerContext: ${id} missing`)
+        refuseSentinelMutation(old.patch, 'replacePeerContext', id)
         for (const p of peers) {
           if (!next.nodes.has(p)) throw new GraphError('PATCH_REJECTED', `replacePeerContext: peer ${p} missing`)
         }
@@ -649,11 +732,14 @@ class GraphImpl implements Graph {
 
         applied.push({ kind: 'peer-context-replaced', subject: newId })
       },
-      setTarball(key, payload) {
+      setTarball(inputs, payload) {
+        const key = toTarballKey(inputs)
+        refuseSentinelMutation(inputs.patch, 'setTarball', `${inputs.name}@${inputs.version}`)
         next.tarballs.set(key, payload)
         applied.push({ kind: 'tarball-set', subject: key })
       },
-      removeTarball(key) {
+      removeTarball(inputs) {
+        const key = toTarballKey(inputs)
         if (!next.tarballs.delete(key)) {
           throw new GraphError('PATCH_REJECTED', `removeTarball: ${key} missing`)
         }
@@ -691,6 +777,7 @@ export function newBuilder(): Builder {
   return {
     addNode(node) {
       guard('addNode')
+      if (node.patch !== undefined) validatePatchToken(node.patch)
       if (s.nodes.has(node.id)) {
         throw new GraphError('INVARIANT_VIOLATION', `duplicate node id: ${node.id}`)
       }
@@ -702,8 +789,9 @@ export function newBuilder(): Builder {
       pushTo(s.outgoing, src, e)
       pushTo(s.incoming, dst, e)
     },
-    setTarball(key, payload) {
+    setTarball(inputs, payload) {
       guard('setTarball')
+      const key = toTarballKey(inputs)
       s.tarballs.set(key, payload)
     },
     diagnostic(d) {

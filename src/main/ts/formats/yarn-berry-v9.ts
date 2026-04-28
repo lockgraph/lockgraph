@@ -184,7 +184,7 @@ export function parse(input: string): Graph {
       if (Object.keys(bin).length > 0) payload.bin = bin
     }
     if (Object.keys(payload).length > 0) {
-      builder.setTarball(id, payload)
+      builder.setTarball({ name: first.name, version }, payload)
     }
 
     // Index every spec in this entry's key so dep-resolution can hit them.

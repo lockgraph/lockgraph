@@ -60,13 +60,13 @@ describe('yarn-berry-v9 — simple fixture', () => {
   })
 
   it('tarball entries carry yarn checksum verbatim (cacheKey-prefixed)', () => {
-    const lodash = g.tarball('lodash@4.17.21')
+    const lodash = g.tarball({ name: 'lodash', version: '4.17.21' })
     expect(lodash?.integrity).toMatch(/^10c0\//)
-    expect(g.tarball('ms@2.1.3')?.integrity).toMatch(/^10c0\//)
+    expect(g.tarball({ name: 'ms', version: '2.1.3' })?.integrity).toMatch(/^10c0\//)
   })
 
   it('workspace nodes have no tarball entry (no artifact)', () => {
-    expect(g.tarball('case-simple@0.0.0-use.local')).toBeUndefined()
+    expect(g.tarball({ name: 'case-simple', version: '0.0.0-use.local' })).toBeUndefined()
   })
 })
 

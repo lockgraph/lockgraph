@@ -4,10 +4,12 @@ import {
   GraphError,
   serializeNodeId,
   nameOf,
+  stripPeerContextFromNodeId,
   toTarballKey,
   type Node,
   type NodeId,
 } from '../../main/ts/graph.ts'
+import { LockfileError } from '../../main/ts/errors.ts'
 
 const n = (id: NodeId, name: string, version: string, peers: NodeId[] = [], extra: Partial<Node> = {}): Node => ({
   id,
@@ -45,19 +47,45 @@ describe('serializeNodeId', () => {
   })
 })
 
-describe('toTarballKey', () => {
-  it('plain id is its own tarball key', () => {
-    expect(toTarballKey('lodash@4.17.21')).toBe('lodash@4.17.21')
+describe('stripPeerContextFromNodeId', () => {
+  it('plain id is its own ADR-0010 base key', () => {
+    expect(stripPeerContextFromNodeId('lodash@4.17.21')).toBe('lodash@4.17.21')
   })
   it('strips peer-context', () => {
-    expect(toTarballKey('react-dom@18.0.0(react@18.0.0)')).toBe('react-dom@18.0.0')
+    expect(stripPeerContextFromNodeId('react-dom@18.0.0(react@18.0.0)')).toBe('react-dom@18.0.0')
   })
   it('strips nested peer-context', () => {
-    expect(toTarballKey('apollo@3.7.0(graphql@16.6.0)(react@18.0.0(react-dom@18.0.0))'))
+    expect(stripPeerContextFromNodeId('apollo@3.7.0(graphql@16.6.0)(react@18.0.0(react-dom@18.0.0))'))
       .toBe('apollo@3.7.0')
   })
   it('keeps scoped names intact', () => {
-    expect(toTarballKey('@scope/lib@1.0.0(@scope/peer@2.0.0)')).toBe('@scope/lib@1.0.0')
+    expect(stripPeerContextFromNodeId('@scope/lib@1.0.0(@scope/peer@2.0.0)')).toBe('@scope/lib@1.0.0')
+  })
+})
+
+describe('toTarballKey', () => {
+  it('builds the unsuffixed key when no slots are present', () => {
+    expect(toTarballKey({ name: 'lodash', version: '4.17.21' })).toBe('lodash@4.17.21')
+  })
+
+  it('adds the patch slot when present', () => {
+    const patch = 'a'.repeat(128)
+    expect(toTarballKey({ name: 'lodash', version: '4.17.21', patch })).toBe(`lodash@4.17.21+patch=${patch}`)
+  })
+
+  it('accepts unresolved patch sentinels', () => {
+    const patch = `unresolved-${'a'.repeat(64)}`
+    expect(toTarballKey({ name: 'lodash', version: '4.17.21', patch })).toBe(`lodash@4.17.21+patch=${patch}`)
+  })
+
+  it('rejects invalid patch slot shapes', () => {
+    expect(() => toTarballKey({ name: 'lodash', version: '4.17.21', patch: '' })).toThrow(LockfileError)
+    try {
+      toTarballKey({ name: 'lodash', version: '4.17.21', patch: '' })
+    } catch (e) {
+      expect((e as LockfileError).code).toBe('INVALID_INPUT')
+    }
+    expect(() => toTarballKey({ name: 'lodash', version: '4.17.21', patch: 'bad token' })).toThrow(/invalid token shape|whitespace/)
   })
 })
 
@@ -73,22 +101,32 @@ describe('Builder + seal', () => {
   it('builder setTarball populates Graph.tarballs', () => {
     const b = newBuilder()
     b.addNode(n('foo@1.0.0', 'foo', '1.0.0'))
-    b.setTarball('foo@1.0.0', { integrity: 'sha512-x', license: 'MIT' })
+    b.setTarball({ name: 'foo', version: '1.0.0' }, { integrity: 'sha512-x', license: 'MIT' })
     const g = b.seal()
-    expect(g.tarball('foo@1.0.0')?.license).toBe('MIT')
+    expect(g.tarball({ name: 'foo', version: '1.0.0' })?.license).toBe('MIT')
     expect(g.tarballOf('foo@1.0.0')?.integrity).toBe('sha512-x')
     // virt-instances of same name@version share the tarball
-    expect(g.tarballOf('foo@1.0.0')).toBe(g.tarball('foo@1.0.0'))
+    expect(g.tarballOf('foo@1.0.0')).toBe(g.tarball({ name: 'foo', version: '1.0.0' }))
   })
 
   it('tarballs() iterates content-sorted', () => {
     const b = newBuilder()
     b.addNode(n('a@1.0.0', 'a', '1.0.0'))
     b.addNode(n('b@1.0.0', 'b', '1.0.0'))
-    b.setTarball('b@1.0.0', { license: 'MIT' })
-    b.setTarball('a@1.0.0', { license: 'Apache-2.0' })
+    b.setTarball({ name: 'b', version: '1.0.0' }, { license: 'MIT' })
+    b.setTarball({ name: 'a', version: '1.0.0' }, { license: 'Apache-2.0' })
     const g = b.seal()
     expect([...g.tarballs()].map(([k]) => k)).toEqual(['a@1.0.0', 'b@1.0.0'])
+  })
+
+  it('tarballOf derives the patched key from Node.patch', () => {
+    const patch = 'a'.repeat(128)
+    const b = newBuilder()
+    b.addNode(n('foo@1.0.0', 'foo', '1.0.0', [], { patch }))
+    b.setTarball({ name: 'foo', version: '1.0.0', patch }, { integrity: 'sha512-x' })
+    const g = b.seal()
+    expect(g.tarballOf('foo@1.0.0')?.integrity).toBe('sha512-x')
+    expect(g.tarball({ name: 'foo', version: '1.0.0' })).toBeUndefined()
   })
 
   it('forward-refs allowed: edge added before its target', () => {
@@ -371,20 +409,20 @@ describe('mutate', () => {
   it('setTarball / removeTarball update shared payload', () => {
     const g = seed()
     const { graph: g2 } = g.mutate(m => {
-      m.setTarball('a@1.0.0', { license: 'MIT', integrity: 'sha512-abc' })
+      m.setTarball({ name: 'a', version: '1.0.0' }, { license: 'MIT', integrity: 'sha512-abc' })
     })
-    expect(g2.tarball('a@1.0.0')?.license).toBe('MIT')
+    expect(g2.tarball({ name: 'a', version: '1.0.0' })?.license).toBe('MIT')
     expect(g2.tarballOf('a@1.0.0')?.integrity).toBe('sha512-abc')
 
     const { graph: g3 } = g2.mutate(m => {
-      m.removeTarball('a@1.0.0')
+      m.removeTarball({ name: 'a', version: '1.0.0' })
     })
-    expect(g3.tarball('a@1.0.0')).toBeUndefined()
+    expect(g3.tarball({ name: 'a', version: '1.0.0' })).toBeUndefined()
   })
 
   it('removeTarball rejects on missing key', () => {
     const g = seed()
-    expect(() => g.mutate(m => { m.removeTarball('ghost@9.9.9') })).toThrow(/missing/)
+    expect(() => g.mutate(m => { m.removeTarball({ name: 'ghost', version: '9.9.9' }) })).toThrow(/missing/)
   })
 
   it('replaceNode new id rebinds incoming and outgoing edges', () => {
@@ -466,5 +504,147 @@ describe('mutate', () => {
     // both queryable, no shared mutable state leaks
     expect(g.getNode('c@1.0.0')).toBeUndefined()
     expect(g2.getNode('c@1.0.0')).toBeDefined()
+  })
+})
+
+describe('patch-slot intake gate (ADR-0011)', () => {
+  const sentinel = `unresolved-${'a'.repeat(64)}`
+  const canonical = 'a'.repeat(128)
+
+  // Sentinel-keyed Node fixture seeded via Builder (parse-time, unguarded).
+  const sealWithSentinelNode = () => {
+    const b = newBuilder()
+    b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
+    b.addNode(n('foo@1.0.0', 'foo', '1.0.0', [], { patch: sentinel }))
+    b.addNode(n('bar@1.0.0', 'bar', '1.0.0'))
+    b.addEdge('app@1.0.0', 'foo@1.0.0', 'dep')
+    b.setTarball({ name: 'foo', version: '1.0.0', patch: sentinel }, { license: 'MIT' })
+    return b.seal()
+  }
+
+  const expectIrreducibleLoss = (run: () => unknown) => {
+    let caught: unknown
+    try { run() } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(LockfileError)
+    expect((caught as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
+  }
+
+  it('Builder.addNode rejects invalid Node.patch with LockfileError(INVALID_INPUT)', () => {
+    const b = newBuilder()
+    let caught: unknown
+    try {
+      b.addNode(n('foo@1.0.0', 'foo', '1.0.0', [], { patch: 'BAD' }))
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(LockfileError)
+    expect((caught as LockfileError).code).toBe('INVALID_INPUT')
+  })
+
+  it('Mutator.replaceNode rejects invalid Node.patch with LockfileError(INVALID_INPUT)', () => {
+    const b = newBuilder()
+    b.addNode(n('foo@1.0.0', 'foo', '1.0.0'))
+    const g = b.seal()
+    let caught: unknown
+    try {
+      g.mutate(m => {
+        m.replaceNode('foo@1.0.0', n('foo@1.0.0', 'foo', '1.0.0', [], { patch: 'BAD' }))
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(LockfileError)
+    expect((caught as LockfileError).code).toBe('INVALID_INPUT')
+  })
+
+  it('Builder.addNode + setTarball with sentinel SUCCEED (parse-time, unguarded)', () => {
+    const g = sealWithSentinelNode()
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.tarball({ name: 'foo', version: '1.0.0', patch: sentinel })?.license).toBe('MIT')
+  })
+
+  it('Mutator.addNode REFUSES sentinel-shaped Node.patch with IRREDUCIBLE_LOSS', () => {
+    const g = sealWithSentinelNode()
+    expectIrreducibleLoss(() => g.mutate(m => {
+      m.addNode(n('baz@1.0.0', 'baz', '1.0.0', [], { patch: sentinel }))
+    }))
+  })
+
+  it('Mutator.replaceNode REFUSES when EXISTING node is sentinel-keyed (covers from-sentinel)', () => {
+    const g = sealWithSentinelNode()
+    expectIrreducibleLoss(() => g.mutate(m => {
+      m.replaceNode('foo@1.0.0', n('foo@1.0.0', 'foo', '1.0.0', [], { patch: canonical }))
+    }))
+  })
+
+  it('Mutator.replaceNode REFUSES when NEW node is sentinel-keyed (covers to-sentinel)', () => {
+    const g = sealWithSentinelNode()
+    expectIrreducibleLoss(() => g.mutate(m => {
+      m.replaceNode('bar@1.0.0', n('bar@1.0.0', 'bar', '1.0.0', [], { patch: sentinel }))
+    }))
+  })
+
+  it('Mutator.replacePeerContext REFUSES on sentinel-keyed node (re-keys = forks)', () => {
+    const b = newBuilder()
+    b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
+    b.addNode(n('react@18.0.0', 'react', '18.0.0'))
+    b.addNode(n('react@17.0.0', 'react', '17.0.0'))
+    b.addNode(n('rd@1.0.0(react@18.0.0)', 'rd', '1.0.0', ['react@18.0.0'], { patch: sentinel }))
+    b.addEdge('app@1.0.0', 'rd@1.0.0(react@18.0.0)', 'dep')
+    b.addEdge('rd@1.0.0(react@18.0.0)', 'react@18.0.0', 'peer')
+    const g = b.seal()
+    expectIrreducibleLoss(() => g.mutate(m => {
+      m.replacePeerContext('rd@1.0.0(react@18.0.0)', ['react@17.0.0'])
+    }))
+  })
+
+  it('Mutator.setTarball REFUSES sentinel-keyed inputs with IRREDUCIBLE_LOSS', () => {
+    const g = sealWithSentinelNode()
+    expectIrreducibleLoss(() => g.mutate(m => {
+      m.setTarball({ name: 'foo', version: '1.0.0', patch: sentinel }, { license: 'Apache-2.0' })
+    }))
+  })
+
+  it('Mutator.setTarball rejects malformed sentinel-prefixed patch with INVALID_INPUT (intake gate before sentinel-refusal)', () => {
+    const g = sealWithSentinelNode()
+    let caught: unknown
+    try {
+      g.mutate(m => {
+        m.setTarball({ name: 'foo', version: '1.0.0', patch: 'unresolved-zzz' }, { license: 'MIT' })
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(LockfileError)
+    expect((caught as LockfileError).code).toBe('INVALID_INPUT')
+  })
+
+  it('Mutator.removeNode PERMITTED on sentinel-keyed node (deletion, no fork)', () => {
+    const g = sealWithSentinelNode()
+    const { graph: g2 } = g.mutate(m => {
+      m.removeEdge('app@1.0.0', 'foo@1.0.0', 'dep')
+      m.removeNode('foo@1.0.0')
+    })
+    expect(g2.getNode('foo@1.0.0')).toBeUndefined()
+  })
+
+  it('Mutator.addEdge / removeEdge PERMITTED touching sentinel-keyed nodes', () => {
+    const g = sealWithSentinelNode()
+    const { graph: g2 } = g.mutate(m => {
+      m.addEdge('foo@1.0.0', 'bar@1.0.0', 'dep')
+    })
+    expect(g2.out('foo@1.0.0').map(e => e.dst)).toEqual(['bar@1.0.0'])
+    const { graph: g3 } = g2.mutate(m => {
+      m.removeEdge('foo@1.0.0', 'bar@1.0.0', 'dep')
+    })
+    expect(g3.out('foo@1.0.0')).toEqual([])
+  })
+
+  it('Mutator.removeTarball PERMITTED on sentinel key (ADR-0011:301-304 carve-out)', () => {
+    const g = sealWithSentinelNode()
+    const { graph: g2 } = g.mutate(m => {
+      m.removeTarball({ name: 'foo', version: '1.0.0', patch: sentinel })
+    })
+    expect(g2.tarball({ name: 'foo', version: '1.0.0', patch: sentinel })).toBeUndefined()
   })
 })
