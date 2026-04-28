@@ -81,6 +81,10 @@ typings/
 .env
 .env.test
 
+# collab dispatch logs and session-id cache
+collab/.dispatches/
+collab/.sessions/
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 
