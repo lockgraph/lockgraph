@@ -138,7 +138,11 @@ async function main () {
     for (const adapter of ADAPTERS) {
       const start = Date.now()
       process.stdout.write(`[${caseName}] ${adapter.id} ... `)
-      const result = await runOne(caseName, adapter)
+      let result = await runOne(caseName, adapter)
+      if (!result.ok && result.error?.includes('ETIMEDOUT')) {
+        process.stdout.write(`retry (${Date.now() - start}ms) ... `)
+        result = await runOne(caseName, adapter)
+      }
       const ms = Date.now() - start
       if (result.ok) {
         process.stdout.write(`ok (${ms}ms)\n`)
