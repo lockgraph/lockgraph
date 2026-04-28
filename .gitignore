@@ -124,8 +124,14 @@ docs
 temp
 synp
 
-# Spec (early iteration)
-spec
+# Spec (early iteration) — only spec/formats/*.md tracked; everything
+# else under spec/ is contributor-private until promoted.
+spec/*
+!spec/formats/
+spec/formats/*
+!spec/formats/*.md
+spec/formats/_template.md
+spec/formats/README.md
 
 # Internal interactions
 collab
