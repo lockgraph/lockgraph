@@ -73,12 +73,14 @@ __metadata:
 
 ## Conversion inputs
 
-Self-contained. Workspaces are named via `name@workspace:path` resolutions
-inside the lockfile.
+Workspaces are named via `name@workspace:path` resolutions inside the
+lockfile. File-backed `patch:` fingerprints are not self-contained:
+Row 1 reads `.yarn/patches/*` under an explicit `workspaceRoot`;
+omission falls through to Row 3.
 
 | Operation | Option | Required? | Effect when omitted |
 |-----------|--------|:---------:|---------------------|
-| Parse     | —      | none      | |
+| Parse     | `workspaceRoot` | no | File-backed `patch:` locators fall through to Row 3; the adapter MUST NOT default to `cwd` |
 | Stringify | —      | none      | |
 
 ### Patch slot
@@ -96,7 +98,7 @@ and surfaced through the format-layer carrier, not on `Node`.
 |---|---|---|
 | File-backed, e.g. `patch:lodash@npm%3A4.17.21#./patch.diff::version=4.17.21&hash=…` | patch source bytes (the `.patch` file referenced by the `#./<path>` fragment) | sha512, lower-case hex, no prefix |
 | `~builtin<compat/…>`, e.g. `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::…` | UTF-8 bytes of `<yarn-major>:<locator>` where `<locator>` is the bare `~builtin<…>` slice (strip `patch:<spec>#` prefix and `::<params>` suffix), e.g. `4:~builtin<compat/typescript>`. yarn-major sourcing per [ADR-0015 (proposed)](../decisions/0015-ambient-state-inputs-to-canonical-recipes.md) when sourceable; un-sourceable at parse time falls through to Row 3 | sha512, lower-case hex, no prefix |
-| Patch input unreachable at parse time (CI artefact stripped of `.yarn/patches/`, slim source tarball, hand-edited entry, or `~builtin<…>` with un-sourceable yarn-major) | UTF-8 bytes of the locator string **as recorded in the lockfile** — `::<params>` (`::version=…`, `::hash=…`, …) included | sentinel `unresolved-<sha256-hex>`; emit `warning` diagnostic |
+| Patch input unreachable at parse time (CI artefact stripped of `.yarn/patches/`, omitted `workspaceRoot`, slim source tarball, hand-edited entry, or `~builtin<…>` with un-sourceable yarn-major) | UTF-8 bytes of the locator string **as recorded in the lockfile** — `::<params>` (`::version=…`, `::hash=…`, …) included | sentinel `unresolved-<sha256-hex>`; emit `warning` diagnostic |
 
 **Routing.**
 
@@ -147,9 +149,9 @@ Sentinel-keyed entries are read-only at the mutator layer per
 
 The path component of a file-backed `patch:` locator (the segment
 after `#`, before `::`) MUST resolve to a file under the workspace
-root. Any violation throws
-`LockfileError({ code: 'INVALID_INPUT' })` with the offending locator
-in the diagnostic message.
+root in the stable filesystem view the parser observes. Static
+violations throw `LockfileError({ code: 'INVALID_INPUT' })` with the
+offending locator in the diagnostic message.
 
 - **Walk.** Percent-decode the path component; treat the result as
   posix-style. Reject absolute paths and Windows drive-letter
@@ -157,14 +159,13 @@ in the diagnostic message.
   normalise (collapse `.`, `..`); reject if any `..` survives the
   collapse, or if the normalised result is not a strict descendant
   of the workspace root.
-- **Symlinks.** Open every component including the leaf with
-  `O_NOFOLLOW`-equivalent semantics (`openat(..., O_NOFOLLOW)` on
-  POSIX, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows). Symlinks are
-  rejected wholesale at the adapter boundary — any symlink
-  encountered throws `LockfileError({ code: 'INVALID_INPUT' })`.
-  Yarn-berry writes `.yarn/patches/*.patch` as regular files in
-  normal usage; admitting leaf symlinks would add TOCTOU surface
-  between resolve and read for no compelling case.
+- **Symlinks.** Pure-JS implementations may `lstat`-walk existing
+  components, open the leaf with `O_NOFOLLOW`-equivalent semantics,
+  require `fstat` regular-file, and re-check containment from the
+  opened fd when the runtime exposes an fd-path primitive. This MUST
+  reject static symlinks and leaf swaps; a parent-directory swap
+  between the walk and the leaf open remains an accepted pure-JS
+  residual. A dirfd/`openat` walker is stronger, not required.
 - **Hardlinks.** Permitted within the workspace filesystem. A
   hardlink cannot cross filesystem boundaries, so the workspace
   containment check carries through; no separate hardlink check is
