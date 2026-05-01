@@ -1,0 +1,10 @@
+{
+  "name": "case-patch-yarn",
+  "private": true,
+  "dependencies": {
+    "lodash": "4.17.21"
+  },
+  "resolutions": {
+    "lodash@npm:4.17.21": "patch:lodash@npm%3A4.17.21#./.yarn/patches/lodash-npm-4.17.21-6382451519.patch"
+  }
+}

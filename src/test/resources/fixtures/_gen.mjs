@@ -85,6 +85,12 @@ function listCases () {
   }).sort()
 }
 
+function loadCaseConfig (caseName) {
+  const file = path.join(TEMPLATES_DIR, caseName, '.fixture.json')
+  if (!fs.existsSync(file)) return {}
+  return JSON.parse(fs.readFileSync(file, 'utf-8'))
+}
+
 async function runOne (caseName, adapter) {
   if (adapter.skip) return { ok: false, skipped: true, reason: adapter.skip }
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `lockfile-fixture-${caseName}-${adapter.id}-`))
@@ -135,7 +141,12 @@ async function main () {
   const report = []
 
   for (const caseName of cases) {
-    for (const adapter of ADAPTERS) {
+    const caseConfig = loadCaseConfig(caseName)
+    const adapters = Array.isArray(caseConfig.adapters)
+      ? ADAPTERS.filter(adapter => caseConfig.adapters.includes(adapter.id))
+      : ADAPTERS
+
+    for (const adapter of adapters) {
       const start = Date.now()
       process.stdout.write(`[${caseName}] ${adapter.id} ... `)
       let result = await runOne(caseName, adapter)

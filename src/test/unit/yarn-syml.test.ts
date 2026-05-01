@@ -81,7 +81,7 @@ describe('SYML — synthetic', () => {
 })
 
 describe('SYML — yarn-berry-v9 fixtures', () => {
-  const cases = ['simple', 'peers-basic', 'peers-multi', 'workspaces-basic']
+  const cases = ['simple', 'patch-yarn', 'peers-basic', 'peers-multi', 'workspaces-basic']
 
   for (const c of cases) {
     it(`parses ${c}/yarn-berry-v9.lock`, () => {

@@ -1,0 +1,13 @@
+diff --git a/package.json b/package.json
+index b35fd95cc7aa288e29b3d9b18defc946d610833b..3e379cf846fcd665e1375ff748ec9d5cd9105480 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "lodash",
+   "version": "4.17.21",
+-  "description": "Lodash modular utilities.",
++  "description": "Lodash modular utilities. patched for fixture.",
+   "keywords": "modules, stdlib, util",
+   "homepage": "https://lodash.com/",
+   "repository": "lodash/lodash",
