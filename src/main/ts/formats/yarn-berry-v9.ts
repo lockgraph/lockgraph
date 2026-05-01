@@ -1,6 +1,7 @@
 // yarn-berry-v9 (`__metadata.version: 9`) — parse-only adapter.
 //
-// See spec/formats/yarn-berry-v9.md and ADR-0010 for the model contract.
+// See spec/formats/yarn-berry-v9.md, ADR-0010, and ADR-0011 for the
+// model contract.
 //
 // Phase 2 v1 — open caveats, deliberately unhandled here:
 // - `peerDependencies` blocks are NOT translated into `peer` edges.
@@ -8,11 +9,12 @@
 //   fixtures; reconstructing peer-virt + peerContext requires a
 //   semver matcher and is deferred. peer info is preserved on disk
 //   in the lockfile bytes; it just doesn't surface in the graph yet.
-// - `patch:` resolutions and `npm:` aliases throw `IRREDUCIBLE_LOSS`
-//   per ADR-0010 until ADR-0011 extends `TarballKey`.
+// - `npm:` alias collisions still throw `IRREDUCIBLE_LOSS` when two
+//   entries collapse onto one NodeId.
 // - Unknown per-entry fields (`linkType`, `languageName`, etc.) are
 //   re-derivable on emit; ignored on parse.
 
+import { createHash } from 'node:crypto'
 import {
   newBuilder,
   GraphError,
@@ -22,6 +24,7 @@ import {
   type TarballPayload,
   type Diagnostic,
 } from '../graph.ts'
+import { readWorkspaceFileBytes } from './_path.ts'
 import { parse as parseSyml, type SymlMap, type SymlValue } from './_yarn-syml.ts'
 
 export class YarnBerryParseError extends Error {
@@ -31,6 +34,10 @@ export class YarnBerryParseError extends Error {
     this.name = 'YarnBerryParseError'
     this.code = code
   }
+}
+
+export interface YarnBerryParseOptions {
+  workspaceRoot?: string
 }
 
 /** Sniffer: matches yarn-berry-v9's discriminant (`__metadata.version: 9`). */
@@ -102,7 +109,7 @@ function validateMetadata(ast: SymlMap): void {
   }
 }
 
-export function parse(input: string): Graph {
+export function parse(input: string, options: YarnBerryParseOptions = {}): Graph {
   const ast = parseSyml(input)
   validateMetadata(ast)
 
@@ -123,15 +130,6 @@ export function parse(input: string): Graph {
       continue
     }
     const specs = parseEntryKey(key)
-    // Reject patch: / aliasing collisions early (per ADR-0010).
-    for (const s of specs) {
-      if (s.protocol === 'patch') {
-        throw new YarnBerryParseError(
-          'IRREDUCIBLE_LOSS',
-          `patch: resolutions are out of scope until ADR-0011 (entry ${JSON.stringify(key)})`,
-        )
-      }
-    }
     entries.push({ key, value: valueMap, specs })
   }
 
@@ -153,10 +151,15 @@ export function parse(input: string): Graph {
     if (seenIds.has(id)) {
       throw new YarnBerryParseError(
         'IRREDUCIBLE_LOSS',
-        `two entries collapse onto NodeId ${id} — likely npm: alias or patch: collision (out of scope until ADR-0011)`,
+        `two entries collapse onto NodeId ${id} — likely npm: alias or patch: collision`,
       )
     }
     seenIds.add(id)
+
+    const resolution = asString(value['resolution'])
+    const patchResult = resolution !== undefined
+      ? extractPatchFingerprint(id, resolution, options.workspaceRoot)
+      : undefined
 
     const node: Node = {
       id,
@@ -164,12 +167,13 @@ export function parse(input: string): Graph {
       version,
       peerContext: [],
     }
-    const resolution = asString(value['resolution'])
     if (resolution !== undefined) node.resolution = resolution
+    if (patchResult?.patch !== undefined) node.patch = patchResult.patch
     if (first.protocol === 'workspace') {
       node.workspacePath = workspacePathOf(first.spec)
     }
     builder.addNode(node)
+    if (patchResult?.diagnostic) diagnostics.push(patchResult.diagnostic)
 
     // Tarball payload — checksum + bin for now; engines/license aren't in v9 lockfiles per fixture probe.
     const payload: TarballPayload = {}
@@ -184,7 +188,7 @@ export function parse(input: string): Graph {
       if (Object.keys(bin).length > 0) payload.bin = bin
     }
     if (Object.keys(payload).length > 0) {
-      builder.setTarball({ name: first.name, version }, payload)
+      builder.setTarball({ name: first.name, version, patch: patchResult?.patch }, payload)
     }
 
     // Index every spec in this entry's key so dep-resolution can hit them.
@@ -217,6 +221,78 @@ export function parse(input: string): Graph {
     }
     throw e
   }
+}
+
+function extractPatchFingerprint(
+  nodeId: string,
+  resolution: string,
+  workspaceRoot: string | undefined,
+): { patch: string; diagnostic?: Diagnostic } | undefined {
+  const locator = patchLocatorOfResolution(resolution)
+  if (locator === undefined) return undefined
+
+  const source = patchSourceOfLocator(locator)
+  if (source === undefined) {
+    return unresolvedPatch(nodeId, locator, `patch locator has no source fragment`)
+  }
+
+  if (source.startsWith('~builtin<')) {
+    const yarnMajor = yarnMajorOfBuiltinPatch(resolution)
+    if (yarnMajor === undefined) {
+      return unresolvedPatch(nodeId, locator, `builtin patch yarn-major is unavailable at parse time`)
+    }
+    return { patch: sha512Hex(`${yarnMajor}:${source}`) }
+  }
+
+  if (workspaceRoot === undefined) {
+    return unresolvedPatch(nodeId, locator, `workspaceRoot is unavailable at parse time`)
+  }
+
+  const bytes = readWorkspaceFileBytes(workspaceRoot, source, locator)
+  if (bytes === undefined) {
+    return unresolvedPatch(nodeId, locator, `patch file is unavailable at parse time`)
+  }
+
+  return { patch: sha512Hex(bytes) }
+}
+
+function patchLocatorOfResolution(resolution: string): string | undefined {
+  if (resolution.startsWith('patch:')) return resolution
+  const idx = resolution.indexOf('@patch:')
+  return idx >= 0 ? resolution.slice(idx + 1) : undefined
+}
+
+function patchSourceOfLocator(locator: string): string | undefined {
+  const hashIdx = locator.indexOf('#')
+  if (hashIdx < 0) return undefined
+  const paramsIdx = locator.indexOf('::', hashIdx + 1)
+  return paramsIdx < 0
+    ? locator.slice(hashIdx + 1)
+    : locator.slice(hashIdx + 1, paramsIdx)
+}
+
+function yarnMajorOfBuiltinPatch(_resolution: string): string | undefined {
+  return undefined
+}
+
+function unresolvedPatch(nodeId: string, locator: string, reason: string): { patch: string; diagnostic: Diagnostic } {
+  return {
+    patch: `unresolved-${sha256Hex(locator)}`,
+    diagnostic: {
+      code: 'YARN_BERRY_PATCH_UNRESOLVED',
+      subject: nodeId,
+      severity: 'warning',
+      message: `${reason}; using sentinel for ${locator}`,
+    },
+  }
+}
+
+function sha512Hex(value: string | Uint8Array): string {
+  return createHash('sha512').update(value).digest('hex')
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
 function addEdgesFromBlock(

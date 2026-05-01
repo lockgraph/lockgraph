@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { LockfileError } from '../../main/ts/errors.ts'
 import { parse, check, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
   readFileSync(resolve(here, '../resources/fixtures/lockfiles', rel), 'utf8')
+const templateDir = (rel: string): string =>
+  resolve(here, '../resources/fixtures/templates', rel)
+const PATCH_FILE = '.yarn/patches/lodash-npm-4.17.21-6382451519.patch'
+
+function patchLocatorOfResolution(resolution: string): string {
+  const idx = resolution.indexOf('@patch:')
+  return idx >= 0 ? resolution.slice(idx + 1) : resolution
+}
 
 describe('yarn-berry-v9 — discriminant', () => {
   it('accepts v9 lockfile header', () => {
@@ -153,19 +164,125 @@ describe('yarn-berry-v9 — workspaces-basic', () => {
   })
 })
 
-describe('yarn-berry-v9 — patch / alias rejection (ADR-0010)', () => {
-  const synthetic = (entryKey: string, value = 'version: 1.0.0\n  resolution: "fake"\n'): string =>
-    `__metadata:\n  version: 9\n  cacheKey: 10c0\n\n"${entryKey}":\n  ${value}`
+describe('yarn-berry-v9 — patch extraction', () => {
+  const lock = fixture('patch-yarn/yarn-berry-v9.lock')
+  const workspaceRoot = templateDir('patch-yarn')
 
-  it('throws IRREDUCIBLE_LOSS on patch: protocol', () => {
-    const input = synthetic('lodash@patch:lodash@npm%3A4.17.21#~/p.patch')
-    expect(() => parse(input)).toThrow(YarnBerryParseError)
+  it('canonical file-backed patch stamps sha512 hex and keys tarball payload by +patch=', () => {
+    const patchBytes = readFileSync(resolve(workspaceRoot, PATCH_FILE))
+    const expectedPatch = createHash('sha512').update(patchBytes).digest('hex')
+    const g = parse(lock, { workspaceRoot })
+
+    expect(g.getNode('lodash@4.17.21')?.patch).toBe(expectedPatch)
+    expect(g.tarballOf('lodash@4.17.21')?.integrity).toMatch(/^10c0\//)
+    expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: expectedPatch })?.integrity).toMatch(/^10c0\//)
+    expect(g.tarball({ name: 'lodash', version: '4.17.21' })).toBeUndefined()
+    expect([...g.tarballs()].map(([key]) => key)).toContain(`lodash@4.17.21+patch=${expectedPatch}`)
+  })
+
+  it('missing patch file falls back to sentinel and warns on the full locator envelope', () => {
+    const tempParent = mkdtempSync(resolve(tmpdir(), 'lockfile-patch-yarn-'))
+    const tempRoot = resolve(tempParent, 'workspace')
     try {
-      parse(input)
-    } catch (e) {
-      expect((e as YarnBerryParseError).code).toBe('IRREDUCIBLE_LOSS')
+      cpSync(workspaceRoot, tempRoot, { recursive: true })
+      rmSync(resolve(tempRoot, PATCH_FILE))
+
+      const g = parse(lock, { workspaceRoot: tempRoot })
+      const resolution = g.getNode('lodash@4.17.21')?.resolution
+      expect(resolution).toBeDefined()
+      const locator = patchLocatorOfResolution(resolution!)
+      const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+      expect(g.getNode('lodash@4.17.21')?.patch).toBe(sentinel)
+      expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+        expect.objectContaining({ severity: 'warning', subject: 'lodash@4.17.21' }),
+      ])
+      expect(g.tarballOf('lodash@4.17.21')?.integrity).toMatch(/^10c0\//)
+      expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: sentinel })?.integrity).toMatch(/^10c0\//)
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true })
     }
   })
+
+  it('leaf symlink swap throws INVALID_INPUT', () => {
+    const tempParent = mkdtempSync(resolve(tmpdir(), 'lockfile-patch-yarn-link-'))
+    const tempRoot = resolve(tempParent, 'workspace')
+    const outsidePatch = resolve(tempParent, 'outside.patch')
+    const patchPath = resolve(tempRoot, PATCH_FILE)
+    try {
+      cpSync(workspaceRoot, tempRoot, { recursive: true })
+      writeFileSync(outsidePatch, 'outside workspace bytes\n')
+      rmSync(patchPath)
+      symlinkSync(outsidePatch, patchPath)
+
+      expect(() => parse(lock, { workspaceRoot: tempRoot })).toThrow(LockfileError)
+      try {
+        parse(lock, { workspaceRoot: tempRoot })
+      } catch (e) {
+        expect((e as LockfileError).code).toBe('INVALID_INPUT')
+      }
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true })
+    }
+  })
+
+  it('builtin patches without sourceable yarn-major fall back to a sentinel warning', () => {
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"typescript@npm:5.4.5":\n' +
+      '  version: 5.4.5\n' +
+      '  resolution: "typescript@patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::version=5.4.5&hash=abc123"\n' +
+      '  checksum: 10c0/abc123\n'
+
+    const g = parse(input)
+    const resolution = g.getNode('typescript@5.4.5')?.resolution
+    expect(resolution).toBeDefined()
+    const locator = patchLocatorOfResolution(resolution!)
+    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+    expect(g.getNode('typescript@5.4.5')?.patch).toBe(sentinel)
+    expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'typescript@5.4.5',
+      }),
+    ])
+  })
+
+  it('workspace escape patch paths throw INVALID_INPUT', () => {
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"lodash@npm:4.17.21":\n' +
+      '  version: 4.17.21\n' +
+      '  resolution: "lodash@patch:lodash@npm%3A4.17.21#../../../etc/passwd::version=4.17.21&hash=deadbe"\n' +
+      '  checksum: 10c0/d8cbea072bb08655bb4c989da418994b073a608dffa608b09ac04b43a791b12aeae7cd7ad919aa4c925f33b48490b5cfe6c1f71d827956071dae2e7bb3a6b74c\n'
+
+    expect(() => parse(input, { workspaceRoot })).toThrow(LockfileError)
+    try {
+      parse(input, { workspaceRoot })
+    } catch (e) {
+      expect((e as LockfileError).code).toBe('INVALID_INPUT')
+    }
+  })
+
+  it('parse() without workspaceRoot falls through to sentinel for file-backed patches', () => {
+    const g = parse(lock)
+    const resolution = g.getNode('lodash@4.17.21')?.resolution
+    expect(resolution).toBeDefined()
+    const locator = patchLocatorOfResolution(resolution!)
+    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+    expect(g.getNode('lodash@4.17.21')?.patch).toBe(sentinel)
+    expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'lodash@4.17.21',
+      }),
+    ])
+  })
+})
+
+describe('yarn-berry-v9 — alias collision rejection (ADR-0010)', () => {
 
   it('throws IRREDUCIBLE_LOSS on TarballKey collision (alias-style)', () => {
     // Two entries collapse onto `lodash@1.0.0` — once they have the same name+version, our keying
