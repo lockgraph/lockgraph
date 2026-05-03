@@ -274,16 +274,18 @@ function patchSourceOfLocator(locator: string): string | undefined {
 }
 
 function isDegeneratePatchSource(source: string): boolean {
-  if (source.trim() === '') return true
-
-  let decoded = source
+  let decoded: string
   try {
     decoded = decodeURIComponent(source)
   } catch {
     return false
   }
 
-  const segments = path.posix.normalize(decoded).split('/').filter(segment => segment !== '' && segment !== '.')
+  const trimmed = decoded.trim()
+  if (trimmed === '') return true
+  if (path.posix.isAbsolute(trimmed)) return false
+
+  const segments = path.posix.normalize(trimmed).split('/').filter(segment => segment !== '' && segment !== '.')
   return segments.length === 0
 }
 
