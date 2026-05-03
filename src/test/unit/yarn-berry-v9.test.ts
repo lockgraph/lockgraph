@@ -170,6 +170,14 @@ describe('yarn-berry-v9 — patch extraction', () => {
   const fixtureLocator = patchLocatorOfResolution(
     /resolution: "(?:[^"]*@)?(patch:[^"]+)"/.exec(lock)?.[1] ?? (() => { throw new Error('missing patch fixture resolution') })(),
   )
+  const unresolvedSentinel = (locator: string): string =>
+    `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+  const patchResolution = (locator: string): string => `foo@${locator}`
+  const singlePatchInput = (locator: string): string =>
+    '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+    '"foo@npm:1.0.0":\n' +
+    '  version: 1.0.0\n' +
+    `  resolution: "${patchResolution(locator)}"\n`
 
   it('canonical file-backed patch stamps sha512 hex and keys tarball payload by +patch=', () => {
     const patchBytes = readFileSync(resolve(workspaceRoot, PATCH_FILE))
@@ -353,19 +361,13 @@ describe('yarn-berry-v9 — patch extraction', () => {
   })
 
   it('empty patch fragments fall back to sentinel warning', () => {
-    const input =
-      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
-      '"foo@npm:1.0.0":\n' +
-      '  version: 1.0.0\n' +
-      '  resolution: "foo@patch:foo@npm%3A1.0.0#::version=1.0.0&hash=abc123"\n'
+    const locator = 'patch:foo@npm%3A1.0.0#::version=1.0.0&hash=abc123'
+    const input = singlePatchInput(locator)
 
     const g = parse(input, { workspaceRoot })
-    const resolution = g.getNode('foo@1.0.0')?.resolution
-    expect(resolution).toBeDefined()
-    const locator = patchLocatorOfResolution(resolution!)
-    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
 
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
@@ -375,19 +377,13 @@ describe('yarn-berry-v9 — patch extraction', () => {
   })
 
   it('whitespace-only patch fragments fall back to sentinel warning on the full locator', () => {
-    const input =
-      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
-      '"foo@npm:1.0.0":\n' +
-      '  version: 1.0.0\n' +
-      '  resolution: "foo@patch:foo@npm%3A1.0.0#  ::version=1.0.0&hash=abc123"\n'
+    const locator = 'patch:foo@npm%3A1.0.0#  ::version=1.0.0&hash=abc123'
+    const input = singlePatchInput(locator)
 
     const g = parse(input, { workspaceRoot })
-    const resolution = g.getNode('foo@1.0.0')?.resolution
-    expect(resolution).toBeDefined()
-    const locator = patchLocatorOfResolution(resolution!)
-    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
 
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
@@ -398,19 +394,13 @@ describe('yarn-berry-v9 — patch extraction', () => {
   })
 
   it.each(['./', '.'])('dot-only patch fragment %j falls back to sentinel warning on the full locator', (fragment) => {
-    const input =
-      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
-      '"foo@npm:1.0.0":\n' +
-      '  version: 1.0.0\n' +
-      `  resolution: "foo@patch:foo@npm%3A1.0.0#${fragment}::version=1.0.0&hash=abc123"\n`
+    const locator = `patch:foo@npm%3A1.0.0#${fragment}::version=1.0.0&hash=abc123`
+    const input = singlePatchInput(locator)
 
     const g = parse(input, { workspaceRoot })
-    const resolution = g.getNode('foo@1.0.0')?.resolution
-    expect(resolution).toBeDefined()
-    const locator = patchLocatorOfResolution(resolution!)
-    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
 
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
@@ -418,6 +408,37 @@ describe('yarn-berry-v9 — patch extraction', () => {
         message: expect.stringContaining(locator),
       }),
     ])
+  })
+
+  it.each([
+    'patch:foo@npm%3A1.0.0#%20%20::version=1.0.0&hash=abc123',
+    'patch:foo@npm%3A1.0.0#%09::version=1.0.0&hash=abc123',
+    'patch:foo@npm%3A1.0.0#%20./%20::version=1.0.0&hash=abc123',
+  ])('degenerate encoded patch fragment %j falls back to sentinel warning on the full locator', (locator) => {
+    const g = parse(singlePatchInput(locator), { workspaceRoot })
+    const diagnostics = g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')
+
+    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toEqual(expect.objectContaining({
+      severity: 'warning',
+      subject: 'foo@1.0.0',
+      message: expect.stringContaining('patch locator has no source fragment'),
+    }))
+    expect(diagnostics[0]?.message).toContain(locator)
+  })
+
+  it.each([
+    'patch:foo@npm%3A1.0.0#..::version=1.0.0&hash=abc123',
+    'patch:foo@npm%3A1.0.0#/abs/path::version=1.0.0&hash=abc123',
+  ])('invalid patch fragment %j throws INVALID_INPUT', (locator) => {
+    expect(() => parse(singlePatchInput(locator), { workspaceRoot })).toThrow(LockfileError)
+    try {
+      parse(singlePatchInput(locator), { workspaceRoot })
+    } catch (e) {
+      expect((e as LockfileError).code).toBe('INVALID_INPUT')
+    }
   })
 })
 
