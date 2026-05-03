@@ -1,0 +1,62 @@
+{
+  "name": "case-git-github-tarball",
+  "version": "0.0.0",
+  "lockfileVersion": 2,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "case-git-github-tarball",
+      "version": "0.0.0",
+      "dependencies": {
+        "is-git": "git+https://github.com/sindresorhus/is.git#v6.3.1",
+        "is-github": "github:sindresorhus/is#v6.3.1",
+        "ms-tarball": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"
+      }
+    },
+    "node_modules/is-git": {
+      "name": "@sindresorhus/is",
+      "version": "6.3.1",
+      "resolved": "git+ssh://git@github.com/sindresorhus/is.git#47f49741eacf0a3678684738159a87c2011bb026",
+      "license": "MIT",
+      "engines": {
+        "node": ">=16"
+      },
+      "funding": {
+        "url": "https://github.com/sindresorhus/is?sponsor=1"
+      }
+    },
+    "node_modules/is-github": {
+      "name": "@sindresorhus/is",
+      "version": "6.3.1",
+      "resolved": "git+ssh://git@github.com/sindresorhus/is.git#47f49741eacf0a3678684738159a87c2011bb026",
+      "license": "MIT",
+      "engines": {
+        "node": ">=16"
+      },
+      "funding": {
+        "url": "https://github.com/sindresorhus/is?sponsor=1"
+      }
+    },
+    "node_modules/ms-tarball": {
+      "name": "ms",
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+      "license": "MIT"
+    }
+  },
+  "dependencies": {
+    "is-git": {
+      "version": "git+ssh://git@github.com/sindresorhus/is.git#47f49741eacf0a3678684738159a87c2011bb026",
+      "from": "is-git@git+https://github.com/sindresorhus/is.git#v6.3.1"
+    },
+    "is-github": {
+      "version": "git+ssh://git@github.com/sindresorhus/is.git#47f49741eacf0a3678684738159a87c2011bb026",
+      "from": "is-github@github:sindresorhus/is#v6.3.1"
+    },
+    "ms-tarball": {
+      "version": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
+    }
+  }
+}
