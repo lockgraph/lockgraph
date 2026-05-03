@@ -15,6 +15,7 @@
 //   re-derivable on emit; ignored on parse.
 
 import { createHash } from 'node:crypto'
+import path from 'node:path'
 import {
   newBuilder,
   GraphError,
@@ -269,7 +270,21 @@ function patchSourceOfLocator(locator: string): string | undefined {
   const source = paramsIdx < 0
     ? locator.slice(hashIdx + 1)
     : locator.slice(hashIdx + 1, paramsIdx)
-  return source === '' ? undefined : source
+  return isDegeneratePatchSource(source) ? undefined : source
+}
+
+function isDegeneratePatchSource(source: string): boolean {
+  if (source.trim() === '') return true
+
+  let decoded = source
+  try {
+    decoded = decodeURIComponent(source)
+  } catch {
+    return false
+  }
+
+  const segments = path.posix.normalize(decoded).split('/').filter(segment => segment !== '' && segment !== '.')
+  return segments.length === 0
 }
 
 function yarnMajorOfBuiltinPatch(_resolution: string): string | undefined {
