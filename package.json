@@ -11,7 +11,7 @@
     "gen:fixtures": "node src/test/resources/fixtures/_gen.mjs"
   },
   "devDependencies": {
-    "@antongolub/artel": "^0.0.2",
+    "@antongolub/artel": "^0.2.0",
     "@types/node": "^22.10.0",
     "bun": "1.2.0",
     "pm-npm-10": "npm:npm@10.9.2",
