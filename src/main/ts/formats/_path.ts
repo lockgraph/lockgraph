@@ -32,7 +32,10 @@ export function readWorkspaceFileBytes(
   candidatePath: string,
   locator: string,
 ): Buffer | undefined {
-  const { root, resolved, segments } = resolveWorkspacePath(workspaceRoot, candidatePath, locator)
+  const root = resolveWorkspaceRoot(workspaceRoot)
+  if (root === undefined) return undefined
+
+  const { resolved, segments } = resolveWorkspacePath(root, candidatePath, locator)
   ensureNoSymlinksOnExistingPath(root, segments, locator)
 
   let fd: number | undefined
@@ -40,7 +43,10 @@ export function readWorkspaceFileBytes(
     fd = openSync(resolved, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
   } catch (cause) {
     const code = codeOf(cause)
-    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') return undefined
+    if (code === 'ENOENT' || code === 'EACCES') return undefined
+    if (code === 'ENOTDIR') {
+      throw invalidWorkspacePath(locator, `patch path traverses a non-directory segment`, cause)
+    }
     if (code === 'ELOOP') {
       throw invalidWorkspacePath(locator, `patch path contains a symlink`, cause)
     }
@@ -58,11 +64,10 @@ export function readWorkspaceFileBytes(
 }
 
 function resolveWorkspacePath(
-  workspaceRoot: string,
+  root: string,
   candidatePath: string,
   locator: string,
-): { root: string; resolved: string; segments: string[] } {
-  const root = realpathSync.native(workspaceRoot)
+): { resolved: string; segments: string[] } {
   const decoded = decodeWorkspacePath(candidatePath, locator)
   const normalized = normalizeWorkspacePath(decoded, locator)
   const segments = normalized.split('/').filter(segment => segment !== '' && segment !== '.')
@@ -73,7 +78,17 @@ function resolveWorkspacePath(
     throw invalidWorkspacePath(locator, `patch path escapes the workspace root`)
   }
 
-  return { root, resolved, segments }
+  return { resolved, segments }
+}
+
+function resolveWorkspaceRoot(workspaceRoot: string): string | undefined {
+  try {
+    return realpathSync.native(workspaceRoot)
+  } catch (cause) {
+    const code = codeOf(cause)
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') return undefined
+    throw cause
+  }
 }
 
 function decodeWorkspacePath(candidatePath: string, locator: string): string {
@@ -117,7 +132,10 @@ function ensureNoSymlinksOnExistingPath(root: string, segments: string[], locato
       stat = lstatSync(current)
     } catch (cause) {
       const code = codeOf(cause)
-      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') return
+      if (code === 'ENOENT' || code === 'EACCES') return
+      if (code === 'ENOTDIR') {
+        throw invalidWorkspacePath(locator, `patch path traverses a non-directory segment`, cause)
+      }
       throw cause
     }
     if (stat === undefined) return
@@ -125,7 +143,9 @@ function ensureNoSymlinksOnExistingPath(root: string, segments: string[], locato
     if (stat.isSymbolicLink()) {
       throw invalidWorkspacePath(locator, `patch path contains a symlink`)
     }
-    if (i < segments.length - 1 && !stat.isDirectory()) return
+    if (i < segments.length - 1 && !stat.isDirectory()) {
+      throw invalidWorkspacePath(locator, `patch path traverses a non-directory segment`)
+    }
   }
 }
 
