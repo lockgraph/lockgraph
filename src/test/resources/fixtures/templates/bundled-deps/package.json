@@ -1,0 +1,12 @@
+{
+  "name": "case-bundled-deps",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "ms": "2.1.3",
+    "is-buffer": "2.0.5"
+  },
+  "bundleDependencies": [
+    "ms"
+  ]
+}
