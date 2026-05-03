@@ -133,5 +133,5 @@ spec/formats/*
 spec/formats/_template.md
 spec/formats/README.md
 
-# Internal interactions
-.collab
+# Internal interactions / per-project artel runtime
+.artel
