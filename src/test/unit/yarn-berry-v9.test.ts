@@ -229,20 +229,45 @@ describe('yarn-berry-v9 — patch extraction', () => {
     }
   })
 
-  it('non-directory intermediate patch segments throw INVALID_INPUT', () => {
+  it.each([
+    {
+      label: 'outermost .yarn segment',
+      patchFile: PATCH_FILE,
+      setup(tempRoot: string): void {
+        rmSync(resolve(tempRoot, '.yarn'), { recursive: true, force: true })
+        writeFileSync(resolve(tempRoot, '.yarn'), 'not a directory\n')
+      },
+    },
+    {
+      label: 'middle .yarn/patches segment',
+      patchFile: PATCH_FILE,
+      setup(tempRoot: string): void {
+        rmSync(resolve(tempRoot, '.yarn/patches'), { recursive: true, force: true })
+        writeFileSync(resolve(tempRoot, '.yarn/patches'), 'not a directory\n')
+      },
+    },
+    {
+      label: 'deeper .yarn/patches/sub segment',
+      patchFile: '.yarn/patches/sub/foo.patch',
+      setup(tempRoot: string): void {
+        writeFileSync(resolve(tempRoot, '.yarn/patches/sub'), 'not a directory\n')
+      },
+    },
+  ])('non-directory intermediate patch segments throw INVALID_INPUT for $label', ({ patchFile, setup }) => {
     const tempParent = mkdtempSync(resolve(tmpdir(), 'lockfile-patch-yarn-nondir-'))
     const tempRoot = resolve(tempParent, 'workspace')
+    const nestedLock = patchFile === PATCH_FILE ? lock : lock.replace(PATCH_FILE, patchFile)
+    const locator = patchFile === PATCH_FILE ? fixtureLocator : fixtureLocator.replace(PATCH_FILE, patchFile)
     try {
       cpSync(workspaceRoot, tempRoot, { recursive: true })
-      rmSync(resolve(tempRoot, '.yarn/patches'), { recursive: true, force: true })
-      writeFileSync(resolve(tempRoot, '.yarn/patches'), 'not a directory\n')
+      setup(tempRoot)
 
-      expect(() => parse(lock, { workspaceRoot: tempRoot })).toThrow(LockfileError)
+      expect(() => parse(nestedLock, { workspaceRoot: tempRoot })).toThrow(LockfileError)
       try {
-        parse(lock, { workspaceRoot: tempRoot })
+        parse(nestedLock, { workspaceRoot: tempRoot })
       } catch (e) {
         expect((e as LockfileError).code).toBe('INVALID_INPUT')
-        expect((e as Error).message).toContain(fixtureLocator)
+        expect((e as Error).message).toContain(locator)
       }
     } finally {
       rmSync(tempParent, { recursive: true, force: true })
@@ -345,6 +370,52 @@ describe('yarn-berry-v9 — patch extraction', () => {
       expect.objectContaining({
         severity: 'warning',
         subject: 'foo@1.0.0',
+      }),
+    ])
+  })
+
+  it('whitespace-only patch fragments fall back to sentinel warning on the full locator', () => {
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"foo@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "foo@patch:foo@npm%3A1.0.0#  ::version=1.0.0&hash=abc123"\n'
+
+    const g = parse(input, { workspaceRoot })
+    const resolution = g.getNode('foo@1.0.0')?.resolution
+    expect(resolution).toBeDefined()
+    const locator = patchLocatorOfResolution(resolution!)
+    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'foo@1.0.0',
+        message: expect.stringContaining(locator),
+      }),
+    ])
+  })
+
+  it.each(['./', '.'])('dot-only patch fragment %j falls back to sentinel warning on the full locator', (fragment) => {
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"foo@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      `  resolution: "foo@patch:foo@npm%3A1.0.0#${fragment}::version=1.0.0&hash=abc123"\n`
+
+    const g = parse(input, { workspaceRoot })
+    const resolution = g.getNode('foo@1.0.0')?.resolution
+    expect(resolution).toBeDefined()
+    const locator = patchLocatorOfResolution(resolution!)
+    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'foo@1.0.0',
+        message: expect.stringContaining(locator),
       }),
     ])
   })
