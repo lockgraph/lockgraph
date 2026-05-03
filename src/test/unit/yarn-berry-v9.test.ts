@@ -167,6 +167,9 @@ describe('yarn-berry-v9 — workspaces-basic', () => {
 describe('yarn-berry-v9 — patch extraction', () => {
   const lock = fixture('patch-yarn/yarn-berry-v9.lock')
   const workspaceRoot = templateDir('patch-yarn')
+  const fixtureLocator = patchLocatorOfResolution(
+    /resolution: "(?:[^"]*@)?(patch:[^"]+)"/.exec(lock)?.[1] ?? (() => { throw new Error('missing patch fixture resolution') })(),
+  )
 
   it('canonical file-backed patch stamps sha512 hex and keys tarball payload by +patch=', () => {
     const patchBytes = readFileSync(resolve(workspaceRoot, PATCH_FILE))
@@ -226,6 +229,26 @@ describe('yarn-berry-v9 — patch extraction', () => {
     }
   })
 
+  it('non-directory intermediate patch segments throw INVALID_INPUT', () => {
+    const tempParent = mkdtempSync(resolve(tmpdir(), 'lockfile-patch-yarn-nondir-'))
+    const tempRoot = resolve(tempParent, 'workspace')
+    try {
+      cpSync(workspaceRoot, tempRoot, { recursive: true })
+      rmSync(resolve(tempRoot, '.yarn/patches'), { recursive: true, force: true })
+      writeFileSync(resolve(tempRoot, '.yarn/patches'), 'not a directory\n')
+
+      expect(() => parse(lock, { workspaceRoot: tempRoot })).toThrow(LockfileError)
+      try {
+        parse(lock, { workspaceRoot: tempRoot })
+      } catch (e) {
+        expect((e as LockfileError).code).toBe('INVALID_INPUT')
+        expect((e as Error).message).toContain(fixtureLocator)
+      }
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true })
+    }
+  })
+
   it('builtin patches without sourceable yarn-major fall back to a sentinel warning', () => {
     const input =
       '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
@@ -247,6 +270,29 @@ describe('yarn-berry-v9 — patch extraction', () => {
         subject: 'typescript@5.4.5',
       }),
     ])
+  })
+
+  it('deleted workspaceRoot falls back to sentinel warning', () => {
+    const tempRoot = mkdtempSync(resolve(tmpdir(), 'lockfile-patch-yarn-root-missing-'))
+    try {
+      rmSync(tempRoot, { recursive: true, force: true })
+
+      const g = parse(lock, { workspaceRoot: tempRoot })
+      const resolution = g.getNode('lodash@4.17.21')?.resolution
+      expect(resolution).toBeDefined()
+      const locator = patchLocatorOfResolution(resolution!)
+      const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+      expect(g.getNode('lodash@4.17.21')?.patch).toBe(sentinel)
+      expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          subject: 'lodash@4.17.21',
+        }),
+      ])
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true })
+    }
   })
 
   it('workspace escape patch paths throw INVALID_INPUT', () => {
@@ -277,6 +323,28 @@ describe('yarn-berry-v9 — patch extraction', () => {
       expect.objectContaining({
         severity: 'warning',
         subject: 'lodash@4.17.21',
+      }),
+    ])
+  })
+
+  it('empty patch fragments fall back to sentinel warning', () => {
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"foo@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "foo@patch:foo@npm%3A1.0.0#::version=1.0.0&hash=abc123"\n'
+
+    const g = parse(input, { workspaceRoot })
+    const resolution = g.getNode('foo@1.0.0')?.resolution
+    expect(resolution).toBeDefined()
+    const locator = patchLocatorOfResolution(resolution!)
+    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+
+    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'foo@1.0.0',
       }),
     ])
   })

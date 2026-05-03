@@ -266,9 +266,10 @@ function patchSourceOfLocator(locator: string): string | undefined {
   const hashIdx = locator.indexOf('#')
   if (hashIdx < 0) return undefined
   const paramsIdx = locator.indexOf('::', hashIdx + 1)
-  return paramsIdx < 0
+  const source = paramsIdx < 0
     ? locator.slice(hashIdx + 1)
     : locator.slice(hashIdx + 1, paramsIdx)
+  return source === '' ? undefined : source
 }
 
 function yarnMajorOfBuiltinPatch(_resolution: string): string | undefined {
