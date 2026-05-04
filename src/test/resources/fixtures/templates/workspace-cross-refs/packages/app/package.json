@@ -1,0 +1,9 @@
+{
+  "name": "@case-ws/app",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@case-ws/core": "workspace:*",
+    "@case-ws/util": "workspace:1.0.0"
+  }
+}

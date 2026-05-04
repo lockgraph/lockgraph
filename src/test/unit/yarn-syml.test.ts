@@ -81,7 +81,7 @@ describe('SYML — synthetic', () => {
 })
 
 describe('SYML — yarn-berry-v9 fixtures', () => {
-  const cases = ['simple', 'patch-yarn', 'peers-basic', 'peers-multi', 'workspaces-basic', 'yarn-crlf']
+  const cases = ['simple', 'patch-yarn', 'peers-basic', 'peers-multi', 'workspace-cross-refs', 'workspaces-basic', 'yarn-crlf']
 
   for (const c of cases) {
     it(`parses ${c}/yarn-berry-v9.lock`, () => {
@@ -121,6 +121,21 @@ describe('SYML — yarn-berry-v9 fixtures', () => {
     expect(tree['@case-ws/a@workspace:packages/a']).toBeDefined()
     expect(tree['@case-ws/b@workspace:packages/b']).toBeDefined()
     expect(tree['case-workspaces-basic@workspace:.']).toBeDefined()
+  })
+
+  it('workspace-cross-refs preserves the three workspace protocol forms', () => {
+    const tree = parse(fixture('workspace-cross-refs/yarn-berry-v9.lock'))
+    const app = tree['@case-ws/app@workspace:packages/app'] as SymlMap
+    const appDeps = app['dependencies'] as SymlMap
+    expect(appDeps['@case-ws/core']).toBe('workspace:*')
+    expect(appDeps['@case-ws/util']).toBe('workspace:1.0.0')
+
+    const coreEntry = tree['@case-ws/core@workspace:*, @case-ws/core@workspace:^, @case-ws/core@workspace:packages/core']
+    expect(coreEntry).toBeDefined()
+
+    const util = tree['@case-ws/util@workspace:1.0.0, @case-ws/util@workspace:packages/util'] as SymlMap
+    const utilDeps = util['dependencies'] as SymlMap
+    expect(utilDeps['@case-ws/core']).toBe('workspace:^')
   })
 
   const yarnCrlfAdapters = [
