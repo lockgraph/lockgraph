@@ -91,7 +91,14 @@ function loadCaseConfig (caseName) {
   return JSON.parse(fs.readFileSync(file, 'utf-8'))
 }
 
-async function runOne (caseName, adapter) {
+function postProcessLockfile (file, caseConfig) {
+  if (caseConfig.post?.lineEndings !== 'crlf') return
+  const input = fs.readFileSync(file, 'utf8')
+  const output = input.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')
+  fs.writeFileSync(file, output)
+}
+
+async function runOne (caseName, caseConfig, adapter) {
   if (adapter.skip) return { ok: false, skipped: true, reason: adapter.skip }
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `lockfile-fixture-${caseName}-${adapter.id}-`))
   try {
@@ -126,7 +133,9 @@ async function runOne (caseName, adapter) {
 
     const outDir = path.join(LOCKFILES_DIR, caseName)
     fs.mkdirSync(outDir, { recursive: true })
-    fs.copyFileSync(produced, path.join(outDir, `${adapter.id}.lock`))
+    const outFile = path.join(outDir, `${adapter.id}.lock`)
+    fs.copyFileSync(produced, outFile)
+    postProcessLockfile(outFile, caseConfig)
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err.message?.split('\n')[0] || String(err), stderr: err.stderr?.toString().slice(-500) }
@@ -149,10 +158,10 @@ async function main () {
     for (const adapter of adapters) {
       const start = Date.now()
       process.stdout.write(`[${caseName}] ${adapter.id} ... `)
-      let result = await runOne(caseName, adapter)
+      let result = await runOne(caseName, caseConfig, adapter)
       if (!result.ok && result.error?.includes('ETIMEDOUT')) {
         process.stdout.write(`retry (${Date.now() - start}ms) ... `)
-        result = await runOne(caseName, adapter)
+        result = await runOne(caseName, caseConfig, adapter)
       }
       const ms = Date.now() - start
       if (result.ok) {
