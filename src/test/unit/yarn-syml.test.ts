@@ -81,7 +81,7 @@ describe('SYML — synthetic', () => {
 })
 
 describe('SYML — yarn-berry-v9 fixtures', () => {
-  const cases = ['simple', 'patch-yarn', 'peers-basic', 'peers-multi', 'workspaces-basic']
+  const cases = ['simple', 'patch-yarn', 'peers-basic', 'peers-multi', 'workspaces-basic', 'yarn-crlf']
 
   for (const c of cases) {
     it(`parses ${c}/yarn-berry-v9.lock`, () => {
@@ -122,4 +122,22 @@ describe('SYML — yarn-berry-v9 fixtures', () => {
     expect(tree['@case-ws/b@workspace:packages/b']).toBeDefined()
     expect(tree['case-workspaces-basic@workspace:.']).toBeDefined()
   })
+
+  const yarnCrlfAdapters = [
+    'npm-1', 'npm-2', 'npm-3',
+    'yarn-classic',
+    'yarn-berry-v4', 'yarn-berry-v5', 'yarn-berry-v6', 'yarn-berry-v8', 'yarn-berry-v9',
+    'pnpm-v5', 'pnpm-v6', 'pnpm-v9',
+    'bun-text',
+  ]
+  for (const adapter of yarnCrlfAdapters) {
+    it(`yarn-crlf/${adapter}.lock is CRLF-only (no bare LF or CR)`, () => {
+      const raw = fixture(`yarn-crlf/${adapter}.lock`)
+      expect(raw).toContain('\r\n')
+      // Strip CRLF pairs; any remaining \r or \n is a bare/mixed line ending.
+      const stripped = raw.replace(/\r\n/g, '')
+      expect(stripped).not.toContain('\n')
+      expect(stripped).not.toContain('\r')
+    })
+  }
 })
