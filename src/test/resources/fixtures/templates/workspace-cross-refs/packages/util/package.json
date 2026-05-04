@@ -1,0 +1,9 @@
+{
+  "name": "@case-ws/util",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@case-ws/core": "workspace:^",
+    "is-buffer": "2.0.5"
+  }
+}

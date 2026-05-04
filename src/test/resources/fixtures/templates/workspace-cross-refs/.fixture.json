@@ -1,0 +1,7 @@
+{
+  "adapters": [
+    "yarn-berry-v5", "yarn-berry-v6", "yarn-berry-v8", "yarn-berry-v9",
+    "pnpm-v5", "pnpm-v6", "pnpm-v9",
+    "bun-text"
+  ]
+}
