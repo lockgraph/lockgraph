@@ -1,7 +1,13 @@
 # `yarn-berry-v9` — yarn berry `yarn.lock` (`__metadata.version: 9`)
 
-> Status: stub.
+> Status: preview.
 > Provenance: **Source-only**.
+
+The completeness contract — stringify, modify, enrich, optimize —
+is owned by [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md).
+This spec records read-side capabilities and points to ADR-0016 for
+the normative emit / mutate / enrich / prune rules; nothing in this
+file overrides ADR-0016.
 
 ## Compatibility
 
@@ -34,7 +40,38 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#file).
 
 ## Conversion inputs
 
-Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
+Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs). The
+patch-slot fingerprint recipe (file-backed and `~builtin<…>`),
+sentinel input shape, and path-confinement rule carry over verbatim
+— v9 inherits v4's `## Patch slot` and `## Path confinement`
+sub-sections without re-statement.
+[ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md)
+§A is the normative source for the **emit-side** companion (canonical
+form rules, field schedule, quoting, line endings, `__metadata.cacheKey`
+threading) — see [#emit](#emit) below.
+
+## Emit
+
+Emit (`stringify(graph, options?)`) is governed by
+[ADR-0016 §A *Stringify*](../decisions/0016-yarn-berry-v9-completeness-contract.md#a-stringify)
+— normative source for:
+
+- the *Graph-level roundtrip* property
+  (`parse(stringify(parse(x))) ≡ parse(x)`),
+- canonical preamble, block ordering, entry-internal field schedule,
+  SYML quoting predicate (the five-condition rule), indent, line
+  endings (`lf` default, `crlf` opt-in), trailing newline,
+  `__metadata.cacheKey` threading,
+- non-goals (no byte-lossless roundtrip, no CST-grade fidelity, no
+  unmodelled `__metadata` resurrection),
+- acceptance gate against the
+  `src/test/resources/fixtures/lockfiles/*/yarn-berry-v9.lock`
+  fixture set.
+
+Subsequent phases — modify (§B), enrich (§C), optimize (§D) — are
+similarly normative-in-ADR-0016. Any conflict between this spec and
+ADR-0016 is resolved in ADR-0016's favour until the ADR flips
+`accepted` and this section is updated to reflect the final shape.
 
 ## Schema sketch
 
@@ -65,6 +102,11 @@ Inherits v8.
 
 ## Open questions
 
-> **Open:** what fields beyond `__metadata.version` actually changed in
-> the v8 → v9 transition? Read yarn 4.14.0 changelog and diff its
-> `Project.ts` against 4.13.0 once a producer is wired up.
+> **Deferred to producer wiring (out of ADR-0016 scope).** What
+> fields beyond `__metadata.version` actually changed in the v8 → v9
+> transition? Read yarn 4.14.0 changelog and diff its `Project.ts`
+> against 4.13.0 once a producer is wired up. The §A canonical form
+> in ADR-0016 is *our* canonical form — byte-identity to yarn 4.14+
+> output is a bonus, not a contract (see ADR-0016 *Risks: yarn 4 → 9
+> emit divergence*), so this question gates fixture provenance and
+> capability-table refinement, not the §A acceptance gate.
