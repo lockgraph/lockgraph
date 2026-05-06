@@ -359,7 +359,10 @@ function validate(s: State): void {
   for (const [id, node] of s.nodes) {
     if (node.workspacePath !== undefined) {
       const inc = s.incoming.get(id)
-      if (inc && inc.length > 0) {
+      // Workspace-to-workspace edges are kind-agnostic by design here; the seal only
+      // blocks incoming edges sourced from non-workspace nodes.
+      const hasNonWorkspaceIncoming = inc?.some(edge => s.nodes.get(edge.src)?.workspacePath === undefined) ?? false
+      if (hasNonWorkspaceIncoming) {
         throw new GraphError('INVARIANT_VIOLATION', `workspace node has incoming edges: ${id}`)
       }
     }

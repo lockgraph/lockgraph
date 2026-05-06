@@ -12,6 +12,11 @@
 export type SymlValue = string | SymlMap
 export interface SymlMap { [key: string]: SymlValue }
 
+const YAML_NUMBER_RE = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
+const YAML_BOOLEAN_RE = /^(true|false|yes|no|on|off)$/i
+const YAML_NULL_RE = /^(null|~)$/
+const YAML_SPECIAL_RE = /[ \t:,[\]{}#&*!|>'"%@`]/
+
 export class SymlParseError extends Error {
   readonly line: number
   constructor(message: string, line: number) {
@@ -154,4 +159,61 @@ export function parse(input: string): SymlMap {
   }
 
   return root
+}
+
+function needsQuotes(raw: string): boolean {
+  if (raw === '') return true
+  if (YAML_SPECIAL_RE.test(raw)) return true
+  if (raw[0] === '-' || raw[0] === '?') return true
+  if (YAML_NUMBER_RE.test(raw)) return true
+  if (YAML_BOOLEAN_RE.test(raw)) return true
+  if (YAML_NULL_RE.test(raw)) return true
+  for (let i = 0; i < raw.length; i++) {
+    if (raw.charCodeAt(i) > 0x7f) return true
+  }
+  return false
+}
+
+function escapeQuoted(raw: string): string {
+  let out = ''
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i)
+    const c = raw[i]
+    if (c === '\\') out += '\\\\'
+    else if (c === '"') out += '\\"'
+    else if (c === '\n') out += '\\n'
+    else if (c === '\t') out += '\\t'
+    else if (c === '\r') out += '\\r'
+    else if (code > 0x7f) out += `\\u${code.toString(16).padStart(4, '0')}`
+    else out += c
+  }
+  return out
+}
+
+function formatScalar(raw: string): string {
+  return needsQuotes(raw) ? `"${escapeQuoted(raw)}"` : raw
+}
+
+function renderMap(map: SymlMap, indent: number, topLevel: boolean): string[] {
+  const lines: string[] = []
+  const entries = Object.entries(map)
+  const pad = '  '.repeat(indent)
+
+  for (let i = 0; i < entries.length; i++) {
+    const [key, value] = entries[i] ?? []
+    if (key === undefined || value === undefined) continue
+    if (typeof value === 'string') {
+      lines.push(`${pad}${formatScalar(key)}: ${formatScalar(value)}`)
+    } else {
+      lines.push(`${pad}${formatScalar(key)}:`)
+      lines.push(...renderMap(value, indent + 1, false))
+    }
+    if (topLevel && i < entries.length - 1) lines.push('')
+  }
+
+  return lines
+}
+
+export function stringify(value: SymlMap): string {
+  return renderMap(value, 0, true).join('\n') + '\n'
 }

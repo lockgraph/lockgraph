@@ -4,8 +4,9 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { newBuilder, type Diagnostic, type Graph, type GraphDiff, type Node } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { parse, check, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse, stringify, check, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -13,10 +14,61 @@ const fixture = (rel: string): string =>
 const templateDir = (rel: string): string =>
   resolve(here, '../resources/fixtures/templates', rel)
 const PATCH_FILE = '.yarn/patches/lodash-npm-4.17.21-6382451519.patch'
+const STRINGIFY_ROUNDTRIP_FIXTURES = [
+  'simple',
+  'patch-yarn',
+  'peers-basic',
+  'peers-multi',
+  'workspaces-basic',
+  'deps-with-scopes',
+  'workspace-cross-refs',
+] as const
 
 function patchLocatorOfResolution(resolution: string): string {
   const idx = resolution.indexOf('@patch:')
   return idx >= 0 ? resolution.slice(idx + 1) : resolution
+}
+
+function parseFixtureGraph(name: typeof STRINGIFY_ROUNDTRIP_FIXTURES[number] | 'yarn-crlf'): Graph {
+  const workspaceRoot = name === 'patch-yarn' ? templateDir('patch-yarn') : undefined
+  return parse(fixture(`${name}/yarn-berry-v9.lock`), workspaceRoot === undefined ? undefined : { workspaceRoot })
+}
+
+function graphSnapshot(graph: Graph) {
+  return {
+    nodes: Array.from(graph.nodes(), node => ({ ...node })),
+    edges: Array.from(graph.nodes(), node =>
+      graph.out(node.id).map(edge => ({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        attrs: edge.attrs === undefined ? undefined : { ...edge.attrs },
+      })),
+    ).flat(),
+    tarballs: Array.from(graph.tarballs(), ([key, payload]) => [key, { ...payload }] as const),
+    diagnostics: graph.diagnostics().map(diagnostic => ({ ...diagnostic })),
+  }
+}
+
+function stringifyWithDiagnostics(graph: Graph) {
+  const diagnostics: Diagnostic[] = []
+  const lockfile = stringify(graph, {
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic)
+    },
+  })
+
+  return { lockfile, diagnostics }
+}
+
+function expectEmptyGraphDiff(diff: GraphDiff) {
+  expect(diff).toEqual({
+    addedNodes: [],
+    removedNodes: [],
+    changedNodes: [],
+    addedEdges: [],
+    removedEdges: [],
+  })
 }
 
 describe('yarn-berry-v9 — discriminant', () => {
@@ -473,5 +525,536 @@ describe('yarn-berry-v9 — diagnostics', () => {
     const diags = g.diagnostics()
     expect(diags.some(d => d.code === 'YARN_BERRY_UNRESOLVED_DEP')).toBe(true)
     expect(diags.every(d => d.severity !== 'error')).toBe(true)
+  })
+})
+
+describe('yarn-berry-v9 — stringify', () => {
+  it.each(STRINGIFY_ROUNDTRIP_FIXTURES)('roundtrips %s at Graph level', (fixtureName) => {
+    const original = parseFixtureGraph(fixtureName)
+    const emitted = stringify(original)
+    const reparsed = parse(
+      emitted,
+      fixtureName === 'patch-yarn' ? { workspaceRoot: templateDir('patch-yarn') } : undefined,
+    )
+
+    expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
+  })
+
+  it('roundtrips yarn-crlf at Graph level when CRLF is explicitly requested', () => {
+    const original = parseFixtureGraph('yarn-crlf')
+    const emitted = stringify(original, { lineEnding: 'crlf' })
+    const reparsed = parse(emitted)
+
+    expect(emitted).toContain('\r\n')
+    expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
+  })
+
+  it('is deterministic across independently parsed graphs', () => {
+    const first = parseFixtureGraph('workspace-cross-refs')
+    const second = parseFixtureGraph('workspace-cross-refs')
+    const options = { cacheKey: '10c0', lineEnding: 'lf' as const }
+
+    expect(stringify(first, options)).toBe(stringify(second, options))
+  })
+
+  it('omits __metadata.cacheKey unless requested', () => {
+    const emitted = stringify(parseFixtureGraph('simple'))
+
+    expect(emitted).toContain('__metadata:\n  version: 9\n')
+    expect(emitted).not.toContain('cacheKey:')
+  })
+
+  it('keeps __metadata.version unquoted to match yarn writer output', () => {
+    const emitted = stringify(parseFixtureGraph('simple'), { cacheKey: '10c0' })
+
+    expect(emitted).toContain('__metadata:\n  version: 9\n  cacheKey: 10c0\n')
+    expect(emitted).not.toContain('version: "9"')
+  })
+
+  it('quotes YAML-colliding keys and values canonically', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'case-stringify@0.0.0-use.local',
+      name: 'case-stringify',
+      version: '0.0.0-use.local',
+      peerContext: [],
+      workspacePath: '',
+      resolution: 'case-stringify@workspace:.',
+    })
+    builder.addNode({
+      id: 'true@1.0.0',
+      name: 'true',
+      version: '1.0.0',
+      peerContext: [],
+      resolution: 'true@npm:1.0.0',
+    })
+    builder.addNode({
+      id: '@scope/name@2.0.0',
+      name: '@scope/name',
+      version: '2.0.0',
+      peerContext: [],
+      resolution: '@scope/name@npm:2.0.0',
+    })
+    builder.addNode({
+      id: 'pkg#hash@3.0.0',
+      name: 'pkg#hash',
+      version: '3.0.0',
+      peerContext: [],
+      resolution: 'pkg#hash@npm:3.0.0',
+    })
+    builder.addNode({
+      id: 'pkg:colon@4.0.0',
+      name: 'pkg:colon',
+      version: '4.0.0',
+      peerContext: [],
+      resolution: 'pkg:colon@npm:4.0.0',
+    })
+    builder.addNode({
+      id: 'dash-version@-1.0.0',
+      name: 'dash-version',
+      version: '-1.0.0',
+      peerContext: [],
+      resolution: 'dash-version@npm:-1.0.0',
+    })
+    builder.addEdge('case-stringify@0.0.0-use.local', 'true@1.0.0', 'dep', { range: 'npm:1.0.0' })
+    builder.addEdge('case-stringify@0.0.0-use.local', '@scope/name@2.0.0', 'dep', { range: 'npm:2.0.0' })
+    builder.addEdge('case-stringify@0.0.0-use.local', 'pkg#hash@3.0.0', 'dep', { range: 'npm:3.0.0' })
+    builder.addEdge('case-stringify@0.0.0-use.local', 'pkg:colon@4.0.0', 'dep', { range: 'npm:4.0.0' })
+    builder.addEdge('case-stringify@0.0.0-use.local', 'dash-version@-1.0.0', 'dep', { range: 'npm:-1.0.0' })
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).toContain('    "true": "npm:1.0.0"\n')
+    expect(emitted).toContain('    "@scope/name": "npm:2.0.0"\n')
+    expect(emitted).toContain('    "pkg#hash": "npm:3.0.0"\n')
+    expect(emitted).toContain('    "pkg:colon": "npm:4.0.0"\n')
+    expect(emitted).toContain('  version: "-1.0.0"\n')
+  })
+
+  it('emits peerDependenciesMeta, dependenciesMeta, and conditions when supplied as raw entry hints', () => {
+    const builder = newBuilder()
+    const hintedNode: Node & Record<string, unknown> = {
+      id: 'pkg@1.0.0',
+      name: 'pkg',
+      version: '1.0.0',
+      peerContext: [],
+      resolution: 'pkg@npm:1.0.0',
+      peerDependencies: { react: '^18.2.0' },
+      peerDependenciesMeta: { react: { optional: true } },
+      dependenciesMeta: { lodash: { unplugged: true } },
+      conditions: { os: 'linux' },
+    }
+    builder.addNode(hintedNode)
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).toContain('  peerDependencies:\n    react: ^18.2.0\n')
+    expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: "true"\n')
+    expect(emitted).toContain('  dependenciesMeta:\n    lodash:\n      unplugged: "true"\n')
+    expect(emitted).toContain('  conditions:\n    os: linux\n')
+  })
+
+  it('synthesizes peerDependencies blocks from graph peer edges', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@18.2.0',
+      name: 'react',
+      version: '18.2.0',
+      peerContext: [],
+      resolution: 'react@npm:18.2.0',
+    })
+    builder.addNode({
+      id: 'react-dom@18.2.0(react@18.2.0)',
+      name: 'react-dom',
+      version: '18.2.0',
+      peerContext: ['react@18.2.0'],
+      resolution: 'react-dom@npm:18.2.0',
+    })
+    builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0' })
+    const graph = builder.seal()
+
+    expect(stringify(graph)).toContain('  peerDependencies:\n    react: ^18.2.0\n')
+  })
+
+  it('omits peerDependencies when every peer edge is missing attrs.range', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@18.2.0',
+      name: 'react',
+      version: '18.2.0',
+      peerContext: [],
+      resolution: 'react@npm:18.2.0',
+    })
+    builder.addNode({
+      id: 'react-dom@18.2.0(react@18.2.0)',
+      name: 'react-dom',
+      version: '18.2.0',
+      peerContext: ['react@18.2.0'],
+      resolution: 'react-dom@npm:18.2.0',
+    })
+    builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer')
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).not.toContain('peerDependencies:\n')
+  })
+
+  it('can emit CRLF line endings', () => {
+    const graph = parseFixtureGraph('simple')
+    const emitted = stringify(graph, { lineEnding: 'crlf' })
+
+    expect(emitted.endsWith('\r\n')).toBe(true)
+    const stripped = emitted.replace(/\r\n/g, '')
+    expect(stripped).not.toContain('\n')
+    expect(stripped).not.toContain('\r')
+  })
+
+  it('throws IRREDUCIBLE_LOSS when peer-virtual siblings collide on emit entry key', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@17.0.0',
+      name: 'react',
+      version: '17.0.0',
+      peerContext: [],
+      resolution: 'react@npm:17.0.0',
+    })
+    builder.addNode({
+      id: 'react@18.0.0',
+      name: 'react',
+      version: '18.0.0',
+      peerContext: [],
+      resolution: 'react@npm:18.0.0',
+    })
+    builder.addNode({
+      id: 'lib@1.0.0(react@17.0.0)',
+      name: 'lib',
+      version: '1.0.0',
+      peerContext: ['react@17.0.0'],
+      resolution: 'lib@npm:1.0.0',
+    })
+    builder.addNode({
+      id: 'lib@1.0.0(react@18.0.0)',
+      name: 'lib',
+      version: '1.0.0',
+      peerContext: ['react@18.0.0'],
+      resolution: 'lib@npm:1.0.0',
+    })
+    builder.addEdge('lib@1.0.0(react@17.0.0)', 'react@17.0.0', 'peer', { range: '^17' })
+    builder.addEdge('lib@1.0.0(react@18.0.0)', 'react@18.0.0', 'peer', { range: '^18' })
+    const graph = builder.seal()
+
+    expect(() => stringify(graph)).toThrow(LockfileError)
+    try {
+      stringify(graph)
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
+      expect((error as Error).message)
+        .toContain('duplicate node id collides on emit: lib@1.0.0 from lib@1.0.0(react@17.0.0), lib@1.0.0(react@18.0.0)')
+    }
+  })
+
+  it('throws IRREDUCIBLE_LOSS when peer-virtual siblings have divergent incoming dep ranges', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'app-a@1.0.0',
+      name: 'app-a',
+      version: '1.0.0',
+      peerContext: [],
+      workspacePath: 'packages/app-a',
+      resolution: 'app-a@workspace:packages/app-a',
+    })
+    builder.addNode({
+      id: 'app-b@1.0.0',
+      name: 'app-b',
+      version: '1.0.0',
+      peerContext: [],
+      workspacePath: 'packages/app-b',
+      resolution: 'app-b@workspace:packages/app-b',
+    })
+    builder.addNode({
+      id: 'react@17.0.0',
+      name: 'react',
+      version: '17.0.0',
+      peerContext: [],
+      resolution: 'react@npm:17.0.0',
+    })
+    builder.addNode({
+      id: 'react@18.0.0',
+      name: 'react',
+      version: '18.0.0',
+      peerContext: [],
+      resolution: 'react@npm:18.0.0',
+    })
+    builder.addNode({
+      id: 'lib@1.0.0(react@17.0.0)',
+      name: 'lib',
+      version: '1.0.0',
+      peerContext: ['react@17.0.0'],
+      resolution: 'lib@npm:1.0.0',
+    })
+    builder.addNode({
+      id: 'lib@1.0.0(react@18.0.0)',
+      name: 'lib',
+      version: '1.0.0',
+      peerContext: ['react@18.0.0'],
+      resolution: 'lib@npm:1.0.0',
+    })
+    builder.addEdge('app-a@1.0.0', 'lib@1.0.0(react@17.0.0)', 'dep', { range: '^1.0.0' })
+    builder.addEdge('app-b@1.0.0', 'lib@1.0.0(react@18.0.0)', 'dep', { range: '~1.0.0' })
+    builder.addEdge('lib@1.0.0(react@17.0.0)', 'react@17.0.0', 'peer', { range: '^17' })
+    builder.addEdge('lib@1.0.0(react@18.0.0)', 'react@18.0.0', 'peer', { range: '^18' })
+    const graph = builder.seal()
+
+    expect(() => stringify(graph)).toThrow(LockfileError)
+    try {
+      stringify(graph)
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
+      expect((error as Error).message)
+        .toContain('duplicate node id collides on emit: lib@1.0.0 from lib@1.0.0(react@17.0.0), lib@1.0.0(react@18.0.0)')
+    }
+  })
+})
+
+describe('yarn-berry-v9 — modify', () => {
+  it('roundtrips addEdge dep', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dep', { range: 'npm:2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-added', subject: { src: 'lodash@4.17.21', dst: 'ms@2.1.3', kind: 'dep' } },
+    ])
+  })
+
+  it('roundtrips addEdge optional', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'optional', { range: 'npm:2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-added', subject: { src: 'case-simple@0.0.0-use.local', dst: 'ms@2.1.3', kind: 'optional' } },
+    ])
+  })
+
+  it('emits addEdge peer through peerDependencies and reparses to the flattened graph', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'peer-consumer@1.0.0(react@18.2.0)',
+        name: 'peer-consumer',
+        version: '1.0.0',
+        peerContext: ['react@18.2.0'],
+        resolution: 'peer-consumer@npm:1.0.0',
+      })
+      m.addEdge('peer-consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: 'npm:18.2.0' })
+    })
+    const flattened = original.mutate(m => {
+      m.addNode({
+        id: 'peer-consumer@1.0.0',
+        name: 'peer-consumer',
+        version: '1.0.0',
+        peerContext: [],
+        resolution: 'peer-consumer@npm:1.0.0',
+      })
+    }).graph
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    expect(lockfile).toContain('  peerDependencies:\n    react: "npm:18.2.0"\n')
+    expectEmptyGraphDiff(flattened.diff(reparsed))
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'YARN_BERRY_V9_PEER_VIRT_FLATTENED',
+        severity: 'warning',
+        subject: 'peer-consumer@1.0.0(react@18.2.0)',
+      }),
+    ])
+    expect(result.applied).toEqual([
+      { kind: 'node-added', subject: 'peer-consumer@1.0.0(react@18.2.0)' },
+      { kind: 'edge-added', subject: { src: 'peer-consumer@1.0.0(react@18.2.0)', dst: 'react@18.2.0', kind: 'peer' } },
+    ])
+  })
+
+  it('does not add incoming peer ranges to the provider entry key', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@18.2.0',
+      name: 'react',
+      version: '18.2.0',
+      peerContext: [],
+      resolution: 'react@npm:18.2.0',
+    })
+    builder.addNode({
+      id: 'peer-consumer@1.0.0(react@18.2.0)',
+      name: 'peer-consumer',
+      version: '1.0.0',
+      peerContext: ['react@18.2.0'],
+      resolution: 'peer-consumer@npm:1.0.0',
+    })
+    builder.addEdge('peer-consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18' })
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).toContain('"react@npm:18.2.0":\n')
+    expect(emitted).not.toContain('"react@npm:18.2.0, react@^18":\n')
+    expect(emitted).toContain('  peerDependencies:\n    react: ^18\n')
+  })
+
+  it('roundtrips removeEdge', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'dep')
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-removed', subject: { src: 'case-simple@0.0.0-use.local', dst: 'ms@2.1.3', kind: 'dep' } },
+    ])
+  })
+
+  it('roundtrips addNode', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'debug@1.0.0',
+        name: 'debug',
+        version: '1.0.0',
+        peerContext: [],
+        resolution: 'debug@npm:1.0.0',
+      })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'node-added', subject: 'debug@1.0.0' },
+    ])
+  })
+
+  it('roundtrips removeNode', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'dep')
+      m.removeNode('ms@2.1.3')
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-removed', subject: { src: 'case-simple@0.0.0-use.local', dst: 'ms@2.1.3', kind: 'dep' } },
+      { kind: 'node-removed', subject: 'ms@2.1.3' },
+    ])
+  })
+
+  it('roundtrips replaceNode version bump', () => {
+    const original = parseFixtureGraph('simple')
+    const current = original.getNode('ms@2.1.3')
+    expect(current).toBeDefined()
+
+    const result = original.mutate(m => {
+      m.replaceNode('ms@2.1.3', {
+        ...current!,
+        id: 'ms@2.1.4',
+        version: '2.1.4',
+        resolution: 'ms@npm:2.1.4',
+      })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'node-replaced', subject: 'ms@2.1.4' },
+    ])
+  })
+
+  it('roundtrips setTarball', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: '10c0/modified-ms-integrity' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: '10c0/modified-ms-integrity' })
+    expect(result.applied).toEqual([
+      { kind: 'tarball-set', subject: 'ms@2.1.3' },
+    ])
+  })
+
+  it('roundtrips removeTarball', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeTarball({ name: 'ms', version: '2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.tarballOf('ms@2.1.3')).toBeUndefined()
+    expect(result.applied).toEqual([
+      { kind: 'tarball-removed', subject: 'ms@2.1.3' },
+    ])
+  })
+
+  it('replacePeerContext reparses to the flattened graph and emits one warning per affected node', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.replacePeerContext('react-dom@18.2.0', ['react@18.2.0'])
+    })
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    expectEmptyGraphDiff(original.diff(reparsed))
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'YARN_BERRY_V9_PEER_VIRT_FLATTENED',
+        severity: 'warning',
+        subject: 'react-dom@18.2.0(react@18.2.0)',
+        message: expect.stringContaining('["react@18.2.0"]'),
+      }),
+    ])
+    expect(diagnostics[0]?.message).toContain('react-dom@npm:18.2.0')
+    expect(result.applied).toEqual([
+      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)' },
+    ])
+  })
+
+  it('refuses replaceNode on sentinel-keyed entries', () => {
+    const graph = parse(fixture('patch-yarn/yarn-berry-v9.lock'))
+    const current = graph.getNode('lodash@4.17.21')
+    expect(current?.patch?.startsWith('unresolved-')).toBe(true)
+
+    expect(() => graph.mutate(m => {
+      m.replaceNode('lodash@4.17.21', {
+        ...current!,
+        id: 'lodash@4.17.22',
+        version: '4.17.22',
+        resolution: 'lodash@npm:4.17.22',
+      })
+    })).toThrow(LockfileError)
+
+    try {
+      graph.mutate(m => {
+        m.replaceNode('lodash@4.17.21', {
+          ...current!,
+          id: 'lodash@4.17.22',
+          version: '4.17.22',
+          resolution: 'lodash@npm:4.17.22',
+        })
+      })
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
+    }
   })
 })
