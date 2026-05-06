@@ -167,12 +167,31 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
   })
 
-  it('workspace nodes must have no incoming edges', () => {
+  it('workspace nodes must have no incoming edges from non-workspace nodes', () => {
     const b = newBuilder()
     b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
     b.addNode(n('a@1.0.0', 'a', '1.0.0'))
     b.addEdge('a@1.0.0', 'app@1.0.0', 'dep')
     expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+  })
+
+  it.each(['dep', 'dev', 'optional'] as const)(
+    'workspace nodes may have incoming %s edges from other workspace nodes',
+    (kind) => {
+      const b = newBuilder()
+      b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
+      b.addNode(n('core@1.0.0', 'core', '1.0.0', [], { workspacePath: 'packages/core' }))
+      b.addEdge('app@1.0.0', 'core@1.0.0', kind)
+      expect(() => b.seal()).not.toThrow()
+    },
+  )
+
+  it('workspace nodes may have incoming peer edges from other workspace nodes', () => {
+    const b = newBuilder()
+    b.addNode(n('app@1.0.0(core@1.0.0)', 'app', '1.0.0', ['core@1.0.0'], { workspacePath: '' }))
+    b.addNode(n('core@1.0.0', 'core', '1.0.0', [], { workspacePath: 'packages/core' }))
+    b.addEdge('app@1.0.0(core@1.0.0)', 'core@1.0.0', 'peer')
+    expect(() => b.seal()).not.toThrow()
   })
 
   it('rejects error-severity diagnostics at seal', () => {
