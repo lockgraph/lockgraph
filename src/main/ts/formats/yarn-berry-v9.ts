@@ -17,12 +17,16 @@
 
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+// @ts-ignore -- local fixture installs do not provide semver typings.
+import semver from 'semver'
 import {
   newBuilder,
   GraphError,
   type Graph,
   type Node,
   type EdgeKind,
+  nameOf,
+  serializeNodeId,
   type TarballPayload,
   type Diagnostic,
 } from '../graph.ts'
@@ -58,6 +62,26 @@ export interface YarnBerryStringifyOptions {
   cacheKey?: string
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
+
+export interface YarnBerryEnrichOptions {}
+
+interface YarnBerryParseHints {
+  peerDependencies: Map<string, Record<string, string>>
+}
+
+interface DerivedPeer {
+  name: string
+  range: string
+  dstOldId: string
+}
+
+interface PendingDiagnostic extends Omit<Diagnostic, 'subject'> {
+  subject: string
+  candidateIds?: string[]
+  peerName?: string
+}
+
+const parseHintsByGraph = new WeakMap<Graph, YarnBerryParseHints>()
 
 /** Sniffer: matches yarn-berry-v9's discriminant (`__metadata.version: 9`). */
 export function check(input: string): boolean {
@@ -134,6 +158,7 @@ export function parse(input: string, options: YarnBerryParseOptions = {}): Graph
 
   const builder = newBuilder()
   const diagnostics: Diagnostic[] = []
+  const rawPeerDependencies = new Map<string, Record<string, string>>()
 
   // Collect entries (everything except __metadata).
   const entries: Array<{ key: string; value: SymlMap; specs: SpecPart[] }> = []
@@ -194,6 +219,11 @@ export function parse(input: string, options: YarnBerryParseOptions = {}): Graph
     builder.addNode(node)
     if (patchResult?.diagnostic) diagnostics.push(patchResult.diagnostic)
 
+    const peerDependencies = stringRecordOfBlock(asMap(value['peerDependencies']))
+    if (peerDependencies !== undefined) {
+      rawPeerDependencies.set(id, peerDependencies)
+    }
+
     // Tarball payload — checksum + bin for now; engines/license aren't in v9 lockfiles per fixture probe.
     const payload: TarballPayload = {}
     const checksum = asString(value['checksum'])
@@ -233,12 +263,163 @@ export function parse(input: string, options: YarnBerryParseOptions = {}): Graph
   for (const d of diagnostics) builder.diagnostic(d)
 
   try {
-    return builder.seal()
+    const graph = builder.seal()
+    if (rawPeerDependencies.size > 0) {
+      parseHintsByGraph.set(graph, { peerDependencies: rawPeerDependencies })
+    }
+    return graph
   } catch (e) {
     if (e instanceof GraphError) {
       throw new YarnBerryParseError('PARSE_FAILED', `seal failed: ${e.message}`)
     }
     throw e
+  }
+}
+
+export function enrich(graph: Graph, _options: YarnBerryEnrichOptions = {}): { graph: Graph; diagnostics: Diagnostic[] } {
+  const rawPeerDependencies = parseHintsByGraph.get(graph)?.peerDependencies ?? new Map<string, Record<string, string>>()
+  const derivedPeersByNodeId = new Map<string, DerivedPeer[]>()
+  const pendingDiagnostics: PendingDiagnostic[] = []
+  let peerChanged = false
+
+  for (const node of graph.nodes()) {
+    const rawPeers = rawPeerDependencies.get(node.id)
+    if (rawPeers === undefined || node.peerContext.length > 0 || graph.out(node.id, 'peer').length > 0) {
+      continue
+    }
+
+    const derivedPeers: DerivedPeer[] = []
+    for (const [peerName, range] of Object.entries(rawPeers).sort((a, b) => cmpStr(a[0], b[0]))) {
+      const normalizedRange = semver.validRange(range)
+      if (normalizedRange === null) {
+        throw new LockfileError({
+          code: 'INVALID_INPUT',
+          message: `invalid peer range for ${node.id}: ${peerName}@${range}`,
+        })
+      }
+
+      const candidates = graph.byName(peerName)
+        .filter(candidateId => {
+          const candidate = graph.getNode(candidateId)
+          return candidate !== undefined
+            && semver.valid(candidate.version) !== null
+            && semver.satisfies(candidate.version, normalizedRange)
+        })
+        .slice()
+        .sort(cmpStr)
+
+      if (candidates.length === 1) {
+        derivedPeers.push({ name: peerName, range, dstOldId: candidates[0]! })
+        peerChanged = true
+        continue
+      }
+
+      if (candidates.length === 0) {
+        pendingDiagnostics.push({
+          code: 'YARN_BERRY_V9_PEER_UNSATISFIED',
+          severity: 'warning',
+          subject: node.id,
+          message: `peer "${peerName}" range "${range}" matches no installed version`,
+        })
+        continue
+      }
+
+      pendingDiagnostics.push({
+        code: 'YARN_BERRY_V9_PEER_AMBIGUOUS',
+        severity: 'warning',
+        subject: node.id,
+        peerName,
+        candidateIds: candidates,
+        message: ambiguousPeerMessage(peerName, candidates),
+      })
+    }
+
+    if (derivedPeers.length > 0) {
+      derivedPeersByNodeId.set(node.id, derivedPeers)
+    }
+  }
+
+  const workspaceChanged = graphNeedsWorkspaceAttribution(graph)
+  if (!peerChanged && !workspaceChanged) {
+    return {
+      graph,
+      diagnostics: pendingDiagnostics.map(diagnostic => finalizePendingDiagnostic(diagnostic, new Map())),
+    }
+  }
+
+  const finalNodeIds = deriveFinalNodeIds(graph, derivedPeersByNodeId)
+  const nextNodes = new Map<string, Node>()
+  for (const node of graph.nodes()) {
+    const derivedPeers = derivedPeersByNodeId.get(node.id)
+    if (derivedPeers === undefined) {
+      nextNodes.set(node.id, node)
+      continue
+    }
+
+    const peerContext = sortPeerContext(derivedPeers.map(peer => finalNodeIds.get(peer.dstOldId) ?? peer.dstOldId))
+    const newId = finalNodeIds.get(node.id) ?? node.id
+    nextNodes.set(node.id, {
+      ...node,
+      id: newId,
+      peerContext,
+    })
+  }
+
+  const builder = newBuilder()
+  for (const node of graph.nodes()) {
+    builder.addNode(nextNodes.get(node.id) ?? node)
+  }
+
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      const nextSrc = nextNodes.get(edge.src)?.id ?? edge.src
+      const nextDst = nextNodes.get(edge.dst)?.id ?? edge.dst
+      let nextAttrs = edge.attrs
+
+      if (edge.kind !== 'peer' && edge.attrs?.workspace !== true && isDerivedWorkspaceRange(edge.attrs?.range)) {
+        const dstNode = graph.getNode(edge.dst)
+        if (dstNode?.workspacePath !== undefined) {
+          nextAttrs = { ...edge.attrs, workspace: true }
+        }
+      }
+
+      builder.addEdge(nextSrc, nextDst, edge.kind, nextAttrs)
+    }
+  }
+
+  for (const [srcOldId, derivedPeers] of derivedPeersByNodeId) {
+    const srcNewId = nextNodes.get(srcOldId)?.id ?? srcOldId
+    for (const peer of derivedPeers) {
+      const dstNewId = nextNodes.get(peer.dstOldId)?.id ?? peer.dstOldId
+      builder.addEdge(srcNewId, dstNewId, 'peer', { range: peer.range })
+    }
+  }
+
+  for (const node of graph.nodes()) {
+    const payload = graph.tarballOf(node.id)
+    if (payload === undefined) continue
+    builder.setTarball({ name: node.name, version: node.version, patch: node.patch }, payload)
+  }
+  for (const diagnostic of graph.diagnostics()) {
+    builder.diagnostic(diagnostic)
+  }
+  const layoutHints = graph.layoutHints()
+  if (layoutHints !== undefined) {
+    builder.layoutHints(layoutHints)
+  }
+
+  const nextGraph = builder.seal()
+  if (rawPeerDependencies.size > 0) {
+    const remappedPeerDependencies = new Map<string, Record<string, string>>()
+    for (const [oldId, block] of rawPeerDependencies) {
+      remappedPeerDependencies.set(nextNodes.get(oldId)?.id ?? oldId, block)
+    }
+    parseHintsByGraph.set(nextGraph, { peerDependencies: remappedPeerDependencies })
+  }
+
+  return {
+    graph: nextGraph,
+    diagnostics: pendingDiagnostics.map(diagnostic => finalizePendingDiagnostic(diagnostic, nextNodes)),
   }
 }
 
@@ -343,6 +524,7 @@ function entryOfNode(graph: Graph, node: Node, options: YarnBerryStringifyOption
   if (optionalDependencies !== undefined) entry['optionalDependencies'] = optionalDependencies
 
   const peerDependencies = extraBlockOfNode(node, 'peerDependencies')
+    ?? rawPeerDependenciesBlockOfNode(graph, node.id)
     ?? edgeBlockOfKind(graph, node, 'peer', { skipMissingRange: true })
   if (peerDependencies !== undefined) entry['peerDependencies'] = peerDependencies
 
@@ -445,6 +627,11 @@ function edgeBlockOfKind(
 
 function extraBlockOfNode(node: Node, field: string): SymlMap | undefined {
   return coerceSymlMap((node as unknown as Record<string, unknown>)[field])
+}
+
+function rawPeerDependenciesBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
+  const peerDependencies = parseHintsByGraph.get(graph)?.peerDependencies.get(nodeId)
+  return peerDependencies === undefined ? undefined : coerceSymlMap(peerDependencies)
 }
 
 function coerceSymlMap(value: unknown): SymlMap | undefined {
@@ -569,6 +756,94 @@ function sha512Hex(value: string | Uint8Array): string {
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function stringRecordOfBlock(block: SymlMap | undefined): Record<string, string> | undefined {
+  if (!block) return undefined
+
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(block)) {
+    if (typeof value === 'string') out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function sortPeerContext(peers: readonly string[]): string[] {
+  return peers.slice().sort((a, b) => {
+    const nameCmp = cmpStr(nameOf(a), nameOf(b))
+    return nameCmp !== 0 ? nameCmp : cmpStr(a, b)
+  })
+}
+
+function deriveFinalNodeIds(graph: Graph, derivedPeersByNodeId: Map<string, DerivedPeer[]>): Map<string, string> {
+  const finalIds = new Map<string, string>()
+  const nodes = Array.from(graph.nodes())
+  for (const node of nodes) {
+    finalIds.set(node.id, node.id)
+  }
+
+  for (let i = 0; i < nodes.length; i++) {
+    let changed = false
+    for (const node of nodes) {
+      const derivedPeers = derivedPeersByNodeId.get(node.id)
+      if (derivedPeers === undefined) continue
+
+      const peerContext = sortPeerContext(derivedPeers.map(peer => finalIds.get(peer.dstOldId) ?? peer.dstOldId))
+      const nextId = serializeNodeId(node.name, node.version, peerContext)
+      if (finalIds.get(node.id) !== nextId) {
+        finalIds.set(node.id, nextId)
+        changed = true
+      }
+    }
+    if (!changed) return finalIds
+  }
+
+  throw new LockfileError({
+    code: 'INVARIANT_VIOLATION',
+    message: `peer enrichment did not converge`,
+  })
+}
+
+function isDerivedWorkspaceRange(range: string | undefined): boolean {
+  return typeof range === 'string' && range.startsWith('workspace:')
+}
+
+function ambiguousPeerMessage(peerName: string, candidates: readonly string[]): string {
+  return `peer "${peerName}" matches multiple installed versions: [${candidates.join(', ')}]`
+}
+
+function finalizePendingDiagnostic(
+  diagnostic: PendingDiagnostic,
+  nextNodes: Map<string, Node>,
+): Diagnostic {
+  const subject = nextNodes.get(diagnostic.subject)?.id ?? diagnostic.subject
+  const message = diagnostic.code === 'YARN_BERRY_V9_PEER_AMBIGUOUS'
+    && diagnostic.peerName !== undefined
+    && diagnostic.candidateIds !== undefined
+    ? ambiguousPeerMessage(
+      diagnostic.peerName,
+      diagnostic.candidateIds.map(candidateId => nextNodes.get(candidateId)?.id ?? candidateId),
+    )
+    : diagnostic.message
+
+  return {
+    code: diagnostic.code,
+    severity: diagnostic.severity,
+    subject,
+    message,
+  }
+}
+
+function graphNeedsWorkspaceAttribution(graph: Graph): boolean {
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (edge.kind === 'peer') continue
+      if (edge.attrs?.workspace === true) continue
+      if (!isDerivedWorkspaceRange(edge.attrs?.range)) continue
+      if (graph.getNode(edge.dst)?.workspacePath !== undefined) return true
+    }
+  }
+  return false
 }
 
 function addEdgesFromBlock(

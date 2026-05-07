@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { newBuilder, type Diagnostic, type Graph, type GraphDiff, type Node } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { parse, stringify, check, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse, stringify, check, enrich, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -1056,5 +1056,277 @@ describe('yarn-berry-v9 — modify', () => {
     } catch (error) {
       expect((error as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
     }
+  })
+})
+
+describe('yarn-berry-v9 — enrich', () => {
+  it('derives a peer edge and virtualizes the consumer when one candidate matches', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: ^18.0.0\n' +
+      '"react@npm:18.2.0":\n' +
+      '  version: 18.2.0\n' +
+      '  resolution: "react@npm:18.2.0"\n'
+
+    const result = enrich(parse(input))
+
+    expect(result.diagnostics).toEqual([])
+    expect(result.graph.getNode('host@1.0.0(react@18.2.0)')).toBeDefined()
+    expect(result.graph.out('host@1.0.0(react@18.2.0)', 'peer')).toEqual([
+      {
+        src: 'host@1.0.0(react@18.2.0)',
+        dst: 'react@18.2.0',
+        kind: 'peer',
+        attrs: { range: '^18.0.0' },
+      },
+    ])
+  })
+
+  it('warns and leaves the source flat when a peer range is ambiguous', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: "*"\n' +
+      '"react@npm:17.0.2":\n' +
+      '  version: 17.0.2\n' +
+      '  resolution: "react@npm:17.0.2"\n' +
+      '"react@npm:18.2.0":\n' +
+      '  version: 18.2.0\n' +
+      '  resolution: "react@npm:18.2.0"\n'
+
+    const result = enrich(parse(input))
+
+    expect(result.graph.getNode('host@1.0.0')).toBeDefined()
+    expect(result.graph.out('host@1.0.0', 'peer')).toEqual([])
+    expect(result.diagnostics).toEqual([
+      {
+        code: 'YARN_BERRY_V9_PEER_AMBIGUOUS',
+        severity: 'warning',
+        subject: 'host@1.0.0',
+        message: 'peer "react" matches multiple installed versions: [react@17.0.2, react@18.2.0]',
+      },
+    ])
+  })
+
+  it('warns and leaves the source flat when a peer range is unsatisfied', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: ^18.0.0\n' +
+      '"react@npm:17.0.2":\n' +
+      '  version: 17.0.2\n' +
+      '  resolution: "react@npm:17.0.2"\n'
+
+    const result = enrich(parse(input))
+
+    expect(result.graph.getNode('host@1.0.0')).toBeDefined()
+    expect(result.graph.out('host@1.0.0', 'peer')).toEqual([])
+    expect(result.diagnostics).toEqual([
+      {
+        code: 'YARN_BERRY_V9_PEER_UNSATISFIED',
+        severity: 'warning',
+        subject: 'host@1.0.0',
+        message: 'peer "react" range "^18.0.0" matches no installed version',
+      },
+    ])
+  })
+
+  it('throws INVALID_INPUT on a malformed peer range', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: definitely-not-a-range\n'
+
+    expect(() => enrich(parse(input))).toThrow(LockfileError)
+    try {
+      enrich(parse(input))
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('INVALID_INPUT')
+      expect((error as Error).message).toContain('react@definitely-not-a-range')
+    }
+  })
+
+  it('marks workspace: prefixed dependency edges with attrs.workspace = true', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"app@workspace:packages/app":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "app@workspace:packages/app"\n' +
+      '  dependencies:\n' +
+      '    core-caret: "workspace:^"\n' +
+      '    core-caret-ranged: "workspace:^1.0.0"\n' +
+      '    core-exact: "workspace:1.0.0"\n' +
+      '    core-link: "workspace:packages/core-link"\n' +
+      '    core-range: "workspace:>=1.0.0 <2.0.0"\n' +
+      '    core-star: "workspace:*"\n' +
+      '    core-tilde-ranged: "workspace:~1.2.3"\n' +
+      '    core-tilde: "workspace:~"\n' +
+      '    core-x: "workspace:1.x"\n' +
+      '"core-caret@workspace:^, core-caret@workspace:packages/core-caret":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core-caret@workspace:packages/core-caret"\n' +
+      '"core-caret-ranged@workspace:^1.0.0, core-caret-ranged@workspace:packages/core-caret-ranged":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core-caret-ranged@workspace:packages/core-caret-ranged"\n' +
+      '"core-exact@workspace:1.0.0, core-exact@workspace:packages/core-exact":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "core-exact@workspace:packages/core-exact"\n' +
+      '"core-link@workspace:packages/core-link":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core-link@workspace:packages/core-link"\n' +
+      '"core-range@workspace:>=1.0.0 <2.0.0, core-range@workspace:packages/core-range":\n' +
+      '  version: 1.5.0\n' +
+      '  resolution: "core-range@workspace:packages/core-range"\n' +
+      '"core-star@workspace:*, core-star@workspace:packages/core-star":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core-star@workspace:packages/core-star"\n' +
+      '"core-tilde-ranged@workspace:~1.2.3, core-tilde-ranged@workspace:packages/core-tilde-ranged":\n' +
+      '  version: 1.2.4\n' +
+      '  resolution: "core-tilde-ranged@workspace:packages/core-tilde-ranged"\n' +
+      '"core-tilde@workspace:~, core-tilde@workspace:packages/core-tilde":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core-tilde@workspace:packages/core-tilde"\n' +
+      '"core-x@workspace:1.x, core-x@workspace:packages/core-x":\n' +
+      '  version: 1.9.0\n' +
+      '  resolution: "core-x@workspace:packages/core-x"\n'
+
+    const result = enrich(parse(input))
+    const out = result.graph.out('app@1.0.0').map(edge => ({
+      dst: edge.dst,
+      range: edge.attrs?.range,
+      workspace: edge.attrs?.workspace,
+    })).sort((a, b) => a.dst.localeCompare(b.dst))
+
+    expect(out).toEqual([
+      { dst: 'core-caret-ranged@1.2.3', range: 'workspace:^1.0.0', workspace: true },
+      { dst: 'core-caret@1.2.3', range: 'workspace:^', workspace: true },
+      { dst: 'core-exact@1.0.0', range: 'workspace:1.0.0', workspace: true },
+      { dst: 'core-link@1.2.3', range: 'workspace:packages/core-link', workspace: true },
+      { dst: 'core-range@1.5.0', range: 'workspace:>=1.0.0 <2.0.0', workspace: true },
+      { dst: 'core-star@1.2.3', range: 'workspace:*', workspace: true },
+      { dst: 'core-tilde-ranged@1.2.4', range: 'workspace:~1.2.3', workspace: true },
+      { dst: 'core-tilde@1.2.3', range: 'workspace:~', workspace: true },
+      { dst: 'core-x@1.9.0', range: 'workspace:1.x', workspace: true },
+    ])
+  })
+
+  it('marks semver-shaped workspace ranges with attrs.workspace = true', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"app@workspace:packages/app":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "app@workspace:packages/app"\n' +
+      '  dependencies:\n' +
+      '    core-caret: "workspace:^1.0.0"\n' +
+      '    core-exact: "workspace:1.0.0"\n' +
+      '    core-tilde: "workspace:~1.2.3"\n' +
+      '    core-x: "workspace:1.x"\n' +
+      '"core-caret@workspace:^1.0.0, core-caret@workspace:packages/core-caret":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core-caret@workspace:packages/core-caret"\n' +
+      '"core-exact@workspace:1.0.0, core-exact@workspace:packages/core-exact":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "core-exact@workspace:packages/core-exact"\n' +
+      '"core-tilde@workspace:~1.2.3, core-tilde@workspace:packages/core-tilde":\n' +
+      '  version: 1.2.4\n' +
+      '  resolution: "core-tilde@workspace:packages/core-tilde"\n' +
+      '"core-x@workspace:1.x, core-x@workspace:packages/core-x":\n' +
+      '  version: 1.9.0\n' +
+      '  resolution: "core-x@workspace:packages/core-x"\n'
+
+    const out = enrich(parse(input)).graph.out('app@1.0.0').map(edge => edge.attrs?.workspace)
+
+    expect(out).toEqual([true, true, true, true])
+  })
+
+  it('marks workspace path links with attrs.workspace = true', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"app@workspace:packages/app":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "app@workspace:packages/app"\n' +
+      '  dependencies:\n' +
+      '    core: "workspace:packages/core"\n' +
+      '"core@workspace:packages/core":\n' +
+      '  version: 1.2.3\n' +
+      '  resolution: "core@workspace:packages/core"\n'
+
+    expect(enrich(parse(input)).graph.out('app@1.0.0')).toEqual([
+      {
+        src: 'app@1.0.0',
+        dst: 'core@1.2.3',
+        kind: 'dep',
+        attrs: { range: 'workspace:packages/core', workspace: true },
+      },
+    ])
+  })
+
+  it('remaps ambiguous peer diagnostic candidates after candidate virtualization', () => {
+    const input =
+      '__metadata:\n  version: 9\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    lib: "*"\n' +
+      '"lib@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "lib@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: "^17.0.0"\n' +
+      '"lib@npm:1.1.0":\n' +
+      '  version: 1.1.0\n' +
+      '  resolution: "lib@npm:1.1.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: "^18.0.0"\n' +
+      '"react@npm:17.0.2":\n' +
+      '  version: 17.0.2\n' +
+      '  resolution: "react@npm:17.0.2"\n' +
+      '"react@npm:18.2.0":\n' +
+      '  version: 18.2.0\n' +
+      '  resolution: "react@npm:18.2.0"\n'
+
+    const result = enrich(parse(input))
+
+    expect(result.graph.getNode('lib@1.0.0(react@17.0.2)')).toBeDefined()
+    expect(result.graph.getNode('lib@1.1.0(react@18.2.0)')).toBeDefined()
+    expect(result.diagnostics).toEqual([
+      {
+        code: 'YARN_BERRY_V9_PEER_AMBIGUOUS',
+        severity: 'warning',
+        subject: 'host@1.0.0',
+        message: 'peer "lib" matches multiple installed versions: [lib@1.0.0(react@17.0.2), lib@1.1.0(react@18.2.0)]',
+      },
+    ])
+  })
+
+  it('re-derives peers after stringify/parse and closes the §A.4 peers-basic degradation', () => {
+    const first = enrich(parseFixtureGraph('peers-basic'))
+
+    expect(first.graph.out('react-dom@18.2.0(react@18.2.0)', 'peer')).toEqual([
+      {
+        src: 'react-dom@18.2.0(react@18.2.0)',
+        dst: 'react@18.2.0',
+        kind: 'peer',
+        attrs: { range: '^18.2.0' },
+      },
+    ])
+
+    const second = enrich(parse(stringify(first.graph)))
+
+    expectEmptyGraphDiff(first.graph.diff(second.graph))
   })
 })
