@@ -1,7 +1,13 @@
 # `yarn-berry-v5` — yarn berry `yarn.lock` (`__metadata.version: 5`)
 
-> Status: stub.
+> Status: preview.
 > Provenance: **Source-only**.
+
+The completeness contract — stringify, modify, enrich, optimize —
+is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
+This spec records compatibility and fixture provenance; the normative
+emit / mutate / enrich / prune rules live in ADR-0018 §A.v5 and the
+version-invariant sections it inherits from ADR-0016.
 
 ## Compatibility
 
@@ -34,11 +40,15 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#file).
 
 ## Schema sketch
 
-Same shape as v4; differences are field-level (TBD).
+Same shape as v4 with `conditions` support added, while retaining bare
+inner-block dependency ranges and raw sha512-hex `checksum` values (no
+`<cacheKey>/` prefix).
 
 ## Capabilities
 
-Inherits v4. No removed capabilities; expect added fields only.
+Parse / stringify / graph-level mutate roundtrip / enrich / optimize
+implemented against the fixture matrix at
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v5.lock`.
 
 ## Conversion inputs
 
@@ -46,11 +56,13 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
 ## Quirks
 
-- v5 introduced **`conditions`** field per entry (used for OS/CPU
-  optionalDependencies skip).
-- `cacheKey` semantics tweaked.
-
-> **TBD:** complete diff vs v4.
+- `__metadata.cacheKey` is empirically `8` across the current v5 fixtures.
+- Inner `dependencies` / `optionalDependencies` emit bare ranges
+  (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form.
+- `checksum` values are raw sha512 hex, not `cacheKey/hash`.
+- `conditions` first appears in v5; the current shipped fixture set does
+  not exercise it, but parse/stringify coverage preserves the nested
+  block shape in the adapter contract.
 
 ## Degradation rules
 
@@ -62,6 +74,7 @@ Inherits v4.
 
 ## Open questions
 
-> **Open:** does berry treat conditions as part of resolution identity, or
-> is `foo@npm:1.0.0` the same node regardless of `conditions`? Likely yes
-> (same package, different install gates) — verify experimentally.
+> None at preview. Fixture verification matched ADR-0018 §A.v5 on all
+> observed deltas: handshake `5`, cacheKey `8`, bare inner dep ranges,
+> raw checksum form, and no `compressionLevel` in the current fixture
+> corpus.
