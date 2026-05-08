@@ -1,7 +1,13 @@
 # `yarn-berry-v4` — yarn berry `yarn.lock` (`__metadata.version: 4`)
 
-> Status: stub.
+> Status: preview.
 > Provenance: **Source-only**.
+
+The completeness contract — stringify, modify, enrich, optimize —
+is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
+This spec records compatibility and fixture provenance; the normative
+emit / mutate / enrich / prune rules live in ADR-0018 §A.v4 and the
+version-invariant sections it inherits from ADR-0016.
 
 ## Compatibility
 
@@ -42,34 +48,15 @@
 
 ## Schema sketch
 
-```yaml
-__metadata:
-  version: 4
-  cacheKey: ...
-
-"foo@npm:^1.0.0":
-  version: 1.0.3
-  resolution: "foo@npm:1.0.3"
-  checksum: ...
-  languageName: node
-  linkType: hard
-```
+Same shape as the later pre-v8 family, but without `conditions`, with
+bare inner-block dependency ranges, and with raw sha512-hex
+`checksum` values (no `<cacheKey>/` prefix).
 
 ## Capabilities
 
-| Feature | Supported | Notes |
-|---------|:---------:|-------|
-| Workspaces                                | ✓ | resolution `name@workspace:path` |
-| Workspace protocol                        | ✓ | `workspace:^`, `workspace:~`, `workspace:*` |
-| Peer-dep virtualization                   | ✓ | `virtual:<hash>#npm:foo@1` resolution |
-| `npm:` alias                              | ✓ | first-class |
-| `git` / `github` protocols                | ✓ | own resolution scheme |
-| `file` / `link` / `portal`                | ✓ | first-class |
-| `patch:` protocol                         | ✓ | first-class; wraps another resolution |
-| Integrity hashes                          | ✓ | `checksum` (custom format incl. cacheKey prefix) |
-| `dev` / `optional` / `peer` separation    | ~ | derivable from manifest, not in lockfile |
-| Bundled deps                              | ✗ | |
-| Overrides / resolutions                   | ~ | applied at resolve time |
+Parse / stringify / graph-level mutate roundtrip / enrich / optimize
+implemented against the fixture matrix at
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v4.lock`.
 
 ## Conversion inputs
 
@@ -177,9 +164,13 @@ offending locator in the diagnostic message.
 
 ## Quirks
 
-- `checksum` is **not** a sha512 — it's a yarn-specific hash incorporating
-  `cacheKey`. Two berry installs with different cacheKeys produce different
-  checksums for the same archive. Keep raw, do not normalise.
+- `__metadata.cacheKey` is empirically `7` across the current v4 fixtures.
+- Inner `dependencies` / `optionalDependencies` emit bare ranges
+  (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form.
+- `checksum` values are raw sha512 hex, not `cacheKey/hash`.
+- `conditions` are absent in the current v4 fixtures and unsupported on
+  emit; if a parsed/synthetic graph carries a conditions sidecar, the
+  v4 emitter drops it with `YARN_BERRY_V4_CONDITIONS_DROPPED`.
 - `linkType: hard` vs `soft` distinguishes hard-linkable vs symlink-only deps.
 - Virtual instances appear with `virtual:<random>#<base-resolution>` keys.
   These are PEER-RESOLVED forks of one underlying package — handle in graph
@@ -201,6 +192,7 @@ offending locator in the diagnostic message.
 
 ## Open questions
 
-> **Open:** schema differences between v4 and v5 / v6 / v8 are incremental but
-> not enumerated anywhere centrally. Need a diff-grid across all four (cacheKey
-> presence, languageName defaults, conditions field, …).
+> None at preview. Fixture verification matched ADR-0018 §A.v4 on all
+> observed deltas: handshake `4`, cacheKey `7`, bare inner dep ranges,
+> raw checksum form, no `conditions`, and no `compressionLevel` in the
+> current fixture corpus.
