@@ -11,6 +11,9 @@ import {
   parse as parseV8,
   stringify as stringifyV8,
 } from '../../main/ts/formats/yarn-berry-v8.ts'
+import { parse as parseV4 } from '../../main/ts/formats/yarn-berry-v4.ts'
+import { parse as parseV5 } from '../../main/ts/formats/yarn-berry-v5.ts'
+import { parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -80,19 +83,24 @@ describe('yarn-berry-v8 — discriminant and isolation', () => {
     expect(parseV8(fixture('simple/yarn-berry-v8.lock')).getNode('case-simple@0.0.0-use.local')).toBeDefined()
     expect(parseV9(fixture('simple/yarn-berry-v9.lock')).getNode('case-simple@0.0.0-use.local')).toBeDefined()
 
-    expect(() => parseV8(fixture('simple/yarn-berry-v9.lock'))).toThrow(LockfileError)
-    try {
-      parseV8(fixture('simple/yarn-berry-v9.lock'))
-    } catch (error) {
-      expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+    for (const lock of [
+      '__metadata:\n  version: 4\n',
+      '__metadata:\n  version: 5\n',
+      '__metadata:\n  version: 6\n',
+      fixture('simple/yarn-berry-v9.lock'),
+    ]) {
+      expect(() => parseV8(lock)).toThrow(LockfileError)
+      try {
+        parseV8(lock)
+      } catch (error) {
+        expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+      }
     }
 
+    expect(() => parseV4('__metadata:\n  version: 8\n')).toThrow(LockfileError)
+    expect(() => parseV5('__metadata:\n  version: 8\n')).toThrow(LockfileError)
+    expect(() => parseV6('__metadata:\n  version: 8\n')).toThrow(LockfileError)
     expect(() => parseV9(fixture('simple/yarn-berry-v8.lock'))).toThrow(LockfileError)
-    try {
-      parseV9(fixture('simple/yarn-berry-v8.lock'))
-    } catch (error) {
-      expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
-    }
   })
 })
 
