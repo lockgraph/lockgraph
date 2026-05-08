@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { newBuilder, type Diagnostic, type Graph, type GraphDiff, type Node } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { parse, stringify, check, enrich, optimize, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse, stringify, check, enrich, optimize } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -88,8 +88,12 @@ describe('yarn-berry-v9 — discriminant', () => {
 
   it('parse rejects format mismatch loudly', () => {
     const lock = fixture('simple/yarn-berry-v8.lock')
-    expect(() => parse(lock)).toThrow(YarnBerryParseError)
-    expect(() => parse(lock)).toThrow(/__metadata\.version/)
+    expect(() => parse(lock)).toThrow(LockfileError)
+    try {
+      parse(lock)
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+    }
   })
 })
 
