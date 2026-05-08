@@ -1,7 +1,13 @@
 # `yarn-berry-v6` — yarn berry `yarn.lock` (`__metadata.version: 6`)
 
-> Status: stub.
+> Status: preview.
 > Provenance: **Source-only**.
+
+The completeness contract — stringify, modify, enrich, optimize —
+is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
+This spec records compatibility and fixture provenance; the normative
+emit / mutate / enrich / prune rules live in ADR-0018 §A.v6 and the
+version-invariant sections it inherits from ADR-0016.
 
 ## Compatibility
 
@@ -32,11 +38,15 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#file).
 
 ## Schema sketch
 
-Same shape; v6 mostly tightens v5 — to be enumerated.
+Same shape as v5 with the same `conditions` support, bare inner-block
+dependency ranges, and raw sha512-hex `checksum` values (no
+`<cacheKey>/` prefix).
 
 ## Capabilities
 
-Inherits v5.
+Parse / stringify / graph-level mutate roundtrip / enrich / optimize
+implemented against the fixture matrix at
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v6.lock`.
 
 ## Conversion inputs
 
@@ -44,8 +54,10 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
 ## Quirks
 
-> **TBD:** v6 stabilised PnP layout details; whether they leak into lockfile
-> needs verification.
+- `__metadata.cacheKey` is empirically `8` across the current v6 fixtures.
+- Inner `dependencies` / `optionalDependencies` emit bare ranges
+  (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form.
+- `checksum` values are raw sha512 hex, not `cacheKey/hash`.
 
 ## Degradation rules
 
@@ -57,6 +69,6 @@ Inherits v5.
 
 ## Open questions
 
-> **Open:** is the v5→v6 bump driven by a *parser-incompatible* change or
-> just a marker for `yarn install` to re-validate? If the latter, parser can
-> be shared with v5.
+> None at preview. The current fixture set matches ADR-0018 §A.v6:
+> same shape as v5, version handshake `6`, cacheKey `8`, bare inner
+> dep ranges, raw checksum form.
