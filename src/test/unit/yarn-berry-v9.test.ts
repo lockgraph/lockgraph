@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { newBuilder, type Diagnostic, type Graph, type GraphDiff, type Node } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { parse, stringify, check, enrich, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse, stringify, check, enrich, optimize, YarnBerryParseError } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -1328,5 +1328,67 @@ describe('yarn-berry-v9 — enrich', () => {
     const second = enrich(parse(stringify(first.graph)))
 
     expectEmptyGraphDiff(first.graph.diff(second.graph))
+  })
+})
+
+describe('yarn-berry-v9 — optimize', () => {
+  function graphWithOrphan(): Graph {
+    const base = parseFixtureGraph('simple')
+    return base.mutate(m => {
+      m.addNode({
+        id: 'orphan@9.9.9',
+        name: 'orphan',
+        version: '9.9.9',
+        peerContext: [],
+        resolution: 'orphan@npm:9.9.9',
+      })
+      m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: '10c0/orphan' })
+    }).graph
+  }
+
+  it('is idempotent', () => {
+    const once = optimize(graphWithOrphan())
+    const twice = optimize(once.graph)
+
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual(once.diagnostics)
+  })
+
+  it('removes exactly the unreachable orphan node', () => {
+    const graph = graphWithOrphan()
+    const result = optimize(graph)
+
+    expect(result.graph.getNode('orphan@9.9.9')).toBeUndefined()
+    expect(graph.diff(result.graph)).toEqual({
+      addedNodes: [],
+      removedNodes: ['orphan@9.9.9'],
+      changedNodes: [],
+      addedEdges: [],
+      removedEdges: [{ src: 'orphan@9.9.9', dst: 'orphan@9.9.9', kind: 'dep' }],
+    })
+  })
+
+  it('survives parse/stringify roundtrip', () => {
+    const optimized = optimize(graphWithOrphan())
+    const reparsed = optimize(parse(stringify(optimized.graph)))
+
+    expect(graphSnapshot(reparsed.graph)).toEqual(graphSnapshot(optimized.graph))
+    expect(reparsed.diagnostics).toEqual(optimized.diagnostics)
+  })
+
+  it('is a no-op when no orphans exist', () => {
+    const graph = parseFixtureGraph('simple')
+    const result = optimize(graph)
+
+    expect(graphSnapshot(result.graph)).toEqual(graphSnapshot(graph))
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it('removes the orphan tarball entry', () => {
+    const result = optimize(graphWithOrphan())
+
+    expect(result.graph.tarball({ name: 'orphan', version: '9.9.9' })).toBeUndefined()
+    expect(Array.from(result.graph.tarballs(), ([key]) => key)).not.toContain('orphan@9.9.9')
   })
 })
