@@ -1,0 +1,371 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
+import { LockfileError } from '../../main/ts/errors.ts'
+import {
+  check as checkV8,
+  enrich as enrichV8,
+  optimize as optimizeV8,
+  parse as parseV8,
+  stringify as stringifyV8,
+} from '../../main/ts/formats/yarn-berry-v8.ts'
+import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const fixture = (rel: string): string =>
+  readFileSync(resolve(here, '../resources/fixtures/lockfiles', rel), 'utf8')
+
+const FIXTURES = [
+  'deps-with-scopes',
+  'git-github-tarball',
+  'peers-basic',
+  'peers-multi',
+  'simple',
+  'workspace-cross-refs',
+  'workspaces-basic',
+  'yarn-crlf',
+] as const
+
+function graphSnapshot(graph: Graph) {
+  return {
+    nodes: Array.from(graph.nodes(), node => ({ ...node })),
+    edges: Array.from(graph.nodes(), node =>
+      graph.out(node.id).map(edge => ({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        attrs: edge.attrs === undefined ? undefined : { ...edge.attrs },
+      })),
+    ).flat(),
+    tarballs: Array.from(graph.tarballs(), ([key, payload]) => [key, { ...payload }] as const),
+    diagnostics: graph.diagnostics().map(diagnostic => ({ ...diagnostic })),
+  }
+}
+
+function expectEmptyGraphDiff(diff: GraphDiff) {
+  expect(diff).toEqual({
+    addedNodes: [],
+    removedNodes: [],
+    changedNodes: [],
+    addedEdges: [],
+    removedEdges: [],
+  })
+}
+
+function parseFixtureGraph(name: typeof FIXTURES[number]): Graph {
+  return parseV8(fixture(`${name}/yarn-berry-v8.lock`))
+}
+
+function stringifyWithDiagnostics(graph: Graph) {
+  const diagnostics: Diagnostic[] = []
+  const lockfile = stringifyV8(graph, {
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic)
+    },
+  })
+
+  return { lockfile, diagnostics }
+}
+
+describe('yarn-berry-v8 — discriminant and isolation', () => {
+  it('accepts v8 lockfile header and rejects v9 header', () => {
+    expect(checkV8(fixture('simple/yarn-berry-v8.lock'))).toBe(true)
+    expect(checkV8(fixture('simple/yarn-berry-v9.lock'))).toBe(false)
+    expect(checkV9(fixture('simple/yarn-berry-v8.lock'))).toBe(false)
+  })
+
+  it('parses with the matching adapter and rejects mismatched lockfileVersion', () => {
+    expect(parseV8(fixture('simple/yarn-berry-v8.lock')).getNode('case-simple@0.0.0-use.local')).toBeDefined()
+    expect(parseV9(fixture('simple/yarn-berry-v9.lock')).getNode('case-simple@0.0.0-use.local')).toBeDefined()
+
+    expect(() => parseV8(fixture('simple/yarn-berry-v9.lock'))).toThrow(LockfileError)
+    try {
+      parseV8(fixture('simple/yarn-berry-v9.lock'))
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+    }
+
+    expect(() => parseV9(fixture('simple/yarn-berry-v8.lock'))).toThrow(LockfileError)
+    try {
+      parseV9(fixture('simple/yarn-berry-v8.lock'))
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+    }
+  })
+})
+
+describe('yarn-berry-v8 — parse fixtures', () => {
+  it.each(FIXTURES)('parses %s fixture', (fixtureName) => {
+    const graph = parseFixtureGraph(fixtureName)
+
+    expect(Array.from(graph.nodes())).not.toHaveLength(0)
+  })
+})
+
+describe('yarn-berry-v8 — stringify', () => {
+  it.each(FIXTURES.filter(name => name !== 'yarn-crlf'))('roundtrips %s at Graph level', (fixtureName) => {
+    const original = parseFixtureGraph(fixtureName)
+    const emitted = stringifyV8(original)
+    const reparsed = parseV8(emitted)
+
+    expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
+  })
+
+  it('roundtrips yarn-crlf at Graph level when CRLF is requested', () => {
+    const original = parseFixtureGraph('yarn-crlf')
+    const emitted = stringifyV8(original, { lineEnding: 'crlf' })
+    const reparsed = parseV8(emitted)
+
+    expect(emitted).toContain('\r\n')
+    expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
+  })
+
+  it('preserves parsed conditions and compressionLevel sidecars', () => {
+    const input =
+      '__metadata:\n' +
+      '  version: 8\n' +
+      '  cacheKey: 10c0\n' +
+      '  compressionLevel: 0\n\n' +
+      '"pkg@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "pkg@npm:1.0.0"\n' +
+      '  conditions:\n' +
+      '    os: linux\n' +
+      '  checksum: 10c0/deadbeef\n' +
+      '  languageName: node\n' +
+      '  linkType: hard\n'
+
+    const original = parseV8(input)
+    const emitted = stringifyV8(original)
+    const reparsed = parseV8(emitted)
+
+    expect(emitted).toContain('__metadata:\n  version: 8\n  cacheKey: 10c0\n  compressionLevel: 0\n')
+    expect(emitted).toContain('  conditions:\n    os: linux\n')
+    expect(emitted).not.toContain('compressionLevel: "0"')
+    expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
+  })
+})
+
+describe('yarn-berry-v8 — modify', () => {
+  it('roundtrips addEdge', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dep', { range: 'npm:2.1.3' })
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+  })
+
+  it('roundtrips removeEdge', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'dep')
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+  })
+
+  it('roundtrips addNode', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'debug@1.0.0',
+        name: 'debug',
+        version: '1.0.0',
+        peerContext: [],
+        resolution: 'debug@npm:1.0.0',
+      })
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+  })
+
+  it('roundtrips removeNode', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'dep')
+      m.removeNode('ms@2.1.3')
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+  })
+
+  it('roundtrips replaceNode', () => {
+    const original = parseFixtureGraph('simple')
+    const current = original.getNode('ms@2.1.3')
+
+    const result = original.mutate(m => {
+      m.replaceNode('ms@2.1.3', {
+        ...current!,
+        id: 'ms@2.1.4',
+        version: '2.1.4',
+        resolution: 'ms@npm:2.1.4',
+      })
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+  })
+
+  it('roundtrips replacePeerContext to the flattened graph with a v8 warning', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.replacePeerContext('react-dom@18.2.0', ['react@18.2.0'])
+    })
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parseV8(lockfile)
+
+    expectEmptyGraphDiff(original.diff(reparsed))
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'YARN_BERRY_V8_PEER_VIRT_FLATTENED',
+        severity: 'warning',
+        subject: 'react-dom@18.2.0(react@18.2.0)',
+      }),
+    ])
+  })
+
+  it('roundtrips setTarball', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: '10c0/modified-ms-integrity' })
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: '10c0/modified-ms-integrity' })
+  })
+
+  it('roundtrips removeTarball', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeTarball({ name: 'ms', version: '2.1.3' })
+    })
+    const reparsed = parseV8(stringifyV8(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.tarballOf('ms@2.1.3')).toBeUndefined()
+  })
+})
+
+describe('yarn-berry-v8 — enrich', () => {
+  it('derives a peer edge and virtualizes the consumer when one candidate matches', () => {
+    const input =
+      '__metadata:\n  version: 8\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: ^18.0.0\n' +
+      '"react@npm:18.2.0":\n' +
+      '  version: 18.2.0\n' +
+      '  resolution: "react@npm:18.2.0"\n'
+
+    const result = enrichV8(parseV8(input))
+
+    expect(result.diagnostics).toEqual([])
+    expect(result.graph.getNode('host@1.0.0(react@18.2.0)')).toBeDefined()
+  })
+
+  it('warns when a peer range is ambiguous', () => {
+    const input =
+      '__metadata:\n  version: 8\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: "*"\n' +
+      '"react@npm:17.0.2":\n' +
+      '  version: 17.0.2\n' +
+      '  resolution: "react@npm:17.0.2"\n' +
+      '"react@npm:18.2.0":\n' +
+      '  version: 18.2.0\n' +
+      '  resolution: "react@npm:18.2.0"\n'
+
+    expect(enrichV8(parseV8(input)).diagnostics).toEqual([
+      {
+        code: 'YARN_BERRY_V8_PEER_AMBIGUOUS',
+        severity: 'warning',
+        subject: 'host@1.0.0',
+        message: 'peer "react" matches multiple installed versions: [react@17.0.2, react@18.2.0]',
+      },
+    ])
+  })
+
+  it('warns when a peer range is unsatisfied', () => {
+    const input =
+      '__metadata:\n  version: 8\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: ^18.0.0\n' +
+      '"react@npm:17.0.2":\n' +
+      '  version: 17.0.2\n' +
+      '  resolution: "react@npm:17.0.2"\n'
+
+    expect(enrichV8(parseV8(input)).diagnostics).toEqual([
+      {
+        code: 'YARN_BERRY_V8_PEER_UNSATISFIED',
+        severity: 'warning',
+        subject: 'host@1.0.0',
+        message: 'peer "react" range "^18.0.0" matches no installed version',
+      },
+    ])
+  })
+
+  it('throws INVALID_INPUT on a malformed peer range', () => {
+    const input =
+      '__metadata:\n  version: 8\n\n' +
+      '"host@npm:1.0.0":\n' +
+      '  version: 1.0.0\n' +
+      '  resolution: "host@npm:1.0.0"\n' +
+      '  peerDependencies:\n' +
+      '    react: definitely-not-a-range\n'
+
+    expect(() => enrichV8(parseV8(input))).toThrow(LockfileError)
+    try {
+      enrichV8(parseV8(input))
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('INVALID_INPUT')
+    }
+  })
+})
+
+describe('yarn-berry-v8 — optimize', () => {
+  function graphWithOrphan(): Graph {
+    const base = parseFixtureGraph('simple')
+    return base.mutate(m => {
+      m.addNode({
+        id: 'orphan@9.9.9',
+        name: 'orphan',
+        version: '9.9.9',
+        peerContext: [],
+        resolution: 'orphan@npm:9.9.9',
+      })
+      m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: '10c0/orphan' })
+    }).graph
+  }
+
+  it('prunes unreachable nodes and tarballs', () => {
+    const result = optimizeV8(graphWithOrphan())
+
+    expect(result.graph.getNode('orphan@9.9.9')).toBeUndefined()
+    expect(result.graph.tarball({ name: 'orphan', version: '9.9.9' })).toBeUndefined()
+  })
+
+  it('is idempotent across stringify/parse', () => {
+    const once = optimizeV8(graphWithOrphan())
+    const twice = optimizeV8(parseV8(stringifyV8(once.graph)))
+
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual(once.diagnostics)
+  })
+})

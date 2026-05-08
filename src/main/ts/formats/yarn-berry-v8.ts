@@ -12,8 +12,9 @@ import {
 } from './_yarn-berry-core.ts'
 
 const CONFIG = {
-  lockfileVersion: 9,
-  codePrefix: 'YARN_BERRY_V9',
+  lockfileVersion: 8,
+  defaultCacheKey: '10c0',
+  codePrefix: 'YARN_BERRY_V8',
   rangeEmit: 'quoted-protocol',
   checksumPrefix: true,
   conditionsAllowed: true,
