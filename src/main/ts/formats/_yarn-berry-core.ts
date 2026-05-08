@@ -275,6 +275,9 @@ export function stringifyFamily(
 
   let output = `${PREAMBLE}\n\n${stringifySyml(root)}`
   output = unquoteMetadataScalar(output, 'version', String(config.lockfileVersion))
+  if (cacheKey !== undefined && /^-?(0|[1-9][0-9]*)$/.test(cacheKey)) {
+    output = unquoteMetadataScalar(output, 'cacheKey', cacheKey)
+  }
   const compressionLevel = sidecar.metadata?.compressionLevel
   if (typeof compressionLevel === 'string' && /^-?(0|[1-9][0-9]*)$/.test(compressionLevel)) {
     output = unquoteMetadataScalar(output, 'compressionLevel', compressionLevel)
@@ -1001,7 +1004,8 @@ function addEdgesFromBlock(
   if (!block) return
   for (const [depName, depRange] of Object.entries(block)) {
     if (typeof depRange !== 'string') continue
-    const lookup = `${depName}@${depRange}`
+    const normalizedRange = normalizedEdgeRange(kind, depRange)
+    const lookup = `${depName}@${normalizedRange}`
     const dstId = index.get(lookup)
     if (!dstId) {
       diagnostics.push({
@@ -1012,8 +1016,20 @@ function addEdgesFromBlock(
       })
       continue
     }
-    builder.addEdge(srcId, dstId, kind, { range: depRange })
+    builder.addEdge(srcId, dstId, kind, { range: normalizedRange })
   }
+}
+
+function normalizedEdgeRange(kind: EdgeKind, range: string): string {
+  if (kind === 'peer') return range
+  return hasExplicitProtocol(range) ? range : `npm:${range}`
+}
+
+function hasExplicitProtocol(range: string): boolean {
+  const colonIdx = range.indexOf(':')
+  if (colonIdx <= 0) return false
+  const prefix = range.slice(0, colonIdx)
+  return /^[a-z][a-z0-9+.-]*$/i.test(prefix)
 }
 
 function remapSidecar(
