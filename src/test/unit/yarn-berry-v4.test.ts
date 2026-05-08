@@ -26,6 +26,8 @@ const FIXTURES = [
   'peers-basic',
   'peers-multi',
   'simple',
+  // Note: workspace-cross-refs not generated for v4 (yarn 1.x predates the
+  // workspace cross-ref form exercised by that template).
   'workspaces-basic',
   'yarn-crlf',
 ] as const

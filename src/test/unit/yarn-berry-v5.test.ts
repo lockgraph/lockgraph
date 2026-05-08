@@ -11,6 +11,7 @@ import {
   parse as parseV5,
   stringify as stringifyV5,
 } from '../../main/ts/formats/yarn-berry-v5.ts'
+import { parse as parseV4 } from '../../main/ts/formats/yarn-berry-v4.ts'
 import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
 import { check as checkV8, parse as parseV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
@@ -89,6 +90,7 @@ describe('yarn-berry-v5 — discriminant and isolation', () => {
     expect(parseV9(fixture('simple/yarn-berry-v9.lock')).getNode('case-simple@0.0.0-use.local')).toBeDefined()
 
     for (const lock of [
+      '__metadata:\n  version: 4\n',
       fixture('simple/yarn-berry-v6.lock'),
       fixture('simple/yarn-berry-v8.lock'),
       fixture('simple/yarn-berry-v9.lock'),
@@ -100,6 +102,8 @@ describe('yarn-berry-v5 — discriminant and isolation', () => {
         expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
       }
     }
+
+    expect(() => parseV4('__metadata:\n  version: 5\n')).toThrow(LockfileError)
   })
 })
 

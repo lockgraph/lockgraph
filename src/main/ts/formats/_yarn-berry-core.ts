@@ -45,7 +45,6 @@ export interface YarnBerryFamilyOptimizeOptions {}
 
 export interface YarnBerryFamilyConfig {
   lockfileVersion: number
-  defaultCacheKey?: string
   codePrefix: string
   rangeEmit: 'bare' | 'quoted-protocol'
   checksumPrefix: boolean
@@ -238,12 +237,13 @@ export function stringifyFamily(
   }
 
   const metadata: SymlMap = { version: String(config.lockfileVersion) }
-  const cacheKey = options.cacheKey ?? config.defaultCacheKey
+  const cacheKey = options.cacheKey ?? asString(sidecar.metadata?.cacheKey)
   if (cacheKey !== undefined) {
     metadata['cacheKey'] = cacheKey
   }
   if (sidecar.metadata !== undefined) {
     for (const key of Object.keys(sidecar.metadata).sort(cmpStr)) {
+      if (key === 'version' || key === 'cacheKey') continue
       const value = cloneSymlValue(sidecar.metadata[key])
       if (value !== undefined) {
         metadata[key] = value
@@ -567,7 +567,7 @@ function validateMetadata(ast: SymlMap, config: YarnBerryFamilyConfig): SymlMap 
 
   const extras: SymlMap = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (key === 'version' || key === 'cacheKey') continue
+    if (key === 'version') continue
     const cloned = cloneSymlValue(value)
     if (cloned !== undefined) {
       extras[key] = cloned

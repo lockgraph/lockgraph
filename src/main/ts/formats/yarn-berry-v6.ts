@@ -13,7 +13,6 @@ import {
 
 const CONFIG = {
   lockfileVersion: 6,
-  defaultCacheKey: '8',
   codePrefix: 'YARN_BERRY_V6',
   rangeEmit: 'bare',
   checksumPrefix: false,

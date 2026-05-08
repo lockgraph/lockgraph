@@ -1,7 +1,13 @@
 # `yarn-berry-v8` — yarn berry `yarn.lock` (`__metadata.version: 8`)
 
-> Status: stub.
+> Status: preview.
 > Provenance: **Source-only**.
+
+The completeness contract — stringify, modify, enrich, optimize —
+is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
+This spec records compatibility and fixture provenance; the normative
+emit / mutate / enrich / prune rules live in ADR-0018 §A.v8 and the
+version-invariant sections it inherits from ADR-0016.
 
 ## Compatibility
 
@@ -36,24 +42,46 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#file). yarn 4 also writes a
 
 ## Schema sketch
 
-Same shape; v8 changes (TBD) are field-level.
+Same shape as v6 with the same structured `conditions` support, but
+with `__metadata.version: 8`, quoted protocol-bearing inner-block
+dependency ranges (`lodash: "npm:4.17.21"`), cacheKey-prefixed
+checksums (`<cacheKey>/<hex>`), and `compressionLevel` carried in
+`__metadata`.
 
 ## Capabilities
 
-Inherits v6. Yarn 4 expanded conditions support and tightened workspace
-constraints.
+Parse / stringify / graph-level mutate roundtrip / enrich / optimize
+implemented against the fixture matrix at
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v8.lock`.
 
 ## Conversion inputs
 
 Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
+## Emit
+
+Emit (`stringify(graph, options?)`) is governed by
+[ADR-0018 §A.v8 *yarn-berry-v8 stringify deltas*](../decisions/0018-yarn-berry-pre-v9-family-completeness.md#av8--yarn-berry-v8-stringify-deltas)
+plus the version-invariant sections ADR-0018 inherits from ADR-0016:
+
+- `__metadata.version` emits the literal `8`.
+- `__metadata.cacheKey` defaults to absent, but when present it is
+  threaded through into the `checksum` prefix form `<cacheKey>/<hex>`.
+- Inner `dependencies` / `optionalDependencies` emit the quoted
+  protocol-bearing form (for example `dep: "npm:2.0.0"`).
+- `conditions` are supported and roundtrip via sidecar preservation.
+- `compressionLevel` is preserved as pass-through `__metadata`
+  sidecar data; the current fixture corpus carries `0`.
+
 ## Quirks
 
-- yarn 4 emits `cacheKey: 10c0` (vs `10` in v6). The cacheKey moves with each
-  cache-format change.
-- `__metadata.cacheKey` and per-entry `checksum` prefix must agree on parse.
-
-> **TBD:** v6 → v8 field diff.
+- `__metadata.cacheKey` is empirically `10c0` across the current v8 fixtures.
+- Inner `dependencies` / `optionalDependencies` emit quoted
+  protocol-bearing ranges, unlike v4/v5/v6's bare form.
+- `checksum` values are `cacheKey/hash`, not raw sha512 hex.
+- `conditions` are present and supported, matching the v5/v6 sidecar shape.
+- `compressionLevel` first appears in the current family corpus at v8
+  and is preserved through `sidecar.metadata`.
 
 ## Degradation rules
 
@@ -66,6 +94,7 @@ Inherits v6.
 
 ## Open questions
 
-> **Open:** confirm fixture naming. The `yarn-{5,6,7}-mr` legacy directories
-> use a different numbering scheme than the lockfile schema versions; we
-> should normalise.
+> None at preview. Fixture verification matched ADR-0018 §A.v8 on the
+> observed deltas: handshake `8`, cacheKey `10c0`, quoted inner dep
+> ranges, `cacheKey/hash` checksum form, `conditions`, and
+> `compressionLevel`.

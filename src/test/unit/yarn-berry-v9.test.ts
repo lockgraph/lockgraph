@@ -562,7 +562,8 @@ describe('yarn-berry-v9 — stringify', () => {
   })
 
   it('omits __metadata.cacheKey unless requested', () => {
-    const emitted = stringify(parseFixtureGraph('simple'))
+    const withoutCacheKey = fixture('simple/yarn-berry-v9.lock').replace('  cacheKey: 10c0\n', '')
+    const emitted = stringify(parse(withoutCacheKey))
 
     expect(emitted).toContain('__metadata:\n  version: 9\n')
     expect(emitted).not.toContain('cacheKey:')
