@@ -1,7 +1,9 @@
 import { describe, it } from 'vitest'
-import { assertConversionContract } from '../_helpers.ts'
+import { assertConversionContract } from '../_assert.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
-import { activeContract, emptyGraph, observeInteropDiagnostics, parseFormat, stringifyFormat } from '../_runtime.ts'
+import { activeContract, observeInteropDiagnostics } from '../_observe.ts'
+import { emptyGraph } from '../_snapshot.ts'
 
 describe('interop adversarial §8.1 — empty graph conversion', () => {
   const graph = emptyGraph()

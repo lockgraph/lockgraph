@@ -1,18 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { newBuilder } from '../../../main/ts/graph.ts'
-import { assertConversionContract } from '../_helpers.ts'
+import { assertConversionContract } from '../_assert.ts'
+import { berryCacheKeyOf, formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { CLASSIC_SHARED_FIXTURES } from '../_fixtures.ts'
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
-import {
-  CLASSIC_SHARED_FIXTURES,
-  activeContract,
-  classicFixtureAsBerrySource,
-  defaultBerryCacheKey,
-  formatCode,
-  minimalBerryLockfile,
-  observeInteropDiagnostics,
-  parseFormat,
-  stringifyFormat,
-} from '../_runtime.ts'
+import { classicFixtureAsBerrySource, minimalBerryLockfile } from '../_synth.ts'
+import { activeContract, observeInteropDiagnostics } from '../_observe.ts'
 
 const CONTRACTS_TO_CLASSIC = CONTRACTS.filter(contract =>
   contract.to === 'yarn-classic' && contract.from.startsWith('yarn-berry-')
@@ -130,7 +123,7 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
       graph.addEdge('consumer@1.0.0(peer@2.0.0)', 'peer@2.0.0', 'peer', { range: '^2.0.0' })
       const sourceGraph = graph.seal()
       const sourceLockfile = stringifyFormat(berryFormat, sourceGraph, {
-        cacheKey: defaultBerryCacheKey(berryFormat),
+        cacheKey: berryCacheKeyOf(berryFormat),
       }).lockfile
       const emitted = stringifyFormat('yarn-classic', sourceGraph)
       const destinationGraph = parseFormat('yarn-classic', emitted.lockfile)

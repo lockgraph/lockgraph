@@ -1,15 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { assertConversionContract } from '../_helpers.ts'
+import { assertConversionContract } from '../_assert.ts'
+import { formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { fixtureLockfile } from '../_fixtures.ts'
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
-import {
-  activeContract,
-  fixtureLockfile,
-  formatCode,
-  minimalBerryLockfile,
-  observeInteropDiagnostics,
-  parseFormat,
-  stringifyFormat,
-} from '../_runtime.ts'
+import { minimalBerryLockfile } from '../_synth.ts'
+import { activeContract, observeInteropDiagnostics } from '../_observe.ts'
 
 const BERRY_CONTRACTS = CONTRACTS.filter(contract =>
   contract.from.startsWith('yarn-berry-')

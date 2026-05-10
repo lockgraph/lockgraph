@@ -1,18 +1,10 @@
 import { describe, it } from 'vitest'
-import { assertConversionContract } from '../_helpers.ts'
+import { assertConversionContract } from '../_assert.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { CLASSIC_SHARED_FIXTURES, fixtureLockfile } from '../_fixtures.ts'
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
-import {
-  CLASSIC_SHARED_FIXTURES,
-  WORKSPACE_MANIFESTS,
-  activeContract,
-  enrichClassicGraph,
-  fixtureLockfile,
-  normalizeGraphForBerry,
-  observeInteropDiagnostics,
-  parseFormat,
-  stringifyFormat,
-  workspaceFixtureGraph,
-} from '../_runtime.ts'
+import { normalizeGraphForBerry } from '../_normalize.ts'
+import { activeContract, observeInteropDiagnostics } from '../_observe.ts'
 
 const CONTRACTS_FROM_CLASSIC = CONTRACTS.filter(contract =>
   contract.from === 'yarn-classic' && contract.to.startsWith('yarn-berry-')

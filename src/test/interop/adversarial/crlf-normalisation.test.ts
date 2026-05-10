@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { fixtureLockfile, graphSnapshot, parseFormat, stringifyFormat } from '../_runtime.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { fixtureLockfile } from '../_fixtures.ts'
+import { graphSnapshot } from '../_snapshot.ts'
 
 describe('interop adversarial §8.5 — CRLF normalisation', () => {
   it('classic -> berry-v9 preserves graph identity while honoring CRLF output', () => {

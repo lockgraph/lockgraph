@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { newBuilder } from '../../../main/ts/graph.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CONTRACTS } from '../_matrix.ts'
-import { observeInteropDiagnostics, parseFormat, stringifyFormat } from '../_runtime.ts'
+import { observeInteropDiagnostics } from '../_observe.ts'
 
 describe('interop adversarial §8.2 — sentinel propagation', () => {
   it('berry-v9 -> yarn-classic collapses a sentinel patch and still surfaces the loss through interop diagnostics', () => {
