@@ -17,6 +17,6 @@ describe('interop adversarial §8.4 — multi-spec key preservation', () => {
   })
 
   it.todo(
-    'classic -> berry-v9 should emit INTEROP_CLASSIC_TO_BERRY_V9_MULTI_SPEC_COLLAPSED once multi-spec canonicalisation is surfaced through the matrix',
+    'classic -> berry-v9 should emit INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V9_MULTI_SPEC_COLLAPSED once multi-spec canonicalisation is surfaced through the matrix',
   )
 })

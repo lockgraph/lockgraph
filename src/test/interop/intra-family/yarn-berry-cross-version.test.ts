@@ -4,6 +4,7 @@ import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
 import {
   activeContract,
   fixtureLockfile,
+  formatCode,
   minimalBerryLockfile,
   observeInteropDiagnostics,
   parseFormat,
@@ -100,7 +101,7 @@ describe('interop: yarn-berry intra-family metadata edges', () => {
 
       if (sourceHasConditions && contract.to === 'yarn-berry-v4') {
         expect(codes).toContain(
-          `INTEROP_${formatCode(contract.from)}_TO_BERRY_V4_CONDITIONS_DROPPED:warning`,
+          `INTEROP_${formatCode(contract.from)}_TO_YARN_BERRY_V4_CONDITIONS_DROPPED:warning`,
         )
       }
 
@@ -112,22 +113,3 @@ describe('interop: yarn-berry intra-family metadata edges', () => {
     })
   }
 })
-
-function formatCode(format: ConversionContract['from']): string {
-  switch (format) {
-    case 'yarn-berry-v4':
-      return 'BERRY_V4'
-    case 'yarn-berry-v5':
-      return 'BERRY_V5'
-    case 'yarn-berry-v6':
-      return 'BERRY_V6'
-    case 'yarn-berry-v8':
-      return 'BERRY_V8'
-    case 'yarn-berry-v9':
-      return 'BERRY_V9'
-    case 'yarn-classic':
-      return 'CLASSIC'
-    default:
-      throw new Error(`formatCode: unsupported format ${format}`)
-  }
-}

@@ -16,6 +16,10 @@ export function assertConversionContract(
   contract: ConversionContract,
   input: AssertConversionContractInput,
 ): void {
+  if (contract.reentrancy === 'asymmetric' && input.graphReentered !== undefined) {
+    throw new Error('asymmetric pair must not pass graphReentered')
+  }
+
   const interopDiagnostics = input.diagnostics.filter(d => d.code.startsWith('INTEROP_'))
   const declared = [
     ...contract.lost,
@@ -81,7 +85,9 @@ export function graphSubset(
       case 'edges':
         for (const node of needle.nodes()) {
           for (const edge of needle.out(node.id)) {
-            const found = haystack.out(edge.src).some(candidate => candidate.dst === edge.dst)
+            const found = haystack.out(edge.src).some(candidate =>
+              candidate.dst === edge.dst && candidate.kind === edge.kind,
+            )
             if (!found) return false
           }
         }

@@ -61,9 +61,7 @@ describe('interop: yarn-classic -> yarn-berry (naive)', () => {
 })
 
 describe('interop: yarn-classic -> yarn-berry (enrich-aware)', () => {
-  for (const contract of CONTRACTS_FROM_CLASSIC) {
-    it.todo(
-      `${contract.to} should preserve manifest-derived dev/workspace edge classification once classic -> berry workspace concretisation is complete`,
-    )
-  }
+  it.todo(
+    'classic -> berry should preserve manifest-derived dev/workspace edge classification once classic -> berry workspace concretisation is complete',
+  )
 })
