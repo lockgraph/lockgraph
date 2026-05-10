@@ -54,6 +54,24 @@ implemented against the fixture matrix at
 
 Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
+## Emit
+
+Emit (`stringify(graph, options?)`) is governed by
+[ADR-0018 §A.v5 *yarn-berry-v5 stringify deltas*](../decisions/0018-yarn-berry-pre-v9-family-completeness.md#av5--yarn-berry-v5-stringify-deltas)
+plus the version-invariant sections ADR-0018 inherits from ADR-0016:
+
+- `__metadata.version` emits the literal `5`.
+- `__metadata.cacheKey` defaults to absent; when present (caller-supplied
+  via `options.cacheKey` or sidecar-preserved from parse) it emits as
+  a bare numeric literal (`cacheKey: 8` empirically) — pre-v8 form, no
+  string quoting.
+- Inner `dependencies` / `optionalDependencies` emit the bare form
+  (for example `lodash: 4.17.21`), not v8/v9's quoted protocol.
+- `checksum` values are raw sha512 hex (no `<cacheKey>/` prefix).
+- `conditions` are supported and roundtrip via sidecar preservation —
+  v5 is the FIRST version with this field (v4 lacks it).
+- `compressionLevel` is not present in the v5 corpus.
+
 ## Quirks
 
 - `__metadata.cacheKey` is empirically `8` across the current v5 fixtures.
