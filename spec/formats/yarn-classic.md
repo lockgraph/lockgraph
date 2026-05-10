@@ -1,6 +1,6 @@
 # `yarn-classic` — yarn 1 `yarn.lock`
 
-> Status: stub.
+> Status: preview.
 > Provenance: **Source-only** — no published spec; format is a custom
 > yaml-like grammar implemented in the yarn 1 parser.
 
