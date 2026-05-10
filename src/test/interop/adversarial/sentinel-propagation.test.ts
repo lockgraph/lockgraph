@@ -4,6 +4,10 @@ import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CONTRACTS } from '../_matrix.ts'
 import { observeInteropDiagnostics } from '../_observe.ts'
 
+// Synthetic in-memory graph: sentinel patches and out-of-band tarball payloads
+// can't be expressed by parsing a real berry lockfile, so this test exercises
+// `stringifyFormat` + `observeInteropDiagnostics` directly rather than going
+// through `convert`. Coverage remains real-graph comparison via featurePresence.
 describe('interop adversarial §8.2 — sentinel propagation', () => {
   it('berry-v9 -> yarn-classic collapses a sentinel patch and still surfaces the loss through interop diagnostics', () => {
     const contract = CONTRACTS.find(entry => entry.from === 'yarn-berry-v9' && entry.to === 'yarn-classic')

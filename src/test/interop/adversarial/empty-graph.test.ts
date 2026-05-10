@@ -5,6 +5,11 @@ import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
 import { activeContract, observeInteropDiagnostics } from '../_observe.ts'
 import { emptyGraph } from '../_snapshot.ts'
 
+// Synthetic-graph adversarial: starts from an in-memory empty graph rather than
+// a parseable source string, so it bypasses `convert` (which requires a valid
+// source lockfile — yarn-classic empty-graph emit produces a header the classic
+// parser rejects, tracked under the empty-classic-emit stub). Surface coverage
+// is still real-graph comparison via `observeInteropDiagnostics`.
 describe('interop adversarial §8.1 — empty graph conversion', () => {
   const graph = emptyGraph()
 

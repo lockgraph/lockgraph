@@ -635,15 +635,20 @@ function entryOfNode(
     resolution: resolutionOfNode(node),
   }
 
-  const dependencies = edgeBlockOfKind(graph, node, 'dep', config)
+  // yarn-berry's on-disk format has a single `dependencies:` block per entry —
+  // no separate `devDependencies` block. ADR-0019 §C derives `dev` edges at the
+  // workspace root from manifests; merge them with `dep` on emit so the
+  // classification survives stringify (parse-side will collapse back to `dep`
+  // per §C's "no on-lockfile signal" table).
+  const dependencies = edgeBlockOfKinds(graph, node, ['dep', 'dev'], config)
   if (dependencies !== undefined) entry['dependencies'] = dependencies
 
-  const optionalDependencies = edgeBlockOfKind(graph, node, 'optional', config)
+  const optionalDependencies = edgeBlockOfKinds(graph, node, ['optional'], config)
   if (optionalDependencies !== undefined) entry['optionalDependencies'] = optionalDependencies
 
   const peerDependencies = extraBlockOfNode(node, 'peerDependencies')
     ?? rawPeerDependenciesBlockOfNode(graph, node.id)
-    ?? edgeBlockOfKind(graph, node, 'peer', config, { skipMissingRange: true })
+    ?? edgeBlockOfKinds(graph, node, ['peer'], config, { skipMissingRange: true })
   if (peerDependencies !== undefined) entry['peerDependencies'] = peerDependencies
 
   const peerDependenciesMeta = extraBlockOfNode(node, 'peerDependenciesMeta')
@@ -704,14 +709,14 @@ function resolutionOfNode(node: Node): string {
   return `${node.name}@npm:${node.version}`
 }
 
-function edgeBlockOfKind(
+function edgeBlockOfKinds(
   graph: Graph,
   node: Node,
-  kind: EdgeKind,
+  kinds: readonly EdgeKind[],
   config: YarnBerryFamilyConfig,
   options: { skipMissingRange?: boolean } = {},
 ): SymlMap | undefined {
-  const edges = graph.out(node.id, kind)
+  const edges = kinds.flatMap(kind => graph.out(node.id, kind))
   if (edges.length === 0) return undefined
 
   const blockEntries: Array<[string, string]> = []
@@ -731,7 +736,7 @@ function edgeBlockOfKind(
       }
       throw new LockfileError({
         code: 'MISSING_REQUIRED_FIELD',
-        message: `edge ${node.id} -> ${edge.dst} (${kind}) requires attrs.range for emit`,
+        message: `edge ${node.id} -> ${edge.dst} (${edge.kind}) requires attrs.range for emit`,
       })
     }
 
@@ -739,11 +744,11 @@ function edgeBlockOfKind(
     if (seen.has(depName)) {
       throw new LockfileError({
         code: 'INVARIANT_VIOLATION',
-        message: `cannot emit duplicate ${kind} dependency key ${depName} from ${node.id}`,
+        message: `cannot emit duplicate ${edge.kind} dependency key ${depName} from ${node.id}`,
       })
     }
     seen.add(depName)
-    blockEntries.push([depName, emittedRangeOfEdge(kind, edge.attrs.range, config)])
+    blockEntries.push([depName, emittedRangeOfEdge(edge.kind, edge.attrs.range, config)])
   }
 
   if (blockEntries.length === 0) return undefined

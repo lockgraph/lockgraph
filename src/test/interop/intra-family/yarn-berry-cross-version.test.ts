@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { assertConversionContract } from '../_assert.ts'
-import { formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { convert, formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { fixtureLockfile } from '../_fixtures.ts'
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
 import { minimalBerryLockfile } from '../_synth.ts'
-import { activeContract, observeInteropDiagnostics } from '../_observe.ts'
+import { activeContract } from '../_observe.ts'
 
 const BERRY_CONTRACTS = CONTRACTS.filter(contract =>
   contract.from.startsWith('yarn-berry-')
@@ -27,34 +27,25 @@ describe('interop: yarn-berry intra-family fixtures', () => {
     describe(`${contract.from} -> ${contract.to}`, () => {
       it.each(fixtures)('%s fixture satisfies the declared contract', fixtureName => {
         const sourceLockfile = fixtureLockfile(fixtureName, contract.from)
-        const sourceGraph = parseFormat(contract.from, sourceLockfile)
-        const emitted = stringifyFormat(contract.to, sourceGraph)
-        const destinationGraph = parseFormat(contract.to, emitted.lockfile)
-        const reentered = reenter(contract, emitted.lockfile)
-        const interopDiagnostics = observeInteropDiagnostics(contract, {
-          sourceGraph,
-          destinationGraph,
-          sourceLockfile,
-          destinationLockfile: emitted.lockfile,
+        const result = convert({
+          from: contract.from,
+          to: contract.to,
+          source: sourceLockfile,
           mode: 'naive',
         })
+        const reentered = reenter(contract, result.lockfile)
         const observedContract = activeContract(contract, {
-          sourceGraph,
-          destinationGraph,
+          sourceGraph: result.sourceGraph,
+          destinationGraph: result.destinationGraph,
           sourceLockfile,
-          destinationLockfile: emitted.lockfile,
+          destinationLockfile: result.lockfile,
           mode: 'naive',
         })
 
         assertConversionContract(observedContract, {
-          graphSource: sourceGraph,
-          graphDestination: destinationGraph,
-          diagnostics: [
-            ...sourceGraph.diagnostics(),
-            ...emitted.diagnostics,
-            ...destinationGraph.diagnostics(),
-            ...interopDiagnostics,
-          ],
+          graphSource: result.sourceGraph,
+          graphDestination: result.destinationGraph,
+          diagnostics: result.diagnostics,
           mode: 'naive',
           fixture: fixtureName,
           graphReentered: reentered,
@@ -73,18 +64,16 @@ describe('interop: yarn-berry intra-family metadata edges', () => {
     })
 
     it(`${contract.from} -> ${contract.to} surfaces the declared metadata observations`, () => {
-      const sourceGraph = parseFormat(contract.from, sourceLockfile)
-      const emitted = stringifyFormat(contract.to, sourceGraph)
-      const destinationGraph = parseFormat(contract.to, emitted.lockfile)
-      const interopDiagnostics = observeInteropDiagnostics(contract, {
-        sourceGraph,
-        destinationGraph,
-        sourceLockfile,
-        destinationLockfile: emitted.lockfile,
+      const result = convert({
+        from: contract.from,
+        to: contract.to,
+        source: sourceLockfile,
         mode: 'naive',
       })
 
-      const codes = interopDiagnostics.map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`)
+      const codes = result.diagnostics
+        .filter(d => d.code.startsWith('INTEROP_'))
+        .map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`)
       const declared = [
         ...contract.lost,
         ...contract.passthrough,

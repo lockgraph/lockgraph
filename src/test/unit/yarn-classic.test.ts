@@ -423,6 +423,20 @@ describe('yarn-classic — enrich', () => {
     ])
   })
 
+  // ADR-0019 §C item (b): "distinguish workspace-member entries from such
+  // external lookalikes". Without setting `workspacePath` on member nodes,
+  // downstream emit (yarn-berry stringify) cannot tell members apart from
+  // external nodes that happen to share the `0.0.0-use.local` version literal,
+  // and the `attrs.workspace = true` markers fall off across format boundaries.
+  it('marks workspace-member nodes with workspacePath from manifest paths', () => {
+    const result = enrich(workspaceFixtureGraph(), undefined, { manifests: WORKSPACE_MANIFESTS })
+
+    expect(result.graph.getNode('@case-ws/a@0.0.0-use.local')?.workspacePath).toBe('packages/a')
+    expect(result.graph.getNode('@case-ws/b@0.0.0-use.local')?.workspacePath).toBe('packages/b')
+    // Non-member nodes stay unmarked.
+    expect(result.graph.getNode('ms@2.1.3')?.workspacePath).toBeUndefined()
+  })
+
   it('warns once without manifests and leaves local-member edges flat', () => {
     const graph = parseFixtureGraph('simple').mutate(m => {
       m.addNode({
