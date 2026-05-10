@@ -9,7 +9,7 @@ import { check as checkV5, parse as parseV5 } from '../../main/ts/formats/yarn-b
 import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
 import { check as checkV8, parse as parseV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
-import { check, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
+import { check, enrich, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -65,6 +65,45 @@ function stringifyWithDiagnostics(graph: Graph) {
 
   return { lockfile, diagnostics }
 }
+
+function workspaceFixtureGraph(): Graph {
+  return parseFixtureGraph('workspaces-basic').mutate(m => {
+    m.addNode({
+      id: '@case-ws/a@0.0.0-use.local',
+      name: '@case-ws/a',
+      version: '0.0.0-use.local',
+      peerContext: [],
+    })
+    m.addNode({
+      id: '@case-ws/b@0.0.0-use.local',
+      name: '@case-ws/b',
+      version: '0.0.0-use.local',
+      peerContext: [],
+    })
+    m.addEdge('@case-ws/a@0.0.0-use.local', 'ms@2.1.3', 'dep', { range: '2.1.3' })
+    m.addEdge('@case-ws/b@0.0.0-use.local', 'ms@2.1.3', 'dep', { range: '2.1.3' })
+  }).graph
+}
+
+const WORKSPACE_MANIFESTS = {
+  '': {
+    name: 'case-workspaces-basic',
+    version: '0.0.0',
+    dependencies: { '@case-ws/a': 'workspace:*' },
+    devDependencies: { '@case-ws/b': 'workspace:^' },
+    optionalDependencies: { ms: '2.1.3' },
+  },
+  'packages/a': {
+    name: '@case-ws/a',
+    version: '1.0.0',
+    dependencies: { ms: '2.1.3' },
+  },
+  'packages/b': {
+    name: '@case-ws/b',
+    version: '1.1.0',
+    dependencies: { ms: '2.1.3' },
+  },
+} as const
 
 describe('yarn-classic — discriminant and isolation', () => {
   it('accepts the classic header and rejects yarn-berry headers', () => {
@@ -357,5 +396,86 @@ describe('yarn-classic — modify', () => {
       { kind: 'tarball-set', subject: `ms@2.1.3+patch=${patch}` },
       { kind: 'tarball-removed', subject: 'ms@2.1.3' },
     ])
+  })
+})
+
+describe('yarn-classic — enrich', () => {
+  it('synthesizes the workspace root and classifies root edges from manifests', () => {
+    const result = enrich(workspaceFixtureGraph(), undefined, { manifests: WORKSPACE_MANIFESTS })
+
+    expect(result.diagnostics).toEqual([])
+    expect(result.graph.getNode('case-workspaces-basic@0.0.0')).toEqual({
+      id: 'case-workspaces-basic@0.0.0',
+      name: 'case-workspaces-basic',
+      version: '0.0.0',
+      peerContext: [],
+      workspacePath: '',
+    })
+    expect(result.graph.out('case-workspaces-basic@0.0.0').map(edge => ({
+      dst: edge.dst,
+      kind: edge.kind,
+      range: edge.attrs?.range,
+      workspace: edge.attrs?.workspace,
+    })).sort((a, b) => a.dst.localeCompare(b.dst))).toEqual([
+      { dst: '@case-ws/a@0.0.0-use.local', kind: 'dep', range: 'workspace:*', workspace: true },
+      { dst: '@case-ws/b@0.0.0-use.local', kind: 'dev', range: 'workspace:^', workspace: true },
+      { dst: 'ms@2.1.3', kind: 'optional', range: '2.1.3', workspace: undefined },
+    ])
+  })
+
+  it('warns once without manifests and leaves local-member edges flat', () => {
+    const graph = parseFixtureGraph('simple').mutate(m => {
+      m.addNode({
+        id: 'case-simple@0.0.0-use.local',
+        name: 'case-simple',
+        version: '0.0.0-use.local',
+        peerContext: [],
+      })
+      m.addEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'dep', { range: '2.1.3' })
+    }).graph
+    const result = enrich(graph)
+
+    expect(result.diagnostics).toEqual([
+      {
+        code: 'YARN_CLASSIC_NO_MANIFESTS',
+        severity: 'warning',
+        message: 'workspace concretisation requires manifests; leaving yarn-classic graph unclassified',
+      },
+    ])
+    expect(result.graph.getNode('case-simple@0.0.0-use.local')).toEqual({
+      id: 'case-simple@0.0.0-use.local',
+      name: 'case-simple',
+      version: '0.0.0-use.local',
+      peerContext: [],
+    })
+    expect(result.graph.out('case-simple@0.0.0-use.local')).toEqual([
+      {
+        src: 'case-simple@0.0.0-use.local',
+        dst: 'ms@2.1.3',
+        kind: 'dep',
+        attrs: { range: '2.1.3' },
+      },
+    ])
+  })
+
+  it('never derives peers or emits YARN_CLASSIC_PEER_* diagnostics', () => {
+    const result = enrich(parseFixtureGraph('peers-basic'), undefined, { manifests: {} })
+
+    expect(Array.from(result.graph.nodes(), node => node.peerContext)).toEqual([
+      [],
+      [],
+      [],
+      [],
+      [],
+    ])
+    expect(result.diagnostics.filter(diagnostic => diagnostic.code.startsWith('YARN_CLASSIC_PEER_'))).toEqual([])
+  })
+
+  it('is idempotent', () => {
+    const once = enrich(workspaceFixtureGraph(), undefined, { manifests: WORKSPACE_MANIFESTS })
+    const twice = enrich(once.graph, undefined, { manifests: WORKSPACE_MANIFESTS })
+
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual(once.diagnostics)
   })
 })

@@ -38,6 +38,18 @@ export interface YarnClassicStringifyOptions {
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
+export interface YarnClassicManifest {
+  name?: string
+  version?: string
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+}
+
+export interface YarnClassicEnrichOptions {
+  manifests?: Record<string, YarnClassicManifest>
+}
+
 const sidecarByGraph = new WeakMap<Graph, YarnClassicSidecar>()
 
 // Mined from legacy/main/ts/formats/yarn-classic.ts:30, but tightened to the
@@ -189,6 +201,59 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
   }
 
   return output
+}
+
+export function enrich(
+  graph: Graph,
+  sidecar: YarnClassicSidecar | undefined = sidecarByGraph.get(graph),
+  options: YarnClassicEnrichOptions = {},
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  if (options.manifests === undefined) {
+    return {
+      graph,
+      diagnostics: [{
+        code: 'YARN_CLASSIC_NO_MANIFESTS',
+        severity: 'warning',
+        message: 'workspace concretisation requires manifests; leaving yarn-classic graph unclassified',
+      }],
+    }
+  }
+
+  const memberManifests = memberManifestsByName(options.manifests)
+  const rootManifest = options.manifests['']
+  const rootNodeId = rootManifest?.name !== undefined && rootManifest.version !== undefined
+    ? `${rootManifest.name}@${rootManifest.version}`
+    : undefined
+  const specIndex = specIndexOfGraph(graph, sidecar)
+  const plan = planClassicEnrich(graph, rootNodeId, rootManifest, memberManifests, specIndex)
+
+  if (
+    plan.rootNode === undefined
+    && plan.addRootEdges.length === 0
+    && plan.removeRootEdges.length === 0
+    && plan.markWorkspaceEdges.length === 0
+  ) {
+    return { graph, diagnostics: [] }
+  }
+
+  const result = graph.mutate(m => {
+    if (plan.rootNode !== undefined) {
+      m.addNode(plan.rootNode)
+    }
+    for (const edge of plan.removeRootEdges) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+    }
+    for (const edge of plan.addRootEdges) {
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+    for (const edge of plan.markWorkspaceEdges) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+  })
+
+  rememberSidecar(result.graph, sidecar ?? { entrySpecs: new Map() })
+  return { graph: result.graph, diagnostics: [] }
 }
 
 function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
@@ -399,6 +464,183 @@ function addEdgesFromMap(
     }
     builder.addEdge(srcId, dstId, kind, { range })
   }
+}
+
+function specIndexOfGraph(graph: Graph, sidecar: YarnClassicSidecar | undefined): Map<string, string> {
+  const specIndex = new Map<string, string>()
+  for (const node of graph.nodes()) {
+    const fromSidecar = sidecar?.entrySpecs.get(node.id) ?? []
+    if (fromSidecar.length > 0) {
+      for (const spec of fromSidecar) {
+        specIndex.set(spec, node.id)
+      }
+      continue
+    }
+
+    for (const edge of graph.in(node.id)) {
+      if (
+        (edge.kind === 'dep' || edge.kind === 'dev' || edge.kind === 'optional')
+        && edge.attrs?.range !== undefined
+      ) {
+        specIndex.set(`${node.name}@${edge.attrs.range}`, node.id)
+      }
+    }
+  }
+  return specIndex
+}
+
+function memberManifestsByName(manifests: Record<string, YarnClassicManifest>): Map<string, { path: string; manifest: YarnClassicManifest }> {
+  const byName = new Map<string, { path: string; manifest: YarnClassicManifest }>()
+  for (const [path, manifest] of Object.entries(manifests)) {
+    if (path === '' || manifest.name === undefined) continue
+    byName.set(manifest.name, { path, manifest })
+  }
+  return byName
+}
+
+function planClassicEnrich(
+  graph: Graph,
+  rootNodeId: string | undefined,
+  rootManifest: YarnClassicManifest | undefined,
+  memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
+  specIndex: Map<string, string>,
+): {
+  rootNode: Node | undefined
+  addRootEdges: Edge[]
+  removeRootEdges: Edge[]
+  markWorkspaceEdges: Edge[]
+} {
+  const addRootEdges: Edge[] = []
+  const removeRootEdges: Edge[] = []
+  const markWorkspaceEdges: Edge[] = []
+
+  const rootNode = rootNodeId !== undefined
+    && graph.getNode(rootNodeId) === undefined
+    && rootManifest?.name !== undefined
+    && rootManifest.version !== undefined
+    ? {
+      id: rootNodeId,
+      name: rootManifest.name,
+      version: rootManifest.version,
+      peerContext: [],
+      workspacePath: '',
+    }
+    : undefined
+
+  const rootOut = rootNodeId === undefined ? [] : graph.out(rootNodeId)
+  if (rootNodeId !== undefined && rootManifest !== undefined) {
+    const desired = desiredRootEdges(graph, rootNodeId, rootManifest, memberManifests, specIndex)
+    const existingByDst = new Map<string, Edge[]>()
+    for (const edge of rootOut) {
+      const current = existingByDst.get(edge.dst)
+      if (current === undefined) existingByDst.set(edge.dst, [edge])
+      else current.push(edge)
+    }
+
+    for (const edge of desired) {
+      const existing = existingByDst.get(edge.dst) ?? []
+      const matches = existing.some(candidate => rootEdgeMatches(candidate, edge))
+      if (!matches) addRootEdges.push(edge)
+      for (const candidate of existing) {
+        if (!rootEdgeMatches(candidate, edge)) {
+          removeRootEdges.push(candidate)
+        }
+      }
+    }
+  }
+
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (
+        edge.kind === 'peer'
+        || edge.attrs?.workspace === true
+        || edge.attrs?.range === undefined
+        || !isWorkspaceProtocolRange(edge.attrs.range)
+      ) {
+        continue
+      }
+
+      const dst = graph.getNode(edge.dst)
+      if (dst === undefined || !memberManifests.has(dst.name)) continue
+      markWorkspaceEdges.push({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        attrs: { ...edge.attrs, workspace: true },
+      })
+    }
+  }
+
+  return { rootNode, addRootEdges, removeRootEdges, markWorkspaceEdges }
+}
+
+function desiredRootEdges(
+  graph: Graph,
+  rootNodeId: string,
+  rootManifest: YarnClassicManifest,
+  memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
+  specIndex: Map<string, string>,
+): Edge[] {
+  const edges: Edge[] = []
+  for (const [kind, deps] of [
+    ['dep', rootManifest.dependencies],
+    ['dev', rootManifest.devDependencies],
+    ['optional', rootManifest.optionalDependencies],
+  ] as const) {
+    if (deps === undefined) continue
+    for (const [name, range] of Object.entries(deps).sort((a, b) => cmpUtf16(a[0], b[0]))) {
+      const dstId = resolveManifestTarget(graph, name, range, memberManifests, specIndex)
+      if (dstId === undefined) continue
+      edges.push({
+        src: rootNodeId,
+        dst: dstId,
+        kind,
+        attrs: isWorkspaceProtocolRange(range) ? { range, workspace: true } : { range },
+      })
+    }
+  }
+  return edges
+}
+
+function resolveManifestTarget(
+  graph: Graph,
+  name: string,
+  range: string,
+  memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
+  specIndex: Map<string, string>,
+): string | undefined {
+  if (isWorkspaceProtocolRange(range)) {
+    return resolveWorkspaceMemberNodeId(graph, name, memberManifests.get(name)?.manifest.version)
+  }
+
+  const exact = specIndex.get(`${name}@${range}`)
+  if (exact !== undefined) return exact
+
+  const candidates = graph.byName(name)
+  if (candidates.length === 1) return candidates[0]
+  return candidates.find(id => graph.getNode(id)?.version === range)
+}
+
+function resolveWorkspaceMemberNodeId(
+  graph: Graph,
+  name: string,
+  manifestVersion: string | undefined,
+): string | undefined {
+  const candidates = graph.byName(name)
+  return candidates.find(id => graph.getNode(id)?.version === '0.0.0-use.local')
+    ?? (manifestVersion === undefined ? undefined : candidates.find(id => graph.getNode(id)?.version === manifestVersion))
+    ?? candidates[0]
+}
+
+function rootEdgeMatches(left: Edge, right: Edge): boolean {
+  return left.src === right.src
+    && left.dst === right.dst
+    && left.kind === right.kind
+    && JSON.stringify(left.attrs ?? {}) === JSON.stringify(right.attrs ?? {})
+}
+
+function isWorkspaceProtocolRange(range: string): boolean {
+  return range.startsWith('workspace:')
 }
 
 function entrySpecsOfNode(graph: Graph, node: Node): string[] {
