@@ -237,6 +237,7 @@ export function enrich(
     && plan.addRootEdges.length === 0
     && plan.removeRootEdges.length === 0
     && plan.markWorkspaceEdges.length === 0
+    && plan.memberNodeReplacements.length === 0
   ) {
     return { graph, diagnostics: [] }
   }
@@ -247,6 +248,9 @@ export function enrich(
     }
     if (plan.rootNodeReplacement !== undefined) {
       m.replaceNode(plan.rootNodeReplacement.id, plan.rootNodeReplacement)
+    }
+    for (const replacement of plan.memberNodeReplacements) {
+      m.replaceNode(replacement.id, replacement)
     }
     for (const edge of plan.removeRootEdges) {
       m.removeEdge(edge.src, edge.dst, edge.kind)
@@ -586,6 +590,7 @@ function planClassicEnrich(
 ): {
   rootNode: Node | undefined
   rootNodeReplacement: Node | undefined
+  memberNodeReplacements: Node[]
   addRootEdges: Edge[]
   removeRootEdges: Edge[]
   markWorkspaceEdges: Edge[]
@@ -593,6 +598,7 @@ function planClassicEnrich(
   const addRootEdges: Edge[] = []
   const removeRootEdges: Edge[] = []
   const markWorkspaceEdges: Edge[] = []
+  const memberNodeReplacements: Node[] = []
   const existingRootNode = rootNodeId === undefined ? undefined : graph.getNode(rootNodeId)
 
   const rootNode = rootNodeId !== undefined
@@ -613,6 +619,26 @@ function planClassicEnrich(
     && rootManifest.version !== undefined
     ? { ...existingRootNode, workspacePath: '' }
     : undefined
+
+  // §C item (b): distinguish workspace-member entries from external lookalikes
+  // by setting `workspacePath` on each in-graph node whose name matches a
+  // manifest workspace member. Without this, downstream emit (e.g. yarn-berry
+  // stringify) cannot tell members apart and emits them as plain npm entries,
+  // which strips the `attrs.workspace = true` markers across format boundaries.
+  //
+  // The version match permits both the `0.0.0-use.local` literal and the
+  // manifest-declared version, but a same-name+version external published
+  // package would also satisfy that. Tarball presence discriminates: external
+  // published packages carry a tarball entry; workspace members are
+  // soft-linked and do not.
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined) continue
+    const member = memberManifests.get(node.name)
+    if (member === undefined) continue
+    if (node.version !== '0.0.0-use.local' && node.version !== member.manifest.version) continue
+    if (graph.tarball({ name: node.name, version: node.version }) !== undefined) continue
+    memberNodeReplacements.push({ ...node, workspacePath: member.path })
+  }
 
   const rootOut = rootNodeId === undefined ? [] : graph.out(rootNodeId)
   if (rootNodeId !== undefined && rootManifest !== undefined) {
@@ -658,7 +684,7 @@ function planClassicEnrich(
     }
   }
 
-  return { rootNode, rootNodeReplacement, addRootEdges, removeRootEdges, markWorkspaceEdges }
+  return { rootNode, rootNodeReplacement, memberNodeReplacements, addRootEdges, removeRootEdges, markWorkspaceEdges }
 }
 
 function desiredRootEdges(

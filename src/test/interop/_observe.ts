@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Diagnostic, Graph } from '../../main/ts/graph.ts'
 import { parse as parseSyml, type SymlMap } from '../../main/ts/formats/_yarn-syml.ts'
-import { featurePresence, graphSubset } from './_graph-features.ts'
+import { featurePresence } from './_graph-features.ts'
 import type { AdditionEntry, ConversionContract, LossEntry, PassthroughEntry } from './_matrix.ts'
 
 export type ObservationContext = {
@@ -13,9 +13,13 @@ export type ObservationContext = {
   manifestsProvided?: boolean
 }
 
-// activeContract and observeInteropDiagnostics share the same per-entry observation
-// predicates; F10 collapses the two passes by having both consumers iterate the
-// matrix once with the same predicate dispatch.
+// `activeContract` and `observeInteropDiagnostics` deliberately use *different*
+// predicates: `applies` is source-side only (does the fixture activate this
+// contract entry?), `observed` looks at both source and destination (did the
+// adapter actually exhibit the declared behaviour?). When the two diverge —
+// e.g. matrix declares peer-virt loss for the fixture but the adapter forgot
+// to drop peer-virt — `assertConversionContract` reports "missing declared
+// diagnostic", surfacing the adapter bug instead of fabricating consistency.
 
 export function activeContract(
   contract: ConversionContract,
@@ -23,13 +27,13 @@ export function activeContract(
 ): ConversionContract {
   return {
     ...contract,
-    lost: contract.lost.filter(entry => lossObserved(entry, context)),
+    lost: contract.lost.filter(entry => lossApplies(entry, context)),
     added: contract.added.filter(entry =>
       entry.diagnostic !== undefined
       && entry.severity !== undefined
-      && additionObserved(entry, context),
+      && additionApplies(entry, context),
     ),
-    passthrough: contract.passthrough.filter(entry => passthroughObserved(entry, context)),
+    passthrough: contract.passthrough.filter(entry => passthroughApplies(entry, context)),
   }
 }
 
@@ -77,20 +81,67 @@ function toDiagnostic(
   }
 }
 
-function lossObserved(entry: LossEntry, context: ObservationContext): boolean {
+// applies: source-side state — does this contract entry activate for the
+// current fixture? Used by `activeContract` to narrow expectations.
+
+function lossApplies(entry: LossEntry, context: ObservationContext): boolean {
+  switch (entry.feature) {
+    case 'conditions':
+    case 'peer-virt':
+    case 'patch':
+    case 'virtual':
+    case 'workspace-metadata':
+      return featurePresence(context.sourceGraph, entry.feature)
+    case 'cacheKey':
+      return hasBerryMetadataField(context.sourceLockfile, 'cacheKey')
+    case 'compressionLevel':
+      return hasBerryMetadataField(context.sourceLockfile, 'compressionLevel')
+    default:
+      return assertExhaustive(entry.feature, 'lossApplies')
+  }
+}
+
+function additionApplies(entry: AdditionEntry, context: ObservationContext): boolean {
+  switch (entry.field) {
+    case '__metadata.version':
+      // Synthesis condition: source isn't already berry. Destination state
+      // is checked in `additionObserved`.
+      return !looksLikeBerry(context.sourceLockfile)
+    case 'workspace metadata':
+      return context.mode === 'enrich-aware' && context.manifestsProvided === true
+    case 'conditions default':
+    case 'compressionLevel default':
+      // No-op additions: filtered out upstream via `entry.diagnostic === undefined`.
+      return false
+    default:
+      return assertExhaustive(entry.field, 'additionApplies')
+  }
+}
+
+function passthroughApplies(entry: PassthroughEntry, context: ObservationContext): boolean {
   switch (entry.feature) {
     case 'conditions':
       return featurePresence(context.sourceGraph, 'conditions')
-        && !graphSubset(context.sourceGraph, context.destinationGraph, ['conditions'])
+    case 'compressionLevel':
+      return hasBerryMetadataField(context.sourceLockfile, 'compressionLevel')
+    default:
+      return assertExhaustive(entry.feature, 'passthroughApplies')
+  }
+}
+
+// observed: actual source-vs-destination state — did the adapter really
+// drop / synthesize / preserve this feature? Used by `observeInteropDiagnostics`
+// to emit real diagnostics. Divergence from `applies` is the adapter bug
+// signal that adversary B1 demanded.
+
+function lossObserved(entry: LossEntry, context: ObservationContext): boolean {
+  switch (entry.feature) {
+    case 'conditions':
     case 'peer-virt':
-      return featurePresence(context.sourceGraph, 'peer-virt')
-        && !graphSubset(context.sourceGraph, context.destinationGraph, ['peer-virt'])
     case 'patch':
-      return featurePresence(context.sourceGraph, 'patch')
-        && !featurePresence(context.destinationGraph, 'patch')
     case 'virtual':
-      return featurePresence(context.sourceGraph, 'virtual')
-        && !featurePresence(context.destinationGraph, 'virtual')
+      return featurePresence(context.sourceGraph, entry.feature)
+        && !featurePresence(context.destinationGraph, entry.feature)
     case 'workspace-metadata':
       return featurePresence(context.sourceGraph, 'workspace-metadata')
         && !workspaceMetadataPreserved(context.sourceGraph, context.destinationGraph)
@@ -116,10 +167,6 @@ function additionObserved(entry: AdditionEntry, context: ObservationContext): bo
         && featurePresence(context.destinationGraph, 'workspace-metadata')
     case 'conditions default':
     case 'compressionLevel default':
-      // No-op additions: matrix records that the destination format *can* carry
-      // these fields but the current conversion path leaves them absent. Filtered
-      // out upstream via `entry.diagnostic === undefined`; switch arm exists to
-      // satisfy exhaustiveness over `AdditionField`.
       return false
     default:
       return assertExhaustive(entry.field, 'additionObserved')
@@ -130,7 +177,7 @@ function passthroughObserved(entry: PassthroughEntry, context: ObservationContex
   switch (entry.feature) {
     case 'conditions':
       return featurePresence(context.sourceGraph, 'conditions')
-        && graphSubset(context.sourceGraph, context.destinationGraph, ['conditions'])
+        && featurePresence(context.destinationGraph, 'conditions')
     case 'compressionLevel':
       return hasBerryMetadataField(context.sourceLockfile, 'compressionLevel')
         && hasBerryMetadataField(context.destinationLockfile, 'compressionLevel')

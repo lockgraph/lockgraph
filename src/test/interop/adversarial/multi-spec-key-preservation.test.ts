@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { convert } from '../_dispatch.ts'
 
 describe('interop adversarial §8.4 — multi-spec key preservation', () => {
   it('classic -> berry-v9 currently canonicalises a multi-spec key to the resolved npm locator', () => {
@@ -10,10 +10,14 @@ describe('interop adversarial §8.4 — multi-spec key preservation', () => {
       '  version "2.1.0"\n' +
       '  resolved "https://registry.yarnpkg.com/foo/-/foo-2.1.0.tgz#0000000000000000000000000000000000000000"\n' +
       '  integrity sha512-foo\n'
-    const sourceGraph = parseFormat('yarn-classic', sourceLockfile)
-    const emitted = stringifyFormat('yarn-berry-v9', sourceGraph)
+    const result = convert({
+      from: 'yarn-classic',
+      to: 'yarn-berry-v9',
+      source: sourceLockfile,
+      mode: 'naive',
+    })
 
-    expect(emitted.lockfile).toContain('"foo@npm:2.1.0":')
+    expect(result.lockfile).toContain('"foo@npm:2.1.0":')
   })
 
   it.todo(

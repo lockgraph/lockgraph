@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { newBuilder } from '../../../main/ts/graph.ts'
 import { assertConversionContract } from '../_assert.ts'
-import { berryCacheKeyOf, formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { berryCacheKeyOf, convert, formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CLASSIC_SHARED_FIXTURES } from '../_fixtures.ts'
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
 import { classicFixtureAsBerrySource, minimalBerryLockfile } from '../_synth.ts'
@@ -19,32 +19,24 @@ describe('interop: yarn-berry -> yarn-classic (classic-compatible berry fixtures
           fixtureName,
           contract.from as Extract<ConversionContract['from'], `yarn-berry-${string}`>,
         )
-        const emitted = stringifyFormat('yarn-classic', source.graph)
-        const destinationGraph = parseFormat('yarn-classic', emitted.lockfile)
-        const interopDiagnostics = observeInteropDiagnostics(contract, {
-          sourceGraph: source.graph,
-          destinationGraph,
-          sourceLockfile: source.lockfile,
-          destinationLockfile: emitted.lockfile,
+        const result = convert({
+          from: contract.from,
+          to: 'yarn-classic',
+          source: source.lockfile,
           mode: 'naive',
         })
         const observedContract = activeContract(contract, {
-          sourceGraph: source.graph,
-          destinationGraph,
+          sourceGraph: result.sourceGraph,
+          destinationGraph: result.destinationGraph,
           sourceLockfile: source.lockfile,
-          destinationLockfile: emitted.lockfile,
+          destinationLockfile: result.lockfile,
           mode: 'naive',
         })
 
         assertConversionContract(observedContract, {
-          graphSource: source.graph,
-          graphDestination: destinationGraph,
-          diagnostics: [
-            ...source.graph.diagnostics(),
-            ...emitted.diagnostics,
-            ...destinationGraph.diagnostics(),
-            ...interopDiagnostics,
-          ],
+          graphSource: result.sourceGraph,
+          graphDestination: result.destinationGraph,
+          diagnostics: result.diagnostics,
           mode: 'naive',
           fixture: `classic-compatible:${fixtureName}`,
         })
@@ -62,17 +54,17 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
         conditions: contract.from !== 'yarn-berry-v4',
         compressionLevel: true,
       })
-      const sourceGraph = parseFormat(contract.from, sourceLockfile)
-      const emitted = stringifyFormat('yarn-classic', sourceGraph)
-      const destinationGraph = parseFormat('yarn-classic', emitted.lockfile)
-      const interopDiagnostics = observeInteropDiagnostics(contract, {
-        sourceGraph,
-        destinationGraph,
-        sourceLockfile,
-        destinationLockfile: emitted.lockfile,
+      const result = convert({
+        from: contract.from,
+        to: 'yarn-classic',
+        source: sourceLockfile,
         mode: 'naive',
       })
-      const codes = new Set(interopDiagnostics.map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`))
+      const codes = new Set(
+        result.diagnostics
+          .filter(d => d.code.startsWith('INTEROP_'))
+          .map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`),
+      )
 
       expect(codes).toContain(
         `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_CACHEKEY_DROPPED:info`,
@@ -88,6 +80,11 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
       }
     })
 
+    // Synthetic in-memory graph: builds peer/patch/virtual/workspace state that
+    // would not survive a berry->classic source-lockfile round-trip (workspace
+    // resolutions like `pkg@workspace:...` raise on classic parse), so this case
+    // bypasses `convert` and exercises `stringifyFormat` + `observeInteropDiagnostics`
+    // directly. Surface coverage is still real-graph comparison via featurePresence.
     it(`${contract.from} drops peer virtualisation, patches, virtual keys, and workspace metadata when present`, () => {
       const graph = newBuilder()
       graph.addNode({
