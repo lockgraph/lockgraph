@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { newBuilder } from '../../../main/ts/graph.ts'
 import { optimize as optimizeV9 } from '../../../main/ts/formats/yarn-berry-v9.ts'
-import { graphSnapshot, parseFormat, stringifyFormat } from '../_runtime.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { graphSnapshot } from '../_snapshot.ts'
 
 describe('interop adversarial §8.6 — cycle pruning interaction', () => {
   it('classic-compatible graph -> berry-v9 keeps optimize idempotent after conversion', () => {

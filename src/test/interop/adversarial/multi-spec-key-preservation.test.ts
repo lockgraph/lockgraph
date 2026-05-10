@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseFormat, stringifyFormat } from '../_runtime.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 
 describe('interop adversarial §8.4 — multi-spec key preservation', () => {
   it('classic -> berry-v9 currently canonicalises a multi-spec key to the resolved npm locator', () => {

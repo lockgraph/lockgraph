@@ -1,17 +1,16 @@
-export type FormatId =
-  | 'yarn-berry-v4'
-  | 'yarn-berry-v5'
-  | 'yarn-berry-v6'
-  | 'yarn-berry-v8'
-  | 'yarn-berry-v9'
-  | 'yarn-classic'
-  | 'npm-1'
-  | 'npm-2'
-  | 'npm-3'
-  | 'pnpm-v5'
-  | 'pnpm-v6'
-  | 'pnpm-v9'
-  | 'bun-text'
+// Interop conversion matrix: pure data + types. No I/O, no graph predicates,
+// no dispatch. Observation logic lives in `_observe.ts`; `_fixtures.ts` owns the
+// corpus arrays that contracts pin via `fixtureSubset`.
+
+import {
+  BERRY_SHARED_FIXTURES,
+  BERRY_SHARED_NO_GIT_FOR_V9,
+  BERRY_WORKSPACE_FIXTURES,
+  CLASSIC_SHARED_FIXTURES,
+} from './_fixtures.ts'
+import type { FormatId } from './_types.ts'
+
+export type { FormatId } from './_types.ts'
 
 export type PreservedFeature =
   | 'nodes'
@@ -38,15 +37,38 @@ export const ALL_FEATURES: PreservedFeature[] = [
   'conditions',
 ]
 
+// Typed discriminants for contract entries. `_observe.ts` switch arms must cover
+// every member of these unions exhaustively (TS `satisfies never` default), so
+// adding a new feature/field to the matrix surfaces as a compile error in the
+// observer rather than a runtime throw.
+export type LossFeature =
+  | 'conditions'
+  | 'peer-virt'
+  | 'patch'
+  | 'virtual'
+  | 'workspace-metadata'
+  | 'compressionLevel'
+  | 'cacheKey'
+
+export type AdditionField =
+  | '__metadata.version'
+  | 'workspace metadata'
+  | 'conditions default'
+  | 'compressionLevel default'
+
+export type PassthroughFeature =
+  | 'conditions'
+  | 'compressionLevel'
+
 export type LossEntry = {
-  feature: string
+  feature: LossFeature
   diagnostic: string
   severity: 'warning' | 'info'
   rationale: string
 }
 
 export type AdditionEntry = {
-  field: string
+  field: AdditionField
   source: 'static' | 'caller-option' | 'manifest-derived' | 'enrich-synthesized'
   diagnostic?: string
   severity?: 'warning' | 'info'
@@ -54,7 +76,7 @@ export type AdditionEntry = {
 }
 
 export type PassthroughEntry = {
-  feature: string
+  feature: PassthroughFeature
   diagnostic: string
   severity: 'warning' | 'info'
   rationale: string
@@ -77,928 +99,261 @@ export type ConversionContract = {
 const withoutFeatures = (...features: PreservedFeature[]): PreservedFeature[] =>
   ALL_FEATURES.filter(feature => !features.includes(feature))
 
-// Shared berry corpus across v4/v5/v6/v8 pairs:
-// - bundled-deps excluded because no yarn-berry fixture exists on disk
-// - patch-yarn excluded because only yarn-berry-v9.lock exists on disk
-// - workspace-cross-refs excluded because yarn-berry-v4.lock is absent
-const BERRY_SHARED_FIXTURES = [
-  'deps-with-scopes',
-  'git-github-tarball',
-  'peers-basic',
-  'peers-multi',
-  'simple',
-  'workspaces-basic',
-  'yarn-crlf',
-] as const
+type BerryFormat = Extract<FormatId, `yarn-berry-${string}`>
+type BerryVersion = 4 | 5 | 6 | 8 | 9
+const BERRY_VERSION: Record<BerryFormat, BerryVersion> = {
+  'yarn-berry-v4': 4,
+  'yarn-berry-v5': 5,
+  'yarn-berry-v6': 6,
+  'yarn-berry-v8': 8,
+  'yarn-berry-v9': 9,
+}
+const BERRY_FORMATS: BerryFormat[] = ['yarn-berry-v4', 'yarn-berry-v5', 'yarn-berry-v6', 'yarn-berry-v8', 'yarn-berry-v9']
 
-// Shared berry corpus for v9<->v4 pairs:
-// - bundled-deps excluded because no yarn-berry fixture exists on disk
-// - patch-yarn excluded because only yarn-berry-v9.lock exists on disk
-// - workspace-cross-refs excluded because yarn-berry-v4.lock is absent
-// - git-github-tarball excluded because yarn-berry-v9.lock is absent
-const BERRY_SHARED_NO_GIT_FOR_V9 = [
-  'deps-with-scopes',
-  'peers-basic',
-  'peers-multi',
-  'simple',
-  'workspaces-basic',
-  'yarn-crlf',
-] as const
+// Conditions support landed in v5; v4 cannot encode conditions.
+const supportsConditions = (format: BerryFormat): boolean => BERRY_VERSION[format] >= 5
 
-// Workspace-focused berry corpus for v5/v6/v8/v9 pairs:
-// - bundled-deps excluded because no yarn-berry fixture exists on disk
-// - patch-yarn excluded because only yarn-berry-v9.lock exists on disk
-// - git-github-tarball excluded because yarn-berry-v9.lock is absent and the
-//   fixture carries no workspace signal for workspace-membership assertions
-const BERRY_WORKSPACE_FIXTURES = [
-  'deps-with-scopes',
-  'peers-basic',
-  'peers-multi',
-  'simple',
-  'workspace-cross-refs',
-  'workspaces-basic',
-  'yarn-crlf',
-] as const
+// v8/v9 use a cacheKey-prefixed checksum (`cacheKey/deadbeef`) which the v5/v6
+// stringifier strips down to plain `deadbeef`, so integrity/tarballs round-trip
+// only when the source is not v8/v9 OR the destination is v8/v9. Crossing the
+// v8 boundary downward is the only direction that drops integrity/tarballs.
+const integrityRoundTrips = (from: BerryFormat, to: BerryFormat): boolean =>
+  BERRY_VERSION[from] < 8 || BERRY_VERSION[to] >= 8
 
-// Classic-compatible shared corpus:
-// - bundled-deps excluded because no yarn-classic fixture exists on disk
-// - patch-yarn excluded because yarn-classic cannot represent patch slots;
-//   patch-yarn excluded - patch-loss path covered by synthetic graph
-//   (cross-family/yarn-berry-to-yarn-classic.test.ts:97-157), TODO
-//   real-fixture coverage tracked under `interop-real-diagnostic-emission` stub
-// - workspace-cross-refs excluded because no yarn-classic fixture exists on disk
-const CLASSIC_SHARED_FIXTURES = [
-  'deps-with-scopes',
-  'git-github-tarball',
-  'peers-basic',
-  'peers-multi',
-  'simple',
-  'workspaces-basic',
-  'yarn-crlf',
-] as const
+const fromCode = (format: FormatId): string => format.replaceAll('-', '_').toUpperCase()
+
+function passthroughEntry(
+  from: BerryFormat,
+  to: BerryFormat,
+  feature: 'conditions' | 'compressionLevel',
+  rationale: string,
+): PassthroughEntry {
+  return {
+    feature,
+    diagnostic: `INTEROP_${fromCode(from)}_TO_${fromCode(to)}_${feature.toUpperCase()}_PASSTHROUGH`,
+    severity: 'info',
+    rationale,
+  }
+}
+
+function conditionsLossEntry(from: BerryFormat, to: BerryFormat): LossEntry {
+  return {
+    feature: 'conditions',
+    diagnostic: `INTEROP_${fromCode(from)}_TO_${fromCode(to)}_CONDITIONS_DROPPED`,
+    severity: 'warning',
+    rationale: 'v4 stringifier warns and drops conditions blocks',
+  }
+}
+
+function berryFixtureSubsetFor(from: BerryFormat, to: BerryFormat): readonly string[] {
+  const versions = new Set<BerryVersion>([BERRY_VERSION[from], BERRY_VERSION[to]])
+  if (versions.has(9) && versions.has(4)) return BERRY_SHARED_NO_GIT_FOR_V9
+  if (versions.has(4)) return BERRY_SHARED_FIXTURES
+  return BERRY_WORKSPACE_FIXTURES
+}
+
+// Berry pair: derive preserved/lost/passthrough from version capability checks.
+// `to` < v8 drops integrity/tarballs; `to` = v4 drops conditions outright; both
+// passthrough conditions only when `from` and `to` both support them.
+function buildBerryPair(from: BerryFormat, to: BerryFormat): ConversionContract {
+  const fromHasConditions = supportsConditions(from)
+  const toHasConditions = supportsConditions(to)
+
+  const preservedDrop: PreservedFeature[] = []
+  if (!integrityRoundTrips(from, to)) preservedDrop.push('integrity', 'tarballs')
+  if (fromHasConditions && !toHasConditions) preservedDrop.push('conditions')
+
+  const lost: LossEntry[] = []
+  if (fromHasConditions && !toHasConditions) lost.push(conditionsLossEntry(from, to))
+
+  const passthrough: PassthroughEntry[] = []
+  if (fromHasConditions && toHasConditions) {
+    passthrough.push(passthroughEntry(from, to, 'conditions', conditionsRationale(from, to)))
+  }
+  passthrough.push(
+    passthroughEntry(from, to, 'compressionLevel', 'runtime preserves compressionLevel as opaque __metadata'),
+  )
+
+  // Reentrancy: a pair is lossless when nothing falls off going from->to. With
+  // version-pair symmetry, the upgrade direction (older->newer) is always
+  // lossless and the downgrade direction (newer->older) is one-way-lossy if
+  // either integrity or conditions actually drop.
+  const reentrancy: ReentrancyClass = preservedDrop.length === 0 ? 'lossless-reentrant' : 'one-way-lossy'
+
+  return {
+    from,
+    to,
+    preserved: preservedDrop.length === 0 ? ALL_FEATURES : withoutFeatures(...preservedDrop),
+    lost,
+    added: [],
+    passthrough,
+    reentrancy,
+    fixtureSubset: [...berryFixtureSubsetFor(from, to)],
+  }
+}
+
+function conditionsRationale(from: BerryFormat, to: BerryFormat): string {
+  if (BERRY_VERSION[from] >= 8 && BERRY_VERSION[to] >= 8) {
+    return 'v8 and v9 both preserve the conditions sidecar verbatim'
+  }
+  if (BERRY_VERSION[from] === 5 && BERRY_VERSION[to] === 6 || BERRY_VERSION[from] === 6 && BERRY_VERSION[to] === 5) {
+    return 'v5 and v6 both preserve conditions blocks'
+  }
+  // newer<->{v5,v6}: the older end of the pair already encodes conditions natively.
+  const olderToken = BERRY_VERSION[to] < BERRY_VERSION[from] ? `v${BERRY_VERSION[to]}` : `v${BERRY_VERSION[from]}`
+  return `${olderToken} already carries conditions blocks unchanged`
+}
+
+const BERRY_BERRY_PAIRS: Array<[BerryFormat, BerryFormat]> = [
+  ['yarn-berry-v9', 'yarn-berry-v8'],
+  ['yarn-berry-v8', 'yarn-berry-v9'],
+  ['yarn-berry-v9', 'yarn-berry-v6'],
+  ['yarn-berry-v6', 'yarn-berry-v9'],
+  ['yarn-berry-v9', 'yarn-berry-v5'],
+  ['yarn-berry-v5', 'yarn-berry-v9'],
+  ['yarn-berry-v9', 'yarn-berry-v4'],
+  ['yarn-berry-v4', 'yarn-berry-v9'],
+  ['yarn-berry-v8', 'yarn-berry-v6'],
+  ['yarn-berry-v6', 'yarn-berry-v8'],
+  ['yarn-berry-v8', 'yarn-berry-v5'],
+  ['yarn-berry-v5', 'yarn-berry-v8'],
+  ['yarn-berry-v8', 'yarn-berry-v4'],
+  ['yarn-berry-v4', 'yarn-berry-v8'],
+  ['yarn-berry-v6', 'yarn-berry-v5'],
+  ['yarn-berry-v5', 'yarn-berry-v6'],
+  ['yarn-berry-v6', 'yarn-berry-v4'],
+  ['yarn-berry-v4', 'yarn-berry-v6'],
+  ['yarn-berry-v5', 'yarn-berry-v4'],
+  ['yarn-berry-v4', 'yarn-berry-v5'],
+]
+
+const BERRY_BERRY_CONTRACTS: ConversionContract[] = BERRY_BERRY_PAIRS.map(([from, to]) => buildBerryPair(from, to))
+
+// Classic -> Berry: preserved subset depends on whether `to` retains
+// integrity/tarballs (v8/v9) and synthesized additions accumulate as the
+// destination format grows new fields (conditions in v5+, compressionLevel in v8+).
+function buildClassicToBerry(to: BerryFormat): ConversionContract {
+  const preserved: PreservedFeature[] = ['nodes', 'edges', 'edge-kinds', 'resolved-url', 'workspace-membership']
+  // v8/v9 round-trip integrity/tarballs from classic; older targets cannot.
+  const preservesIntegrityFromClassic = BERRY_VERSION[to] >= 8
+  if (preservesIntegrityFromClassic) preserved.splice(3, 0, 'integrity', 'tarballs')
+
+  const added: AdditionEntry[] = [
+    {
+      field: '__metadata.version',
+      source: 'static',
+      diagnostic: `INTEROP_YARN_CLASSIC_TO_${fromCode(to)}_PREAMBLE_SYNTHESIZED`,
+      severity: 'info',
+      rationale: 'berry outputs always synthesize a __metadata.version preamble',
+    },
+    {
+      field: 'workspace metadata',
+      source: 'manifest-derived',
+      diagnostic: `INTEROP_YARN_CLASSIC_TO_${fromCode(to)}_WORKSPACE_SYNTHESIZED`,
+      severity: 'info',
+      rationale: 'workspace root and workspace attrs are synthesized only in enrich-aware mode',
+    },
+  ]
+  if (supportsConditions(to)) {
+    added.push({
+      field: 'conditions default',
+      source: 'static',
+      rationale: `${to.slice('yarn-berry-'.length)} can carry conditions but the current conversion path leaves them absent`,
+    })
+  }
+  if (preservesIntegrityFromClassic) {
+    added.push({
+      field: 'compressionLevel default',
+      source: 'static',
+      rationale: `${to.slice('yarn-berry-'.length)} can carry compressionLevel but the current conversion path leaves it absent`,
+    })
+  }
+
+  return {
+    from: 'yarn-classic',
+    to,
+    preserved,
+    lost: [],
+    added,
+    passthrough: [],
+    reentrancy: 'asymmetric',
+    enrichRequired: ['manifests'],
+    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
+  }
+}
+
+// Berry -> Classic: classic flattens away peer/patch/virtual/workspace metadata
+// and has no `__metadata` block, so cacheKey/compressionLevel always drop. v4
+// has no conditions to start with, so the conditions loss only fires from v5+.
+function buildBerryToClassic(from: BerryFormat): ConversionContract {
+  const fromHasConditions = supportsConditions(from)
+  const lost: LossEntry[] = [
+    {
+      feature: 'peer-virt',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_PEER_VIRT_DROPPED`,
+      severity: 'warning',
+      rationale: 'classic flattens peerContext away on emit',
+    },
+    {
+      feature: 'patch',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_PATCH_DROPPED`,
+      severity: 'warning',
+      rationale: 'classic cannot encode patch slots',
+    },
+    {
+      feature: 'virtual',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_VIRTUAL_DROPPED`,
+      severity: 'warning',
+      rationale: 'classic has no virtual key space',
+    },
+    {
+      feature: 'workspace-metadata',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED`,
+      severity: 'info',
+      rationale: 'classic omits root workspace metadata and attrs.workspace boundaries',
+    },
+  ]
+  if (fromHasConditions) {
+    lost.push({
+      feature: 'conditions',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_CONDITIONS_DROPPED`,
+      severity: 'warning',
+      rationale: 'classic has no conditions field',
+    })
+  }
+  lost.push(
+    {
+      feature: 'compressionLevel',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED`,
+      severity: 'info',
+      rationale: 'classic has no __metadata section',
+    },
+    {
+      feature: 'cacheKey',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_CACHEKEY_DROPPED`,
+      severity: 'info',
+      rationale: 'classic has no __metadata section',
+    },
+  )
+
+  return {
+    from,
+    to: 'yarn-classic',
+    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs'],
+    lost,
+    added: [],
+    passthrough: [],
+    reentrancy: 'asymmetric',
+    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
+  }
+}
 
 // TODO(adr-0020): ADR-0018 explicitly deferred compressionLevel, but the
 // current core preserves unknown __metadata extras across the whole berry
 // family. The interop contracts therefore pin observed passthrough behavior
 // instead of the dispatch brief's v8/v9-only assumption.
 export const CONTRACTS: ConversionContract[] = [
-  {
-    from: 'yarn-berry-v9',
-    to: 'yarn-berry-v8',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V8_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v8 and v9 both preserve the conditions sidecar verbatim',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V8_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v8',
-    to: 'yarn-berry-v9',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V9_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v8 and v9 both preserve the conditions sidecar verbatim',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V9_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v9',
-    to: 'yarn-berry-v6',
-    preserved: withoutFeatures('integrity', 'tarballs'),
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V6_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v6 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V6_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v6',
-    to: 'yarn-berry-v9',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V9_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v6 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V9_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v9',
-    to: 'yarn-berry-v5',
-    preserved: withoutFeatures('integrity', 'tarballs'),
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V5_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v5 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V5_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v5',
-    to: 'yarn-berry-v9',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V9_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v5 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V9_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v9',
-    to: 'yarn-berry-v4',
-    preserved: withoutFeatures('integrity', 'tarballs', 'conditions'),
-    lost: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V4_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'v4 stringifier warns and drops conditions blocks',
-      },
-    ],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_BERRY_V4_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_SHARED_NO_GIT_FOR_V9],
-  },
-  {
-    from: 'yarn-berry-v4',
-    to: 'yarn-berry-v9',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_BERRY_V9_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_SHARED_NO_GIT_FOR_V9],
-  },
-  {
-    from: 'yarn-berry-v8',
-    to: 'yarn-berry-v6',
-    preserved: withoutFeatures('integrity', 'tarballs'),
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V6_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v6 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V6_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v6',
-    to: 'yarn-berry-v8',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V8_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v6 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V8_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v8',
-    to: 'yarn-berry-v5',
-    preserved: withoutFeatures('integrity', 'tarballs'),
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V5_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v5 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V5_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v5',
-    to: 'yarn-berry-v8',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V8_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v5 already carries conditions blocks unchanged',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V8_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v8',
-    to: 'yarn-berry-v4',
-    preserved: withoutFeatures('integrity', 'tarballs', 'conditions'),
-    lost: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V4_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'v4 stringifier warns and drops conditions blocks',
-      },
-    ],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_BERRY_V4_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v4',
-    to: 'yarn-berry-v8',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_BERRY_V8_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v6',
-    to: 'yarn-berry-v5',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V5_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v5 and v6 both preserve conditions blocks',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V5_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v5',
-    to: 'yarn-berry-v6',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V6_CONDITIONS_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'v5 and v6 both preserve conditions blocks',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V6_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_WORKSPACE_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v6',
-    to: 'yarn-berry-v4',
-    preserved: withoutFeatures('conditions'),
-    lost: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V4_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'v4 stringifier warns and drops conditions blocks',
-      },
-    ],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_BERRY_V4_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v4',
-    to: 'yarn-berry-v6',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_BERRY_V6_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v5',
-    to: 'yarn-berry-v4',
-    preserved: withoutFeatures('conditions'),
-    lost: [
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V4_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'v4 stringifier warns and drops conditions blocks',
-      },
-    ],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_BERRY_V4_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'one-way-lossy',
-    fixtureSubset: [...BERRY_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v4',
-    to: 'yarn-berry-v5',
-    preserved: ALL_FEATURES,
-    lost: [],
-    added: [],
-    passthrough: [
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_BERRY_V5_COMPRESSIONLEVEL_PASSTHROUGH',
-        severity: 'info',
-        rationale: 'runtime preserves compressionLevel as opaque __metadata',
-      },
-    ],
-    reentrancy: 'lossless-reentrant',
-    fixtureSubset: [...BERRY_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-classic',
-    to: 'yarn-berry-v4',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'resolved-url', 'workspace-membership'],
-    lost: [],
-    added: [
-      {
-        field: '__metadata.version',
-        source: 'static',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V4_PREAMBLE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'berry outputs always synthesize a __metadata.version preamble',
-      },
-      {
-        field: 'workspace metadata',
-        source: 'manifest-derived',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V4_WORKSPACE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'workspace root and workspace attrs are synthesized only in enrich-aware mode',
-      },
-    ],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    enrichRequired: ['manifests'],
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-classic',
-    to: 'yarn-berry-v5',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'resolved-url', 'workspace-membership'],
-    lost: [],
-    added: [
-      {
-        field: '__metadata.version',
-        source: 'static',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V5_PREAMBLE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'berry outputs always synthesize a __metadata.version preamble',
-      },
-      {
-        field: 'workspace metadata',
-        source: 'manifest-derived',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V5_WORKSPACE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'workspace root and workspace attrs are synthesized only in enrich-aware mode',
-      },
-      {
-        field: 'conditions default',
-        source: 'static',
-        rationale: 'v5 can carry conditions but the current conversion path leaves them absent',
-      },
-    ],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    enrichRequired: ['manifests'],
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-classic',
-    to: 'yarn-berry-v6',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'resolved-url', 'workspace-membership'],
-    lost: [],
-    added: [
-      {
-        field: '__metadata.version',
-        source: 'static',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V6_PREAMBLE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'berry outputs always synthesize a __metadata.version preamble',
-      },
-      {
-        field: 'workspace metadata',
-        source: 'manifest-derived',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V6_WORKSPACE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'workspace root and workspace attrs are synthesized only in enrich-aware mode',
-      },
-      {
-        field: 'conditions default',
-        source: 'static',
-        rationale: 'v6 can carry conditions but the current conversion path leaves them absent',
-      },
-    ],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    enrichRequired: ['manifests'],
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-classic',
-    to: 'yarn-berry-v8',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs', 'workspace-membership'],
-    lost: [],
-    added: [
-      {
-        field: '__metadata.version',
-        source: 'static',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V8_PREAMBLE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'berry outputs always synthesize a __metadata.version preamble',
-      },
-      {
-        field: 'workspace metadata',
-        source: 'manifest-derived',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V8_WORKSPACE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'workspace root and workspace attrs are synthesized only in enrich-aware mode',
-      },
-      {
-        field: 'conditions default',
-        source: 'static',
-        rationale: 'v8 can carry conditions but the current conversion path leaves them absent',
-      },
-      {
-        field: 'compressionLevel default',
-        source: 'static',
-        rationale: 'v8 can carry compressionLevel but the current conversion path leaves it absent',
-      },
-    ],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    enrichRequired: ['manifests'],
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-classic',
-    to: 'yarn-berry-v9',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs', 'workspace-membership'],
-    lost: [],
-    added: [
-      {
-        field: '__metadata.version',
-        source: 'static',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V9_PREAMBLE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'berry outputs always synthesize a __metadata.version preamble',
-      },
-      {
-        field: 'workspace metadata',
-        source: 'manifest-derived',
-        diagnostic: 'INTEROP_YARN_CLASSIC_TO_YARN_BERRY_V9_WORKSPACE_SYNTHESIZED',
-        severity: 'info',
-        rationale: 'workspace root and workspace attrs are synthesized only in enrich-aware mode',
-      },
-      {
-        field: 'conditions default',
-        source: 'static',
-        rationale: 'v9 can carry conditions but the current conversion path leaves them absent',
-      },
-      {
-        field: 'compressionLevel default',
-        source: 'static',
-        rationale: 'v9 can carry compressionLevel but the current conversion path leaves it absent',
-      },
-    ],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    enrichRequired: ['manifests'],
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v4',
-    to: 'yarn-classic',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs'],
-    lost: [
-      {
-        feature: 'peer-virt',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_CLASSIC_PEER_VIRT_DROPPED',
-        severity: 'warning',
-        rationale: 'classic flattens peerContext away on emit',
-      },
-      {
-        feature: 'patch',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_CLASSIC_PATCH_DROPPED',
-        severity: 'warning',
-        rationale: 'classic cannot encode patch slots',
-      },
-      {
-        feature: 'virtual',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_CLASSIC_VIRTUAL_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no virtual key space',
-      },
-      {
-        feature: 'workspace-metadata',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED',
-        severity: 'info',
-        rationale: 'classic omits root workspace metadata and attrs.workspace boundaries',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-      {
-        feature: 'cacheKey',
-        diagnostic: 'INTEROP_YARN_BERRY_V4_TO_YARN_CLASSIC_CACHEKEY_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-    ],
-    added: [],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v5',
-    to: 'yarn-classic',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs'],
-    lost: [
-      {
-        feature: 'peer-virt',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_PEER_VIRT_DROPPED',
-        severity: 'warning',
-        rationale: 'classic flattens peerContext away on emit',
-      },
-      {
-        feature: 'patch',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_PATCH_DROPPED',
-        severity: 'warning',
-        rationale: 'classic cannot encode patch slots',
-      },
-      {
-        feature: 'virtual',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_VIRTUAL_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no virtual key space',
-      },
-      {
-        feature: 'workspace-metadata',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED',
-        severity: 'info',
-        rationale: 'classic omits root workspace metadata and attrs.workspace boundaries',
-      },
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no conditions field',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-      {
-        feature: 'cacheKey',
-        diagnostic: 'INTEROP_YARN_BERRY_V5_TO_YARN_CLASSIC_CACHEKEY_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-    ],
-    added: [],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v6',
-    to: 'yarn-classic',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs'],
-    lost: [
-      {
-        feature: 'peer-virt',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_PEER_VIRT_DROPPED',
-        severity: 'warning',
-        rationale: 'classic flattens peerContext away on emit',
-      },
-      {
-        feature: 'patch',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_PATCH_DROPPED',
-        severity: 'warning',
-        rationale: 'classic cannot encode patch slots',
-      },
-      {
-        feature: 'virtual',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_VIRTUAL_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no virtual key space',
-      },
-      {
-        feature: 'workspace-metadata',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED',
-        severity: 'info',
-        rationale: 'classic omits root workspace metadata and attrs.workspace boundaries',
-      },
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no conditions field',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-      {
-        feature: 'cacheKey',
-        diagnostic: 'INTEROP_YARN_BERRY_V6_TO_YARN_CLASSIC_CACHEKEY_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-    ],
-    added: [],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v8',
-    to: 'yarn-classic',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs'],
-    lost: [
-      {
-        feature: 'peer-virt',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_PEER_VIRT_DROPPED',
-        severity: 'warning',
-        rationale: 'classic flattens peerContext away on emit',
-      },
-      {
-        feature: 'patch',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_PATCH_DROPPED',
-        severity: 'warning',
-        rationale: 'classic cannot encode patch slots',
-      },
-      {
-        feature: 'virtual',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_VIRTUAL_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no virtual key space',
-      },
-      {
-        feature: 'workspace-metadata',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED',
-        severity: 'info',
-        rationale: 'classic omits root workspace metadata and attrs.workspace boundaries',
-      },
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no conditions field',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-      {
-        feature: 'cacheKey',
-        diagnostic: 'INTEROP_YARN_BERRY_V8_TO_YARN_CLASSIC_CACHEKEY_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-    ],
-    added: [],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
-  {
-    from: 'yarn-berry-v9',
-    to: 'yarn-classic',
-    preserved: ['nodes', 'edges', 'edge-kinds', 'integrity', 'resolved-url', 'tarballs'],
-    lost: [
-      {
-        feature: 'peer-virt',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_PEER_VIRT_DROPPED',
-        severity: 'warning',
-        rationale: 'classic flattens peerContext away on emit',
-      },
-      {
-        feature: 'patch',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_PATCH_DROPPED',
-        severity: 'warning',
-        rationale: 'classic cannot encode patch slots',
-      },
-      {
-        feature: 'virtual',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_VIRTUAL_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no virtual key space',
-      },
-      {
-        feature: 'workspace-metadata',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED',
-        severity: 'info',
-        rationale: 'classic omits root workspace metadata and attrs.workspace boundaries',
-      },
-      {
-        feature: 'conditions',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_CONDITIONS_DROPPED',
-        severity: 'warning',
-        rationale: 'classic has no conditions field',
-      },
-      {
-        feature: 'compressionLevel',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-      {
-        feature: 'cacheKey',
-        diagnostic: 'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_CACHEKEY_DROPPED',
-        severity: 'info',
-        rationale: 'classic has no __metadata section',
-      },
-    ],
-    added: [],
-    passthrough: [],
-    reentrancy: 'asymmetric',
-    fixtureSubset: [...CLASSIC_SHARED_FIXTURES],
-  },
+  ...BERRY_BERRY_CONTRACTS,
+  ...BERRY_FORMATS.map(buildClassicToBerry),
+  ...BERRY_FORMATS.map(buildBerryToClassic),
 ]

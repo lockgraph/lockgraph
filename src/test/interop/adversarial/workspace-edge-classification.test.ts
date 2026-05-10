@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { enrichClassicGraph, normalizeGraphForBerry, parseFormat, stringifyFormat, workspaceFixtureGraph } from '../_runtime.ts'
+import { parseFormat, stringifyFormat } from '../_dispatch.ts'
+import { enrichClassicGraph, normalizeGraphForBerry } from '../_normalize.ts'
+import { workspaceFixtureGraph } from '../_synth.ts'
 
 describe('interop adversarial §8.3 — workspace-edge classification', () => {
   it('classic -> berry-v9 stays flat without manifests', () => {
