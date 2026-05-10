@@ -1,10 +1,12 @@
 import {
   GraphError,
   newBuilder,
+  toTarballKey,
   type Diagnostic,
   type Edge,
   type Graph,
   type Node,
+  type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
 
@@ -49,6 +51,8 @@ export interface YarnClassicManifest {
 export interface YarnClassicEnrichOptions {
   manifests?: Record<string, YarnClassicManifest>
 }
+
+export interface YarnClassicOptimizeOptions {}
 
 const sidecarByGraph = new WeakMap<Graph, YarnClassicSidecar>()
 
@@ -229,6 +233,7 @@ export function enrich(
 
   if (
     plan.rootNode === undefined
+    && plan.rootNodeReplacement === undefined
     && plan.addRootEdges.length === 0
     && plan.removeRootEdges.length === 0
     && plan.markWorkspaceEdges.length === 0
@@ -239,6 +244,9 @@ export function enrich(
   const result = graph.mutate(m => {
     if (plan.rootNode !== undefined) {
       m.addNode(plan.rootNode)
+    }
+    if (plan.rootNodeReplacement !== undefined) {
+      m.replaceNode(plan.rootNodeReplacement.id, plan.rootNodeReplacement)
     }
     for (const edge of plan.removeRootEdges) {
       m.removeEdge(edge.src, edge.dst, edge.kind)
@@ -256,9 +264,80 @@ export function enrich(
   return { graph: result.graph, diagnostics: [] }
 }
 
+export function optimize(
+  graph: Graph,
+  _options: YarnClassicOptimizeOptions = {},
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  const sidecar = sidecarByGraph.get(graph)
+  const reachable = new Set(graph.walk(Array.from(graph.roots())))
+  const unreachableNodes = Array.from(graph.nodes(), node => node.id)
+    .filter(nodeId => !reachable.has(nodeId))
+    .sort(cmpUtf16)
+
+  if (unreachableNodes.length === 0) {
+    return {
+      graph,
+      diagnostics: graph.diagnostics().filter(diagnostic => diagnostic.severity === 'warning'),
+    }
+  }
+
+  const unreachable = new Set(unreachableNodes)
+  const referencedTarballs = new Set<string>()
+  const tarballsToRemove = new Map<string, TarballKeyInputs>()
+  const internalEdges = unreachableNodes
+    .flatMap(src =>
+      graph.out(src)
+        .filter(edge => unreachable.has(edge.dst))
+        .map(edge => ({ src: edge.src, dst: edge.dst, kind: edge.kind })),
+    )
+    .sort((a, b) =>
+      cmpUtf16(`${a.src}\u0000${a.kind}\u0000${a.dst}`, `${b.src}\u0000${b.kind}\u0000${b.dst}`),
+    )
+
+  for (const node of graph.nodes()) {
+    const inputs = { name: node.name, version: node.version, patch: node.patch }
+    const key = toTarballKey(inputs)
+    if (unreachable.has(node.id)) {
+      tarballsToRemove.set(key, inputs)
+      continue
+    }
+    referencedTarballs.add(key)
+  }
+
+  const result = graph.mutate(m => {
+    for (const edge of internalEdges) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+    }
+    for (const nodeId of unreachableNodes) {
+      m.removeNode(nodeId)
+    }
+    for (const [key, inputs] of Array.from(tarballsToRemove.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))) {
+      if (!referencedTarballs.has(key)) {
+        m.removeTarball(inputs)
+      }
+    }
+  })
+
+  if (sidecar !== undefined) {
+    rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
+  }
+  return { graph: result.graph, diagnostics: result.unresolved }
+}
+
 function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
   if (sidecar.entrySpecs.size === 0) return
   sidecarByGraph.set(graph, sidecar)
+}
+
+function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSidecar {
+  const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))
+  const entrySpecs = new Map<string, string[]>()
+  for (const [nodeId, specs] of sidecar.entrySpecs) {
+    if (reachableIds.has(nodeId)) {
+      entrySpecs.set(nodeId, specs.slice())
+    }
+  }
+  return { entrySpecs }
 }
 
 function ensureClassicHeader(input: string): void {
@@ -506,6 +585,7 @@ function planClassicEnrich(
   specIndex: Map<string, string>,
 ): {
   rootNode: Node | undefined
+  rootNodeReplacement: Node | undefined
   addRootEdges: Edge[]
   removeRootEdges: Edge[]
   markWorkspaceEdges: Edge[]
@@ -513,9 +593,10 @@ function planClassicEnrich(
   const addRootEdges: Edge[] = []
   const removeRootEdges: Edge[] = []
   const markWorkspaceEdges: Edge[] = []
+  const existingRootNode = rootNodeId === undefined ? undefined : graph.getNode(rootNodeId)
 
   const rootNode = rootNodeId !== undefined
-    && graph.getNode(rootNodeId) === undefined
+    && existingRootNode === undefined
     && rootManifest?.name !== undefined
     && rootManifest.version !== undefined
     ? {
@@ -525,6 +606,12 @@ function planClassicEnrich(
       peerContext: [],
       workspacePath: '',
     }
+    : undefined
+  const rootNodeReplacement = existingRootNode !== undefined
+    && existingRootNode.workspacePath === undefined
+    && rootManifest?.name !== undefined
+    && rootManifest.version !== undefined
+    ? { ...existingRootNode, workspacePath: '' }
     : undefined
 
   const rootOut = rootNodeId === undefined ? [] : graph.out(rootNodeId)
@@ -571,7 +658,7 @@ function planClassicEnrich(
     }
   }
 
-  return { rootNode, addRootEdges, removeRootEdges, markWorkspaceEdges }
+  return { rootNode, rootNodeReplacement, addRootEdges, removeRootEdges, markWorkspaceEdges }
 }
 
 function desiredRootEdges(

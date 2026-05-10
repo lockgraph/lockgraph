@@ -9,7 +9,7 @@ import { check as checkV5, parse as parseV5 } from '../../main/ts/formats/yarn-b
 import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
 import { check as checkV8, parse as parseV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
-import { check, enrich, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
+import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -477,5 +477,110 @@ describe('yarn-classic — enrich', () => {
 
     expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
     expect(twice.diagnostics).toEqual(once.diagnostics)
+  })
+})
+
+describe('yarn-classic — optimize', () => {
+  function graphWithOrphan(): Graph {
+    const base = parseFixtureGraph('simple')
+    return base.mutate(m => {
+      m.addNode({
+        id: 'orphan@9.9.9',
+        name: 'orphan',
+        version: '9.9.9',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/orphan/-/orphan-9.9.9.tgz#0000000000000000000000000000000000000000',
+      })
+      m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'sha512-orphan' })
+    }).graph
+  }
+
+  function graphWithCyclePair(): Graph {
+    const base = parseFixtureGraph('simple')
+    return base.mutate(m => {
+      m.addNode({
+        id: 'cycle-a@1.0.0',
+        name: 'cycle-a',
+        version: '1.0.0',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/cycle-a/-/cycle-a-1.0.0.tgz#1111111111111111111111111111111111111111',
+      })
+      m.addNode({
+        id: 'cycle-b@1.0.0',
+        name: 'cycle-b',
+        version: '1.0.0',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/cycle-b/-/cycle-b-1.0.0.tgz#2222222222222222222222222222222222222222',
+      })
+      m.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: '1.0.0' })
+      m.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: '1.0.0' })
+      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: 'sha512-cycle-a' })
+      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: 'sha512-cycle-b' })
+    }).graph
+  }
+
+  it('is idempotent', () => {
+    const once = optimize(graphWithOrphan())
+    const twice = optimize(once.graph)
+
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual(once.diagnostics)
+  })
+
+  it('prunes an unreachable orphan cycle and its tarball', () => {
+    const graph = graphWithOrphan()
+    const result = optimize(graph)
+
+    expect(result.graph.getNode('orphan@9.9.9')).toBeUndefined()
+    expect(result.graph.tarball({ name: 'orphan', version: '9.9.9' })).toBeUndefined()
+    expect(graph.diff(result.graph)).toEqual({
+      addedNodes: [],
+      removedNodes: ['orphan@9.9.9'],
+      changedNodes: [],
+      addedEdges: [],
+      removedEdges: [{ src: 'orphan@9.9.9', dst: 'orphan@9.9.9', kind: 'dep' }],
+    })
+  })
+
+  it('prunes unreachable mutual-cycle nodes', () => {
+    const graph = graphWithCyclePair()
+    const result = optimize(graph)
+
+    expect(result.graph.getNode('cycle-a@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('cycle-b@1.0.0')).toBeUndefined()
+    expect(result.graph.tarball({ name: 'cycle-a', version: '1.0.0' })).toBeUndefined()
+    expect(result.graph.tarball({ name: 'cycle-b', version: '1.0.0' })).toBeUndefined()
+    expect(graph.diff(result.graph)).toEqual({
+      addedNodes: [],
+      removedNodes: ['cycle-a@1.0.0', 'cycle-b@1.0.0'],
+      changedNodes: [],
+      addedEdges: [],
+      removedEdges: [
+        { src: 'cycle-a@1.0.0', dst: 'cycle-b@1.0.0', kind: 'dep' },
+        { src: 'cycle-b@1.0.0', dst: 'cycle-a@1.0.0', kind: 'dep' },
+      ],
+    })
+  })
+
+  it('preserves every reachable node and tarball on fixture graphs', () => {
+    const graph = parseFixtureGraph('peers-basic')
+    const result = optimize(graph)
+
+    expect(graphSnapshot(result.graph)).toEqual(graphSnapshot(graph))
+    expect(Array.from(result.graph.tarballs(), ([key]) => key)).toEqual(
+      Array.from(graph.tarballs(), ([key]) => key),
+    )
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it('survives yarn-classic stringify/parse roundtrip when re-enrich compensates for the synthesized root', () => {
+    const enriched = enrich(parseFixtureGraph('workspaces-basic'), undefined, { manifests: WORKSPACE_MANIFESTS })
+    const optimized = optimize(enriched.graph)
+    const reparsed = enrich(parse(stringify(optimized.graph)), undefined, { manifests: WORKSPACE_MANIFESTS })
+
+    expect(graphSnapshot(reparsed.graph)).toEqual(graphSnapshot(enriched.graph))
+    expectEmptyGraphDiff(enriched.graph.diff(reparsed.graph))
+    expect(reparsed.diagnostics).toEqual([])
   })
 })
