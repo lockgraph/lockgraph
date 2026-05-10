@@ -162,6 +162,26 @@ offending locator in the diagnostic message.
   the descriptor before returning the fingerprint — no FD outlives
   the patch-extraction call.
 
+## Emit
+
+Emit (`stringify(graph, options?)`) is governed by
+[ADR-0018 §A.v4 *yarn-berry-v4 stringify deltas*](../decisions/0018-yarn-berry-pre-v9-family-completeness.md#av4--yarn-berry-v4-stringify-deltas)
+plus the version-invariant sections ADR-0018 inherits from ADR-0016:
+
+- `__metadata.version` emits the literal `4`.
+- `__metadata.cacheKey` defaults to absent; when present (caller-supplied
+  via `options.cacheKey` or sidecar-preserved from parse) it emits as
+  a bare numeric literal (`cacheKey: 7` empirically — note the v4-only
+  value differs from v5/v6's `8`) — pre-v8 form, no string quoting.
+- Inner `dependencies` / `optionalDependencies` emit the bare form
+  (for example `lodash: 4.17.21`), not v8/v9's quoted protocol.
+- `checksum` values are raw sha512 hex (no `<cacheKey>/` prefix).
+- `conditions` are NOT supported on emit (v4 predates the field;
+  v5 introduced it). If a parsed/synthetic graph carries a conditions
+  sidecar, the v4 emitter drops it with diagnostic
+  `YARN_BERRY_V4_CONDITIONS_DROPPED`.
+- `compressionLevel` is not present in the v4 corpus.
+
 ## Quirks
 
 - `__metadata.cacheKey` is empirically `7` across the current v4 fixtures.
