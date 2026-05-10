@@ -1,110 +1,133 @@
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { describe, it } from 'vitest'
-import type { Diagnostic, Graph } from '../../../main/ts/graph.ts'
-import { parse as parseV8, stringify as stringifyV8 } from '../../../main/ts/formats/yarn-berry-v8.ts'
-import { parse as parseV9, stringify as stringifyV9 } from '../../../main/ts/formats/yarn-berry-v9.ts'
+import { describe, expect, it } from 'vitest'
 import { assertConversionContract } from '../_helpers.ts'
-import { CONTRACTS } from '../_matrix.ts'
+import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
+import {
+  activeContract,
+  fixtureLockfile,
+  minimalBerryLockfile,
+  observeInteropDiagnostics,
+  parseFormat,
+  stringifyFormat,
+} from '../_runtime.ts'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const fixture = (rel: string): string =>
-  readFileSync(resolve(here, '../../resources/fixtures/lockfiles', rel), 'utf8')
+const BERRY_CONTRACTS = CONTRACTS.filter(contract =>
+  contract.from.startsWith('yarn-berry-')
+  && contract.to.startsWith('yarn-berry-')
+  && contract.to !== 'yarn-classic'
+) as ConversionContract[]
 
-const FIXTURES = [
-  'deps-with-scopes',
-  'git-github-tarball',
-  'peers-basic',
-  'peers-multi',
-  'simple',
-  'workspace-cross-refs',
-  'workspaces-basic',
-  'yarn-crlf',
-] as const
+type BerryFormat = Extract<ConversionContract['from'], `yarn-berry-${string}`>
 
-const FIXTURE_SET = new Set<string>(FIXTURES)
-
-function stringifyV8WithDiagnostics(graph: Graph): { lockfile: string; diagnostics: Diagnostic[] } {
-  const diagnostics: Diagnostic[] = []
-  const lockfile = stringifyV8(graph, {
-    onDiagnostic(diagnostic) {
-      diagnostics.push(diagnostic)
-    },
-  })
-  return { lockfile, diagnostics }
+function reenter(contract: ConversionContract, destinationLockfile: string) {
+  const destinationGraph = parseFormat(contract.to, destinationLockfile)
+  const reentered = stringifyFormat(contract.from, destinationGraph)
+  return parseFormat(contract.from, reentered.lockfile)
 }
 
-function stringifyV9WithDiagnostics(graph: Graph): { lockfile: string; diagnostics: Diagnostic[] } {
-  const diagnostics: Diagnostic[] = []
-  const lockfile = stringifyV9(graph, {
-    onDiagnostic(diagnostic) {
-      diagnostics.push(diagnostic)
-    },
-  })
-  return { lockfile, diagnostics }
-}
+describe('interop: yarn-berry intra-family fixtures', () => {
+  for (const contract of BERRY_CONTRACTS) {
+    const fixtures = contract.fixtureSubset ?? []
 
-function contractOf(from: 'yarn-berry-v8' | 'yarn-berry-v9', to: 'yarn-berry-v8' | 'yarn-berry-v9') {
-  const contract = CONTRACTS.find(entry => entry.from === from && entry.to === to)
-  if (contract === undefined) throw new Error(`missing interop contract for ${from} -> ${to}`)
-  return contract
-}
+    describe(`${contract.from} -> ${contract.to}`, () => {
+      it.each(fixtures)('%s fixture satisfies the declared contract', fixtureName => {
+        const sourceLockfile = fixtureLockfile(fixtureName, contract.from)
+        const sourceGraph = parseFormat(contract.from, sourceLockfile)
+        const emitted = stringifyFormat(contract.to, sourceGraph)
+        const destinationGraph = parseFormat(contract.to, emitted.lockfile)
+        const reentered = reenter(contract, emitted.lockfile)
+        const interopDiagnostics = observeInteropDiagnostics(contract, {
+          sourceGraph,
+          destinationGraph,
+          sourceLockfile,
+          destinationLockfile: emitted.lockfile,
+          mode: 'naive',
+        })
+        const observedContract = activeContract(contract, {
+          sourceGraph,
+          destinationGraph,
+          sourceLockfile,
+          destinationLockfile: emitted.lockfile,
+          mode: 'naive',
+        })
 
-function fixturesFor(contract: ReturnType<typeof contractOf>): readonly string[] {
-  if (contract.fixtureSubset === undefined) return FIXTURES
-  for (const fixtureName of contract.fixtureSubset) {
-    if (!FIXTURE_SET.has(fixtureName)) {
-      throw new Error(`unknown fixture ${fixtureName} in contract ${contract.from} -> ${contract.to}`)
-    }
+        assertConversionContract(observedContract, {
+          graphSource: sourceGraph,
+          graphDestination: destinationGraph,
+          diagnostics: [
+            ...sourceGraph.diagnostics(),
+            ...emitted.diagnostics,
+            ...destinationGraph.diagnostics(),
+            ...interopDiagnostics,
+          ],
+          mode: 'naive',
+          fixture: fixtureName,
+          graphReentered: reentered,
+        })
+      })
+    })
   }
-  return contract.fixtureSubset
+})
+
+describe('interop: yarn-berry intra-family metadata edges', () => {
+  for (const contract of BERRY_CONTRACTS) {
+    const sourceHasConditions = contract.from !== 'yarn-berry-v4'
+    const sourceLockfile = minimalBerryLockfile(contract.from as BerryFormat, {
+      conditions: sourceHasConditions,
+      compressionLevel: true,
+    })
+
+    it(`${contract.from} -> ${contract.to} surfaces the declared metadata observations`, () => {
+      const sourceGraph = parseFormat(contract.from, sourceLockfile)
+      const emitted = stringifyFormat(contract.to, sourceGraph)
+      const destinationGraph = parseFormat(contract.to, emitted.lockfile)
+      const interopDiagnostics = observeInteropDiagnostics(contract, {
+        sourceGraph,
+        destinationGraph,
+        sourceLockfile,
+        destinationLockfile: emitted.lockfile,
+        mode: 'naive',
+      })
+
+      const codes = interopDiagnostics.map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`)
+      const declared = [
+        ...contract.lost,
+        ...contract.passthrough,
+      ].map(entry => `${entry.diagnostic}:${entry.severity}`)
+
+      for (const code of codes) {
+        expect(declared).toContain(code)
+      }
+
+      if (sourceHasConditions && contract.to === 'yarn-berry-v4') {
+        expect(codes).toContain(
+          `INTEROP_${formatCode(contract.from)}_TO_BERRY_V4_CONDITIONS_DROPPED:warning`,
+        )
+      }
+
+      if (contract.passthrough.some(entry => entry.feature === 'compressionLevel')) {
+        expect(codes).toContain(
+          `INTEROP_${formatCode(contract.from)}_TO_${formatCode(contract.to)}_COMPRESSIONLEVEL_PASSTHROUGH:info`,
+        )
+      }
+    })
+  }
+})
+
+function formatCode(format: ConversionContract['from']): string {
+  switch (format) {
+    case 'yarn-berry-v4':
+      return 'BERRY_V4'
+    case 'yarn-berry-v5':
+      return 'BERRY_V5'
+    case 'yarn-berry-v6':
+      return 'BERRY_V6'
+    case 'yarn-berry-v8':
+      return 'BERRY_V8'
+    case 'yarn-berry-v9':
+      return 'BERRY_V9'
+    case 'yarn-classic':
+      return 'CLASSIC'
+    default:
+      throw new Error(`formatCode: unsupported format ${format}`)
+  }
 }
-
-describe('interop: yarn-berry-v9 -> yarn-berry-v8 (naive)', () => {
-  const contract = contractOf('yarn-berry-v9', 'yarn-berry-v8')
-
-  it.each(fixturesFor(contract))('%s fixture satisfies the v9 -> v8 contract', fixtureName => {
-    const graphV9 = parseV9(fixture(`${fixtureName}/yarn-berry-v9.lock`))
-    const emittedV8 = stringifyV8WithDiagnostics(graphV9)
-    const graphV8 = parseV8(emittedV8.lockfile)
-    const reenteredV9 = parseV9(stringifyV9(graphV8))
-
-    assertConversionContract(contract, {
-      graphSource: graphV9,
-      graphDestination: graphV8,
-      diagnostics: [
-        ...graphV9.diagnostics(),
-        ...emittedV8.diagnostics,
-        ...graphV8.diagnostics(),
-      ],
-      mode: 'naive',
-      fixture: fixtureName,
-      graphReentered: reenteredV9,
-    })
-  })
-})
-
-describe('interop: yarn-berry-v8 -> yarn-berry-v9 (naive)', () => {
-  const contract = contractOf('yarn-berry-v8', 'yarn-berry-v9')
-
-  it.each(fixturesFor(contract))('%s fixture satisfies the v8 -> v9 contract', fixtureName => {
-    const graphV8 = parseV8(fixture(`${fixtureName}/yarn-berry-v8.lock`))
-    const emittedV9 = stringifyV9WithDiagnostics(graphV8)
-    const graphV9 = parseV9(emittedV9.lockfile)
-    const reenteredV8 = parseV8(stringifyV8(graphV9))
-
-    assertConversionContract(contract, {
-      graphSource: graphV8,
-      graphDestination: graphV9,
-      diagnostics: [
-        ...graphV8.diagnostics(),
-        ...emittedV9.diagnostics,
-        ...graphV9.diagnostics(),
-      ],
-      mode: 'naive',
-      fixture: fixtureName,
-      graphReentered: reenteredV8,
-    })
-  })
-})
