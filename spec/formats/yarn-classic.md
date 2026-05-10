@@ -69,20 +69,24 @@ Keys = comma-separated dep specs that share the same resolved version.
 | `file` / `link` / `portal`                | ~ | `file:` only |
 | `patch:` protocol                         | ✗ | |
 | Integrity hashes                          | ✓ | sha512; older lockfiles use sha1 |
-| `dev` / `optional` / `peer` separation    | ✗ | only resolution, not classification |
+| `dev` / `optional` / `peer` separation    | ~ | `optional` recoverable from lockfile (`optionalDependencies:` sibling block); `dev` / `peer` require `manifests` and otherwise collapse to `dep` |
 | Bundled deps                              | ✗ | |
 | Overrides / resolutions                   | ~ | yarn applies them at resolve time |
 
 ## Conversion inputs
 
 Workspaces are not encoded in the lockfile. Without `manifests`, only the
-root project is recovered and per-dep classification
-(`dev` / `optional` / `peer`) is unavailable.
+root project is recovered, and per-dep classification splits along the
+lockfile-derivable / manifest-required axis: only `dep` / `optional`
+classification is available (the lockfile records
+`optionalDependencies` as a separate inner-block sibling of
+`dependencies:`); `dev` and `peer` live only on `package.json` and
+collapse to `dep`.
 
 | Operation | Option                           | Required?              | Effect when omitted |
 |-----------|----------------------------------|:----------------------:|---------------------|
-| Parse     | `manifests['']`                  | required for monorepos | source of truth for the `workspaces` field; without it, all member projects collapse into the root |
-| Parse     | `manifests[<workspacePath>]`     | recommended            | classifies each dep as `prod` / `dev` / `optional` / `peer`; otherwise everything lands in `prod` with low confidence |
+| Parse     | `manifests['']`                  | required for monorepos | source of truth for the `workspaces` field. Without it, the synthesised root cannot distinguish workspace-member entries (which would normally carry `attrs.workspace = true` on their root-edges) from external `0.0.0-use.local` lookalikes — both end up as ordinary `dep` edges from the synthesised root. Member entries themselves remain present as graph nodes; they just lose the workspace-edge marker (per ADR-0019 §C 473-481) |
+| Parse     | `manifests[<workspacePath>]`     | recommended            | recovers full `dep` / `dev` / `optional` / `peer` classification; without it, only `dep` and `optional` are recoverable from the lockfile (yarn 1 emits `optionalDependencies:` as a sibling inner-block), while `dev` and `peer` collapse to `dep` (per ADR-0019 §C 4-row table) |
 | Stringify | `manifests`                      | optional               | re-emit reads only the graph; manifests inform the header comment (currently none) |
 
 ## Quirks
@@ -112,6 +116,8 @@ root project is recovered and per-dep classification
 
 ## Open questions
 
-> **Open:** without `manifests`, can we *infer* dev/optional from observed
-> nesting + ranges? Probably not reliably. Mark unclassified deps as `prod`
-> with a `confidence: low` annotation, or refuse?
+> **Open:** without `manifests`, can we *infer* `dev` / `peer` from observed
+> nesting + ranges? (`optional` is already recoverable from
+> `optionalDependencies:` inner-block; per ADR-0019 §C only `dev` / `peer`
+> are unrecoverable.) Probably not reliably. Mark unclassified deps as
+> `dep` with a `confidence: low` annotation, or refuse?
