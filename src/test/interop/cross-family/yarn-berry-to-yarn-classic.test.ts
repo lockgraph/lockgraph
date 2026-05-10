@@ -7,6 +7,7 @@ import {
   activeContract,
   classicFixtureAsBerrySource,
   defaultBerryCacheKey,
+  formatCode,
   minimalBerryLockfile,
   observeInteropDiagnostics,
   parseFormat,
@@ -81,15 +82,15 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
       const codes = new Set(interopDiagnostics.map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`))
 
       expect(codes).toContain(
-        `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_CACHEKEY_DROPPED:info`,
+        `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_CACHEKEY_DROPPED:info`,
       )
       expect(codes).toContain(
-        `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_COMPRESSIONLEVEL_DROPPED:info`,
+        `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_COMPRESSIONLEVEL_DROPPED:info`,
       )
 
       if (contract.from !== 'yarn-berry-v4') {
         expect(codes).toContain(
-          `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_CONDITIONS_DROPPED:warning`,
+          `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_CONDITIONS_DROPPED:warning`,
         )
       }
     })
@@ -143,36 +144,17 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
       const codes = new Set(interopDiagnostics.map(diagnostic => `${diagnostic.code}:${diagnostic.severity}`))
 
       expect(codes).toContain(
-        `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_PEER_VIRT_DROPPED:warning`,
+        `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_PEER_VIRT_DROPPED:warning`,
       )
       expect(codes).toContain(
-        `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_PATCH_DROPPED:warning`,
+        `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_PATCH_DROPPED:warning`,
       )
       expect(codes).toContain(
-        `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_VIRTUAL_DROPPED:warning`,
+        `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_VIRTUAL_DROPPED:warning`,
       )
       expect(codes).toContain(
-        `INTEROP_${formatCode(contract.from)}_TO_CLASSIC_WORKSPACE_METADATA_DROPPED:info`,
+        `INTEROP_${formatCode(contract.from)}_TO_YARN_CLASSIC_WORKSPACE_METADATA_DROPPED:info`,
       )
     })
   }
 })
-
-function formatCode(format: ConversionContract['from']): string {
-  switch (format) {
-    case 'yarn-berry-v4':
-      return 'BERRY_V4'
-    case 'yarn-berry-v5':
-      return 'BERRY_V5'
-    case 'yarn-berry-v6':
-      return 'BERRY_V6'
-    case 'yarn-berry-v8':
-      return 'BERRY_V8'
-    case 'yarn-berry-v9':
-      return 'BERRY_V9'
-    case 'yarn-classic':
-      return 'CLASSIC'
-    default:
-      throw new Error(`formatCode: unsupported format ${format}`)
-  }
-}

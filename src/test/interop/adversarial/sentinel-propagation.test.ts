@@ -38,11 +38,11 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
 
     expect(Array.from(destinationGraph.nodes()).some(node => node.patch?.startsWith('unresolved-') === true)).toBe(false)
     expect(interopDiagnostics.map(diagnostic => diagnostic.code)).toContain(
-      'INTEROP_BERRY_V9_TO_CLASSIC_PATCH_DROPPED',
+      'INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_PATCH_DROPPED',
     )
   })
 
   it.todo(
-    'berry-v9 -> yarn-classic should grow an explicit INTEROP_BERRY_V9_TO_CLASSIC_SENTINEL_COLLAPSED diagnostic once the matrix adds sentinel-specific rows',
+    'berry-v9 -> yarn-classic should grow an explicit INTEROP_YARN_BERRY_V9_TO_YARN_CLASSIC_SENTINEL_COLLAPSED diagnostic once the matrix adds sentinel-specific rows',
   )
 })

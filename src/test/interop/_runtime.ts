@@ -176,6 +176,10 @@ export function defaultBerryCacheKey(format: Extract<FormatId, `yarn-berry-${str
   }
 }
 
+export function formatCode(format: FormatId): string {
+  return format.replaceAll('-', '_').toUpperCase()
+}
+
 export function classicFixtureAsBerrySource(
   fixtureName: (typeof CLASSIC_SHARED_FIXTURES)[number],
   format: Extract<FormatId, `yarn-berry-${string}`>,
@@ -375,7 +379,7 @@ function additionObserved(entry: AdditionEntry, context: ObservationContext): bo
         && context.manifestsProvided === true
         && hasWorkspaceMetadata(context.destinationGraph)
     default:
-      return false
+      throw new Error(`additionObserved: unrecognized field '${entry.field}'`)
   }
 }
 
