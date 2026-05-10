@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { type Graph, type GraphDiff } from '../../main/ts/graph.ts'
+import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import { check as checkV4, parse as parseV4 } from '../../main/ts/formats/yarn-berry-v4.ts'
 import { check as checkV5, parse as parseV5 } from '../../main/ts/formats/yarn-berry-v5.ts'
@@ -53,6 +53,17 @@ function expectEmptyGraphDiff(diff: GraphDiff) {
 
 function parseFixtureGraph(name: typeof FIXTURES[number]): Graph {
   return parse(fixture(`${name}/yarn-classic.lock`))
+}
+
+function stringifyWithDiagnostics(graph: Graph) {
+  const diagnostics: Diagnostic[] = []
+  const lockfile = stringify(graph, {
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic)
+    },
+  })
+
+  return { lockfile, diagnostics }
 }
 
 describe('yarn-classic — discriminant and isolation', () => {
@@ -134,5 +145,217 @@ describe('yarn-classic — stringify', () => {
     expect(emitted.replace(/\r\n/g, '\n')).toBe(stringify(original))
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
     expectEmptyGraphDiff(original.diff(reparsed))
+  })
+})
+
+describe('yarn-classic — modify', () => {
+  it('roundtrips addNode', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'debug@4.4.1',
+        name: 'debug',
+        version: '4.4.1',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/debug/-/debug-4.4.1.tgz#0000000000000000000000000000000000000000',
+      })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'node-added', subject: 'debug@4.4.1' },
+    ])
+  })
+
+  it('roundtrips addEdge dep', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dep', { range: '2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-added', subject: { src: 'lodash@4.17.21', dst: 'ms@2.1.3', kind: 'dep' } },
+    ])
+  })
+
+  it('collapses addEdge dev to dep on reparse', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dev', { range: '2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+    const flattened = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dep', { range: '2.1.3' })
+    }).graph
+
+    expectEmptyGraphDiff(flattened.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-added', subject: { src: 'lodash@4.17.21', dst: 'ms@2.1.3', kind: 'dev' } },
+    ])
+  })
+
+  it('roundtrips addEdge optional', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'optional', { range: '2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-added', subject: { src: 'lodash@4.17.21', dst: 'ms@2.1.3', kind: 'optional' } },
+    ])
+  })
+
+  it('roundtrips removeEdge', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.removeEdge('react-dom@18.2.0', 'scheduler@0.23.2', 'dep')
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-removed', subject: { src: 'react-dom@18.2.0', dst: 'scheduler@0.23.2', kind: 'dep' } },
+    ])
+  })
+
+  it('roundtrips removeNode', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.removeEdge('react-dom@18.2.0', 'scheduler@0.23.2', 'dep')
+      m.removeNode('scheduler@0.23.2')
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-removed', subject: { src: 'react-dom@18.2.0', dst: 'scheduler@0.23.2', kind: 'dep' } },
+      { kind: 'node-removed', subject: 'scheduler@0.23.2' },
+    ])
+  })
+
+  it('roundtrips setTarball', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'sha512-modified-ms-integrity' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+    expect(result.applied).toEqual([
+      { kind: 'tarball-set', subject: 'ms@2.1.3' },
+    ])
+  })
+
+  it('emits addEdge peer warning once and reparses without the peer edge', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'peer-consumer@1.0.0(react@18.2.0)',
+        name: 'peer-consumer',
+        version: '1.0.0',
+        peerContext: ['react@18.2.0'],
+        resolution: 'https://registry.yarnpkg.com/peer-consumer/-/peer-consumer-1.0.0.tgz#1111111111111111111111111111111111111111',
+      })
+      m.addEdge('peer-consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0' })
+    })
+    const flattened = original.mutate(m => {
+      m.addNode({
+        id: 'peer-consumer@1.0.0',
+        name: 'peer-consumer',
+        version: '1.0.0',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/peer-consumer/-/peer-consumer-1.0.0.tgz#1111111111111111111111111111111111111111',
+      })
+    }).graph
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    expectEmptyGraphDiff(flattened.diff(reparsed))
+    expect(diagnostics.map(diagnostic => diagnostic.code).sort()).toEqual([
+      'YARN_CLASSIC_PEER_DROPPED',
+      'YARN_CLASSIC_PEER_VIRT_FLATTENED',
+    ])
+    expect(diagnostics.find(diagnostic => diagnostic.code === 'YARN_CLASSIC_PEER_DROPPED')).toEqual(
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'peer-consumer@1.0.0(react@18.2.0)',
+      }),
+    )
+    expect(diagnostics.find(diagnostic => diagnostic.code === 'YARN_CLASSIC_PEER_DROPPED')?.message)
+      .toContain('peer-consumer@1.0.0(react@18.2.0) -> react@^18.2.0')
+    expect(reparsed.out('peer-consumer@1.0.0', 'peer')).toEqual([])
+    expect(result.applied).toEqual([
+      { kind: 'node-added', subject: 'peer-consumer@1.0.0(react@18.2.0)' },
+      { kind: 'edge-added', subject: { src: 'peer-consumer@1.0.0(react@18.2.0)', dst: 'react@18.2.0', kind: 'peer' } },
+    ])
+  })
+
+  it('replacePeerContext reparses to the flattened graph and emits one warning per affected node', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.replacePeerContext('react-dom@18.2.0', ['react@18.2.0'])
+    })
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    expectEmptyGraphDiff(original.diff(reparsed))
+    expect(diagnostics.map(diagnostic => diagnostic.code).sort()).toEqual([
+      'YARN_CLASSIC_PEER_DROPPED',
+      'YARN_CLASSIC_PEER_VIRT_FLATTENED',
+    ])
+    expect(diagnostics.find(diagnostic => diagnostic.code === 'YARN_CLASSIC_PEER_VIRT_FLATTENED')).toEqual(
+      expect.objectContaining({
+        severity: 'warning',
+        subject: 'react-dom@18.2.0(react@18.2.0)',
+      }),
+    )
+    expect(diagnostics.find(diagnostic => diagnostic.code === 'YARN_CLASSIC_PEER_VIRT_FLATTENED')?.message)
+      .toContain('["react@18.2.0"]')
+    expect(result.applied).toEqual([
+      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)' },
+    ])
+  })
+
+  it('drops patch metadata on emit and warns once per affected node', () => {
+    const original = parseFixtureGraph('simple')
+    const patch = 'a'.repeat(128)
+    const current = original.getNode('ms@2.1.3')
+    expect(current).toBeDefined()
+
+    const result = original.mutate(m => {
+      m.replaceNode('ms@2.1.3', {
+        ...current!,
+        patch,
+      })
+      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
+      m.removeTarball({ name: 'ms', version: '2.1.3' })
+    })
+    const flattened = original.mutate(m => {
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'sha512-patched-ms-integrity' })
+    }).graph
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    expectEmptyGraphDiff(flattened.diff(reparsed))
+    expect(reparsed.getNode('ms@2.1.3')?.patch).toBeUndefined()
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'YARN_CLASSIC_PATCH_DROPPED',
+        severity: 'warning',
+        subject: 'ms@2.1.3',
+      }),
+    ])
+    expect(diagnostics[0]?.message).toContain(patch)
+    expect(result.applied).toEqual([
+      { kind: 'node-replaced', subject: 'ms@2.1.3' },
+      { kind: 'tarball-set', subject: `ms@2.1.3+patch=${patch}` },
+      { kind: 'tarball-removed', subject: 'ms@2.1.3' },
+    ])
   })
 })

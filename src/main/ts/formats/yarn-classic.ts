@@ -2,6 +2,7 @@ import {
   GraphError,
   newBuilder,
   type Diagnostic,
+  type Edge,
   type Graph,
   type Node,
 } from '../graph.ts'
@@ -34,6 +35,7 @@ interface YarnClassicEntry {
 
 export interface YarnClassicStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
+  onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
 const sidecarByGraph = new WeakMap<Graph, YarnClassicSidecar>()
@@ -131,7 +133,18 @@ export function parse(input: string): Graph {
 }
 
 export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {}): string {
+  const warnedPeerEdges = new Set<string>()
+  const warnedPeerContexts = new Set<string>()
+  const warnedPatches = new Set<string>()
+  const emitDiagnostic = (diagnostic: Diagnostic): void => {
+    options.onDiagnostic?.(diagnostic)
+  }
+
   const entries = Array.from(graph.nodes(), node => {
+    warnPatchDrop(node, warnedPatches, emitDiagnostic)
+    warnPeerContextFlatten(node, warnedPeerContexts, emitDiagnostic)
+    warnDroppedPeerEdges(graph, node.id, warnedPeerEdges, emitDiagnostic)
+
     const key = stringifyEntryKey(entrySpecsOfNode(graph, node))
     const lines = [
       `${key}:`,
@@ -148,7 +161,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       lines.push(`  integrity ${integrity}`)
     }
 
-    const dependencies = collectBlockEntries(graph, node.id, 'dep')
+    const dependencies = collectDependencyBlockEntries(graph, node.id)
     if (dependencies.length > 0) {
       lines.push('  dependencies:')
       for (const [name, range] of dependencies) {
@@ -156,7 +169,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       }
     }
 
-    const optionalDependencies = collectBlockEntries(graph, node.id, 'optional')
+    const optionalDependencies = collectBlockEntries(graph, graph.out(node.id, 'optional'))
     if (optionalDependencies.length > 0) {
       lines.push('  optionalDependencies:')
       for (const [name, range] of optionalDependencies) {
@@ -390,7 +403,7 @@ function addEdgesFromMap(
 
 function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   const liveSpecs = Array.from(graph.in(node.id))
-    .filter(edge => edge.kind === 'dep' || edge.kind === 'dev' || edge.kind === 'optional')
+    .filter(edge => edge.kind === 'dep' || edge.kind === 'optional')
     .map(edge => edge.attrs?.range)
     .filter((range): range is string => range !== undefined)
     .map(range => `${node.name}@${range}`)
@@ -438,8 +451,15 @@ function hasNonAscii(value: string): boolean {
   return false
 }
 
-function collectBlockEntries(graph: Graph, srcId: string, kind: 'dep' | 'optional'): Array<[string, string]> {
-  return graph.out(srcId, kind)
+function collectDependencyBlockEntries(graph: Graph, srcId: string): Array<[string, string]> {
+  return collectBlockEntries(
+    graph,
+    Array.from(graph.out(srcId, 'dep')).concat(graph.out(srcId, 'dev')),
+  )
+}
+
+function collectBlockEntries(graph: Graph, edges: readonly Edge[]): Array<[string, string]> {
+  return edges
     .map(edge => {
       const dst = graph.getNode(edge.dst)
       if (dst === undefined || edge.attrs?.range === undefined) return undefined
@@ -447,6 +467,59 @@ function collectBlockEntries(graph: Graph, srcId: string, kind: 'dep' | 'optiona
     })
     .filter((entry): entry is [string, string] => entry !== undefined)
     .sort((a, b) => cmpUtf16(a[0], b[0]))
+}
+
+function warnDroppedPeerEdges(
+  graph: Graph,
+  srcId: string,
+  warned: Set<string>,
+  emitDiagnostic: (diagnostic: Diagnostic) => void,
+): void {
+  for (const edge of graph.out(srcId, 'peer')) {
+    const key = `${edge.src}\u0000${edge.dst}\u0000${edge.attrs?.range ?? ''}`
+    if (warned.has(key)) continue
+    warned.add(key)
+
+    const dst = graph.getNode(edge.dst)
+    emitDiagnostic({
+      code: 'YARN_CLASSIC_PEER_DROPPED',
+      severity: 'warning',
+      subject: srcId,
+      message: dst === undefined || edge.attrs?.range === undefined
+        ? `peer edge ${edge.src} -> ${edge.dst} is unsupported in yarn-classic; dropping on emit`
+        : `peer edge ${edge.src} -> ${dst.name}@${edge.attrs.range} is unsupported in yarn-classic; dropping on emit`,
+    })
+  }
+}
+
+function warnPeerContextFlatten(
+  node: Node,
+  warned: Set<string>,
+  emitDiagnostic: (diagnostic: Diagnostic) => void,
+): void {
+  if (node.peerContext.length === 0 || warned.has(node.id)) return
+  warned.add(node.id)
+  emitDiagnostic({
+    code: 'YARN_CLASSIC_PEER_VIRT_FLATTENED',
+    severity: 'warning',
+    subject: node.id,
+    message: `peerContext ${JSON.stringify(node.peerContext)} is unsupported in yarn-classic; flattening on emit`,
+  })
+}
+
+function warnPatchDrop(
+  node: Node,
+  warned: Set<string>,
+  emitDiagnostic: (diagnostic: Diagnostic) => void,
+): void {
+  if (node.patch === undefined || warned.has(node.id)) return
+  warned.add(node.id)
+  emitDiagnostic({
+    code: 'YARN_CLASSIC_PATCH_DROPPED',
+    severity: 'warning',
+    subject: node.id,
+    message: `patch slot ${JSON.stringify(node.patch)} is unsupported in yarn-classic; dropping on emit`,
+  })
 }
 
 // Mined from legacy/main/ts/formats/yarn-classic.ts:188-212. The graph stores
