@@ -5,13 +5,16 @@ import type { PreservedFeature } from './_matrix.ts'
 
 // Features observed on a graph for contract diagnostics. Includes PreservedFeature
 // (returnable by graphSubset) plus the runtime-only flags the observation lens uses
-// (`patch`, `virtual`, `workspace-metadata`, `sentinel`).
+// (`patch`, `virtual`, `workspace-metadata`, `sentinel`, `sentinel-collapsed`,
+// `multi-spec-collapsed`).
 export type GraphFeature =
   | PreservedFeature
   | 'patch'
   | 'virtual'
   | 'workspace-metadata'
   | 'sentinel'
+  | 'sentinel-collapsed'
+  | 'multi-spec-collapsed'
 
 export function featurePresence(graph: Graph, feature: GraphFeature): boolean {
   switch (feature) {
@@ -43,7 +46,22 @@ export function featurePresence(graph: Graph, feature: GraphFeature): boolean {
           graph.out(node.id).some(edge => edge.attrs?.workspace === true),
         )
     case 'sentinel':
+    case 'sentinel-collapsed':
       return Array.from(graph.nodes()).some(node => node.patch?.startsWith('unresolved-') === true)
+    case 'multi-spec-collapsed':
+      // Graph-side signal: a node with multiple incoming edges carrying
+      // distinct ranges. Classic multi-spec entry keys ("foo@^1, foo@^2") with
+      // no parent references are not observable on the graph; lockfile-text
+      // detection in `_observe.ts` covers the source-text route.
+      return Array.from(graph.nodes()).some(node => {
+        const ranges = new Set<string>()
+        for (const edge of graph.in(node.id)) {
+          if (edge.kind !== 'dep' && edge.kind !== 'optional') continue
+          const range = edge.attrs?.range
+          if (typeof range === 'string') ranges.add(range)
+        }
+        return ranges.size > 1
+      })
     default:
       throw new Error(`featurePresence: unknown feature '${feature satisfies never}'`)
   }

@@ -96,6 +96,11 @@ function lossApplies(entry: LossEntry, context: ObservationContext): boolean {
       return hasBerryMetadataField(context.sourceLockfile, 'cacheKey')
     case 'compressionLevel':
       return hasBerryMetadataField(context.sourceLockfile, 'compressionLevel')
+    case 'sentinel-collapsed':
+      return featurePresence(context.sourceGraph, 'sentinel-collapsed')
+    case 'multi-spec-collapsed':
+      return featurePresence(context.sourceGraph, 'multi-spec-collapsed')
+        || hasClassicMultiSpecEntry(context.sourceLockfile)
     default:
       return assertExhaustive(entry.feature, 'lossApplies')
   }
@@ -151,6 +156,13 @@ function lossObserved(entry: LossEntry, context: ObservationContext): boolean {
     case 'compressionLevel':
       return hasBerryMetadataField(context.sourceLockfile, 'compressionLevel')
         && !hasBerryMetadataField(context.destinationLockfile, 'compressionLevel')
+    case 'sentinel-collapsed':
+      return featurePresence(context.sourceGraph, 'sentinel-collapsed')
+        && !featurePresence(context.destinationGraph, 'sentinel-collapsed')
+    case 'multi-spec-collapsed':
+      return (featurePresence(context.sourceGraph, 'multi-spec-collapsed')
+        || hasClassicMultiSpecEntry(context.sourceLockfile))
+        && !hasClassicMultiSpecEntry(context.destinationLockfile)
     default:
       return assertExhaustive(entry.feature, 'lossObserved')
   }
@@ -225,6 +237,16 @@ function looksLikeBerry(lockfile: string | undefined): boolean {
 function hasBerryMetadataField(lockfile: string | undefined, field: string): boolean {
   const meta = berryMetadata(lockfile)
   return meta !== undefined && Object.prototype.hasOwnProperty.call(meta, field)
+}
+
+// Classic multi-spec entry keys carry comma-joined specs ("foo@^1, foo@^2"),
+// always quoted (mustQuoteEntryKey forces quoting for multi-spec). Berry emits
+// multi-spec keys in the same shape ("foo@npm:^1, foo@npm:^2"), so the regex
+// here matches both — `multi-spec-collapsed` only fires when destination text
+// no longer contains a multi-spec key.
+const CLASSIC_MULTI_SPEC_ENTRY_RE = /^"[^"\n]+,[^"\n]+":/m
+function hasClassicMultiSpecEntry(lockfile: string | undefined): boolean {
+  return lockfile !== undefined && CLASSIC_MULTI_SPEC_ENTRY_RE.test(lockfile)
 }
 
 function berryMetadata(lockfile: string | undefined): SymlMap | undefined {

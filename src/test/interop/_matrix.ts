@@ -49,6 +49,8 @@ export type LossFeature =
   | 'workspace-metadata'
   | 'compressionLevel'
   | 'cacheKey'
+  | 'sentinel-collapsed'
+  | 'multi-spec-collapsed'
 
 export type AdditionField =
   | '__metadata.version'
@@ -269,11 +271,20 @@ function buildClassicToBerry(to: BerryFormat): ConversionContract {
     })
   }
 
+  const lost: LossEntry[] = [
+    {
+      feature: 'multi-spec-collapsed',
+      diagnostic: `INTEROP_YARN_CLASSIC_TO_${fromCode(to)}_MULTI_SPEC_COLLAPSED`,
+      severity: 'info',
+      rationale: 'berry canonicalises multi-spec classic entry keys to a single npm locator per node',
+    },
+  ]
+
   return {
     from: 'yarn-classic',
     to,
     preserved,
-    lost: [],
+    lost,
     added,
     passthrough: [],
     reentrancy: 'asymmetric',
@@ -299,6 +310,12 @@ function buildBerryToClassic(from: BerryFormat): ConversionContract {
       diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_PATCH_DROPPED`,
       severity: 'warning',
       rationale: 'classic cannot encode patch slots',
+    },
+    {
+      feature: 'sentinel-collapsed',
+      diagnostic: `INTEROP_${fromCode(from)}_TO_YARN_CLASSIC_SENTINEL_COLLAPSED`,
+      severity: 'warning',
+      rationale: 'classic has no slot-value namespace, so unresolved- sentinel patches (ADR-0011) collapse on emit',
     },
     {
       feature: 'virtual',
