@@ -1,11 +1,11 @@
-// _npm-flat-test-utils.ts — npm-flat-family spec metadata + per-family wrappers.
+// _pnpm-flat-test-utils.ts — pnpm-flat-family spec metadata + per-family wrappers.
 //
 // Re-exports family-agnostic helpers from `src/test/helpers/lockfile-test-utils.ts`
-// and adds the npm-flat-specific spec type + fixture catalogue. NO
-// describe()/it() registrations — those live in `_npm-flat-suite.ts`.
+// and adds the pnpm-flat-specific spec type + fixture catalogue. NO
+// describe()/it() registrations — those live in `_pnpm-flat-suite.ts`.
 //
 // Resolves r1 collab F3 — eliminates near-duplicate helper code by
-// hoisting фaмily-agnostic utilities к a neutral location.
+// hoisting family-agnostic utilities к a neutral location.
 
 import { type Diagnostic, type Graph } from '../../main/ts/graph.ts'
 import {
@@ -17,49 +17,49 @@ import {
 
 export { fixture, graphSnapshot, expectEmptyGraphDiff }
 
-// Phase §A working fixture set per ADR-0021 §"Acceptance gate — per-version".
+// 8-fixture matrix per ADR-0022 §A.pnpm-* acceptance gate.
 export const FIXTURES = [
-  'bundled-deps',
-  'deps-with-scopes',
-  'git-github-tarball',
+  'simple',
   'peers-basic',
   'peers-multi',
-  'simple',
+  'deps-with-scopes',
   'workspaces-basic',
+  'workspace-cross-refs',
+  'patch-yarn',
   'yarn-crlf',
 ] as const
 
 export type FixtureName = typeof FIXTURES[number]
 
-export interface FlatFamilyAdapter {
+export interface PnpmFamilyAdapter {
   check(input: string): boolean
   parse(input: string, options?: { onDiagnostic?: (d: Diagnostic) => void }): Graph
   stringify(graph: Graph, options?: { lineEnding?: 'lf' | 'crlf'; onDiagnostic?: (d: Diagnostic) => void }): string
-  enrich(graph: Graph, options?: {}): { graph: Graph; diagnostics: Diagnostic[] }
+  enrich(graph: Graph, options?: { manifests?: Record<string, any> }): { graph: Graph; diagnostics: Diagnostic[] }
   optimize(graph: Graph, options?: {}): { graph: Graph; diagnostics: Diagnostic[] }
 }
 
-export interface FlatFamilySpec {
-  /** Display label, e.g. 'npm-2', 'npm-3'. */
+export interface PnpmFamilySpec {
+  /** Display label, e.g. 'pnpm-v6', 'pnpm-v9'. */
   label: string
-  /** Lockfile version number used in JSON. */
-  lockfileVersion: 2 | 3
-  /** Diagnostic prefix, e.g. 'NPM_V2', 'NPM_V3'. */
-  diagPrefix: 'NPM_V2' | 'NPM_V3'
+  /** Lockfile version literal (quoted string scalar). */
+  lockfileVersion: '6.0' | '9.0'
+  /** Diagnostic prefix per ADR-0022. */
+  diagPrefix: 'PNPM_V6' | 'PNPM_V9'
   /** Fixture file extension (matches the version slug). */
-  fixtureSuffix: 'npm-2.lock' | 'npm-3.lock'
+  fixtureSuffix: 'pnpm-v6.lock' | 'pnpm-v9.lock'
   /** Adapter under test. */
-  adapter: FlatFamilyAdapter
-  /** Cross-version rejection probe: lockfiles whose parsers MUST reject the version's input. */
-  crossAdapterRejectExtra?: ReadonlyArray<(input: string) => unknown>
+  adapter: PnpmFamilyAdapter
+  /** Cross-version sibling fixture suffixes that this adapter must reject. */
+  crossVersionRejects: ReadonlyArray<'pnpm-v5.lock' | 'pnpm-v6.lock' | 'pnpm-v9.lock'>
 }
 
-export function parseFixtureGraph(spec: FlatFamilySpec, name: FixtureName): Graph {
+export function parseFixtureGraph(spec: PnpmFamilySpec, name: FixtureName): Graph {
   return spec.adapter.parse(fixture(`${name}/${spec.fixtureSuffix}`))
 }
 
 export function stringifyWithDiagnostics(
-  spec: FlatFamilySpec,
+  spec: PnpmFamilySpec,
   graph: Graph,
 ): { lockfile: string; diagnostics: Diagnostic[] } {
   return sharedStringifyWithDiagnostics(spec.adapter, graph)
