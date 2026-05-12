@@ -14,10 +14,7 @@ describe('interop adversarial §8.1 — empty graph conversion', () => {
   const graph = emptyGraph()
 
   for (const contract of CONTRACTS) {
-    const testCase = contract.to === 'yarn-classic' && contract.from.startsWith('yarn-berry-')
-      ? it.skip
-      : it
-    testCase(`${contract.from} -> ${contract.to} keeps the graph empty and emits no spurious interop diagnostics`, () => {
+    it(`${contract.from} -> ${contract.to} keeps the graph empty and emits no spurious interop diagnostics`, () => {
       const sourceLockfile = stringifyEmpty(contract.from).lockfile
       const emitted = stringifyEmpty(contract.to, graph)
       const destinationGraph = parseFormat(contract.to, emitted.lockfile)
@@ -46,8 +43,6 @@ describe('interop adversarial §8.1 — empty graph conversion', () => {
       })
     })
   }
-
-  it.todo('berry -> yarn-classic empty-graph conversion currently emits a classic header that the strict classic parser rejects')
 })
 
 function stringifyEmpty(format: ConversionContract['from'], graph = emptyGraph()) {
