@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { type Graph, type GraphDiff } from '../../main/ts/graph.ts'
+import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { check, parse, stringify } from '../../main/ts/formats/npm-3.ts'
+import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/npm-3.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
 
@@ -279,5 +279,486 @@ describe('npm-3 — stringify (§A.4 Graph-level roundtrip)', () => {
       name: '@case-ws/a',
       version: '0.0.0',
     })
+  })
+})
+
+function stringifyWithDiagnostics(graph: Graph): { lockfile: string; diagnostics: Diagnostic[] } {
+  const diagnostics: Diagnostic[] = []
+  const lockfile = stringify(graph, {
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic)
+    },
+  })
+  return { lockfile, diagnostics }
+}
+
+describe('npm-3 — modify (§B Mutator surface, inherits ADR-0016 §B verbatim)', () => {
+  it('roundtrips addNode', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'debug@4.4.1',
+        name: 'debug',
+        version: '4.4.1',
+        peerContext: [],
+      })
+      m.setTarball({ name: 'debug', version: '4.4.1' }, {
+        integrity: 'sha512-fakedebugintegrity',
+      })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.getNode('debug@4.4.1')).toBeDefined()
+    expect(result.applied).toEqual([
+      { kind: 'node-added', subject: 'debug@4.4.1' },
+      { kind: 'tarball-set', subject: 'debug@4.4.1' },
+    ])
+  })
+
+  it('roundtrips addEdge dep', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dep', { range: '2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-added', subject: { src: 'lodash@4.17.21', dst: 'ms@2.1.3', kind: 'dep' } },
+    ])
+  })
+
+  it('addEdge peer with range survives on disk (npm-3 records peerDependencies block, unlike npm-1)', () => {
+    // npm-3 records peerDependencies on disk per ADR-0021 §B.npm-3 — peer
+    // edges persist via the entry's peerDependencies block on stringify. To
+    // add a peer edge respecting the Graph invariant (peer edges must match
+    // peerContext per graph.ts:380), the caller seeds the consumer node with
+    // a virtualised NodeId (peerContext aligned with the peer edge dst). The
+    // npm-3 stringify flattens the virtual NodeId on emit (per the family
+    // peer-virt-flattened lossy rule) and writes the peerDependencies block
+    // under the underlying entry.
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'peer-consumer@1.0.0(ms@2.1.3)',
+        name: 'peer-consumer',
+        version: '1.0.0',
+        peerContext: ['ms@2.1.3'],
+      })
+      m.addEdge('peer-consumer@1.0.0(ms@2.1.3)', 'ms@2.1.3', 'peer', { range: '^2.1.0' })
+    })
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+
+    // The peer-virt flattening fires (npm has no virtual:<hash># on-disk
+    // encoding), but the peer edge itself is NOT dropped (unlike npm-1) —
+    // the peerDependencies block surfaces on the flattened entry.
+    expect(diagnostics.filter(d => d.code === 'NPM_V3_PEER_VIRT_FLATTENED')).toHaveLength(1)
+    expect(diagnostics.filter(d => d.code.includes('PEER_DROPPED'))).toEqual([])
+
+    const obj = JSON.parse(lockfile)
+    expect(obj.packages['node_modules/peer-consumer']?.peerDependencies).toEqual({
+      ms: '^2.1.0',
+    })
+  })
+
+  it('roundtrips removeEdge', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(result.applied).toEqual([
+      { kind: 'edge-removed', subject: { src: 'case-simple@0.0.0', dst: 'ms@2.1.3', kind: 'dep' } },
+    ])
+  })
+
+  it('roundtrips removeNode', () => {
+    const original = parseFixtureGraph('simple')
+    // Remove a leaf node (ms) and its incoming edge from the root.
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
+      m.removeNode('ms@2.1.3')
+      m.removeTarball({ name: 'ms', version: '2.1.3' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.getNode('ms@2.1.3')).toBeUndefined()
+  })
+
+  it('roundtrips setTarball', () => {
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.setTarball({ name: 'ms', version: '2.1.3' }, {
+        integrity: 'sha512-modified-ms-integrity',
+      })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+    expect(result.applied).toEqual([
+      { kind: 'tarball-set', subject: 'ms@2.1.3' },
+    ])
+  })
+
+  it('roundtrips replaceNode (version bump, same name)', () => {
+    const original = parseFixtureGraph('simple')
+    const current = original.getNode('ms@2.1.3')!
+    const result = original.mutate(m => {
+      m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
+      m.replaceNode('ms@2.1.3', {
+        ...current,
+        id: 'ms@2.1.4',
+        version: '2.1.4',
+      })
+      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: 'sha512-bumped-ms-integrity' })
+      m.removeTarball({ name: 'ms', version: '2.1.3' })
+      m.addEdge('case-simple@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
+    })
+    const reparsed = parse(stringify(result.graph))
+
+    expect(reparsed.getNode('ms@2.1.3')).toBeUndefined()
+    expect(reparsed.getNode('ms@2.1.4')).toBeDefined()
+    expectEmptyGraphDiff(result.graph.diff(reparsed))
+  })
+
+  it('replacePeerContext (non-empty) flattens on emit with NPM_V3_PEER_VIRT_FLATTENED', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const result = original.mutate(m => {
+      m.replacePeerContext('react-dom@18.2.0', ['react@18.2.0'])
+    })
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    // Reparse flattens the virtualised NodeId back to the bare form.
+    expect(reparsed.getNode('react-dom@18.2.0(react@18.2.0)')).toBeUndefined()
+    expect(reparsed.getNode('react-dom@18.2.0')).toBeDefined()
+    expect(diagnostics.map(d => d.code)).toEqual(['NPM_V3_PEER_VIRT_FLATTENED'])
+    expect(diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: 'NPM_V3_PEER_VIRT_FLATTENED',
+        severity: 'warning',
+        subject: 'react-dom@18.2.0(react@18.2.0)',
+      }),
+    )
+    expect(diagnostics[0]?.message).toContain('["react@18.2.0"]')
+    expect(result.applied).toEqual([
+      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)' },
+    ])
+  })
+
+  it('setNode patch drops on emit with NPM_V3_PATCH_DROPPED', () => {
+    const original = parseFixtureGraph('simple')
+    const patch = 'a'.repeat(128)
+    const current = original.getNode('ms@2.1.3')!
+
+    const result = original.mutate(m => {
+      m.replaceNode('ms@2.1.3', { ...current, patch })
+      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
+      m.removeTarball({ name: 'ms', version: '2.1.3' })
+    })
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    const reparsed = parse(lockfile)
+
+    expect(reparsed.getNode('ms@2.1.3')?.patch).toBeUndefined()
+    expect(diagnostics.filter(d => d.code === 'NPM_V3_PATCH_DROPPED')).toEqual([
+      expect.objectContaining({
+        code: 'NPM_V3_PATCH_DROPPED',
+        severity: 'warning',
+        subject: 'ms@2.1.3',
+      }),
+    ])
+    expect(diagnostics.find(d => d.code === 'NPM_V3_PATCH_DROPPED')?.message).toContain(patch)
+  })
+
+  it('emits each lossy diagnostic at most once per affected node', () => {
+    const original = parseFixtureGraph('peers-basic')
+    const patch = 'b'.repeat(128)
+    const reactDom = original.getNode('react-dom@18.2.0')!
+    const result = original.mutate(m => {
+      m.replaceNode('react-dom@18.2.0', { ...reactDom, patch })
+      m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: 'sha512-x' })
+      m.removeTarball({ name: 'react-dom', version: '18.2.0' })
+      m.replacePeerContext('react-dom@18.2.0', ['react@18.2.0'])
+    })
+    const { diagnostics } = stringifyWithDiagnostics(result.graph)
+
+    const peerVirt = diagnostics.filter(d => d.code === 'NPM_V3_PEER_VIRT_FLATTENED')
+    const patchDrop = diagnostics.filter(d => d.code === 'NPM_V3_PATCH_DROPPED')
+    expect(peerVirt).toHaveLength(1)
+    expect(patchDrop).toHaveLength(1)
+  })
+})
+
+describe('npm-3 — enrich (§C, ADR-0021 §C.npm-3)', () => {
+  it('peer-virt structurally absent: on-disk peerDependencies stay in sidecar; no graph peer edges (mirrors yarn-classic)', () => {
+    const graph = parseFixtureGraph('peers-basic')
+    // Parse leaves the peer block in sidecar (per §A's *Known degradation*
+    // clause); enrich does NOT materialise peer edges on the graph — the
+    // npm-flat outcome (per ADR-0021 §C.npm-3 + the graph invariant tying
+    // peer edges to peerContext) means peer edges only appear when the
+    // adapter virtualizes the source NodeId, which the npm side declines.
+    expect(graph.out('react-dom@18.2.0', 'peer')).toEqual([])
+    const result = enrich(graph)
+
+    expect(result.diagnostics).toEqual([])
+    expect(result.graph.out('react-dom@18.2.0', 'peer')).toEqual([])
+    expect(result.graph.getNode('react-dom@18.2.0')?.peerContext).toEqual([])
+    expect(result.graph.getNode('react-dom@18.2.0(react@18.2.0)')).toBeUndefined()
+    // The on-disk peer block round-trips via the sidecar fallback in
+    // buildNodeModulesEntry (not via graph peer edges).
+    const emitted = stringify(result.graph)
+    const reparsed = JSON.parse(emitted)
+    expect(reparsed.packages['node_modules/react-dom']?.peerDependencies).toEqual({
+      react: '^18.2.0',
+    })
+  })
+
+  it('emits NPM_V3_PEER_UNSATISFIED when no candidate matches the range', () => {
+    // Construct a graph where react-dom declares a peer range that no
+    // installed react version satisfies. Use peers-multi as the base and
+    // mutate the parse-side state: the cleanest path is a synthetic build
+    // via the existing parse + manual graph mutation.
+    const synthetic = {
+      name: 'case-x',
+      version: '0.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'case-x', version: '0.0.0', dependencies: { 'pkg-a': '1.0.0' } },
+        'node_modules/pkg-a': {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/pkg-a/-/pkg-a-1.0.0.tgz',
+          integrity: 'sha512-aaa',
+          peerDependencies: { 'react': '^99.99.0' },
+        },
+        'node_modules/react': {
+          version: '18.2.0',
+          resolved: 'https://registry.npmjs.org/react/-/react-18.2.0.tgz',
+          integrity: 'sha512-react',
+        },
+      },
+    }
+    const graph = parse(JSON.stringify(synthetic, null, 2))
+    const result = enrich(graph)
+
+    expect(result.diagnostics.map(d => d.code)).toEqual(['NPM_V3_PEER_UNSATISFIED'])
+    expect(result.diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: 'NPM_V3_PEER_UNSATISFIED',
+        severity: 'warning',
+        subject: 'pkg-a@1.0.0',
+      }),
+    )
+    expect(result.graph.out('pkg-a@1.0.0', 'peer')).toEqual([])
+  })
+
+  it('emits NPM_V3_PEER_AMBIGUOUS when multiple candidates satisfy the range', () => {
+    const synthetic = {
+      name: 'case-x',
+      version: '0.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'case-x', version: '0.0.0' },
+        'node_modules/pkg-a': {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/pkg-a/-/pkg-a-1.0.0.tgz',
+          integrity: 'sha512-aaa',
+          peerDependencies: { 'react': '*' },
+        },
+        'node_modules/react': {
+          version: '17.0.2',
+          resolved: 'https://registry.npmjs.org/react/-/react-17.0.2.tgz',
+          integrity: 'sha512-r17',
+        },
+        'node_modules/pkg-a/node_modules/react': {
+          version: '18.2.0',
+          resolved: 'https://registry.npmjs.org/react/-/react-18.2.0.tgz',
+          integrity: 'sha512-r18',
+        },
+      },
+    }
+    const graph = parse(JSON.stringify(synthetic, null, 2))
+    const result = enrich(graph)
+
+    expect(result.diagnostics.map(d => d.code)).toEqual(['NPM_V3_PEER_AMBIGUOUS'])
+    expect(result.diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: 'NPM_V3_PEER_AMBIGUOUS',
+        severity: 'warning',
+        subject: 'pkg-a@1.0.0',
+      }),
+    )
+  })
+
+  it('peer-virt structurally absent: never produces virtualised NodeIds on the npm side', () => {
+    const graph = parseFixtureGraph('peers-multi')
+    const result = enrich(graph)
+
+    // Every node keeps peerContext=[] post-enrich (npm-flat outcome).
+    for (const node of result.graph.nodes()) {
+      expect(node.peerContext).toEqual([])
+      // No virtualised NodeId forms (`name@version(react@…)`) on the graph.
+      expect(node.id).not.toMatch(/\(.+\)$/)
+    }
+    // No interop-style peer-virt diagnostics from the npm enrich path.
+    expect(result.diagnostics.filter(d => d.code.includes('PEER_VIRT'))).toEqual([])
+  })
+
+  it('marks edges to workspace members with attrs.workspace = true', () => {
+    // workspaces-basic root has no edges to members; synthesise an edge to
+    // exercise the workspace-edge attribution branch of §C.npm-3.
+    const base = parseFixtureGraph('workspaces-basic')
+    const graph = base.mutate(m => {
+      m.addEdge('case-workspaces-basic@0.0.0', '@case-ws/a@0.0.0', 'dep', { range: '*' })
+    }).graph
+    const result = enrich(graph)
+
+    const wsEdge = result.graph.out('case-workspaces-basic@0.0.0', 'dep')
+      .find(e => e.dst === '@case-ws/a@0.0.0')
+    expect(wsEdge?.attrs?.workspace).toBe(true)
+
+    // Edge to non-member ms (no workspacePath) stays unmarked.
+    const memberToMs = result.graph.out('@case-ws/a@0.0.0', 'dep')
+      .find(e => e.dst === 'ms@2.1.3')
+    expect(memberToMs?.attrs?.workspace).toBeUndefined()
+  })
+
+  it('preserves workspace member tagging from parse (parser sets workspacePath, enrich no-ops)', () => {
+    const graph = parseFixtureGraph('workspaces-basic')
+    const result = enrich(graph)
+
+    // Parser already materialised workspace members from `packages` block.
+    expect(result.graph.getNode('case-workspaces-basic@0.0.0')?.workspacePath).toBe('')
+    expect(result.graph.getNode('@case-ws/a@0.0.0')?.workspacePath).toBe('packages/a')
+    expect(result.graph.getNode('@case-ws/b@0.0.0')?.workspacePath).toBe('packages/b')
+    expect(result.graph.getNode('ms@2.1.3')?.workspacePath).toBeUndefined()
+  })
+
+  it('does NOT emit NPM_V3_NO_MANIFESTS (lockfile embeds manifests natively per ADR-0021 §C.npm-3)', () => {
+    const graph = parseFixtureGraph('workspaces-basic')
+    const result = enrich(graph)
+    expect(result.diagnostics.map(d => d.code)).not.toContain('NPM_V3_NO_MANIFESTS')
+  })
+
+  it('is idempotent — enrich(enrich(graph)) ≡ enrich(graph)', () => {
+    const graph = parseFixtureGraph('peers-basic')
+    const once = enrich(graph)
+    const twice = enrich(once.graph)
+
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual([])
+  })
+
+  it('idempotent on a graph with both peer edges and workspace marks', () => {
+    const base = parseFixtureGraph('workspaces-basic')
+    const graph = base.mutate(m => {
+      m.addEdge('case-workspaces-basic@0.0.0', '@case-ws/a@0.0.0', 'dep', { range: '*' })
+    }).graph
+    const once = enrich(graph)
+    const twice = enrich(once.graph)
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual(once.diagnostics)
+  })
+})
+
+describe('npm-3 — optimize (§D, ADR-0021 §D.npm-3 — prune unreachable)', () => {
+  function graphWithOrphan(): Graph {
+    const base = parseFixtureGraph('simple')
+    return base.mutate(m => {
+      m.addNode({
+        id: 'orphan@9.9.9',
+        name: 'orphan',
+        version: '9.9.9',
+        peerContext: [],
+      })
+      m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'sha512-orphan' })
+    }).graph
+  }
+
+  function graphWithCyclePair(): Graph {
+    const base = parseFixtureGraph('simple')
+    return base.mutate(m => {
+      m.addNode({
+        id: 'cycle-a@1.0.0',
+        name: 'cycle-a',
+        version: '1.0.0',
+        peerContext: [],
+      })
+      m.addNode({
+        id: 'cycle-b@1.0.0',
+        name: 'cycle-b',
+        version: '1.0.0',
+        peerContext: [],
+      })
+      m.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: '1.0.0' })
+      m.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: '1.0.0' })
+      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: 'sha512-cycle-a' })
+      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: 'sha512-cycle-b' })
+    }).graph
+  }
+
+  it('prunes an unreachable self-loop orphan and its tarball', () => {
+    const graph = graphWithOrphan()
+    const result = optimize(graph)
+
+    expect(result.graph.getNode('orphan@9.9.9')).toBeUndefined()
+    expect(result.graph.tarball({ name: 'orphan', version: '9.9.9' })).toBeUndefined()
+    expect(graph.diff(result.graph)).toEqual({
+      addedNodes: [],
+      removedNodes: ['orphan@9.9.9'],
+      changedNodes: [],
+      addedEdges: [],
+      removedEdges: [{ src: 'orphan@9.9.9', dst: 'orphan@9.9.9', kind: 'dep' }],
+    })
+  })
+
+  it('prunes an unreachable mutual cycle and its tarballs', () => {
+    const graph = graphWithCyclePair()
+    const result = optimize(graph)
+
+    expect(result.graph.getNode('cycle-a@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('cycle-b@1.0.0')).toBeUndefined()
+    expect(result.graph.tarball({ name: 'cycle-a', version: '1.0.0' })).toBeUndefined()
+    expect(result.graph.tarball({ name: 'cycle-b', version: '1.0.0' })).toBeUndefined()
+  })
+
+  it('is idempotent — optimize(optimize(graph)) ≡ optimize(graph)', () => {
+    const once = optimize(graphWithOrphan())
+    const twice = optimize(once.graph)
+    expect(graphSnapshot(twice.graph)).toEqual(graphSnapshot(once.graph))
+    expect(twice.diagnostics).toEqual(once.diagnostics)
+  })
+
+  it('preserves every reachable node and tarball on fixture graphs', () => {
+    const graph = parseFixtureGraph('peers-basic')
+    const result = optimize(graph)
+    expect(graphSnapshot(result.graph)).toEqual(graphSnapshot(graph))
+    expect(Array.from(result.graph.tarballs(), ([k]) => k)).toEqual(
+      Array.from(graph.tarballs(), ([k]) => k),
+    )
+  })
+
+  it('survives stringify/parse roundtrip composition with re-enrich (§A.4 + §C/§D composition)', () => {
+    // For peer-edge state and workspace markers, re-enrich is required after
+    // stringify->parse: graph peer edges demote to sidecar.peerDependencies on
+    // parse, and workspace `attrs.workspace = true` markers are not emitted
+    // to disk per ADR-0021 §A.npm-3. The composition predicate per ADR-0021
+    // §D.npm-3 (mirroring ADR-0019 §D's pattern):
+    //   enrich(parse(stringify(optimize(enrich(parse(x)))))) ≡
+    //     optimize(enrich(parse(x)))
+    const base = parseFixtureGraph('peers-basic')
+    const enriched = enrich(base)
+    const optimized = optimize(enriched.graph)
+    const reparsed = enrich(parse(stringify(optimized.graph)))
+
+    expect(graphSnapshot(reparsed.graph)).toEqual(graphSnapshot(optimized.graph))
+    expectEmptyGraphDiff(optimized.graph.diff(reparsed.graph))
   })
 })
