@@ -196,9 +196,13 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     return { key, text: lines.join('\n') }
   }).sort((a, b) => cmpUtf16(a.key, b.key))
 
-  let output = HEADER + entries.map(entry => entry.text).join('\n\n')
-  if (entries.length === 0) output = HEADER.trimEnd()
-  output += '\n'
+  // §A header strict shape: empty graph emits HEADER as-is (two blank lines
+  // after `# yarn lockfile v1`), so `check` / `ensureClassicHeader` treat the
+  // output as a valid classic file with zero entries (ADR-0020 §8.1).
+  const body = entries.length === 0
+    ? ''
+    : `${entries.map(entry => entry.text).join('\n\n')}\n`
+  const output = HEADER + body
 
   if (options.lineEnding === 'crlf') {
     return output.replace(/\n/g, '\r\n')
