@@ -18,13 +18,18 @@
 //   that introduce new nodes flat-emit under `node_modules/<name>` (the
 //   simplest topology that survives re-parse).
 
+// @ts-ignore -- local fixture installs do not provide semver typings.
+import semver from 'semver'
 import {
   GraphError,
   newBuilder,
+  toTarballKey,
   type Diagnostic,
+  type Edge,
   type EdgeKind,
   type Graph,
   type Node,
+  type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
@@ -404,12 +409,15 @@ export function stringify(graph: Graph, options: Npm3StringifyOptions = {}): str
     packages[''] = buildSyntheticRootEntry(rootMeta)
   }
 
-  // Workspace member entries + their node_modules/<wsName> link entries.
+  // Emit §B lossy diagnostics across every node (including root): non-empty
+  // peerContext flattens to NPM_V3_PEER_VIRT_FLATTENED, non-empty patch slot
+  // drops to NPM_V3_PATCH_DROPPED. Per ADR-0021 §B.npm-3 (inheriting
+  // ADR-0016 §B Mutator API verbatim with npm-family lossy rows).
   const workspaceMembers: Node[] = []
   for (const node of graph.nodes()) {
-    if (rootNode !== undefined && node.id === rootNode.id) continue
     warnPatchDrop(node, warnedPatches, emitDiagnostic)
     warnPeerContextFlatten(node, warnedPeerVirt, emitDiagnostic)
+    if (rootNode !== undefined && node.id === rootNode.id) continue
     if (node.workspacePath !== undefined && node.workspacePath !== '') {
       workspaceMembers.push(node)
     }
@@ -448,22 +456,223 @@ export function stringify(graph: Graph, options: Npm3StringifyOptions = {}): str
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
-// §C/§D stubs: out of scope for phase A per the dispatcher's brief. Future
-// phases replace these with derivation / pruning implementations. Signature
-// matches family-uniform shape per ADR-0021 §5 (graph, options) — sidecar
-// threaded through WeakMap registry, not parameter.
+// §C enrich — workspace edge attribution + peer-derivation diagnostics.
+//
+// Per ADR-0021 §C.npm-3, the npm side declares peer derivation with the
+// *flat outcome*: "peer edges only — no peer-virt NodeIds". The ts Graph
+// invariant at `validate` (graph.ts:380-382) requires peer edges to match
+// `peerContext` exactly, so producing peer edges *without* virtualizing the
+// source would violate the invariant. Resolution (pragmatic, mirroring
+// yarn-classic §C):
+//
+//   - Peer edges are NOT materialised on the graph by npm-3 §C. The parsed
+//     `peerDependencies` block stays on the sidecar (per §A parse) and
+//     round-trips on stringify via `buildNodeModulesEntry`'s sidecar-driven
+//     fallback. Cross-format conversion to a peer-virt-supporting destination
+//     (yarn-berry) re-derives peer edges with virtualization through that
+//     adapter's §C pass (per ADR-0020's interop matrix).
+//   - The three-branch derivation outcome IS evaluated for diagnostic
+//     surfacing — `NPM_V3_PEER_AMBIGUOUS` / `NPM_V3_PEER_UNSATISFIED` warn
+//     when the on-disk peer block resolves to ≥2 / 0 candidates against
+//     installed versions. The 1-candidate-bind case is silent (the implicit
+//     binding is encoded by npm's install-time resolution, not the graph).
+//
+// Workspace concretisation:
+//   - Workspace member nodes already carry `workspacePath` from the §A
+//     parse (parse pass 1 materialises them from the `packages` block).
+//   - Enrich attributes edges to workspace destinations with
+//     `workspace = true` so downstream emitters (e.g. yarn-berry stringify)
+//     preserve the membership tag across format boundaries. The npm-3 emit
+//     itself does NOT serialise the `workspace = true` marker (npm has no
+//     `workspace:` protocol on disk) — the marker survives in-memory only,
+//     and is re-derived on the next enrich pass after a stringify→parse
+//     cycle (§A.4 composition gate per ADR-0021 §D.npm-3).
+//
+// No `NPM_V3_NO_MANIFESTS` diagnostic: the lockfile embeds the manifest
+// surface (root `""` entry + `<wsPath>` entries are manifest mirrors per
+// ADR-0021 §A.npm-3). Manifests are not an external input for npm-3 (unlike
+// npm-1 and yarn-classic where they are).
 export function enrich(
   graph: Graph,
   _options: Npm3EnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  return { graph, diagnostics: [] }
+  const sidecar = sidecarByGraph.get(graph)
+  const diagnostics: Diagnostic[] = []
+  const workspaceEdgesToMark: Edge[] = []
+
+  // Pass 1: evaluate peer derivation for diagnostic surfacing only. The
+  // graph-side peer edge is NOT added (see header note). One warning per
+  // unsatisfied / ambiguous peer entry; the 1-candidate-bind branch is
+  // silent (npm runtime resolves it implicitly).
+  for (const node of graph.nodes()) {
+    const nodeSide = sidecar?.nodes.get(node.id)
+    const rawPeers = nodeSide?.peerDependencies
+    if (rawPeers === undefined) continue
+
+    for (const [peerName, range] of Object.entries(rawPeers).sort((a, b) => cmpStr(a[0], b[0]))) {
+      const normalizedRange = semver.validRange(range)
+      // Some npm peerDependencies ranges are tags / non-semver tokens — treat
+      // them as wildcards (match every candidate by name), the same way npm's
+      // own resolver does at install time.
+      const candidates = graph.byName(peerName)
+        .filter(candidateId => {
+          const candidate = graph.getNode(candidateId)
+          if (candidate === undefined) return false
+          if (normalizedRange === null) return true
+          if (semver.valid(candidate.version) === null) return false
+          return semver.satisfies(candidate.version, normalizedRange)
+        })
+        .slice()
+        .sort(cmpStr)
+
+      if (candidates.length === 1) continue
+      if (candidates.length === 0) {
+        diagnostics.push({
+          code: 'NPM_V3_PEER_UNSATISFIED',
+          severity: 'warning',
+          subject: node.id,
+          message: `peer "${peerName}" range "${range}" matches no installed version`,
+        })
+        continue
+      }
+      diagnostics.push({
+        code: 'NPM_V3_PEER_AMBIGUOUS',
+        severity: 'warning',
+        subject: node.id,
+        message: `peer "${peerName}" range "${range}" matches multiple candidates: ${candidates.join(', ')}`,
+      })
+    }
+  }
+
+  // Pass 2: workspace edge attribution. An edge from any source to a node
+  // whose `workspacePath` is set (and is NOT the root `""`) is a
+  // workspace-member edge; mark it `workspace = true` if the attr is missing.
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (edge.kind === 'peer') continue
+      if (edge.attrs?.workspace === true) continue
+      const dst = graph.getNode(edge.dst)
+      if (dst === undefined) continue
+      if (dst.workspacePath === undefined || dst.workspacePath === '') continue
+      workspaceEdgesToMark.push({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        attrs: { ...edge.attrs, workspace: true },
+      })
+    }
+  }
+
+  if (workspaceEdgesToMark.length === 0) {
+    return { graph, diagnostics }
+  }
+
+  const result = graph.mutate(m => {
+    for (const edge of workspaceEdgesToMark) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+  })
+
+  if (sidecar !== undefined) {
+    sidecarByGraph.set(result.graph, sidecar)
+  }
+  return { graph: result.graph, diagnostics }
 }
 
+// §D optimize — prune unreachable from graph.roots() via reachability walk.
+// Per ADR-0021 §D.npm-3 (inheriting ADR-0016 §D algorithm verbatim). Mirrors
+// yarn-classic §D / _yarn-berry-core.ts optimizeFamily. Idempotent.
 export function optimize(
   graph: Graph,
   _options: Npm3OptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  return { graph, diagnostics: [] }
+  const sidecar = sidecarByGraph.get(graph)
+  const reachable = new Set(graph.walk(Array.from(graph.roots())))
+  const unreachableNodes = Array.from(graph.nodes(), node => node.id)
+    .filter(nodeId => !reachable.has(nodeId))
+    .sort(cmpStr)
+
+  if (unreachableNodes.length === 0) {
+    return {
+      graph,
+      diagnostics: graph.diagnostics().filter(diagnostic => diagnostic.severity === 'warning'),
+    }
+  }
+
+  const unreachable = new Set(unreachableNodes)
+  const referencedTarballs = new Set<string>()
+  const tarballsToRemove = new Map<string, TarballKeyInputs>()
+  const internalEdges = unreachableNodes
+    .flatMap(src =>
+      graph.out(src)
+        .filter(edge => unreachable.has(edge.dst))
+        .map(edge => ({ src: edge.src, dst: edge.dst, kind: edge.kind })),
+    )
+    .sort((a, b) =>
+      cmpStr(`${a.src} ${a.kind} ${a.dst}`, `${b.src} ${b.kind} ${b.dst}`),
+    )
+
+  for (const node of graph.nodes()) {
+    const inputs = { name: node.name, version: node.version, patch: node.patch }
+    const key = toTarballKey(inputs)
+    if (unreachable.has(node.id)) {
+      tarballsToRemove.set(key, inputs)
+      continue
+    }
+    referencedTarballs.add(key)
+  }
+
+  const result = graph.mutate(m => {
+    for (const edge of internalEdges) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+    }
+    for (const nodeId of unreachableNodes) {
+      m.removeNode(nodeId)
+    }
+    for (const [key, inputs] of Array.from(tarballsToRemove.entries()).sort((a, b) => cmpStr(a[0], b[0]))) {
+      if (!referencedTarballs.has(key)) {
+        m.removeTarball(inputs)
+      }
+    }
+  })
+
+  if (sidecar !== undefined) {
+    sidecarByGraph.set(result.graph, pruneSidecar(sidecar, result.graph))
+  }
+  return { graph: result.graph, diagnostics: result.unresolved }
+}
+
+function pruneSidecar(sidecar: Npm3Sidecar, graph: Graph): Npm3Sidecar {
+  const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))
+  const nodes = new Map<string, Npm3NodeSidecar>()
+  for (const [nodeId, sc] of sidecar.nodes) {
+    if (reachableIds.has(nodeId)) {
+      nodes.set(nodeId, sc)
+    }
+  }
+  const edgeRanges = new Map<string, string>()
+  const edgeDeclaredNames = new Map<string, string>()
+  for (const [edgeKey, range] of sidecar.edgeRanges) {
+    const [src, , dst] = edgeKey.split('|')
+    if (src !== undefined && dst !== undefined && reachableIds.has(src) && reachableIds.has(dst)) {
+      edgeRanges.set(edgeKey, range)
+      const declaredName = sidecar.edgeDeclaredNames.get(edgeKey)
+      if (declaredName !== undefined) edgeDeclaredNames.set(edgeKey, declaredName)
+    }
+  }
+  const workspaceByPath = new Map<string, string>()
+  for (const [path, nodeId] of sidecar.workspaceByPath) {
+    if (reachableIds.has(nodeId)) workspaceByPath.set(path, nodeId)
+  }
+  return {
+    rootId: sidecar.rootId !== undefined && reachableIds.has(sidecar.rootId) ? sidecar.rootId : undefined,
+    rootMeta: sidecar.rootMeta,
+    nodes,
+    edgeRanges,
+    edgeDeclaredNames,
+    workspaceByPath,
+  }
 }
 
 // === Helpers ================================================================
@@ -586,8 +795,8 @@ function addDepEdges(
 
 function resolveDepTarget(srcPath: string, name: string, pathToId: Map<string, string>): string | undefined {
   // npm install-time resolution: walk up parents from the source path's
-  // install context, try `<parent>/node_modules/<name>` at each level.
-  // The legacy parser does this in `getClosestPkg`
+  // install context, try `<parent>/node_modules/<name>` at each level until
+  // the hoisted root `node_modules/<name>`. Mirrors legacy/getClosestPkg
   // (legacy/main/ts/formats/npm-3.ts:63-82).
   //
   // Source-path classes (per ADR-0021 §A.npm-3 *Entry key shape*):
@@ -596,27 +805,29 @@ function resolveDepTarget(srcPath: string, name: string, pathToId: Map<string, s
   //   - "<wsPath>"                               -> workspace member manifest
   //   - "<wsPath>/node_modules/<a>" / nested     -> workspace's nested dep
   //
-  // The parent-walk schedule below covers all four. A workspace member at
-  // `<wsPath>` first tries `<wsPath>/node_modules/<name>`, then falls back
-  // to the hoisted root `node_modules/<name>` (the same algorithm npm uses).
+  // For every source class, the walk strips one trailing `/node_modules/<tail>`
+  // at a time, emitting `<prefix>/node_modules/<name>` and (where the prefix
+  // is empty) the bare `node_modules/<name>` for the hoisted root.
 
   const candidates: string[] = []
 
-  // Strip a trailing `/node_modules/<tail>` repeatedly to climb the install
-  // chain. Each level emits one candidate `<parent>/node_modules/<name>`.
-  // For root (srcPath === ""), the only level is the empty prefix.
+  // First probe: `<srcPath>/node_modules/<name>` (or bare for root).
+  candidates.push(srcPath === '' ? `node_modules/${name}` : `${srcPath}/node_modules/${name}`)
+
+  // Walk up: strip the trailing `<...>/node_modules/<tail>` (or leading
+  // `node_modules/<tail>` if srcPath itself is `node_modules/<tail>`).
   let current = srcPath
-  while (true) {
-    candidates.push(current === '' ? `node_modules/${name}` : `${current}/node_modules/${name}`)
+  while (current !== '') {
     const idx = current.lastIndexOf('/node_modules/')
-    if (idx < 0) break
-    current = current.slice(0, idx)
-  }
-  // After the loop, also probe the bare-root level (`node_modules/<name>`)
-  // for workspace-member sources whose path doesn't pass through any
-  // `/node_modules/` boundary.
-  if (srcPath !== '' && !srcPath.startsWith('node_modules/') && !srcPath.includes('/node_modules/')) {
-    candidates.push(`node_modules/${name}`)
+    if (idx >= 0) {
+      current = current.slice(0, idx)
+    } else if (current.startsWith('node_modules/')) {
+      current = ''
+    } else {
+      // Workspace member without any `/node_modules/` boundary: hoist to root.
+      current = ''
+    }
+    candidates.push(current === '' ? `node_modules/${name}` : `${current}/node_modules/${name}`)
   }
 
   for (const candidate of candidates) {
