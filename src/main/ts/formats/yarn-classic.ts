@@ -320,7 +320,7 @@ export function optimize(
       m.removeNode(nodeId)
     }
     for (const [key, inputs] of Array.from(tarballsToRemove.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))) {
-      if (!referencedTarballs.has(key)) {
+      if (!referencedTarballs.has(key) && graph.tarball(inputs) !== undefined) {
         m.removeTarball(inputs)
       }
     }
