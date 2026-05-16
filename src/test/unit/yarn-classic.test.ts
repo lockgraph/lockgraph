@@ -609,6 +609,33 @@ describe('yarn-classic — optimize', () => {
     expect(result.diagnostics).toEqual([])
   })
 
+  it('prunes an orphan node lacking a tarball entry without crashing', () => {
+    const base = parseFixtureGraph('simple')
+    const graph = base.mutate(m => {
+      m.addNode({
+        id: 'orphan-no-tarball@9.9.9',
+        name: 'orphan-no-tarball',
+        version: '9.9.9',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/orphan-no-tarball/-/orphan-no-tarball-9.9.9.tgz#3333333333333333333333333333333333333333',
+      })
+      m.addEdge('orphan-no-tarball@9.9.9', 'orphan-no-tarball@9.9.9', 'dep', { range: '9.9.9' })
+    }).graph
+    expect(graph.tarball({ name: 'orphan-no-tarball', version: '9.9.9' })).toBeUndefined()
+
+    const result = optimize(graph)
+
+    expect(result.graph.getNode('orphan-no-tarball@9.9.9')).toBeUndefined()
+    expect(result.graph.tarball({ name: 'orphan-no-tarball', version: '9.9.9' })).toBeUndefined()
+    expect(graph.diff(result.graph)).toEqual({
+      addedNodes: [],
+      removedNodes: ['orphan-no-tarball@9.9.9'],
+      changedNodes: [],
+      addedEdges: [],
+      removedEdges: [{ src: 'orphan-no-tarball@9.9.9', dst: 'orphan-no-tarball@9.9.9', kind: 'dep' }],
+    })
+  })
+
   it('survives yarn-classic stringify/parse roundtrip when re-enrich compensates for the synthesized root', () => {
     const enriched = enrich(parseFixtureGraph('workspaces-basic'), undefined, { manifests: WORKSPACE_MANIFESTS })
     const optimized = optimize(enriched.graph)
