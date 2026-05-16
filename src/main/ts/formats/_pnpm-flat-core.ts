@@ -534,7 +534,7 @@ export function stringifyFamily(
   }
 
   // --- Step 1: classify nodes — root + workspace members + resolved nodes. ---
-  const rootNode = locateRootNode(graph, sidecar)
+  const rootNode = locatePnpmRootNode(graph, sidecar)
   const workspaceNodes: Node[] = []
   const resolvedNodes: Node[] = []
   for (const node of graph.nodes()) {
@@ -687,7 +687,7 @@ export function enrichFamily(
       const alreadyBound = node.peerContext.some(p => stripPeerContextFromNodeId(p).startsWith(`${peerName}@`))
       if (alreadyBound) continue
 
-      const candidates = collectPeerCandidates(graph, peerName, peerRange)
+      const candidates = derivePeerCandidates(graph, peerName, peerRange)
       if (candidates.length === 1) {
         diagnostics.push({
           code: `${shape.diagnosticPrefix}_PEER_BOUND`,
@@ -804,19 +804,25 @@ export function optimizeFamily(
     }
   })
 
-  if (sidecar !== undefined) rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
+  if (sidecar !== undefined) rememberSidecar(result.graph, prunePnpmSidecar(sidecar, result.graph))
   return { graph: result.graph, diagnostics: result.unresolved }
 }
 
 // === Helpers ===============================================================
+//
+// Micro-utilities below are exported для consumption by pnpm-family
+// adapters that own their own pipelines but share family-internal infra
+// (e.g. pnpm-v5 standalone-fit per ADR-0022). They are NOT part of the
+// interop surface — they remain prefixed-private (`_pnpm-flat-core`) by
+// module-naming convention.
 
-function normalizeLineEndings(input: string): string {
+export function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 }
 
-const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
+export const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 
-function sortRecord<T>(record: Record<string, T>): Record<string, T> {
+export function sortRecord<T>(record: Record<string, T>): Record<string, T> {
   const out: Record<string, T> = {}
   for (const key of Object.keys(record).sort(cmpStr)) {
     const v = record[key]
@@ -825,7 +831,7 @@ function sortRecord<T>(record: Record<string, T>): Record<string, T> {
   return out
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+export function isPlainObject(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
@@ -1057,7 +1063,12 @@ function resolveSnapshotTarget(
   return undefined
 }
 
-function resolvePeerTargetById(seenIds: Set<string>, peerName: string, peerVersion: string): string | undefined {
+/**
+ * Resolve a `<peerName>@<peerVersion>` reference to a known node id —
+ * either the bare id or a parenthesised peer-virt instance. Used by both
+ * v9 snapshot edges и v5 peer edges из `packages` entries.
+ */
+export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, peerVersion: string): string | undefined {
   const bareId = `${peerName}@${peerVersion}`
   if (seenIds.has(bareId)) return bareId
   for (const id of seenIds) {
@@ -1075,7 +1086,7 @@ function importerSpec(value: unknown): { specifier?: string; version: string } |
   return { specifier, version }
 }
 
-function resolveLinkPath(importerPath: string, relTarget: string): string {
+export function resolveLinkPath(importerPath: string, relTarget: string): string {
   if (importerPath === '.' || importerPath === '') {
     return relTarget.replace(/^\.\//, '').replace(/^\.\.\//, '')
   }
@@ -1089,7 +1100,12 @@ function resolveLinkPath(importerPath: string, relTarget: string): string {
   return stack.join('/')
 }
 
-function tarballPayloadOf(entry: unknown): TarballPayload | undefined {
+/**
+ * Build a `TarballPayload` from a pnpm `packages[<id>]` entry. Returns
+ * `undefined` when no derivable payload fields are present (verbatim
+ * `setTarball` skip semantics). Shared across pnpm-family adapters.
+ */
+export function tarballPayloadOf(entry: unknown): TarballPayload | undefined {
   if (!isPlainObject(entry)) return undefined
   const payload: TarballPayload = {}
   const resolution = entry.resolution
@@ -1114,7 +1130,16 @@ function extractSettings(value: unknown): PnpmSettings {
   return out
 }
 
-function locateRootNode(graph: Graph, sidecar: PnpmSidecar | undefined): Node | undefined {
+/**
+ * Locate the synthetic root importer node для emit. Prefers the sidecar's
+ * recorded `rootId`, falls back to `workspacePath === ''`, finally to a
+ * sole root. Generic across sidecar shapes — only the `rootId` field is
+ * required.
+ */
+export function locatePnpmRootNode(
+  graph: Graph,
+  sidecar: { rootId?: string } | undefined,
+): Node | undefined {
   if (sidecar?.rootId !== undefined) {
     const node = graph.getNode(sidecar.rootId)
     if (node !== undefined) return node
@@ -1193,7 +1218,7 @@ function nodeIdToImporterVersion(node: Node): string {
   return node.version + node.peerContext.map(p => `(${p})`).join('')
 }
 
-function relativeImporterPath(importerPath: string, targetPath: string): string {
+export function relativeImporterPath(importerPath: string, targetPath: string): string {
   if (importerPath === '.' || importerPath === '') return targetPath
   const importerSegs = importerPath.split('/').filter(s => s.length > 0)
   const targetSegs = targetPath.split('/').filter(s => s.length > 0)
@@ -1304,7 +1329,14 @@ function buildSnapshotEntry(
   return entry
 }
 
-function collectPeerCandidates(graph: Graph, peerName: string, peerRange: string): NodeId[] {
+/**
+ * Three-branch peer-virt fallback per ADR-0006. Given a peer `peerName`
+ * declaration with semver `peerRange`, return all bare (non-peer-virt)
+ * nodes whose version satisfies the range. Sorted lexically для stable
+ * downstream diagnostics. Exported для pnpm-family adapters that own
+ * their own pipelines (e.g. pnpm-v5 standalone-fit).
+ */
+export function derivePeerCandidates(graph: Graph, peerName: string, peerRange: string): NodeId[] {
   const candidates: NodeId[] = []
   for (const id of graph.byName(peerName)) {
     const node = graph.getNode(id)
@@ -1443,13 +1475,31 @@ function isWorkspaceProtocolRange(range: string): boolean {
   return range.startsWith('workspace:')
 }
 
-function pruneSidecar(sidecar: PnpmSidecar, graph: Graph): PnpmSidecar {
+/**
+ * Generic sidecar pruner для any pnpm-family sidecar carrying
+ * `nodes: Map<string, NodeSc>` + `importerEdges: Map<string, EdgeSc>`
+ * keyed by `<src>\0<kind>\0<dst>` edge tokens. Drops entries that
+ * reference node ids no longer present in `graph`. The spread preserves
+ * any other fields on the sidecar shape verbatim (e.g. `settings`,
+ * `rootId`, `importerSpecifiers`, `inboundSettings`).
+ *
+ * Exported для pnpm-family adapters that own their own pipelines (e.g.
+ * pnpm-v5 standalone-fit) while reusing the prune contract verbatim.
+ */
+export function prunePnpmSidecar<
+  NodeSc,
+  EdgeSc,
+  Sidecar extends {
+    nodes: Map<string, NodeSc>
+    importerEdges: Map<string, EdgeSc>
+  },
+>(sidecar: Sidecar, graph: Graph): Sidecar {
   const aliveIds = new Set(Array.from(graph.nodes(), n => n.id))
-  const nodes = new Map<string, PnpmNodeSidecar>()
+  const nodes = new Map<string, NodeSc>()
   for (const [id, sc] of sidecar.nodes) {
     if (aliveIds.has(id)) nodes.set(id, sc)
   }
-  const importerEdges = new Map<string, PnpmEdgeSidecar>()
+  const importerEdges = new Map<string, EdgeSc>()
   for (const [key, sc] of sidecar.importerEdges) {
     const [src, _kind, dst] = key.split('\0')
     if (src !== undefined && dst !== undefined && aliveIds.has(src) && aliveIds.has(dst)) {
