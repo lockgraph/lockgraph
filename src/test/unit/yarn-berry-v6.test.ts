@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+
+const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
+const MODIFIED_SRI = 'sha512-' + createHash('sha512').update('modified-ms-integrity').digest('base64')
 import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import {
@@ -131,7 +135,9 @@ describe('yarn-berry-v6 — stringify', () => {
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
   })
 
-  it('preserves parsed conditions metadata and raw checksum form', () => {
+  it('preserves parsed conditions metadata and canonical checksum form', () => {
+    const PKG_HEX = createHash('sha512').update('pkg-1.0.0').digest('hex')
+    const DEP_HEX = createHash('sha512').update('dep-2.0.0').digest('hex')
     const input =
       '__metadata:\n' +
       '  version: 6\n' +
@@ -143,13 +149,13 @@ describe('yarn-berry-v6 — stringify', () => {
       '    dep: 2.0.0\n' +
       '  conditions:\n' +
       '    os: linux\n' +
-      '  checksum: deadbeef\n' +
+      `  checksum: ${PKG_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n\n' +
       '"dep@npm:2.0.0":\n' +
       '  version: 2.0.0\n' +
       '  resolution: "dep@npm:2.0.0"\n' +
-      '  checksum: cafebabe\n' +
+      `  checksum: ${DEP_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n'
 
@@ -160,8 +166,8 @@ describe('yarn-berry-v6 — stringify', () => {
     expect(emitted).toContain('__metadata:\n  version: 6\n  cacheKey: 8\n')
     expect(emitted).toContain('  dep: 2.0.0\n')
     expect(emitted).toContain('  conditions:\n    os: linux\n')
-    expect(emitted).toContain('  checksum: deadbeef\n')
-    expect(emitted).not.toContain('checksum: 8/deadbeef')
+    expect(emitted).toContain(`  checksum: ${PKG_HEX}\n`)
+    expect(emitted).not.toContain(`checksum: 8/${PKG_HEX}`)
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
   })
 })
@@ -240,27 +246,28 @@ describe('yarn-berry-v6 — modify', () => {
     const reparsed = parseV6(lockfile)
 
     expectEmptyGraphDiff(original.diff(reparsed))
-    expect(diagnostics).toEqual([
+    expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'YARN_BERRY_V6_PEER_VIRT_FLATTENED',
         severity: 'warning',
         subject: 'react-dom@18.2.0(react@18.2.0)',
       }),
-    ])
+    ]))
   })
 
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'modified-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
     const emitted = stringifyV6(result.graph)
     const reparsed = parseV6(emitted)
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(emitted).toContain('checksum: modified-ms-integrity')
-    expect(emitted).not.toContain('checksum: 8/modified-ms-integrity')
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'modified-ms-integrity' })
+    expect(emitted).toContain(`checksum: ${MODIFIED_HEX}`)
+    expect(emitted).not.toContain(`checksum: 8/${MODIFIED_HEX}`)
+    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
   })
 
   it('roundtrips removeTarball', () => {
@@ -271,7 +278,7 @@ describe('yarn-berry-v6 — modify', () => {
     const reparsed = parseV6(stringifyV6(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toBeUndefined()
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
 })
 

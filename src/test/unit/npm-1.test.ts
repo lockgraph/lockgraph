@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const MODIFIED_SRI = sriOf('modified-ms-integrity')
+const BUMPED_SRI = sriOf('bumped-ms-integrity')
 import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/npm-1.ts'
@@ -356,13 +361,11 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
   it('roundtrips setTarball (integrity update)', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, {
-        integrity: 'sha512-modified-ms-integrity',
-      })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
     const reparsed = parse(stringify(result.graph))
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
   })
 
   it('roundtrips replaceNode (version bump)', () => {
@@ -371,7 +374,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     const result = original.mutate(m => {
       m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
       m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: 'sha512-bumped-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
       m.addEdge('case-simple@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
     })
@@ -401,7 +404,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     )
   })
 
-  it('setNode patch drops on emit with NPM_V1_PATCH_DROPPED', () => {
+  it('setNode patch drops on emit with RECIPE_FEATURE_DROPPED', () => {
     const original = parseFixtureGraph('simple')
     const patch = 'a'.repeat(128)
     const current = original.getNode('ms@2.1.3')!
@@ -414,7 +417,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     const reparsed = parse(lockfile)
 
     expect(reparsed.getNode('ms@2.1.3')?.patch).toBeUndefined()
-    expect(diagnostics.filter(d => d.code === 'NPM_V1_PATCH_DROPPED')).toHaveLength(1)
+    expect(diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'ms@2.1.3')).toHaveLength(1)
   })
 
   it('workspace member nodes drop on emit with NPM_V1_WORKSPACES_UNSAFE', () => {
@@ -467,7 +470,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     const { diagnostics } = stringifyWithDiagnostics(result.graph)
 
     const peerVirt = diagnostics.filter(d => d.code === 'NPM_V1_PEER_VIRT_FLATTENED')
-    const patchDrop = diagnostics.filter(d => d.code === 'NPM_V1_PATCH_DROPPED')
+    const patchDrop = diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'react-dom@18.2.0')
     const peerDrop = diagnostics.filter(d => d.code === 'NPM_V1_PEER_DROPPED')
     expect(peerVirt).toHaveLength(1)
     expect(patchDrop).toHaveLength(1)

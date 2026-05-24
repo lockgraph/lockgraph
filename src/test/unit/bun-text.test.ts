@@ -4,9 +4,14 @@
 // manifest-driven workspace enrich, §D prune unreachable + idempotence, plus
 // cross-adapter isolation rejection.
 
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { type Graph } from '../../main/ts/graph.ts'
+import { toTarballKey, type Graph } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const MODIFIED_SRI = sriOf('modified-ms-integrity')
+const BUMPED_SRI = sriOf('bumped-ms-integrity')
 import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/bun-text.ts'
 import { parse as parseNpm1 } from '../../main/ts/formats/npm-1.ts'
 import { parse as parseNpm3 } from '../../main/ts/formats/npm-3.ts'
@@ -302,11 +307,11 @@ describe('bun-text — modify (§B Mutator surface)', () => {
   it('roundtrips setTarball (integrity update)', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'sha512-modified-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
     const reparsed = parse(stringify(result.graph))
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: MODIFIED_SRI })
   })
 
   it('roundtrips replaceNode (version bump)', () => {
@@ -315,7 +320,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     const result = original.mutate(m => {
       m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
       m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: 'sha512-bumped-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
       m.addEdge('case-simple@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
     })
@@ -325,7 +330,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     expectEmptyGraphDiff(result.graph.diff(reparsed))
   })
 
-  it('setNode patch drops on emit с BUN_TEXT_PATCH_DROPPED diagnostic', () => {
+  it('setNode patch drops on emit с RECIPE_FEATURE_DROPPED diagnostic', () => {
     const original = parseFixtureGraph('simple')
     const patch = 'a'.repeat(128)
     const current = original.getNode('ms@2.1.3')!
@@ -337,10 +342,11 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     const { lockfile, diagnostics } = stringifyWithDiagnostics({ stringify }, result.graph)
     const reparsed = parse(lockfile)
     expect(reparsed.getNode('ms@2.1.3')?.patch).toBeUndefined()
-    expect(diagnostics.filter(d => d.code === 'BUN_TEXT_PATCH_DROPPED')).toHaveLength(1)
-    expect(diagnostics.find(d => d.code === 'BUN_TEXT_PATCH_DROPPED')).toEqual(
+    const drops = diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'ms@2.1.3')
+    expect(drops).toHaveLength(1)
+    expect(drops[0]).toEqual(
       expect.objectContaining({
-        code: 'BUN_TEXT_PATCH_DROPPED',
+        code: 'RECIPE_FEATURE_DROPPED',
         severity: 'warning',
         subject: 'ms@2.1.3',
       }),
@@ -384,9 +390,53 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     })
     const { diagnostics } = stringifyWithDiagnostics({ stringify }, result.graph)
     const peerVirt = diagnostics.filter(d => d.code === 'BUN_TEXT_PEER_VIRT_FLATTENED')
-    const patchDrop = diagnostics.filter(d => d.code === 'BUN_TEXT_PATCH_DROPPED')
+    const patchDrop = diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'react-dom@18.2.0')
     expect(peerVirt).toHaveLength(1)
     expect(patchDrop).toHaveLength(1)
+  })
+
+  // Real-world regression (commit 0775b26): bun-text has no patch protocol,
+  // so a graph carrying both bare `<n>@<ver>` and patched `<n>@<ver>+patch=<hash>`
+  // siblings would emit two `packages` entries that collapse onto a single
+  // identity on reparse and trip the seal с `bun-text seal failed: duplicate
+  // edge …`. The fix deduplicates at emit (prefer unpatched, drop the patched
+  // sibling via `warnPatchDrop` / RECIPE_FEATURE_DROPPED).
+  it('dedups bare + patched siblings of the same `<n>@<ver>` on emit (no reparse seal failure)', () => {
+    const patch = 'a'.repeat(128)
+    const patchedId = toTarballKey({ name: 'typescript', version: '5.4.5', patch })
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'typescript@5.4.5',
+        name: 'typescript',
+        version: '5.4.5',
+        peerContext: [],
+      })
+      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: sriOf('typescript-bare') })
+      m.addNode({
+        id: patchedId,
+        name: 'typescript',
+        version: '5.4.5',
+        peerContext: [],
+        patch,
+      })
+      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: sriOf('typescript-patched') })
+    })
+
+    const { lockfile, diagnostics } = stringifyWithDiagnostics({ stringify }, result.graph)
+
+    // Reparse must not throw the seal `duplicate edge` / IRREDUCIBLE_LOSS.
+    const reparsed = parse(lockfile)
+    const typescriptNodes = Array.from(reparsed.nodes()).filter(n => n.name === 'typescript')
+    expect(typescriptNodes).toHaveLength(1)
+    expect(typescriptNodes[0]?.id).toBe('typescript@5.4.5')
+    expect(typescriptNodes[0]?.patch).toBeUndefined()
+
+    // Patch loss attributed via RECIPE_FEATURE_DROPPED on the patched sibling.
+    const patchDrops = diagnostics.filter(d =>
+      d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === patchedId,
+    )
+    expect(patchDrops).toHaveLength(1)
   })
 })
 

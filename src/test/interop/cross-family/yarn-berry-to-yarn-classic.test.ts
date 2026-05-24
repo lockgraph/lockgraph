@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { newBuilder } from '../../../main/ts/graph.ts'
+import { newBuilder, toTarballKey } from '../../../main/ts/graph.ts'
 import { assertConversionContract } from '../_assert.ts'
 import { berryCacheKeyOf, convert, formatCode, parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CLASSIC_SHARED_FIXTURES } from '../_fixtures.ts'
@@ -109,14 +109,27 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
         resolution: 'https://registry.yarnpkg.com/consumer/-/consumer-1.0.0.tgz#2222222222222222222222222222222222222222',
       })
       graph.addNode({
-        id: 'pkg@1.0.0',
+        id: toTarballKey({
+          name: 'pkg',
+          version: '1.0.0',
+          patch: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        }),
         name: 'pkg',
         version: '1.0.0',
         peerContext: [],
         patch: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         workspacePath: 'packages/pkg',
       })
-      graph.addEdge('root@1.0.0', 'pkg@1.0.0', 'dep', { range: 'workspace:*', workspace: true })
+      graph.addEdge(
+        'root@1.0.0',
+        toTarballKey({
+          name: 'pkg',
+          version: '1.0.0',
+          patch: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        }),
+        'dep',
+        { range: 'workspace:*', workspace: true },
+      )
       graph.addEdge('consumer@1.0.0(peer@2.0.0)', 'peer@2.0.0', 'peer', { range: '^2.0.0' })
       const sourceGraph = graph.seal()
       const sourceLockfile = stringifyFormat(berryFormat, sourceGraph, {

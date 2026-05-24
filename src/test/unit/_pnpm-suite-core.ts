@@ -19,6 +19,7 @@
 // — v5 wires this core suite directly because its shape would otherwise
 // require widening the `PnpmFamilySpec` discriminant unions everywhere.
 
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Diagnostic, type Graph } from '../../main/ts/graph.ts'
 import {
@@ -27,6 +28,10 @@ import {
   graphSnapshot,
   stringifyWithDiagnostics as sharedStringifyWithDiagnostics,
 } from '../helpers/lockfile-test-utils.ts'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const MODIFIED_SRI = sriOf('modified-ms-integrity')
+const BUMPED_SRI = sriOf('bumped-ms-integrity')
 
 export interface PnpmCoreAdapter {
   check(input: string): boolean
@@ -144,13 +149,14 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
     it('roundtrips setTarball (integrity update)', () => {
       const original = parseFixtureGraph(spec, 'simple')
       const result = original.mutate(m => {
-        m.setTarball({ name: 'ms', version: '2.1.3' }, {
-          integrity: 'sha512-modified-ms-integrity',
-        })
+        m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
       })
       const reparsed = spec.adapter.parse(spec.adapter.stringify(result.graph))
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+      // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution
+      // from the on-disk `resolution:` block (or by convention from
+      // name@version when only `integrity:` is emitted).
+      expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
     })
 
     it('roundtrips replaceNode (version bump)', () => {
@@ -159,7 +165,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
       const result = original.mutate(m => {
         m.removeEdge('.@0.0.0', 'ms@2.1.3', 'dep')
         m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: 'sha512-bumped-ms-integrity' })
+        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
         m.removeTarball({ name: 'ms', version: '2.1.3' })
         m.addEdge('.@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
       })
@@ -181,7 +187,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
       expectEmptyGraphDiff(original.diff(reparsed))
     })
 
-    it(`setNode patch drops on emit with ${diagPrefix}_PATCH_DROPPED`, () => {
+    it(`setNode patch drops on emit with RECIPE_FEATURE_DROPPED`, () => {
       const original = parseFixtureGraph(spec, 'simple')
       const patch = 'a'.repeat(128)
       const current = original.getNode('ms@2.1.3')!
@@ -191,7 +197,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
         m.removeTarball({ name: 'ms', version: '2.1.3' })
       })
       const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
-      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toHaveLength(1)
+      expect(diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'ms@2.1.3')).toHaveLength(1)
     })
 
     it('emits each lossy diagnostic at most once per affected node', () => {
@@ -204,7 +210,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
         m.removeTarball({ name: 'react-dom', version: '18.2.0' })
       })
       const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
-      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toHaveLength(1)
+      expect(diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'react-dom@18.2.0(react@18.2.0)')).toHaveLength(1)
     })
   })
 }

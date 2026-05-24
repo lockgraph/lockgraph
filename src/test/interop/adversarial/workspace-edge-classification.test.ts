@@ -34,22 +34,23 @@ describe('interop adversarial §8.3 — workspace-edge classification', () => {
     expect(destinationGraph.getNode('@case-ws/b@0.0.0-use.local')?.workspacePath).toBe('packages/b')
 
     // After emit, the dev edge collapses to `dep` per §C (no devDependencies
-    // block on yarn-berry); the surviving signal is the edge presence + range.
+    // block on yarn-berry); workspace markers survive parse via the F4
+    // parse-side marking pass (ADR-0014 §4.F4 — populate `attrs.workspace`
+    // + canonical `workspaceRange` whenever the range carries the
+    // `workspace:` protocol AND the target carries `workspacePath`).
     expect(destinationGraph.out('case-workspaces-basic@0.0.0').map(edge => ({
       dst: edge.dst,
       kind: edge.kind,
       range: edge.attrs?.range,
       workspace: edge.attrs?.workspace,
     })).sort((a, b) => a.dst.localeCompare(b.dst))).toEqual([
-      { dst: '@case-ws/a@0.0.0-use.local', kind: 'dep', range: 'workspace:*', workspace: undefined },
-      { dst: '@case-ws/b@0.0.0-use.local', kind: 'dep', range: 'workspace:^', workspace: undefined },
+      { dst: '@case-ws/a@0.0.0-use.local', kind: 'dep', range: 'workspace:*', workspace: true },
+      { dst: '@case-ws/b@0.0.0-use.local', kind: 'dep', range: 'workspace:^', workspace: true },
       { dst: 'ms@2.1.3', kind: 'optional', range: 'npm:2.1.3', workspace: undefined },
     ])
 
-    // After yarn-berry-v9's enrich pass, attrs.workspace = true is recovered
-    // because workspace member nodes carry workspacePath (set by classic enrich
-    // per §C item (b) — distinguish workspace-member entries from external
-    // lookalikes).
+    // Re-enrich is a no-op for workspace markers now (parse already set
+    // them); the assertion preserves the post-enrich invariant.
     const reEnriched = enrichBerryV9(destinationGraph).graph
     expect(reEnriched.out('case-workspaces-basic@0.0.0').map(edge => ({
       dst: edge.dst,

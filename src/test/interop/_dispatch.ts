@@ -3,8 +3,16 @@ import { parse as parseClassic, stringify as stringifyClassic } from '../../main
 import { parse as parseV4, stringify as stringifyV4 } from '../../main/ts/formats/yarn-berry-v4.ts'
 import { parse as parseV5, stringify as stringifyV5 } from '../../main/ts/formats/yarn-berry-v5.ts'
 import { parse as parseV6, stringify as stringifyV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
+import { parse as parseV7, stringify as stringifyV7 } from '../../main/ts/formats/yarn-berry-v7.ts'
 import { parse as parseV8, stringify as stringifyV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { parse as parseV9, stringify as stringifyV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse as parseNpm1, stringify as stringifyNpm1 } from '../../main/ts/formats/npm-1.ts'
+import { parse as parseNpm2, stringify as stringifyNpm2 } from '../../main/ts/formats/npm-2.ts'
+import { parse as parseNpm3, stringify as stringifyNpm3 } from '../../main/ts/formats/npm-3.ts'
+import { parse as parsePnpmV5, stringify as stringifyPnpmV5 } from '../../main/ts/formats/pnpm-v5.ts'
+import { parse as parsePnpmV6, stringify as stringifyPnpmV6 } from '../../main/ts/formats/pnpm-v6.ts'
+import { parse as parsePnpmV9, stringify as stringifyPnpmV9 } from '../../main/ts/formats/pnpm-v9.ts'
+import { parse as parseBunText, stringify as stringifyBunText } from '../../main/ts/formats/bun-text.ts'
 import type { YarnClassicManifest } from '../../main/ts/formats/yarn-classic.ts'
 import { CONTRACTS } from './_matrix.ts'
 import type { ConversionContract, FormatId } from './_matrix.ts'
@@ -35,38 +43,41 @@ const PARSERS: Record<FormatId, ((lockfile: string) => Graph) | undefined> = {
   'yarn-berry-v4': parseV4,
   'yarn-berry-v5': parseV5,
   'yarn-berry-v6': parseV6,
+  'yarn-berry-v7': parseV7,
   'yarn-berry-v8': parseV8,
   'yarn-berry-v9': parseV9,
   'yarn-classic': parseClassic,
-  'npm-1': undefined,
-  'npm-2': undefined,
-  'npm-3': undefined,
-  'pnpm-v5': undefined,
-  'pnpm-v6': undefined,
-  'pnpm-v9': undefined,
-  'bun-text': undefined,
+  'npm-1': parseNpm1,
+  'npm-2': parseNpm2,
+  'npm-3': parseNpm3,
+  'pnpm-v5': parsePnpmV5,
+  'pnpm-v6': parsePnpmV6,
+  'pnpm-v9': parsePnpmV9,
+  'bun-text': parseBunText,
 }
 
 const STRINGIFIERS: Record<FormatId, Stringifier | undefined> = {
   'yarn-berry-v4': { kind: 'berry', emit: stringifyV4 },
   'yarn-berry-v5': { kind: 'berry', emit: stringifyV5 },
   'yarn-berry-v6': { kind: 'berry', emit: stringifyV6 },
+  'yarn-berry-v7': { kind: 'berry', emit: stringifyV7 },
   'yarn-berry-v8': { kind: 'berry', emit: stringifyV8 },
   'yarn-berry-v9': { kind: 'berry', emit: stringifyV9 },
   'yarn-classic': { kind: 'classic', emit: stringifyClassic },
-  'npm-1': undefined,
-  'npm-2': undefined,
-  'npm-3': undefined,
-  'pnpm-v5': undefined,
-  'pnpm-v6': undefined,
-  'pnpm-v9': undefined,
-  'bun-text': undefined,
+  'npm-1': { kind: 'classic', emit: stringifyNpm1 },
+  'npm-2': { kind: 'classic', emit: stringifyNpm2 },
+  'npm-3': { kind: 'classic', emit: stringifyNpm3 },
+  'pnpm-v5': { kind: 'classic', emit: stringifyPnpmV5 },
+  'pnpm-v6': { kind: 'classic', emit: stringifyPnpmV6 },
+  'pnpm-v9': { kind: 'classic', emit: stringifyPnpmV9 },
+  'bun-text': { kind: 'classic', emit: stringifyBunText },
 }
 
 const BERRY_CACHE_KEYS: Record<Extract<FormatId, `yarn-berry-${string}`>, string> = {
   'yarn-berry-v4': '7',
   'yarn-berry-v5': '8',
   'yarn-berry-v6': '8',
+  'yarn-berry-v7': '10',
   'yarn-berry-v8': '10c0',
   'yarn-berry-v9': '10c0',
 }

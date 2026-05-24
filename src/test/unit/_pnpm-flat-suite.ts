@@ -5,12 +5,17 @@
 // delta tests stay in the individual `pnpm-v{6,9}.test.ts` files (v9
 // snapshots-block stability, v6 dependencies-collapsed shape, etc.).
 
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Graph } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseYarnBerry } from '../../main/ts/formats/yarn-berry-v9.ts'
 import { parse as parseNpm3 } from '../../main/ts/formats/npm-3.ts'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const MODIFIED_SRI = sriOf('modified-ms-integrity')
+const BUMPED_SRI = sriOf('bumped-ms-integrity')
 import {
   FIXTURES,
   expectEmptyGraphDiff,
@@ -18,6 +23,7 @@ import {
   graphSnapshot,
   parseFixtureGraph,
   stringifyWithDiagnostics,
+  templateRootOf,
   type PnpmFamilySpec,
 } from './_pnpm-flat-test-utils.ts'
 
@@ -159,9 +165,13 @@ export function describeParseFixturesCommon(spec: PnpmFamilySpec): void {
       expect(wsDeps.length).toBeGreaterThan(0)
     })
 
-    it('parses overrides sidecar (patch-yarn fixture carries overrides)', () => {
+    it('parses overrides sidecar + canonical patch hash (ADR-0014 §4.F2)', () => {
       const graph = parseFixtureGraph(spec, 'patch-yarn')
-      expect(graph.getNode('lodash@4.17.21')).toBeDefined()
+      const lodash = graph.getNode('lodash@4.17.21')
+      expect(lodash).toBeDefined()
+      // workspaceRoot is threaded by parseFixtureGraph → canonical
+      // byte-hashing path exercised here (not sentinel fallback).
+      expect(lodash?.patch).toMatch(/^[0-9a-f]{128}$/)
     })
   })
 }
@@ -174,7 +184,10 @@ export function describeStringifyCommon(spec: PnpmFamilySpec): void {
     it.each(FIXTURES.filter(n => n !== 'yarn-crlf'))('roundtrips %s at Graph level', (fixtureName) => {
       const original = parseFixtureGraph(spec, fixtureName)
       const emitted = spec.adapter.stringify(original)
-      const reparsed = spec.adapter.parse(emitted)
+      // Re-parse with the same workspaceRoot so patch-yarn lands on the
+      // canonical byte-hashing path (matches the original parse) instead
+      // of the sentinel fallback.
+      const reparsed = spec.adapter.parse(emitted, { workspaceRoot: templateRootOf(fixtureName) })
 
       expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
       expectEmptyGraphDiff(original.diff(reparsed))
@@ -289,13 +302,14 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
     it('roundtrips setTarball (integrity update)', () => {
       const original = parseFixtureGraph(spec, 'simple')
       const result = original.mutate(m => {
-        m.setTarball({ name: 'ms', version: '2.1.3' }, {
-          integrity: 'sha512-modified-ms-integrity',
-        })
+        m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
       })
       const reparsed = spec.adapter.parse(spec.adapter.stringify(result.graph))
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+      // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution
+      // from the on-disk `resolution:` block (or by convention from
+      // name@version when only `integrity:` is emitted).
+      expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
     })
 
     it('roundtrips replaceNode (version bump)', () => {
@@ -304,7 +318,7 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
       const result = original.mutate(m => {
         m.removeEdge('.@0.0.0', 'ms@2.1.3', 'dep')
         m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: 'sha512-bumped-ms-integrity' })
+        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
         m.removeTarball({ name: 'ms', version: '2.1.3' })
         m.addEdge('.@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
       })
@@ -326,7 +340,7 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
       expectEmptyGraphDiff(original.diff(reparsed))
     })
 
-    it(`setNode patch drops on emit with ${diagPrefix}_PATCH_DROPPED`, () => {
+    it(`setNode patch SURVIVES on emit via overrides block (ADR-0014 §4.F2)`, () => {
       const original = parseFixtureGraph(spec, 'simple')
       const patch = 'a'.repeat(128)
       const current = original.getNode('ms@2.1.3')!
@@ -335,9 +349,13 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
         m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
         m.removeTarball({ name: 'ms', version: '2.1.3' })
       })
-      const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
+      const { lockfile, diagnostics } = stringifyWithDiagnostics(spec, result.graph)
 
-      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toHaveLength(1)
+      // pnpm v6/v9 SUPPORT patches via overrides; no drop diagnostic should fire.
+      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toHaveLength(0)
+      expect(diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'ms@2.1.3')).toHaveLength(0)
+      expect(lockfile).toContain('overrides:')
+      expect(lockfile).toContain('patch:')
     })
 
     it('emits each lossy diagnostic at most once per affected node', () => {
@@ -350,7 +368,9 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
         m.removeTarball({ name: 'react-dom', version: '18.2.0' })
       })
       const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
-      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toHaveLength(1)
+      // pnpm v6/v9 SUPPORT patches: zero drops; the patch lands in overrides.
+      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toHaveLength(0)
+      expect(diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED')).toHaveLength(0)
     })
   })
 }

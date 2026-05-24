@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { newBuilder } from '../../../main/ts/graph.ts'
 import { optimize as optimizeV9 } from '../../../main/ts/formats/yarn-berry-v9.ts'
 import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { graphSnapshot } from '../_snapshot.ts'
+
+const sri = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 
 describe('interop adversarial §8.6 — cycle pruning interaction', () => {
   it('classic-compatible graph -> berry-v9 keeps optimize idempotent after conversion', () => {
@@ -30,9 +33,9 @@ describe('interop adversarial §8.6 — cycle pruning interaction', () => {
     })
     builder.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: 'npm:1.0.0' })
     builder.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: 'npm:1.0.0' })
-    builder.setTarball({ name: 'root', version: '1.0.0' }, { integrity: 'sha512-root' })
-    builder.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: 'sha512-cycle-a' })
-    builder.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: 'sha512-cycle-b' })
+    builder.setTarball({ name: 'root', version: '1.0.0' }, { integrity: sri('root') })
+    builder.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: sri('cycle-a') })
+    builder.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: sri('cycle-b') })
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-berry-v9', sourceGraph)
     const destinationGraph = parseFormat('yarn-berry-v9', emitted.lockfile)

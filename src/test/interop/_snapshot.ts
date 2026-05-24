@@ -16,6 +16,11 @@ export function graphSnapshot(graph: Graph) {
       })),
     ).flat(),
     tarballs: Array.from(graph.tarballs(), ([key, payload]) => [key, { ...payload }] as const),
-    diagnostics: graph.diagnostics().map(diagnostic => ({ ...diagnostic })),
+    // RECIPE_* diagnostics are emission-side observability events (ADR-0014 §5),
+    // not graph identity — exclude them from cross-format snapshot equality
+    // so source/destination graphs compare on structural state only.
+    diagnostics: graph.diagnostics()
+      .filter(diagnostic => !diagnostic.code.startsWith('RECIPE_'))
+      .map(diagnostic => ({ ...diagnostic })),
   }
 }

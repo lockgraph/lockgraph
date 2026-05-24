@@ -529,14 +529,19 @@ describe('mutate', () => {
 describe('patch-slot intake gate (ADR-0011)', () => {
   const sentinel = `unresolved-${'a'.repeat(64)}`
   const canonical = 'a'.repeat(128)
+  const fooSentinelId = toTarballKey({ name: 'foo', version: '1.0.0', patch: sentinel })
+  const barSentinelId = toTarballKey({ name: 'bar', version: '1.0.0', patch: sentinel })
+  const bazSentinelId = toTarballKey({ name: 'baz', version: '1.0.0', patch: sentinel })
+  const fooCanonicalId = toTarballKey({ name: 'foo', version: '1.0.0', patch: canonical })
+  const rdSentinelId = `${toTarballKey({ name: 'rd', version: '1.0.0', patch: sentinel })}(react@18.0.0)`
 
   // Sentinel-keyed Node fixture seeded via Builder (parse-time, unguarded).
   const sealWithSentinelNode = () => {
     const b = newBuilder()
     b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
-    b.addNode(n('foo@1.0.0', 'foo', '1.0.0', [], { patch: sentinel }))
+    b.addNode(n(fooSentinelId, 'foo', '1.0.0', [], { patch: sentinel }))
     b.addNode(n('bar@1.0.0', 'bar', '1.0.0'))
-    b.addEdge('app@1.0.0', 'foo@1.0.0', 'dep')
+    b.addEdge('app@1.0.0', fooSentinelId, 'dep')
     b.setTarball({ name: 'foo', version: '1.0.0', patch: sentinel }, { license: 'MIT' })
     return b.seal()
   }
@@ -578,28 +583,28 @@ describe('patch-slot intake gate (ADR-0011)', () => {
 
   it('Builder.addNode + setTarball with sentinel SUCCEED (parse-time, unguarded)', () => {
     const g = sealWithSentinelNode()
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(sentinel)
+    expect(g.getNode(fooSentinelId)?.patch).toBe(sentinel)
     expect(g.tarball({ name: 'foo', version: '1.0.0', patch: sentinel })?.license).toBe('MIT')
   })
 
   it('Mutator.addNode REFUSES sentinel-shaped Node.patch with IRREDUCIBLE_LOSS', () => {
     const g = sealWithSentinelNode()
     expectIrreducibleLoss(() => g.mutate(m => {
-      m.addNode(n('baz@1.0.0', 'baz', '1.0.0', [], { patch: sentinel }))
+      m.addNode(n(bazSentinelId, 'baz', '1.0.0', [], { patch: sentinel }))
     }))
   })
 
   it('Mutator.replaceNode REFUSES when EXISTING node is sentinel-keyed (covers from-sentinel)', () => {
     const g = sealWithSentinelNode()
     expectIrreducibleLoss(() => g.mutate(m => {
-      m.replaceNode('foo@1.0.0', n('foo@1.0.0', 'foo', '1.0.0', [], { patch: canonical }))
+      m.replaceNode(fooSentinelId, n(fooCanonicalId, 'foo', '1.0.0', [], { patch: canonical }))
     }))
   })
 
   it('Mutator.replaceNode REFUSES when NEW node is sentinel-keyed (covers to-sentinel)', () => {
     const g = sealWithSentinelNode()
     expectIrreducibleLoss(() => g.mutate(m => {
-      m.replaceNode('bar@1.0.0', n('bar@1.0.0', 'bar', '1.0.0', [], { patch: sentinel }))
+      m.replaceNode('bar@1.0.0', n(barSentinelId, 'bar', '1.0.0', [], { patch: sentinel }))
     }))
   })
 
@@ -608,12 +613,12 @@ describe('patch-slot intake gate (ADR-0011)', () => {
     b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
     b.addNode(n('react@18.0.0', 'react', '18.0.0'))
     b.addNode(n('react@17.0.0', 'react', '17.0.0'))
-    b.addNode(n('rd@1.0.0(react@18.0.0)', 'rd', '1.0.0', ['react@18.0.0'], { patch: sentinel }))
-    b.addEdge('app@1.0.0', 'rd@1.0.0(react@18.0.0)', 'dep')
-    b.addEdge('rd@1.0.0(react@18.0.0)', 'react@18.0.0', 'peer')
+    b.addNode(n(rdSentinelId, 'rd', '1.0.0', ['react@18.0.0'], { patch: sentinel }))
+    b.addEdge('app@1.0.0', rdSentinelId, 'dep')
+    b.addEdge(rdSentinelId, 'react@18.0.0', 'peer')
     const g = b.seal()
     expectIrreducibleLoss(() => g.mutate(m => {
-      m.replacePeerContext('rd@1.0.0(react@18.0.0)', ['react@17.0.0'])
+      m.replacePeerContext(rdSentinelId, ['react@17.0.0'])
     }))
   })
 
@@ -641,22 +646,22 @@ describe('patch-slot intake gate (ADR-0011)', () => {
   it('Mutator.removeNode PERMITTED on sentinel-keyed node (deletion, no fork)', () => {
     const g = sealWithSentinelNode()
     const { graph: g2 } = g.mutate(m => {
-      m.removeEdge('app@1.0.0', 'foo@1.0.0', 'dep')
-      m.removeNode('foo@1.0.0')
+      m.removeEdge('app@1.0.0', fooSentinelId, 'dep')
+      m.removeNode(fooSentinelId)
     })
-    expect(g2.getNode('foo@1.0.0')).toBeUndefined()
+    expect(g2.getNode(fooSentinelId)).toBeUndefined()
   })
 
   it('Mutator.addEdge / removeEdge PERMITTED touching sentinel-keyed nodes', () => {
     const g = sealWithSentinelNode()
     const { graph: g2 } = g.mutate(m => {
-      m.addEdge('foo@1.0.0', 'bar@1.0.0', 'dep')
+      m.addEdge(fooSentinelId, 'bar@1.0.0', 'dep')
     })
-    expect(g2.out('foo@1.0.0').map(e => e.dst)).toEqual(['bar@1.0.0'])
+    expect(g2.out(fooSentinelId).map(e => e.dst)).toEqual(['bar@1.0.0'])
     const { graph: g3 } = g2.mutate(m => {
-      m.removeEdge('foo@1.0.0', 'bar@1.0.0', 'dep')
+      m.removeEdge(fooSentinelId, 'bar@1.0.0', 'dep')
     })
-    expect(g3.out('foo@1.0.0')).toEqual([])
+    expect(g3.out(fooSentinelId)).toEqual([])
   })
 
   it('Mutator.removeTarball PERMITTED on sentinel key (ADR-0011:301-304 carve-out)', () => {

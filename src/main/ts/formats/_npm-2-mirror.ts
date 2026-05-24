@@ -33,6 +33,15 @@
 import { type Graph, type Node, type Diagnostic } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
 import {
+  stringifyForNpm,
+  type ResolutionCanonical,
+} from '../recipe/resolution.ts'
+
+function deriveLegacyResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
+  if (canonical === undefined) return undefined
+  return stringifyForNpm(canonical)
+}
+import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
   edgeTripleKey,
@@ -300,8 +309,10 @@ function buildLegacyNodeEntry(
   // and mirrors it in the legacy `dependencies` block too. The graph holds
   // the URL via `node.resolution`; the npm-N parser sometimes leaves it
   // unset (URL lives only on the on-disk `resolved` slot). Recover via the
-  // npm-2 mirror sidecar when available.
+  // npm-2 mirror sidecar when available. ADR-0014 §4.F3 cross-format
+  // fallback: derive from canonical resolution as last resort.
   const sourceResolved = sidecarResolvedFor(ctx, node)
+    ?? deriveLegacyResolvedFromCanonical(tarball?.resolution)
   if (node.resolution !== undefined) {
     // For git entries the resolution itself becomes the `version` field
     // (per the npm-2 legacy mirror fixture) and `from:` records the original

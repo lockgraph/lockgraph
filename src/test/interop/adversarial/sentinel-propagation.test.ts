@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { newBuilder } from '../../../main/ts/graph.ts'
+import { newBuilder, toTarballKey } from '../../../main/ts/graph.ts'
 import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CONTRACTS } from '../_matrix.ts'
 import { observeInteropDiagnostics } from '../_observe.ts'
@@ -9,24 +9,27 @@ import { observeInteropDiagnostics } from '../_observe.ts'
 // `stringifyFormat` + `observeInteropDiagnostics` directly rather than going
 // through `convert`. Coverage remains real-graph comparison via featurePresence.
 describe('interop adversarial §8.2 — sentinel propagation', () => {
+  const patch = 'unresolved-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+  const nodeId = toTarballKey({ name: 'pkg', version: '1.0.0', patch })
+
   it('berry-v9 -> yarn-classic collapses a sentinel patch and still surfaces the loss through interop diagnostics', () => {
     const contract = CONTRACTS.find(entry => entry.from === 'yarn-berry-v9' && entry.to === 'yarn-classic')
     if (contract === undefined) throw new Error('missing interop contract for yarn-berry-v9 -> yarn-classic')
 
     const builder = newBuilder()
     builder.addNode({
-      id: 'pkg@1.0.0',
+      id: nodeId,
       name: 'pkg',
       version: '1.0.0',
       peerContext: [],
-      patch: 'unresolved-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      patch,
       resolution: 'https://registry.yarnpkg.com/pkg/-/pkg-1.0.0.tgz#0000000000000000000000000000000000000000',
     })
     builder.setTarball(
       {
         name: 'pkg',
         version: '1.0.0',
-        patch: 'unresolved-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+        patch,
       },
       { integrity: 'sha512-pkg' },
     )
@@ -53,18 +56,18 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
 
     const builder = newBuilder()
     builder.addNode({
-      id: 'pkg@1.0.0',
+      id: nodeId,
       name: 'pkg',
       version: '1.0.0',
       peerContext: [],
-      patch: 'unresolved-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      patch,
       resolution: 'https://registry.yarnpkg.com/pkg/-/pkg-1.0.0.tgz#0000000000000000000000000000000000000000',
     })
     builder.setTarball(
       {
         name: 'pkg',
         version: '1.0.0',
-        patch: 'unresolved-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+        patch,
       },
       { integrity: 'sha512-pkg' },
     )

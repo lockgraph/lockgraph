@@ -4,9 +4,11 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { newBuilder, type Diagnostic, type Graph, type GraphDiff, type Node } from '../../main/ts/graph.ts'
+import { newBuilder, toTarballKey, type Diagnostic, type Graph, type GraphDiff, type Node } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import { parse, stringify, check, enrich, optimize } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse as parsePnpmV9 } from '../../main/ts/formats/pnpm-v9.ts'
+import { sentinelHashOfLocator } from '../../main/ts/recipe/patch.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -32,6 +34,15 @@ function patchLocatorOfResolution(resolution: string): string {
 function parseFixtureGraph(name: typeof STRINGIFY_ROUNDTRIP_FIXTURES[number] | 'yarn-crlf'): Graph {
   const workspaceRoot = name === 'patch-yarn' ? templateDir('patch-yarn') : undefined
   return parse(fixture(`${name}/yarn-berry-v9.lock`), workspaceRoot === undefined ? undefined : { workspaceRoot })
+}
+
+const patchedNodeId = (name: string, version: string, patch: string): string =>
+  toTarballKey({ name, version, patch })
+
+function uniqueNodeByNameVersion(graph: Graph, name: string, version: string): Node {
+  const matches = Array.from(graph.nodes()).filter(node => node.name === name && node.version === version)
+  expect(matches).toHaveLength(1)
+  return matches[0]!
 }
 
 function graphSnapshot(graph: Graph) {
@@ -126,10 +137,10 @@ describe('yarn-berry-v9 — simple fixture', () => {
     expect([...g.roots()]).toEqual(['case-simple@0.0.0-use.local'])
   })
 
-  it('tarball entries carry yarn checksum verbatim (cacheKey-prefixed)', () => {
+  it('tarball entries carry canonical SRI integrity (ADR-0014 §4.F1)', () => {
     const lodash = g.tarball({ name: 'lodash', version: '4.17.21' })
-    expect(lodash?.integrity).toMatch(/^10c0\//)
-    expect(g.tarball({ name: 'ms', version: '2.1.3' })?.integrity).toMatch(/^10c0\//)
+    expect(lodash?.integrity).toMatch(/^sha512-/)
+    expect(g.tarball({ name: 'ms', version: '2.1.3' })?.integrity).toMatch(/^sha512-/)
   })
 
   it('workspace nodes have no tarball entry (no artifact)', () => {
@@ -227,7 +238,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
     /resolution: "(?:[^"]*@)?(patch:[^"]+)"/.exec(lock)?.[1] ?? (() => { throw new Error('missing patch fixture resolution') })(),
   )
   const unresolvedSentinel = (locator: string): string =>
-    `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+    sentinelHashOfLocator(locator)
   const patchResolution = (locator: string): string => `foo@${locator}`
   const singlePatchInput = (locator: string): string =>
     '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
@@ -239,10 +250,11 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const patchBytes = readFileSync(resolve(workspaceRoot, PATCH_FILE))
     const expectedPatch = createHash('sha512').update(patchBytes).digest('hex')
     const g = parse(lock, { workspaceRoot })
+    const nodeId = patchedNodeId('lodash', '4.17.21', expectedPatch)
 
-    expect(g.getNode('lodash@4.17.21')?.patch).toBe(expectedPatch)
-    expect(g.tarballOf('lodash@4.17.21')?.integrity).toMatch(/^10c0\//)
-    expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: expectedPatch })?.integrity).toMatch(/^10c0\//)
+    expect(g.getNode(nodeId)?.patch).toBe(expectedPatch)
+    expect(g.tarballOf(nodeId)?.integrity).toMatch(/^sha512-/)
+    expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: expectedPatch })?.integrity).toMatch(/^sha512-/)
     expect(g.tarball({ name: 'lodash', version: '4.17.21' })).toBeUndefined()
     expect([...g.tarballs()].map(([key]) => key)).toContain(`lodash@4.17.21+patch=${expectedPatch}`)
   })
@@ -255,17 +267,19 @@ describe('yarn-berry-v9 — patch extraction', () => {
       rmSync(resolve(tempRoot, PATCH_FILE))
 
       const g = parse(lock, { workspaceRoot: tempRoot })
-      const resolution = g.getNode('lodash@4.17.21')?.resolution
+      const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
+      const resolution = node.resolution
       expect(resolution).toBeDefined()
       const locator = patchLocatorOfResolution(resolution!)
-      const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+      const sentinel = sentinelHashOfLocator(locator)
+      const nodeId = patchedNodeId('lodash', '4.17.21', sentinel)
 
-      expect(g.getNode('lodash@4.17.21')?.patch).toBe(sentinel)
+      expect(g.getNode(nodeId)?.patch).toBe(sentinel)
       expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
-        expect.objectContaining({ severity: 'warning', subject: 'lodash@4.17.21' }),
+        expect.objectContaining({ severity: 'warning', subject: nodeId }),
       ])
-      expect(g.tarballOf('lodash@4.17.21')?.integrity).toMatch(/^10c0\//)
-      expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: sentinel })?.integrity).toMatch(/^10c0\//)
+      expect(g.tarballOf(nodeId)?.integrity).toMatch(/^sha512-/)
+      expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: sentinel })?.integrity).toMatch(/^sha512-/)
     } finally {
       rmSync(tempParent, { recursive: true, force: true })
     }
@@ -347,16 +361,18 @@ describe('yarn-berry-v9 — patch extraction', () => {
       '  checksum: 10c0/abc123\n'
 
     const g = parse(input)
-    const resolution = g.getNode('typescript@5.4.5')?.resolution
+    const node = uniqueNodeByNameVersion(g, 'typescript', '5.4.5')
+    const resolution = node.resolution
     expect(resolution).toBeDefined()
     const locator = patchLocatorOfResolution(resolution!)
-    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+    const sentinel = sentinelHashOfLocator(locator)
+    const nodeId = patchedNodeId('typescript', '5.4.5', sentinel)
 
-    expect(g.getNode('typescript@5.4.5')?.patch).toBe(sentinel)
+    expect(g.getNode(nodeId)?.patch).toBe(sentinel)
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
-        subject: 'typescript@5.4.5',
+        subject: nodeId,
       }),
     ])
   })
@@ -367,16 +383,18 @@ describe('yarn-berry-v9 — patch extraction', () => {
       rmSync(tempRoot, { recursive: true, force: true })
 
       const g = parse(lock, { workspaceRoot: tempRoot })
-      const resolution = g.getNode('lodash@4.17.21')?.resolution
+      const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
+      const resolution = node.resolution
       expect(resolution).toBeDefined()
       const locator = patchLocatorOfResolution(resolution!)
-      const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+      const sentinel = sentinelHashOfLocator(locator)
+      const nodeId = patchedNodeId('lodash', '4.17.21', sentinel)
 
-      expect(g.getNode('lodash@4.17.21')?.patch).toBe(sentinel)
+      expect(g.getNode(nodeId)?.patch).toBe(sentinel)
       expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
         expect.objectContaining({
           severity: 'warning',
-          subject: 'lodash@4.17.21',
+          subject: nodeId,
         }),
       ])
     } finally {
@@ -402,16 +420,18 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
   it('parse() without workspaceRoot falls through to sentinel for file-backed patches', () => {
     const g = parse(lock)
-    const resolution = g.getNode('lodash@4.17.21')?.resolution
+    const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
+    const resolution = node.resolution
     expect(resolution).toBeDefined()
     const locator = patchLocatorOfResolution(resolution!)
-    const sentinel = `unresolved-${createHash('sha256').update(locator, 'utf8').digest('hex')}`
+    const sentinel = sentinelHashOfLocator(locator)
+    const nodeId = patchedNodeId('lodash', '4.17.21', sentinel)
 
-    expect(g.getNode('lodash@4.17.21')?.patch).toBe(sentinel)
+    expect(g.getNode(nodeId)?.patch).toBe(sentinel)
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
-        subject: 'lodash@4.17.21',
+        subject: nodeId,
       }),
     ])
   })
@@ -421,13 +441,13 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const input = singlePatchInput(locator)
 
     const g = parse(input, { workspaceRoot })
-    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
-
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
+    const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
+    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
-        subject: 'foo@1.0.0',
+        subject: nodeId,
       }),
     ])
   })
@@ -437,13 +457,13 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const input = singlePatchInput(locator)
 
     const g = parse(input, { workspaceRoot })
-    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
-
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
+    const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
+    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
-        subject: 'foo@1.0.0',
+        subject: nodeId,
         message: expect.stringContaining(locator),
       }),
     ])
@@ -454,13 +474,13 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const input = singlePatchInput(locator)
 
     const g = parse(input, { workspaceRoot })
-    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
-
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
+    const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
+    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
         severity: 'warning',
-        subject: 'foo@1.0.0',
+        subject: nodeId,
         message: expect.stringContaining(locator),
       }),
     ])
@@ -473,13 +493,14 @@ describe('yarn-berry-v9 — patch extraction', () => {
   ])('degenerate encoded patch fragment %j falls back to sentinel warning on the full locator', (locator) => {
     const g = parse(singlePatchInput(locator), { workspaceRoot })
     const diagnostics = g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')
+    const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
 
-    expect(g.getNode('foo@1.0.0')?.resolution).toBe(patchResolution(locator))
-    expect(g.getNode('foo@1.0.0')?.patch).toBe(unresolvedSentinel(locator))
+    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]).toEqual(expect.objectContaining({
       severity: 'warning',
-      subject: 'foo@1.0.0',
+      subject: nodeId,
       message: expect.stringContaining('patch locator has no source fragment'),
     }))
     expect(diagnostics[0]?.message).toContain(locator)
@@ -517,6 +538,28 @@ describe('yarn-berry-v9 — alias collision rejection (ADR-0010)', () => {
       '"foo@npm:1.0.0":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n\n' +
       '"foo@npm:1.0.0-alias":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n'
     expect(() => parse(input2)).toThrow(/IRREDUCIBLE_LOSS|collapse onto NodeId/)
+  })
+
+  it('keeps bare and builtin-compat patch siblings distinct via +patch=', () => {
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"typescript@npm:5.4.5":\n  version: 5.4.5\n  resolution: "typescript@npm:5.4.5"\n\n' +
+      '"typescript@patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>":\n' +
+      '  version: 5.4.5\n' +
+      '  resolution: "typescript@patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::version=5.4.5&hash=abc123"\n'
+
+    const graph = parse(input)
+    const patchNode = Array.from(graph.nodes()).find(
+      node => node.name === 'typescript' && node.version === '5.4.5' && node.resolution?.includes('@patch:') === true,
+    )
+    expect(patchNode).toBeDefined()
+    const locator = patchLocatorOfResolution(patchNode!.resolution!)
+    const sentinel = sentinelHashOfLocator(locator)
+
+    expect([...graph.nodes()].map(node => node.id).sort()).toEqual([
+      'typescript@5.4.5',
+      patchedNodeId('typescript', '5.4.5', sentinel),
+    ])
   })
 })
 
@@ -717,6 +760,193 @@ describe('yarn-berry-v9 — stringify', () => {
     expect(stripped).not.toContain('\r')
   })
 
+  it('synthesises npm: prefix on bare-range entry-key specs (cross-family path)', () => {
+    // Cross-family input (pnpm-v9 → yarn-berry-v9) delivers bare semver
+    // ranges on dep edges. Yarn-berry entry-spec grammar requires a
+    // `<scheme>:` prefix; emit must synthesise `npm:` so reparse stays
+    // well-formed. ADR-0016 §B / ADR-0020 Phase C-ii unblock.
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'app@1.0.0',
+      name: 'app',
+      version: '1.0.0',
+      peerContext: [],
+      workspacePath: '',
+      resolution: 'app@workspace:.',
+    })
+    builder.addNode({
+      id: 'lodash@4.17.21',
+      name: 'lodash',
+      version: '4.17.21',
+      peerContext: [],
+      resolution: 'lodash@npm:4.17.21',
+    })
+    builder.addEdge('app@1.0.0', 'lodash@4.17.21', 'dep', { range: '^4.17.0' })
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    // Entry-key carries the synthesised `npm:` form (sorted after the
+    // primary `lodash@npm:4.17.21` spec).
+    expect(emitted).toContain('"lodash@npm:4.17.21, lodash@npm:^4.17.0":\n')
+    // Reparse stays well-formed — primary blocker is the PARSE_FAILED
+    // "no protocol colon" throw when an entry-key spec misses `<scheme>:`.
+    expect(() => parse(emitted)).not.toThrow()
+  })
+
+  it('passes through protocol-prefixed ranges verbatim on entry-key synthesis', () => {
+    // Existing intra-family `npm:` / `workspace:` / `patch:` / `file:`
+    // / `git+ssh:` / `https:` inputs must passthrough untouched — the
+    // bare-range escape hatch is additive.
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'app@1.0.0',
+      name: 'app',
+      version: '1.0.0',
+      peerContext: [],
+      workspacePath: '',
+      resolution: 'app@workspace:.',
+    })
+    builder.addNode({
+      id: 'lodash@4.17.21',
+      name: 'lodash',
+      version: '4.17.21',
+      peerContext: [],
+      resolution: 'lodash@npm:4.17.21',
+    })
+    builder.addEdge('app@1.0.0', 'lodash@4.17.21', 'dep', { range: 'npm:^4.17.0' })
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).toContain('"lodash@npm:4.17.21, lodash@npm:^4.17.0":\n')
+    expect(emitted).not.toContain('npm:npm:')
+  })
+
+  it('drops patch directive + emits RECIPE_FEATURE_DROPPED on sentinel-only patch input (cross-family path)', () => {
+    // Cross-family input (pnpm-v9 → yarn-berry-v9) delivers a sentinel
+    // `unresolved-<sha256>` patch token alongside a non-patch resolution
+    // (pnpm hashes `<name>@<version>:<literalKey>`, yarn hashes the
+    // patch locator — ADR-0011). Yarn-berry cannot reconstruct a working
+    // `patch:` URL; per ADR-0014 §5 graceful-degradation rule emit
+    // `RECIPE_FEATURE_DROPPED (feature='patch')` and stringify the base
+    // resolution without a patch directive.
+    const SENTINEL = sentinelHashOfLocator('cross-family-test')
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'app@1.0.0',
+      name: 'app',
+      version: '1.0.0',
+      peerContext: [],
+      workspacePath: '',
+      resolution: 'app@workspace:.',
+    })
+    builder.addNode({
+      id: patchedNodeId('lodash', '4.17.21', SENTINEL),
+      name: 'lodash',
+      version: '4.17.21',
+      peerContext: [],
+      patch: SENTINEL,
+      resolution: 'lodash@npm:4.17.21',
+    })
+    builder.addEdge('app@1.0.0', patchedNodeId('lodash', '4.17.21', SENTINEL), 'dep', { range: 'npm:^4.17.0' })
+    const graph = builder.seal()
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(graph)
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RECIPE_FEATURE_DROPPED',
+        severity: 'warning',
+        subject: patchedNodeId('lodash', '4.17.21', SENTINEL),
+        message: expect.stringContaining('patch dropped on emit'),
+      }),
+    ]))
+    expect(lockfile).toContain('  resolution: "lodash@npm:4.17.21"\n')
+    expect(lockfile).not.toContain('@patch:')
+    const reparsed = parse(lockfile)
+    expect(reparsed.getNode('lodash@4.17.21')?.patch).toBeUndefined()
+  })
+
+  it('drops patch directive + emits RECIPE_FEATURE_DROPPED on canonical-patch input without locator (cross-family path)', () => {
+    // Canonical 128-hex sha512 (F2 byte-hashing) carries byte-identity but
+    // no source-path info — yarn locators encode path + version params
+    // which the hex alone cannot reconstruct. Without a `@patch:` envelope
+    // on `node.resolution`, per ADR-0014 §5 graceful-degradation rule emit
+    // `RECIPE_FEATURE_DROPPED (feature='patch')` and stringify the base
+    // resolution without a patch directive — matches sentinel-only path.
+    const CANONICAL_PATCH = 'a'.repeat(128)
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'app@1.0.0',
+      name: 'app',
+      version: '1.0.0',
+      peerContext: [],
+      workspacePath: '',
+      resolution: 'app@workspace:.',
+    })
+    builder.addNode({
+      id: patchedNodeId('lodash', '4.17.21', CANONICAL_PATCH),
+      name: 'lodash',
+      version: '4.17.21',
+      peerContext: [],
+      patch: CANONICAL_PATCH,
+      resolution: 'lodash@npm:4.17.21',
+    })
+    builder.addEdge('app@1.0.0', patchedNodeId('lodash', '4.17.21', CANONICAL_PATCH), 'dep', { range: 'npm:^4.17.0' })
+    const graph = builder.seal()
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(graph)
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RECIPE_FEATURE_DROPPED',
+        severity: 'warning',
+        subject: patchedNodeId('lodash', '4.17.21', CANONICAL_PATCH),
+        message: expect.stringContaining('patch dropped on emit'),
+      }),
+    ]))
+    expect(lockfile).toContain('  resolution: "lodash@npm:4.17.21"\n')
+    expect(lockfile).not.toMatch(/@patch:/)
+    const reparsed = parse(lockfile)
+    expect(reparsed.getNode('lodash@4.17.21')?.patch).toBeUndefined()
+  })
+
+  it('real cross-format convert (pnpm-v9 canonical-patch → yarn-berry-v9) degrades with RECIPE_FEATURE_DROPPED', () => {
+    // End-to-end: parse the patch-yarn pnpm-v9 fixture with workspaceRoot
+    // so pnpm yields the canonical 128-hex F2 hash (not a sentinel), then
+    // stringify as yarn-berry-v9. Yarn-berry cannot reconstruct the
+    // `@patch:` locator from the canonical hex → graceful degradation
+    // fires and the base resolution emits without a patch directive.
+    const pnpmGraph = parsePnpmV9(fixture('patch-yarn/pnpm-v9.lock'), {
+      workspaceRoot: templateDir('patch-yarn'),
+    })
+    const lodash = pnpmGraph.getNode('lodash@4.17.21')
+    expect(lodash?.patch).toBeDefined()
+    expect(lodash!.patch).toMatch(/^[0-9a-f]{128}$/)
+
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(pnpmGraph)
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RECIPE_FEATURE_DROPPED',
+        severity: 'warning',
+        subject: 'lodash@4.17.21',
+        message: expect.stringContaining('patch dropped on emit'),
+      }),
+    ]))
+    expect(lockfile).not.toMatch(/@patch:/)
+  })
+
+  it('preserves resolution-locator path for intra-family sentinel patch (existing behaviour)', () => {
+    // Intra-family (yarn-berry parse → yarn-berry stringify) sentinel
+    // path keeps node.resolution intact when it carries `@patch:` and
+    // emit returns it verbatim — round-trip stays lossless.
+    const graph = parse(fixture('patch-yarn/yarn-berry-v9.lock'))
+    const node = uniqueNodeByNameVersion(graph, 'lodash', '4.17.21')
+    expect(node?.patch?.startsWith('unresolved-')).toBe(true)
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(graph)
+    expect(diagnostics.find(d => d.code === 'RECIPE_FEATURE_DROPPED')).toBeUndefined()
+    expect(lockfile).toContain('@patch:')
+  })
+
   it('throws IRREDUCIBLE_LOSS when peer-virtual siblings collide on emit entry key', () => {
     const builder = newBuilder()
     builder.addNode({
@@ -877,13 +1107,13 @@ describe('yarn-berry-v9 — modify', () => {
 
     expect(lockfile).toContain('  peerDependencies:\n    react: "npm:18.2.0"\n')
     expectEmptyGraphDiff(flattened.diff(reparsed))
-    expect(diagnostics).toEqual([
+    expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'YARN_BERRY_V9_PEER_VIRT_FLATTENED',
         severity: 'warning',
         subject: 'peer-consumer@1.0.0(react@18.2.0)',
       }),
-    ])
+    ]))
     expect(result.applied).toEqual([
       { kind: 'node-added', subject: 'peer-consumer@1.0.0(react@18.2.0)' },
       { kind: 'edge-added', subject: { src: 'peer-consumer@1.0.0(react@18.2.0)', dst: 'react@18.2.0', kind: 'peer' } },
@@ -986,13 +1216,18 @@ describe('yarn-berry-v9 — modify', () => {
 
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
+    const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
+    const MODIFIED_SRI = 'sha512-' + createHash('sha512').update('modified-ms-integrity').digest('base64')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: '10c0/modified-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
-    const reparsed = parse(stringify(result.graph))
+    const emitted = stringify(result.graph)
+    const reparsed = parse(emitted)
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: '10c0/modified-ms-integrity' })
+    expect(emitted).toContain(`checksum: 10c0/${MODIFIED_HEX}`)
+    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
     expect(result.applied).toEqual([
       { kind: 'tarball-set', subject: 'ms@2.1.3' },
     ])
@@ -1006,7 +1241,7 @@ describe('yarn-berry-v9 — modify', () => {
     const reparsed = parse(stringify(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toBeUndefined()
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
     expect(result.applied).toEqual([
       { kind: 'tarball-removed', subject: 'ms@2.1.3' },
     ])
@@ -1021,15 +1256,13 @@ describe('yarn-berry-v9 — modify', () => {
     const reparsed = parse(lockfile)
 
     expectEmptyGraphDiff(original.diff(reparsed))
-    expect(diagnostics).toEqual([
-      expect.objectContaining({
-        code: 'YARN_BERRY_V9_PEER_VIRT_FLATTENED',
-        severity: 'warning',
-        subject: 'react-dom@18.2.0(react@18.2.0)',
-        message: expect.stringContaining('["react@18.2.0"]'),
-      }),
-    ])
-    expect(diagnostics[0]?.message).toContain('react-dom@npm:18.2.0')
+    const peerVirtFlat = diagnostics.find(d => d.code === 'YARN_BERRY_V9_PEER_VIRT_FLATTENED')
+    expect(peerVirtFlat).toMatchObject({
+      severity: 'warning',
+      subject: 'react-dom@18.2.0(react@18.2.0)',
+    })
+    expect(peerVirtFlat?.message).toContain('["react@18.2.0"]')
+    expect(peerVirtFlat?.message).toContain('react-dom@npm:18.2.0')
     expect(result.applied).toEqual([
       { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)' },
     ])
@@ -1037,13 +1270,13 @@ describe('yarn-berry-v9 — modify', () => {
 
   it('refuses replaceNode on sentinel-keyed entries', () => {
     const graph = parse(fixture('patch-yarn/yarn-berry-v9.lock'))
-    const current = graph.getNode('lodash@4.17.21')
+    const current = uniqueNodeByNameVersion(graph, 'lodash', '4.17.21')
     expect(current?.patch?.startsWith('unresolved-')).toBe(true)
 
     expect(() => graph.mutate(m => {
-      m.replaceNode('lodash@4.17.21', {
+      m.replaceNode(current!.id, {
         ...current!,
-        id: 'lodash@4.17.22',
+        id: patchedNodeId('lodash', '4.17.22', current!.patch!),
         version: '4.17.22',
         resolution: 'lodash@npm:4.17.22',
       })
@@ -1051,9 +1284,9 @@ describe('yarn-berry-v9 — modify', () => {
 
     try {
       graph.mutate(m => {
-        m.replaceNode('lodash@4.17.21', {
+        m.replaceNode(current!.id, {
           ...current!,
-          id: 'lodash@4.17.22',
+          id: patchedNodeId('lodash', '4.17.22', current!.patch!),
           version: '4.17.22',
           resolution: 'lodash@npm:4.17.22',
         })
@@ -1274,7 +1507,13 @@ describe('yarn-berry-v9 — enrich', () => {
         src: 'app@1.0.0',
         dst: 'core@1.2.3',
         kind: 'dep',
-        attrs: { range: 'workspace:packages/core', workspace: true },
+        attrs: {
+          range: 'workspace:packages/core',
+          workspace: true,
+          // ADR-0014 §4.F4 — canonical workspaceRange sidecar populated
+          // alongside the workspace marker at parse-time.
+          workspaceRange: { specifier: 'workspace:packages/core', resolvedVersion: '1.2.3' },
+        },
       },
     ])
   })

@@ -2,10 +2,12 @@
 // Public surface follows spec/bindings/ts.md#graph-types.
 
 import { LockfileError } from './errors.ts'
+import type { ResolutionCanonical } from './recipe/resolution.ts'
+import type { WorkspaceRange } from './recipe/workspace.ts'
 
 export type NodeId = string
 
-/** `${name}@${version}` — NodeId stripped of peerContext. Per ADR-0010. */
+/** `${name}@${version}[+patch=…]` — NodeId stripped of peerContext. Per ADR-0010/0011. */
 export type TarballKey = string
 export type Patch = string
 export interface TarballKeyInputs {
@@ -38,12 +40,23 @@ export interface TarballPayload {
   os?:                  string[]
   libc?:                string[]
   bundledDependencies?: string[]
+  // ADR-0014 §4.F3 — typed canonical resolution. Distinct from `Node.resolution`
+  // (PM-native verbatim string sidecar per ADR-0013): this carrier holds the
+  // 5-case discriminated union populated at adapter parse via `recipe/
+  // resolution.parse()`. Adapter stringify projects back to PM-native via
+  // `recipe/resolution.stringifyFor*`. `Node.resolution` retains its role as
+  // verbatim sidecar for same-format round-trip and patch-locator retrieval.
+  resolution?:          ResolutionCanonical
 }
 
 export type EdgeAttrs = {
-  range?:     string
-  optional?:  boolean
-  workspace?: boolean
+  range?:          string
+  optional?:       boolean
+  workspace?:      boolean
+  // ADR-0014 §4.F4 — canonical workspace-specifier pair. Populated by
+  // adapters at parse time on edges where `workspace === true`; consumed
+  // at stringify time to drive RECIPE_WORKSPACE_* diagnostics.
+  workspaceRange?: WorkspaceRange
 }
 
 export interface Edge {
@@ -161,12 +174,34 @@ export function nameOf(id: NodeId): string {
 }
 
 /** peerContext is expected pre-sorted alphabetically by name (caller's contract per ADR-0006). */
-export function serializeNodeId(name: string, version: string, peerContext: readonly NodeId[]): NodeId {
-  if (peerContext.length === 0) return `${name}@${version}`
-  return `${name}@${version}` + peerContext.map(p => `(${p})`).join('')
+export function serializeNodeId(
+  name: string,
+  version: string,
+  peerContext: readonly NodeId[],
+  patch?: Patch,
+): NodeId {
+  const base = toTarballKey({ name, version, patch })
+  if (peerContext.length === 0) return base
+  return base + peerContext.map(p => `(${p})`).join('')
 }
 
-/** Strips peerContext from a NodeId to derive the ADR-0010 base key (`${name}@${version}`). */
+function acceptedNodeIds(node: Node): readonly NodeId[] {
+  const bare = serializeNodeId(node.name, node.version, node.peerContext)
+  if (node.patch === undefined) return [bare]
+  const patched = serializeNodeId(node.name, node.version, node.peerContext, node.patch)
+  return bare === patched ? [bare] : [bare, patched]
+}
+
+function carriesPatchInNodeId(node: Pick<Node, 'id' | 'name' | 'version' | 'patch'>): boolean {
+  if (node.patch === undefined) return false
+  return stripPeerContextFromNodeId(node.id) === toTarballKey({
+    name: node.name,
+    version: node.version,
+    patch: node.patch,
+  })
+}
+
+/** Strips peerContext from a NodeId to derive the ADR-0010/0011 base key (`${name}@${version}[+patch=…]`). */
 export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
   // Find first depth-0 `(` — that's where peerContext begins. Scoped names are unaffected.
   let depth = 0
@@ -179,8 +214,10 @@ export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
   return id
 }
 
-const PATCH_CANONICAL_RE = /^[0-9a-f]{128}$/
-const PATCH_SENTINEL_RE = /^unresolved-[0-9a-f]{64}$/
+// Patch-token grammar предикаты owned by `recipe/patch.ts` per ADR-0014
+// §4.F2 + ADR-0011 §Decision. graph.ts consumes them — there is no local
+// regex shadow here so the token grammar stays single-source.
+import { isCanonicalHash, isSentinelPatch as recipeIsSentinelPatch } from './recipe/patch.ts'
 
 export function validatePatchToken(patch: string): void {
   if (patch.length === 0) {
@@ -192,13 +229,13 @@ export function validatePatchToken(patch: string): void {
   if (/\s/.test(patch)) {
     throw new LockfileError({ code: 'INVALID_INPUT', message: `patch slot must not contain whitespace` })
   }
-  if (!PATCH_CANONICAL_RE.test(patch) && !PATCH_SENTINEL_RE.test(patch)) {
+  if (!isCanonicalHash(patch) && !recipeIsSentinelPatch(patch)) {
     throw new LockfileError({ code: 'INVALID_INPUT', message: `patch slot has invalid token shape` })
   }
 }
 
 function isSentinelPatch(patch: string): boolean {
-  return patch.startsWith('unresolved-')
+  return recipeIsSentinelPatch(patch)
 }
 
 // ADR-0011:282-304 — sentinel-keyed mutator coherence rule.
@@ -367,9 +404,9 @@ function validate(s: State): void {
       }
     }
 
-    const expected = serializeNodeId(node.name, node.version, node.peerContext)
-    if (expected !== id) {
-      throw new GraphError('INVARIANT_VIOLATION', `node id ${id} disagrees with derived id ${expected}`)
+    const expected = acceptedNodeIds(node)
+    if (!expected.includes(id)) {
+      throw new GraphError('INVARIANT_VIOLATION', `node id ${id} disagrees with derived id ${expected.join(' or ')}`)
     }
 
     const peerEdgeTargets = (s.outgoing.get(id) ?? [])
@@ -708,7 +745,9 @@ class GraphImpl implements Graph {
           if (!next.nodes.has(p)) throw new GraphError('PATCH_REJECTED', `replacePeerContext: peer ${p} missing`)
         }
 
-        const newId = serializeNodeId(old.name, old.version, peers)
+        const newId = carriesPatchInNodeId(old)
+          ? serializeNodeId(old.name, old.version, peers, old.patch)
+          : serializeNodeId(old.name, old.version, peers)
         if (newId !== id && next.nodes.has(newId)) {
           throw new GraphError('PATCH_REJECTED', `replacePeerContext: target id ${newId} already exists`)
         }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+
+const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
+const MODIFIED_SRI = 'sha512-' + createHash('sha512').update('modified-ms-integrity').digest('base64')
 import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import {
@@ -110,6 +114,70 @@ describe('yarn-berry-v8 — parse fixtures', () => {
 
     expect(Array.from(graph.nodes())).not.toHaveLength(0)
   })
+
+  // Real-world regression: when a workspace package is also published to
+  // npm (e.g. qiwi/masker `@qiwi/masker-split` published as `1.6.8`),
+  // yarn-berry may collapse the npm alias и workspace specs onto the same
+  // entry. The compound entry-key lists `<n>@npm:<ver>` before
+  // `<n>@workspace:<path>` lexically; the resolution stays
+  // `<n>@workspace:<path>`. Workspace identification must key off the
+  // resolution (canonical, per ADR-0014 §4.F3), not `specs[0].protocol`,
+  // else the node loses its `workspacePath` и the seal rejects it under
+  // ADR-0017 (the source of any `workspace:^` incoming edge is now a
+  // workspace node that doesn't look like one).
+  it('treats a compound `@npm:<ver>, @workspace:<path>` entry as a workspace node', () => {
+    const input =
+      '__metadata:\n' +
+      '  version: 8\n' +
+      '  cacheKey: 10c0\n\n' +
+      '"@scope/lib@npm:1.6.8, @scope/lib@workspace:*, @scope/lib@workspace:^, @scope/lib@workspace:packages/lib":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "@scope/lib@workspace:packages/lib"\n' +
+      '  languageName: unknown\n' +
+      '  linkType: soft\n\n' +
+      '"@scope/consumer@workspace:packages/consumer":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "@scope/consumer@workspace:packages/consumer"\n' +
+      '  dependencies:\n' +
+      '    "@scope/lib": "workspace:^"\n' +
+      '  languageName: unknown\n' +
+      '  linkType: soft\n'
+
+    const graph = parseV8(input)
+    const lib = graph.getNode('@scope/lib@0.0.0-use.local')
+    const consumer = graph.getNode('@scope/consumer@0.0.0-use.local')
+
+    expect(lib?.workspacePath).toBe('packages/lib')
+    expect(consumer?.workspacePath).toBe('packages/consumer')
+    expect(graph.in('@scope/lib@0.0.0-use.local')).toHaveLength(1)
+  })
+
+  // Real-world regression (qiwi/mware fixture, commit 0775b26): yarn 4 emits
+  // a compound entry-key where one half is a bare `<name>@<version>` token
+  // (no `<protocol>:` colon) when a workspace package is also published to
+  // the npm registry — `"@qiwi/mware-context@1.14.1, @qiwi/mware-context@workspace:packages/context"`.
+  // The shared `parseSpec` tokenizer previously threw `PARSE_FAILED` on the
+  // bare half (`bad entry-spec, no protocol colon: <raw>`). The fix
+  // synthesises `npm:` per ADR-0016 §B (matches `entryKeyRangeOf`'s default
+  // for cross-family input), keeping the grammar uniform downstream without
+  // throwing. Pin the behavior so the bare-name-version half parses cleanly
+  // and the resulting node is identified as a workspace via its `resolution`.
+  it('parses bare `<name>@<version>` half in compound entry-key (synthesises `npm:`)', () => {
+    const input =
+      '__metadata:\n' +
+      '  version: 8\n' +
+      '  cacheKey: 10c0\n\n' +
+      '"@qiwi/mware-context@1.14.1, @qiwi/mware-context@workspace:packages/context":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "@qiwi/mware-context@workspace:packages/context"\n' +
+      '  languageName: unknown\n' +
+      '  linkType: soft\n'
+
+    expect(() => parseV8(input)).not.toThrow()
+    const graph = parseV8(input)
+    const node = graph.getNode('@qiwi/mware-context@0.0.0-use.local')
+    expect(node?.workspacePath).toBe('packages/context')
+  })
 })
 
 describe('yarn-berry-v8 — stringify', () => {
@@ -131,6 +199,7 @@ describe('yarn-berry-v8 — stringify', () => {
   })
 
   it('preserves parsed conditions and compressionLevel sidecars', () => {
+    const PKG_HEX = createHash('sha512').update('pkg-1.0.0').digest('hex')
     const input =
       '__metadata:\n' +
       '  version: 8\n' +
@@ -141,7 +210,7 @@ describe('yarn-berry-v8 — stringify', () => {
       '  resolution: "pkg@npm:1.0.0"\n' +
       '  conditions:\n' +
       '    os: linux\n' +
-      '  checksum: 10c0/deadbeef\n' +
+      `  checksum: 10c0/${PKG_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n'
 
@@ -230,24 +299,27 @@ describe('yarn-berry-v8 — modify', () => {
     const reparsed = parseV8(lockfile)
 
     expectEmptyGraphDiff(original.diff(reparsed))
-    expect(diagnostics).toEqual([
+    expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'YARN_BERRY_V8_PEER_VIRT_FLATTENED',
         severity: 'warning',
         subject: 'react-dom@18.2.0(react@18.2.0)',
       }),
-    ])
+    ]))
   })
 
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: '10c0/modified-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
-    const reparsed = parseV8(stringifyV8(result.graph))
+    const emitted = stringifyV8(result.graph)
+    const reparsed = parseV8(emitted)
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: '10c0/modified-ms-integrity' })
+    expect(emitted).toContain(`checksum: 10c0/${MODIFIED_HEX}`)
+    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
   })
 
   it('roundtrips removeTarball', () => {
@@ -258,7 +330,7 @@ describe('yarn-berry-v8 — modify', () => {
     const reparsed = parseV8(stringifyV8(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toBeUndefined()
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
 })
 

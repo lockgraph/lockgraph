@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { LockfileError } from '../../main/ts/errors.ts'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const PACKAGES_SRI = sriOf('PACKAGES_WINS')
+const LEGACY_SRI = sriOf('LEGACY_LOSES')
+const PACKAGES_INTEGRITY_SRI = sriOf('PACKAGES_INTEGRITY')
+const LEGACY_INTEGRITY_SRI = sriOf('LEGACY_DIFFERENT_INTEGRITY')
 import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/npm-2.ts'
 import { parse as parseV3 } from '../../main/ts/formats/npm-3.ts'
 import { fixture, parseFixtureGraph, type FlatFamilySpec } from './_npm-flat-test-utils.ts'
@@ -156,7 +163,7 @@ describe('npm-2 — NPM_V2_DUAL_MODE_DRIFT diagnostics', () => {
         'node_modules/ms': {
           version: '2.1.3',
           resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
-          integrity: 'sha512-PACKAGES_WINS',
+          integrity: PACKAGES_SRI,
         },
       },
       // Legacy mirror disagrees with packages on version (DRIFT).
@@ -164,7 +171,7 @@ describe('npm-2 — NPM_V2_DUAL_MODE_DRIFT diagnostics', () => {
         ms: {
           version: '2.1.2',
           resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.2.tgz',
-          integrity: 'sha512-LEGACY_LOSES',
+          integrity: LEGACY_SRI,
         },
       },
     }, null, 2)
@@ -177,7 +184,7 @@ describe('npm-2 — NPM_V2_DUAL_MODE_DRIFT diagnostics', () => {
     expect(graph.getNode('ms@2.1.3')).toBeDefined()
     expect(graph.getNode('ms@2.1.2')).toBeUndefined()
     const ms = graph.tarballOf('ms@2.1.3')
-    expect(ms?.integrity).toBe('sha512-PACKAGES_WINS')
+    expect(ms?.integrity).toBe(PACKAGES_SRI)
   })
 
   it('emits NPM_V2_DUAL_MODE_DRIFT for resolved / integrity disagreement', () => {
@@ -191,14 +198,14 @@ describe('npm-2 — NPM_V2_DUAL_MODE_DRIFT diagnostics', () => {
         'node_modules/ms': {
           version: '2.1.3',
           resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
-          integrity: 'sha512-PACKAGES_INTEGRITY',
+          integrity: PACKAGES_INTEGRITY_SRI,
         },
       },
       dependencies: {
         ms: {
           version: '2.1.3', // same version
           resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
-          integrity: 'sha512-LEGACY_DIFFERENT_INTEGRITY',
+          integrity: LEGACY_INTEGRITY_SRI,
         },
       },
     }, null, 2)
