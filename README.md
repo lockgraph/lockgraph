@@ -2,7 +2,7 @@
 
 > Universal lockfile model and converter for **npm**, **yarn**, **pnpm**, **bun**.
 
-<p><img alt="@antongolub/lockfile" src="./pics/pic.png" align="right" width="300">
+<p><img alt="@antongolub/lockfile — universal lockfile model and converter for npm, yarn, pnpm, bun" src="./pics/lockfile.svg" align="right" width="300">
 
 Each package manager brings its own philosophy of how to describe, store and
 control project dependencies. It looks acceptable to a developer staring at a
