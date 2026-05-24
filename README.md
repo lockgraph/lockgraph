@@ -12,7 +12,7 @@ dependency graphs across the ecosystem.
 
 This library models the dependency graph independent of any specific
 package manager, then projects it back into the format you need.
-Conversion is one use case; **modification** (audit-fix, override pinning,
+Conversion is one use case; modification (audit-fix, override pinning,
 license filtering) is the headline.
 
 </p>
