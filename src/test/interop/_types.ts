@@ -6,6 +6,7 @@ export type FormatId =
   | 'yarn-berry-v4'
   | 'yarn-berry-v5'
   | 'yarn-berry-v6'
+  | 'yarn-berry-v7'
   | 'yarn-berry-v8'
   | 'yarn-berry-v9'
   | 'yarn-classic'

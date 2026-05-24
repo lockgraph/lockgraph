@@ -47,6 +47,25 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
+import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import {
+  emitDropped as patchEmitDropped,
+  emitWorkspaceResolved,
+  emitWorkspaceUnresolved,
+  invalidIntegrityDiagnostic,
+  unknownResolutionDiagnostic,
+} from '../recipe/diagnostics.ts'
+import {
+  parse as parseResolutionRecipe,
+  stringifyForNpm,
+  type ResolutionCanonical,
+} from '../recipe/resolution.ts'
+import {
+  isWorkspaceEdge,
+  shouldEmitWorkspaceResolved,
+  stringifyForVersionOnly,
+  workspaceRangeOfEdge,
+} from '../recipe/workspace.ts'
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -229,7 +248,7 @@ export function parseFamily(
         peerContext: [],
       })
       if (entry.integrity !== undefined || hasTarballPayload(entry)) {
-        builder.setTarball({ name: tailName, version }, tarballPayloadOf(entry))
+        builder.setTarball({ name: tailName, version }, tarballPayloadOf(entry, id, diagnostics))
       }
     }
   }
@@ -353,13 +372,19 @@ export function stringifyFamily(
   const rootMeta = sidecar?.rootMeta
   const rootName = rootMeta?.name ?? rootNode?.name ?? ''
   const rootVersion = rootMeta?.version ?? rootNode?.version ?? '0.0.0'
+  const plannedInstallPaths = deriveInstallPathsForStringify(graph, sidecar, rootNode)
 
   const packages: Record<string, unknown> = {}
 
   if (rootNode !== undefined) {
-    packages[''] = buildRootEntry(graph, rootNode, rootMeta, sidecar)
+    packages[''] = buildRootEntry(graph, rootNode, rootMeta, sidecar, emitDiagnostic)
   } else if (rootMeta !== undefined) {
     packages[''] = buildSyntheticRootEntry(rootMeta)
+  } else {
+    // Empty graph / no root info: emit a minimal root entry so the lockfile
+    // remains parseable (parseFamily rejects a `packages` map missing the
+    // `''` key — see this module's parse path).
+    packages[''] = { name: rootName, version: rootVersion }
   }
 
   const workspaceMembers: Node[] = []
@@ -372,7 +397,7 @@ export function stringifyFamily(
     }
   }
   for (const node of workspaceMembers) {
-    packages[node.workspacePath!] = buildWorkspaceMemberEntry(graph, node, sidecar)
+    packages[node.workspacePath!] = buildWorkspaceMemberEntry(graph, node, sidecar, emitDiagnostic)
     packages[`node_modules/${node.name}`] = {
       resolved: node.workspacePath,
       link: true,
@@ -384,8 +409,8 @@ export function stringifyFamily(
     if (node.workspacePath !== undefined) continue
 
     const nodeSide = sidecar?.nodes.get(node.id)
-    const paths = nodeSide?.installPaths.length ? nodeSide.installPaths : [`node_modules/${node.name}`]
-    const entry = buildNodeModulesEntry(graph, node, nodeSide, config)
+    const paths = plannedInstallPaths.get(node.id) ?? [`node_modules/${node.name}`]
+    const entry = buildNodeModulesEntry(graph, node, nodeSide, config, emitDiagnostic)
     for (const path of paths) {
       packages[path] = entry
     }
@@ -446,7 +471,10 @@ export function enrichFamily(
     }
   }
 
-  // Pass 2: workspace edge attribution.
+  // Pass 2: workspace edge attribution. Marks `workspace: true` AND
+  // populates `attrs.workspaceRange` (F4 canonical sidecar) — npm-2/3
+  // link entries carry no on-disk specifier, so the F4 carrier holds
+  // the empty pending sentinel + `dst.version` as `resolvedVersion`.
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
       if (edge.kind === 'peer') continue
@@ -454,11 +482,14 @@ export function enrichFamily(
       const dst = graph.getNode(edge.dst)
       if (dst === undefined) continue
       if (dst.workspacePath === undefined || dst.workspacePath === '') continue
+      const workspaceRange = dst.version !== undefined && dst.version !== ''
+        ? { specifier: '', resolvedVersion: dst.version }
+        : { specifier: '' }
       workspaceEdgesToMark.push({
         src: edge.src,
         dst: edge.dst,
         kind: edge.kind,
-        attrs: { ...edge.attrs, workspace: true },
+        attrs: { ...edge.attrs, workspace: true, workspaceRange },
       })
     }
   }
@@ -656,11 +687,19 @@ function hasTarballPayload(entry: NpmEntry): boolean {
     || entry.cpu !== undefined
     || entry.os !== undefined
     || entry.libc !== undefined
+    || entry.resolved !== undefined
 }
 
-function tarballPayloadOf(entry: NpmEntry): TarballPayload {
+function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnostic[]): TarballPayload {
   const payload: TarballPayload = {}
-  if (entry.integrity !== undefined) payload.integrity = entry.integrity
+  if (entry.integrity !== undefined) {
+    const canonical = integrityValidateCanonical(entry.integrity)
+    if (canonical === undefined) {
+      diagnostics.push(invalidIntegrityDiagnostic('NPM', subject, entry.integrity))
+    } else {
+      payload.integrity = canonical
+    }
+  }
   if (entry.engines !== undefined) payload.engines = { ...entry.engines }
   if (entry.funding !== undefined) payload.funding = entry.funding
   if (entry.license !== undefined) payload.license = entry.license
@@ -669,6 +708,14 @@ function tarballPayloadOf(entry: NpmEntry): TarballPayload {
   if (entry.cpu !== undefined) payload.cpu = entry.cpu.slice()
   if (entry.os !== undefined) payload.os = entry.os.slice()
   if (entry.libc !== undefined) payload.libc = entry.libc.slice()
+  // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL.
+  if (typeof entry.resolved === 'string' && !entry.link) {
+    const canonical = parseResolutionRecipe(entry.resolved, { sourceKind: 'npm-resolved' })
+    if (canonical.type === 'unknown') {
+      diagnostics.push(unknownResolutionDiagnostic(subject, entry.resolved))
+    }
+    payload.resolution = canonical
+  }
   return payload
 }
 
@@ -760,17 +807,156 @@ function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | u
   return undefined
 }
 
+function deriveInstallPathsForStringify(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  rootNode: Node | undefined,
+): Map<string, string[]> {
+  const byNodeId = new Map<string, Set<string>>()
+  const pathToId = new Map<string, string>()
+  const seenConsumers = new Set<string>()
+  const queue: Array<{ nodeId: string; path: string }> = []
+
+  const addConsumer = (nodeId: string, consumerPath: string): void => {
+    const key = `${nodeId}\u0000${consumerPath}`
+    if (seenConsumers.has(key)) return
+    seenConsumers.add(key)
+    queue.push({ nodeId, path: consumerPath })
+  }
+
+  const addPlacement = (nodeId: string, installPath: string): void => {
+    const occupant = pathToId.get(installPath)
+    if (occupant !== undefined && occupant !== nodeId) {
+      throw new LockfileError({
+        code: 'IRREDUCIBLE_LOSS',
+        message: `install path ${JSON.stringify(installPath)} collides between ${occupant} and ${nodeId}`,
+      })
+    }
+    pathToId.set(installPath, nodeId)
+    let paths = byNodeId.get(nodeId)
+    if (paths === undefined) {
+      paths = new Set<string>()
+      byNodeId.set(nodeId, paths)
+    }
+    const sizeBefore = paths.size
+    paths.add(installPath)
+    if (paths.size !== sizeBefore) {
+      addConsumer(nodeId, installPath)
+    }
+  }
+
+  if (rootNode !== undefined) {
+    addConsumer(rootNode.id, '')
+  }
+
+  const workspaceMembers = Array.from(graph.nodes())
+    .filter(node => node.workspacePath !== undefined && node.workspacePath !== '')
+    .sort((a, b) => cmpStr(a.workspacePath!, b.workspacePath!))
+  for (const node of workspaceMembers) {
+    addConsumer(node.id, node.workspacePath!)
+  }
+
+  const seededNodes = Array.from(graph.nodes())
+    .filter(node => node.workspacePath === undefined)
+    .sort((a, b) => cmpStr(a.id, b.id))
+  for (const node of seededNodes) {
+    const installPaths = sidecar?.nodes.get(node.id)?.installPaths ?? []
+    for (const installPath of installPaths) {
+      addPlacement(node.id, installPath)
+    }
+  }
+
+  // Shared BFS body for both passes below: pop a consumer, place each
+  // non-peer, non-workspace dep at `<consumer-path>/node_modules/<dep-name>`
+  // if not already routable from there. `addPlacement` enqueues the dst,
+  // which feeds further iterations of this loop. Edge sort follows the
+  // (kind, dst) order shared via `compareEdgesForBfs`.
+  const drainBfsQueue = (): void => {
+    while (queue.length > 0) {
+      const current = queue.shift()!
+      const edges = graph.out(current.nodeId)
+        .filter(edge => edge.kind !== 'peer')
+        .slice()
+        .sort(compareEdgesForBfs)
+      for (const edge of edges) {
+        const dst = graph.getNode(edge.dst)
+        if (dst === undefined || dst.workspacePath !== undefined) continue
+        if (resolveDepTarget(current.path, dst.name, pathToId) === dst.id) continue
+        const installPath = current.path === ''
+          ? `node_modules/${dst.name}`
+          : `${current.path}/node_modules/${dst.name}`
+        addPlacement(dst.id, installPath)
+      }
+    }
+  }
+
+  // Root-reachable BFS placement runs BEFORE the lexicographic fallback so
+  // that the version each root / workspace consumer actually depends on
+  // claims `node_modules/<name>` first. Cross-family input (yarn-berry,
+  // pnpm, bun-text) carries no sidecar install paths; without this
+  // ordering, the fallback assigned `node_modules/<name>` by node-ID sort
+  // and any root-direct edge to a non-lexicographically-first version then
+  // collided at root (e.g. qiwi-uniconfig `lcov-parse@0.0.10` vs
+  // `lcov-parse@1.0.0`). Node-flat sources (npm-2 / npm-3) carry sidecar
+  // install paths that have already filled every position above, so this
+  // BFS is a no-op for them.
+  drainBfsQueue()
+
+  // Lexicographic fallback for nodes not reachable from any root or
+  // workspace consumer (e.g. orphaned packages preserved by the graph but
+  // disconnected from the root manifest). After each fallback placement
+  // re-drain the consumer queue so the orphan's transitive dependencies
+  // nest under its install path. Without the per-iteration drain, a non-
+  // dominant version reached only via the synthetic fallback path (e.g.
+  // peers-multi `react-dom@18.2.0` in the yarn-classic shape) cannot pull
+  // its scoped deps (`scheduler@0.23.2`) into its capsule and npm's
+  // node-resolution at parse time falls back to the dominant root version
+  // of the same name.
+  for (const node of seededNodes) {
+    if (byNodeId.has(node.id)) continue
+    addPlacement(node.id, fallbackInstallPathForNode(node, pathToId))
+    drainBfsQueue()
+  }
+
+  const planned = new Map<string, string[]>()
+  for (const [nodeId, installPaths] of byNodeId) {
+    planned.set(nodeId, Array.from(installPaths).sort(cmpStr))
+  }
+  return planned
+}
+
+function compareEdgesForBfs(a: Edge, b: Edge): number {
+  const byKind = cmpStr(a.kind, b.kind)
+  if (byKind !== 0) return byKind
+  return cmpStr(a.dst, b.dst)
+}
+
+function fallbackInstallPathForNode(node: Node, pathToId: ReadonlyMap<string, string>): string {
+  const primary = `node_modules/${node.name}`
+  const occupant = pathToId.get(primary)
+  if (occupant === undefined || occupant === node.id) return primary
+
+  let ordinal = 1
+  while (true) {
+    const synthetic = `node_modules/.lockfile-${encodeURIComponent(node.name)}-${encodeURIComponent(node.version)}-${ordinal}/node_modules/${node.name}`
+    const existing = pathToId.get(synthetic)
+    if (existing === undefined || existing === node.id) return synthetic
+    ordinal++
+  }
+}
+
 function buildRootEntry(
   graph: Graph,
   rootNode: Node,
   rootMeta: NpmRootMeta | undefined,
   sidecar: NpmSidecar | undefined,
+  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {}
   body.name = rootMeta?.name ?? rootNode.name
   body.version = rootMeta?.version ?? rootNode.version
 
-  const blocks = collectManifestBlocks(graph, rootNode.id, sidecar)
+  const blocks = collectManifestBlocks(graph, rootNode.id, sidecar, emitDiagnostic)
   if (Object.keys(blocks.dep).length > 0) body.dependencies = blocks.dep
   if (Object.keys(blocks.dev).length > 0) body.devDependencies = blocks.dev
   if (Object.keys(blocks.peer).length > 0) body.peerDependencies = blocks.peer
@@ -795,12 +981,13 @@ function buildWorkspaceMemberEntry(
   graph: Graph,
   node: Node,
   sidecar: NpmSidecar | undefined,
+  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     name: node.name,
     version: node.version,
   }
-  const blocks = collectManifestBlocks(graph, node.id, sidecar)
+  const blocks = collectManifestBlocks(graph, node.id, sidecar, emitDiagnostic)
   const nodeSide = sidecar?.nodes.get(node.id)
   if (Object.keys(blocks.dep).length > 0) body.dependencies = blocks.dep
   if (Object.keys(blocks.dev).length > 0) body.devDependencies = blocks.dev
@@ -815,6 +1002,7 @@ function buildNodeModulesEntry(
   node: Node,
   nodeSide: NpmFlatSidecar | undefined,
   config: NpmFamilyConfig,
+  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {}
   if (nodeSide !== undefined && nodeSide.installPaths.some(p => installPathTail(p) !== node.name)) {
@@ -826,8 +1014,11 @@ function buildNodeModulesEntry(
   // `resolved` URL: prefer `node.resolution`. Adapter-specific recovery
   // (e.g. npm-2 legacy-mirror sidecar that stashes the on-disk URL when
   // the parser does not sync it to `node.resolution`) is delegated via
-  // `hooks.recoverResolvedForNode`.
-  const resolved = node.resolution ?? config.hooks?.recoverResolvedForNode?.(graph, node)
+  // `hooks.recoverResolvedForNode`. ADR-0014 §4.F3 cross-format fallback:
+  // when neither carrier is present, derive from canonical resolution.
+  const resolved = node.resolution
+    ?? config.hooks?.recoverResolvedForNode?.(graph, node)
+    ?? deriveResolvedFromCanonical(tarball?.resolution)
   if (resolved !== undefined) body.resolved = resolved
   if (tarball?.integrity !== undefined) body.integrity = tarball.integrity
   if (nodeSide?.dev === true) body.dev = true
@@ -836,7 +1027,7 @@ function buildNodeModulesEntry(
   if (nodeSide?.inBundle === true) body.inBundle = true
 
   const sidecar = getFlatSidecar(graph)
-  const blocks = collectManifestBlocks(graph, node.id, sidecar)
+  const blocks = collectManifestBlocks(graph, node.id, sidecar, emitDiagnostic)
   const innerDeps: Record<string, string> = { ...blocks.dep, ...blocks.dev }
   if (Object.keys(innerDeps).length > 0) body.dependencies = sortRecord(innerDeps)
 
@@ -860,6 +1051,14 @@ function buildNodeModulesEntry(
   return reorderEntry(body)
 }
 
+// ADR-0014 §4.F3 — project canonical resolution → npm `resolved` URL for
+// cross-format fallback. Workspace canonical returns undefined (npm encodes
+// workspaces via link entries, not via `resolved`).
+function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
+  if (canonical === undefined) return undefined
+  return stringifyForNpm(canonical)
+}
+
 function installPathTail(path: string): string {
   const chain = ('/' + path).split('/node_modules/').filter(Boolean)
   return chain[chain.length - 1] ?? path
@@ -869,6 +1068,7 @@ function collectManifestBlocks(
   graph: Graph,
   srcId: string,
   sidecar: NpmSidecar | undefined,
+  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
 ): {
   dep: Record<string, string>
   dev: Record<string, string>
@@ -882,8 +1082,8 @@ function collectManifestBlocks(
   for (const edge of graph.out(srcId)) {
     const dst = graph.getNode(edge.dst)
     if (dst === undefined) continue
-    const range = edge.attrs?.[NPM_EDGE_RANGE_ATTR]
-    if (typeof range !== 'string') continue
+    const rawRange = edge.attrs?.[NPM_EDGE_RANGE_ATTR]
+    if (typeof rawRange !== 'string') continue
     const target = edge.kind === 'dep' ? dep
       : edge.kind === 'dev' ? dev
       : edge.kind === 'peer' ? peer
@@ -892,7 +1092,36 @@ function collectManifestBlocks(
     if (target === undefined) continue
     const edgeKey = edgeTripleKey(edge.src, edge.kind, edge.dst)
     const declaredName = sidecar?.edgeDeclaredNames.get(edgeKey) ?? dst.name
-    target[declaredName] = range
+
+    // ADR-0014 §4.F4 — workspace edges: npm lacks the `workspace:` protocol
+    // entirely (link entries carry workspace identity; the dep range itself
+    // is a concrete version). When the source carried a non-empty workspace
+    // specifier, fire RECIPE_WORKSPACE_RESOLVED; when no resolvedVersion is
+    // available, fire RECIPE_WORKSPACE_UNRESOLVED and drop the entry.
+    if (isWorkspaceEdge(edge)) {
+      const ws = workspaceRangeOfEdge(edge, dst)
+      if (ws !== undefined) {
+        const resolved = stringifyForVersionOnly(ws)
+        if (resolved === undefined) {
+          emitWorkspaceUnresolved(
+            { src: edge.src, dst: edge.dst, kind: edge.kind },
+            emitDiagnostic,
+          )
+          continue
+        }
+        if (shouldEmitWorkspaceResolved(ws)) {
+          emitWorkspaceResolved(
+            { src: edge.src, dst: edge.dst, kind: edge.kind },
+            ws.specifier,
+            resolved,
+            emitDiagnostic,
+          )
+        }
+        target[declaredName] = resolved
+        continue
+      }
+    }
+    target[declaredName] = rawRange
   }
   return {
     dep: sortRecord(dep),
@@ -964,12 +1193,12 @@ function warnPatchDrop(
 ): void {
   if (node.patch === undefined || warned.has(node.id)) return
   warned.add(node.id)
-  emitDiagnostic({
-    code: `${config.diagnosticPrefix}_PATCH_DROPPED`,
-    severity: 'warning',
-    subject: node.id,
-    message: `patch slot ${JSON.stringify(node.patch)} is unsupported in npm-${config.lockfileVersion}; dropping on emit`,
-  })
+  patchEmitDropped(
+    node.id,
+    'patch',
+    `npm-${config.lockfileVersion} has no patch: protocol; ${JSON.stringify(node.patch)} dropped`,
+    emitDiagnostic,
+  )
 }
 
 function parseFailed(config: NpmFamilyConfig, message: string): LockfileError {

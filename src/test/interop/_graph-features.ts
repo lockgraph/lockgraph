@@ -1,7 +1,14 @@
 import { isDeepStrictEqual } from 'node:util'
-import type { Graph } from '../../main/ts/graph.ts'
+import type { Graph, TarballPayload } from '../../main/ts/graph.ts'
 import { rawConditionsBlockOfNode } from '../../main/ts/formats/_yarn-berry-core.ts'
 import type { PreservedFeature } from './_matrix.ts'
+
+function stripResolution(payload: TarballPayload | undefined): TarballPayload | undefined {
+  if (payload === undefined) return undefined
+  if (payload.resolution === undefined) return payload
+  const { resolution: _resolution, ...rest } = payload
+  return rest
+}
 
 // Features observed on a graph for contract diagnostics. Includes PreservedFeature
 // (returnable by graphSubset) plus the runtime-only flags the observation lens uses
@@ -108,15 +115,35 @@ export function graphSubset(
         }
         break
       case 'resolved-url':
+        // ADR-0014 §4.F3 — PM-native `node.resolution` is sidecar attribution
+        // (yarn-berry locator vs yarn-classic URL vs pnpm tarball URL, all
+        // shape-different by design). Preservation across formats is at the
+        // canonical level: both source and destination must carry resolution
+        // information of the SAME canonical type (the URL host is attribution
+        // and may diverge per stringify-table convention).
         for (const node of needle.nodes()) {
-          if (node.resolution !== undefined && haystack.getNode(node.id)?.resolution !== node.resolution) {
+          const needleHasNative = node.resolution !== undefined
+          const needleCanonical = needle.tarballOf(node.id)?.resolution
+          if (!needleHasNative && needleCanonical === undefined) continue
+          const haystackNode = haystack.getNode(node.id)
+          const haystackHasNative = haystackNode?.resolution !== undefined
+          const haystackCanonical = haystack.tarballOf(node.id)?.resolution
+          if (!haystackHasNative && haystackCanonical === undefined) return false
+          if (needleCanonical !== undefined && haystackCanonical !== undefined
+            && needleCanonical.type !== haystackCanonical.type) {
             return false
           }
         }
         break
       case 'tarballs':
         for (const [key, payload] of needle.tarballs()) {
-          if (!isDeepStrictEqual(haystackTarballs.get(key), payload)) return false
+          // ADR-0014 §4.F3 — canonical resolution URL is attribution per
+          // hosting host (identity drops host for `(name, version)` tuple).
+          // Different source/target adapters produce different canonical
+          // URLs by convention (e.g. yarn-berry uses npmjs default, yarn-
+          // classic emits yarnpkg.com); excluding `resolution` from the
+          // tarball-preservation comparator avoids that attribution divergence.
+          if (!isDeepStrictEqual(stripResolution(haystackTarballs.get(key)), stripResolution(payload))) return false
         }
         break
       case 'workspace-membership':

@@ -59,6 +59,12 @@ import {
   type NpmSidecar,
 } from './_npm-flat-types.ts'
 import { derivePeerCandidates, pruneSidecar } from './_npm-core.ts'
+import { emitDropped as patchEmitDropped, emitDropped as recipeEmitDropped } from '../recipe/diagnostics.ts'
+import {
+  parse as parseResolutionRecipe,
+  stringifyForNpm,
+  type ResolutionCanonical,
+} from '../recipe/resolution.ts'
 
 // === Public option types ====================================================
 
@@ -204,6 +210,19 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
         builder.addNode(node)
         const payload: TarballPayload = {}
         if (entry.integrity !== undefined) payload.integrity = entry.integrity
+        // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL.
+        if (resolved !== undefined) {
+          const canonical = parseResolutionRecipe(resolved, { sourceKind: 'npm-resolved' })
+          if (canonical.type === 'unknown') {
+            diagnostics.push({
+              code:     'RECIPE_RESOLUTION_UNKNOWN',
+              severity: 'warning',
+              subject:  id,
+              message:  `resolution shape not canonicalisable: ${JSON.stringify(resolved)}`,
+            })
+          }
+          payload.resolution = canonical
+        }
         if (Object.keys(payload).length > 0) {
           builder.setTarball({ name: declaredName, version }, payload)
         }
@@ -349,6 +368,13 @@ export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): str
           subject: node.id,
           message: `workspace member ${node.id} at ${JSON.stringify(node.workspacePath)} is unsupported in npm-1; omitting from emit`,
         })
+        // ADR-0014 §4.F3 — also surface canonical RECIPE_FEATURE_DROPPED.
+        recipeEmitDropped(
+          node.id,
+          'workspace',
+          `npm-1 has no workspace primitive (ADR-0021 §A.npm-1)`,
+          emitDiagnostic,
+        )
       }
       continue
     }
@@ -819,13 +845,16 @@ function buildEntry(
   // parsed as a URL (preserving the parse-time shape per ADR-0021 §A.npm-1);
   // otherwise the URL goes under `resolved`.
   const tarball = graph.tarballOf(node.id)
-  if (node.resolution !== undefined) {
-    if (/^(git[+:]|github:)/.test(node.resolution)) {
-      entry.version = node.resolution
-    } else if (isHttpUrl(node.resolution) && isHttpUrl(node.version)) {
+  // ADR-0014 §4.F3 cross-format fallback: when PM-native `node.resolution`
+  // is absent (cross-format input), derive from canonical.
+  const resolutionStr = node.resolution ?? deriveResolvedFromCanonical(tarball?.resolution)
+  if (resolutionStr !== undefined) {
+    if (/^(git[+:]|github:)/.test(resolutionStr)) {
+      entry.version = resolutionStr
+    } else if (isHttpUrl(resolutionStr) && isHttpUrl(node.version)) {
       entry.version = node.version
     } else {
-      entry.resolved = node.resolution
+      entry.resolved = resolutionStr
     }
   }
   if (tarball?.integrity !== undefined && !/^(git[+:]|github:)/.test(entry.version ?? '')) {
@@ -870,6 +899,13 @@ const NPM1_ENTRY_FIELD_ORDER: ReadonlyArray<keyof Npm1Entry> = [
   'requires',
   'dependencies',
 ] as const
+
+// ADR-0014 §4.F3 — project canonical resolution → npm-1 `resolved` URL.
+// Workspace canonical returns undefined (npm-1 predates workspaces).
+function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
+  if (canonical === undefined) return undefined
+  return stringifyForNpm(canonical)
+}
 
 function reorderEntry(entry: Npm1Entry): Npm1Entry {
   const out: Record<string, unknown> = {}
@@ -992,12 +1028,12 @@ function warnPatchDrop(
 ): void {
   if (node.patch === undefined || warned.has(node.id)) return
   warned.add(node.id)
-  emitDiagnostic({
-    code: 'NPM_V1_PATCH_DROPPED',
-    severity: 'warning',
-    subject: node.id,
-    message: `patch slot ${JSON.stringify(node.patch)} is unsupported in npm-1; dropping on emit`,
-  })
+  patchEmitDropped(
+    node.id,
+    'patch',
+    `npm-1 has no patch: protocol; ${JSON.stringify(node.patch)} dropped`,
+    emitDiagnostic,
+  )
 }
 
 // === Manifest-driven enrich plan ===========================================

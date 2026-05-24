@@ -19,10 +19,24 @@ import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixturesRoot = resolve(here, '../resources/fixtures/lockfiles')
+const templatesRoot = resolve(here, '../resources/fixtures/templates')
 
 /** Read a lockfile fixture by `<scenario>/<adapter>.lock` relative path. */
 export const fixture = (rel: string): string =>
   readFileSync(resolve(fixturesRoot, rel), 'utf8')
+
+/**
+ * Absolute path to the template workspace directory for a fixture name,
+ * e.g. `templateRootOf('patch-yarn')` →
+ * `src/test/resources/fixtures/templates/patch-yarn`. The template root
+ * houses the `package.json` + `.yarn/patches/...` source the canonical
+ * recipe needs for `+patch=<hash>` derivation; threading it через
+ * `parseFixtureGraph` (см. `_pnpm-flat-test-utils.ts`) keeps the
+ * family-common patch-yarn tests on the canonical byte-hashing path
+ * rather than the sentinel fallback.
+ */
+export const templateRootOf = (name: string): string =>
+  resolve(templatesRoot, name)
 
 /**
  * Capture a deterministic snapshot of a graph for equality assertions.

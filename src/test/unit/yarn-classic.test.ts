@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const MODIFIED_SRI = sriOf('modified-ms-integrity')
 import { newBuilder, type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import { check as checkV4, parse as parseV4 } from '../../main/ts/formats/yarn-berry-v4.ts'
@@ -10,6 +14,8 @@ import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-b
 import { check as checkV8, parse as parseV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
 import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
+import { parse as parseResolution } from '../../main/ts/recipe/resolution.ts'
+import { toTarballKey } from '../../main/ts/graph.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -206,6 +212,75 @@ describe('yarn-classic — stringify', () => {
     expect(Array.from(reparsed.nodes())).toEqual([])
     expectEmptyGraphDiff(original.diff(reparsed))
   })
+
+  // Real-world regression (commit 0775b26): yarn-berry locators on cross-family
+  // sources (`<n>@patch:...`, `<n>@npm:<ver>`) reach yarn-classic stringify as
+  // `{ type: 'unknown', raw }` canonical. The pre-fix `deriveResolvedFromCanonical`
+  // forwarded `raw` verbatim, which yarn-classic's parser rejects on reparse
+  // because it is not a URL. `isYarnClassicResolvedUrl` now gates the emit so
+  // only URL-shaped resolutions land in `resolved`; the patch loss is attributed
+  // via the existing `warnPatchDrop` channel (verified in the patched-sibling
+  // dedup test below).
+  it('omits `resolved` when canonical is non-URL unknown (yarn-berry patch leak)', () => {
+    const b = newBuilder()
+    b.addNode({
+      id: 'foo@1.0.0',
+      name: 'foo',
+      version: '1.0.0',
+      peerContext: [],
+    })
+    b.setTarball({ name: 'foo', version: '1.0.0' }, {
+      integrity: 'sha512-deadbeef',
+      resolution: { type: 'unknown', raw: 'foo@patch:foo@npm%3A1.0.0#./.yarn/patches/foo.patch::version=1.0.0' },
+    })
+    const graph = b.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).not.toContain('resolved "foo@patch:')
+    expect(emitted).toContain('foo@1.0.0:')
+    expect(emitted).toContain('integrity sha512-deadbeef')
+  })
+
+  it('emits `resolved "<url>"` when canonical is tarball URL', () => {
+    const b = newBuilder()
+    b.addNode({
+      id: 'foo@1.0.0',
+      name: 'foo',
+      version: '1.0.0',
+      peerContext: [],
+    })
+    b.setTarball({ name: 'foo', version: '1.0.0' }, {
+      integrity: 'sha512-deadbeef',
+      resolution: { type: 'tarball', url: 'https://registry.yarnpkg.com/foo/-/foo-1.0.0.tgz' },
+    })
+    const graph = b.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).toContain('resolved "https://registry.yarnpkg.com/foo/-/foo-1.0.0.tgz"')
+  })
+
+  // Real-world regression (commit 0775b26 / qiwi-mware blocker 2): yarn-berry
+  // collapses npm-aliased entries onto the dominant target name, so the entry-
+  // key spec[0] name (e.g. `string-width-cjs`) disagrees with the `resolution:`
+  // field's name (`string-width`). The pre-fix `peelYarnBerryLocator` rejected
+  // the parse when `options.name` mismatched the locator's own name, returning
+  // `unknown` and leaking a non-URL through `resolved` (handled by the gate
+  // above). The fix relaxes the peel to a SOFT match — the locator's parsed
+  // name passes through to URL derivation, so the npm-alias case resolves to a
+  // proper registry tarball URL.
+  it('parseResolution: soft name match — npm-alias locator derives registry URL despite options.name mismatch', () => {
+    const canonical = parseResolution('string-width@npm:4.2.3', {
+      sourceKind: 'yarn-berry-locator',
+      name: 'string-width-cjs',
+    })
+
+    expect(canonical).toEqual({
+      type: 'tarball',
+      url:  'https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz',
+    })
+  })
 })
 
 describe('yarn-classic — modify', () => {
@@ -301,12 +376,13 @@ describe('yarn-classic — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'sha512-modified-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
     const reparsed = parse(stringify(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
     expect(result.applied).toEqual([
       { kind: 'tarball-set', subject: 'ms@2.1.3' },
     ])
@@ -406,7 +482,7 @@ describe('yarn-classic — modify', () => {
     expect(reparsed.getNode('ms@2.1.3')?.patch).toBeUndefined()
     expect(diagnostics).toEqual([
       expect.objectContaining({
-        code: 'YARN_CLASSIC_PATCH_DROPPED',
+        code: 'RECIPE_FEATURE_DROPPED',
         severity: 'warning',
         subject: 'ms@2.1.3',
       }),
@@ -417,6 +493,51 @@ describe('yarn-classic — modify', () => {
       { kind: 'tarball-set', subject: `ms@2.1.3+patch=${patch}` },
       { kind: 'tarball-removed', subject: 'ms@2.1.3' },
     ])
+  })
+
+  // Real-world regression (commit 0775b26): yarn-classic identifies entries by
+  // `<n>@<ver>` (no patch disambiguator). A graph carrying both bare and
+  // patched siblings would emit two entries that collapse onto a single key on
+  // reparse and trip the seal с `IRREDUCIBLE_LOSS: two entries collapse onto
+  // NodeId …`. The fix dedups at emit (prefer unpatched, drop the patched
+  // sibling via `warnPatchDrop` / RECIPE_FEATURE_DROPPED).
+  it('dedups bare + patched siblings of the same `<n>@<ver>` on emit (no IRREDUCIBLE_LOSS)', () => {
+    const patch = 'a'.repeat(128)
+    const patchedId = toTarballKey({ name: 'typescript', version: '5.4.5', patch })
+    const original = parseFixtureGraph('simple')
+    const result = original.mutate(m => {
+      m.addNode({
+        id: 'typescript@5.4.5',
+        name: 'typescript',
+        version: '5.4.5',
+        peerContext: [],
+        resolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000',
+      })
+      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: 'sha512-bare' })
+      m.addNode({
+        id: patchedId,
+        name: 'typescript',
+        version: '5.4.5',
+        peerContext: [],
+        patch,
+        resolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000',
+      })
+      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: 'sha512-patched' })
+    })
+
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
+    // Reparse must not throw the seal `IRREDUCIBLE_LOSS: two entries collapse`.
+    const reparsed = parse(lockfile)
+    const typescriptNodes = Array.from(reparsed.nodes()).filter(n => n.name === 'typescript')
+    expect(typescriptNodes).toHaveLength(1)
+    expect(typescriptNodes[0]?.id).toBe('typescript@5.4.5')
+    expect(typescriptNodes[0]?.patch).toBeUndefined()
+
+    // Patch loss attributed via RECIPE_FEATURE_DROPPED on the patched sibling.
+    const patchDrops = diagnostics.filter(d =>
+      d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === patchedId,
+    )
+    expect(patchDrops).toHaveLength(1)
   })
 })
 
@@ -644,5 +765,50 @@ describe('yarn-classic — optimize', () => {
     expect(graphSnapshot(reparsed.graph)).toEqual(graphSnapshot(enriched.graph))
     expectEmptyGraphDiff(enriched.graph.diff(reparsed.graph))
     expect(reparsed.diagnostics).toEqual([])
+  })
+})
+
+// Real-world regression edge-case coverage (commit 0775b26): the URL-shape
+// filter inside `deriveResolvedFromCanonical` accepts exactly four prefix
+// shapes — `https://`, `http://`, `https://codeload.github.com/`, and
+// `git+https://`. Other URL-ish shapes (the SCP-form `git@host:owner/repo`
+// и `git+ssh://`) get dropped from the `resolved` field; downstream
+// `warnPatchDrop` / RECIPE_FEATURE_DROPPED attribute any feature loss. The
+// other inline tests already pin the npm-locator + patch-leak cases; this
+// block pins the URL-shape gate explicitly across every accepted prefix and
+// the rejected git protocols.
+describe('yarn-classic — deriveResolvedFromCanonical URL-shape exhaustive coverage', () => {
+  function emitFor(can: import('../../main/ts/recipe/resolution.ts').ResolutionCanonical): string {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'pkg@1.0.0',
+      name: 'pkg',
+      version: '1.0.0',
+      peerContext: [],
+    })
+    builder.setTarball({ name: 'pkg', version: '1.0.0' }, { resolution: can })
+    return stringify(builder.seal())
+  }
+
+  it('keeps each of the four accepted URL prefixes (https, http, codeload, git+https)', () => {
+    for (const url of [
+      'https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz',
+      'http://registry.example.com/foo/-/foo-1.0.0.tgz',
+      'https://codeload.github.com/owner/repo/tar.gz/abcdef1234567890abcdef1234567890abcdef12',
+      'git+https://github.com/owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
+    ]) {
+      const emitted = emitFor({ type: 'unknown', raw: url })
+      expect(emitted).toContain(`resolved "${url}"`)
+    }
+  })
+
+  it('drops non-URL git protocols (git@host:path SCP form, git+ssh://)', () => {
+    for (const raw of [
+      'git+ssh://git@github.com/owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
+      'git@github.com:owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
+    ]) {
+      const emitted = emitFor({ type: 'unknown', raw })
+      expect(emitted).not.toContain(`resolved "${raw}"`)
+    }
   })
 })

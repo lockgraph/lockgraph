@@ -14,7 +14,8 @@
 //     regular packages, `[<name>@workspace:<path>]` (len 1) for workspace refs.
 //
 // §B Lossy-but-acceptable:
-//   - `BUN_TEXT_PATCH_DROPPED` — bun cannot encode patches; drop on emit.
+//   - `RECIPE_FEATURE_DROPPED` (feature='patch') — bun cannot encode
+//     patches; drop on emit per ADR-0014 §5 canonical loss code.
 //   - `BUN_TEXT_PEER_VIRT_FLATTENED` — bun's peer-deps are declarative;
 //     peer-virt NodeIds (`<id>(<peer>@<v>)`) flatten on emit.
 //
@@ -34,7 +35,20 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
+import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import {
+  emitDropped as patchEmitDropped,
+  emitDropped as recipeEmitDropped,
+  emitWorkspaceCollapsed,
+  invalidIntegrityDiagnostic,
+} from '../recipe/diagnostics.ts'
+import {
+  bunTextWouldCollapse,
+  isWorkspaceEdge,
+  workspaceRangeOfEdge,
+} from '../recipe/workspace.ts'
 import { cmpStr, sortRecord } from './_npm-flat-types.ts'
+import { nodeVersionOf } from './_node-id.ts'
 
 // === Public option types ====================================================
 
@@ -278,7 +292,12 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
         peerContext: [],
       })
       if (integrity !== undefined) {
-        builder.setTarball({ name, version }, { integrity })
+        const canonical = integrityValidateCanonical(integrity)
+        if (canonical === undefined) {
+          diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
+        } else {
+          builder.setTarball({ name, version }, { integrity: canonical })
+        }
       }
     }
     nodeSidecar.set(nodeId, { inner, packagesKey })
@@ -371,11 +390,11 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
 
   // Build `workspaces` block: root + members.
   const workspacesBlock: Record<string, BunTextWorkspaceManifest> = {
-    '': buildWorkspaceManifest(graph, rootNode, sidecar?.workspaces.get('')?.manifest),
+    '': buildWorkspaceManifest(graph, rootNode, sidecar?.workspaces.get('')?.manifest, emitDiagnostic),
   }
   for (const member of memberNodes) {
     const path = member.workspacePath!
-    workspacesBlock[path] = buildWorkspaceManifest(graph, member, sidecar?.workspaces.get(path)?.manifest)
+    workspacesBlock[path] = buildWorkspaceManifest(graph, member, sidecar?.workspaces.get(path)?.manifest, emitDiagnostic)
   }
 
   // Build `packages` block: workspace members (1-elem tuples) then regular packages
@@ -384,15 +403,40 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
   for (const member of [...memberNodes].sort((a, b) => cmpStr(a.name, b.name))) {
     packagesBlock[member.name] = [`${member.name}@workspace:${member.workspacePath}`]
   }
+  // Sort: unpatched nodes first (patch === undefined) for any given
+  // `<name>@<version>` tuple, so the dedup loop below keeps the cleaner shape
+  // and the patched siblings are dropped via `warnPatchDrop` /
+  // RECIPE_FEATURE_DROPPED. bun-text has no patch protocol, so patched and
+  // unpatched siblings of the same `<name>@<version>` collapse onto one
+  // entry on reparse — emit only one to keep the seal invariant.
   const regularNodes = Array.from(graph.nodes())
     .filter(n => n.id !== rootNode?.id && n.workspacePath === undefined)
-    .sort((a, b) => cmpStr(a.name, b.name) || cmpStr(a.version, b.version))
+    .sort((a, b) =>
+      cmpStr(a.name, b.name)
+        || cmpStr(a.version, b.version)
+        || ((a.patch === undefined ? 0 : 1) - (b.patch === undefined ? 0 : 1)),
+    )
+  const warnedResolutions = new Set<string>()
+  const emittedNameVersion = new Set<string>()
   for (const node of regularNodes) {
     warnPatchDrop(node, warnedPatches, emitDiagnostic)
     warnPeerVirt(node, warnedPeerVirt, emitDiagnostic)
+    warnResolutionDrop(graph, node, warnedResolutions, emitDiagnostic)
+
+    const nameVersion = `${node.name}@${node.version}`
+    if (emittedNameVersion.has(nameVersion)) {
+      // Patched sibling of a `<name>@<version>` already emitted — bun-text
+      // has no patch protocol, so this would collapse onto the same key on
+      // reparse and break the seal with a duplicate-edge error. Drop the
+      // duplicate emit; the `warnPatchDrop` diagnostic already encodes the
+      // RECIPE_FEATURE_DROPPED loss.
+      continue
+    }
+    emittedNameVersion.add(nameVersion)
 
     const inner = buildInnerBlock(graph, node, sidecar)
-    const integrity = graph.tarballOf(node.id)?.integrity ?? ''
+    const integritySrc = graph.tarballOf(node.id)?.integrity
+    const integrity = integritySrc ?? ''
     const key = chooseNodeEmitKey(node, sidecar, packagesBlock)
     packagesBlock[key] = [`${node.name}@${node.version}`, '', inner, integrity]
   }
@@ -810,8 +854,20 @@ function addBlockEdges(
         })
         continue
       }
-      const attrs: { range: string; workspace?: boolean } = { range }
-      if (isWorkspaceProtocolRange(range)) attrs.workspace = true
+      const attrs: { range: string; workspace?: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = { range }
+      if (isWorkspaceProtocolRange(range)) {
+        attrs.workspace = true
+        // ADR-0014 §4.F4 — bun-text member-ref form has no version range;
+        // canonical specifier is `workspace:*` (bun's coarse default). The
+        // verbatim source-side richer specifier survives in `attrs.range`
+        // for same-format roundtrip; the canonical workspaceRange flags the
+        // coarse identity to cross-format consumers. resolvedVersion is
+        // best-effort — extracted from the canonical NodeId.
+        const dstVersion = nodeVersionOf(dstId)
+        attrs.workspaceRange = dstVersion !== undefined && dstVersion !== ''
+          ? { specifier: 'workspace:*', resolvedVersion: dstVersion }
+          : { specifier: 'workspace:*' }
+      }
       try {
         builder.addEdge(srcId, dstId, kind, attrs)
       } catch (error) {
@@ -858,6 +914,7 @@ function buildWorkspaceManifest(
   graph: Graph,
   workspaceNode: Node | undefined,
   sidecarManifest: BunTextWorkspaceManifest | undefined,
+  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
 ): BunTextWorkspaceManifest {
   // Workspace manifest emitted к the `workspaces` block. Pulls structural data
   // из the graph (edges out of the workspace node) and falls back к sidecar
@@ -890,6 +947,22 @@ function buildWorkspaceManifest(
             : edge.kind === 'peer' ? peerDependencies
               : undefined
       if (target === undefined) continue
+      // ADR-0014 §4.F4 — bun-text canonical specifier is `workspace:*`
+      // (member-ref form has no version range). Cross-format sources that
+      // carry richer `^|~|<exact>` specifiers surface a collapse diagnostic;
+      // the verbatim range is preserved in the manifest dep block (bun
+      // tolerates richer protocol shapes on disk — the diagnostic is
+      // observability, not destructive).
+      if (isWorkspaceEdge(edge)) {
+        const ws = workspaceRangeOfEdge(edge, dst)
+        if (ws !== undefined && bunTextWouldCollapse(ws.specifier)) {
+          emitWorkspaceCollapsed(
+            { src: edge.src, dst: edge.dst, kind: edge.kind },
+            ws.specifier,
+            emitDiagnostic,
+          )
+        }
+      }
       target[dst.name] = range
     }
     if (Object.keys(dependencies).length > 0) out.dependencies = sortRecord(dependencies)
@@ -968,12 +1041,38 @@ function warnPatchDrop(
 ): void {
   if (node.patch === undefined || warned.has(node.id)) return
   warned.add(node.id)
-  emitDiagnostic({
-    code: 'BUN_TEXT_PATCH_DROPPED',
-    severity: 'warning',
-    subject: node.id,
-    message: `patch slot ${JSON.stringify(node.patch)} is unsupported in bun-text; dropping on emit`,
-  })
+  patchEmitDropped(
+    node.id,
+    'patch',
+    `bun-text cannot encode patches; ${JSON.stringify(node.patch)} dropped`,
+    emitDiagnostic,
+  )
+}
+
+// ADR-0014 §4.F3 stringify table — bun-text encodes only registry tarballs
+// (URL derived by convention from name@version) and workspace members
+// (via the `workspaces` block). git / directory / unknown F3 cases have
+// no representation in bun-text and are dropped with RECIPE_FEATURE_DROPPED.
+// Nodes that ALSO drop patch (F2) skip the F3 drop — the patch diagnostic
+// already represents the loss (the F3 unknown shape is the patch locator).
+function warnResolutionDrop(
+  graph: Graph,
+  node: Node,
+  warned: Set<string>,
+  emitDiagnostic: (diagnostic: Diagnostic) => void,
+): void {
+  if (warned.has(node.id)) return
+  const canonical = graph.tarballOf(node.id)?.resolution
+  if (canonical === undefined) return
+  if (canonical.type === 'tarball') return
+  if (canonical.type === 'unknown' && node.patch !== undefined) return
+  warned.add(node.id)
+  recipeEmitDropped(
+    node.id,
+    canonical.type,
+    `bun-text cannot encode ${canonical.type} resolution for ${node.id}`,
+    emitDiagnostic,
+  )
 }
 
 function warnPeerVirt(

@@ -1,9 +1,14 @@
 // _pnpm-flat-core.ts — pnpm flat-family (pnpm-v6 / pnpm-v9) shared core.
 //
 // Scope: the two on-disk shapes that share the YAML codec + ADR-0006
-// peer-virt encoding + importer synthesis loop. v5 (decimal version
-// literal, dense snapshot tree) is OUT OF SCOPE and ships standalone
-// per ADR-0022 phase order.
+// peer-virt encoding + importer synthesis loop are owned wholly by this
+// module. pnpm-v5 (decimal version literal, dense snapshot tree) ships
+// standalone with its own profile and codec per ADR-0022 phase order,
+// но reuses the format-neutral helpers exported here — `tarballPayloadOf`
+// (F1/F3 shared parser), peer-target resolution, line-ending normalisation,
+// importer-path math. v5 takes the parts that have no on-disk shape
+// dependency; the v6/v9 YAML codec, profile semantics, and
+// peer-virt encoding stay in scope.
 //
 // Per-version thin entries (`pnpm-v6.ts`, `pnpm-v9.ts`) hand a
 // `PnpmLayoutProfile` — a discriminated union with one variant per
@@ -25,8 +30,10 @@
 //
 // Diagnostic codes carry the per-version prefix from
 // `profile.diagnosticPrefix` (e.g. `PNPM_V9_PEER_AMBIGUOUS`,
-// `PNPM_V6_PATCH_DROPPED`). Family-shared diagnostics keep the bare
-// `PNPM_` prefix (e.g. `PNPM_BAD_ENTRY`, `PNPM_UNRESOLVED_DEP`).
+// `PNPM_V6_INVALID_INTEGRITY`). Family-shared diagnostics keep the bare
+// `PNPM_` prefix (e.g. `PNPM_BAD_ENTRY`, `PNPM_UNRESOLVED_DEP`). Patch
+// loss surfaces through the canonical `RECIPE_FEATURE_DROPPED` code per
+// ADR-0014 §5 (recipe diagnostics live в `recipe/diagnostics.ts`).
 //
 // YAML in/out is delegated к `_pnpm-yaml.ts`; this module owns only
 // the higher-level pnpm family semantics.
@@ -49,11 +56,38 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
+import { nodeVersionOf } from './_node-id.ts'
+import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import {
+  parse as parseResolutionRecipe,
+  stringifyForPnpm,
+  type ResolutionCanonical,
+} from '../recipe/resolution.ts'
+import {
+  hashAndNormaliseBytes as patchHashAndNormaliseBytes,
+  sentinelHashOf as patchSentinelHashOf,
+} from '../recipe/patch.ts'
+import {
+  invalidIntegrityDiagnostic,
+  patchNormalisedDiagnostic,
+  unknownResolutionDiagnostic,
+} from '../recipe/diagnostics.ts'
+import { readWorkspaceFileBytes } from './_path.ts'
 import { readYaml, emitYaml, flowMap, quoted, type YamlMap } from './_pnpm-yaml.ts'
 
 // === Public option types ====================================================
 
-export interface PnpmFamilyParseOptions {}
+export interface PnpmFamilyParseOptions {
+  /**
+   * Filesystem root used by F2 patch-slot extraction (ADR-0014 §4.F2).
+   * When the `overrides:` block carries `patch:<spec>#<workspace-path>`
+   * entries the resolver reads `<workspaceRoot>/<workspace-path>` bytes
+   * and emits the canonical sha512-hex on `Node.patch`. Absent / unreadable
+   * patch sources fall back to the ADR-0011 `unresolved-<sha256-hex>`
+   * sentinel computed from the locator string.
+   */
+  workspaceRoot?: string
+}
 
 export interface PnpmFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -232,7 +266,7 @@ export function checkFamily(input: string, profile: PnpmLayoutProfile): boolean 
 
 export function parseFamily(
   input: string,
-  _options: PnpmFamilyParseOptions,
+  options: PnpmFamilyParseOptions,
   profile: PnpmLayoutProfile,
 ): Graph {
   const shape = resolveProfile(profile)
@@ -261,6 +295,17 @@ export function parseFamily(
   if (yaml.overrides !== undefined && typeof yaml.overrides === 'object') {
     sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
   }
+
+  // ADR-0014 §4.F2 — compile patch directives from the overrides block.
+  // Each directive carries the literal `overrides:` key (preserved verbatim
+  // per ADR-0011), a parsed matcher (bare / range / exact per pnpm key
+  // grammar), and the pre-computed canonical sha512-hex when source bytes
+  // were readable. Per-node lookup resolves the matcher against (name,
+  // version) and falls back to the ADR-0011 sentinel
+  // `unresolved-<sha256(<name>@<version>:<literal-key>)>` when bytes are
+  // unavailable. Consumed during node-add below so node.patch is set BEFORE
+  // the tarball key is derived.
+  const patchDirectives = parseOverridePatches(sidecar.overrides, options.workspaceRoot)
 
   const packagesMap = isPlainObject(yaml.packages) ? yaml.packages : {}
 
@@ -305,7 +350,7 @@ export function parseFamily(
         })
         continue
       }
-      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry)
+      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
       const snapEntry = snapshotsMap[snapshotKey]
       if (isPlainObject(snapEntry) && Array.isArray(snapEntry.transitivePeerDependencies)) {
         const sc = sidecar.nodes.get(nodeId)
@@ -334,7 +379,7 @@ export function parseFamily(
       seenIds.add(nodeId)
       idByPackagesKey.set(pkgKey, nodeId)
       const pkgEntry = packagesMap[pkgKey]!
-      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry)
+      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
       // v6 carries `dev` per-entry — capture for round-trip.
       if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
         const sc = sidecar.nodes.get(nodeId)
@@ -435,7 +480,22 @@ export function parseFamily(
             })
             continue
           }
-          const attrs: { range: string; workspace: boolean } = { range: specifier ?? version, workspace: true }
+          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
+          // pnpm carries `workspace:<spec>` via the importer specifier
+          // map; the `link:<path>` value is resolution, not range.
+          // resolvedVersion is the synthesised member node version
+          // (`<importerPath>@<version>` — version is the synthesis
+          // default at parse time, manifests may refine via enrich).
+          const rawSpecifier = specifier ?? ''
+          const targetVersion = nodeVersionOf(targetId)
+          const workspaceRange = targetVersion !== undefined && targetVersion !== ''
+            ? { specifier: rawSpecifier, resolvedVersion: targetVersion }
+            : { specifier: rawSpecifier }
+          const attrs: { range: string; workspace: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = {
+            range: specifier ?? version,
+            workspace: true,
+            workspaceRange,
+          }
           try {
             builder.addEdge(srcId, targetId, kind, attrs)
           } catch (error) {
@@ -528,10 +588,12 @@ export function stringifyFamily(
     options.onDiagnostic?.(diagnostic)
   }
 
-  const warnedPatches = new Set<string>()
-  for (const node of graph.nodes()) {
-    warnPatchDrop(shape, node, warnedPatches, emitDiagnostic)
-  }
+  // ADR-0014 §4.F2 — pnpm v6/v9 SUPPORT patch slots via the `overrides:`
+  // block carrier. `synthesiseOverridePatches` merges sidecar.overrides
+  // attribution (round-trip case) с per-Node.patch synthesised entries
+  // (cross-format conversion case where source-side path is recovered
+  // from `Node.resolution`). No drop diagnostic in this family.
+  const effectiveOverrides = synthesiseOverridePatches(graph, sidecar)
 
   // --- Step 1: classify nodes — root + workspace members + resolved nodes. ---
   const rootNode = locatePnpmRootNode(graph, sidecar)
@@ -566,8 +628,8 @@ export function stringifyFamily(
     excludeLinksFromLockfile: settings.excludeLinksFromLockfile ?? false,
   } as YamlMap
 
-  if (sidecar?.overrides !== undefined && Object.keys(sidecar.overrides).length > 0) {
-    out.overrides = sortRecord(sidecar.overrides) as YamlMap
+  if (Object.keys(effectiveOverrides).length > 0) {
+    out.overrides = sortRecord(effectiveOverrides) as YamlMap
   }
 
   // importers vs collapsed dependencies — v9 always emits importers; v6
@@ -931,6 +993,8 @@ function addPackageNode(
   peerContext: string[],
   nodeId: string,
   pkgEntry: unknown,
+  diagnostics: Diagnostic[],
+  patch?: string,
 ): void {
   const node: Node = {
     id: nodeId,
@@ -944,11 +1008,12 @@ function addPackageNode(
       node.resolution = resolution.tarball
     }
   }
+  if (patch !== undefined) node.patch = patch
   builder.addNode(node)
 
-  const payload = tarballPayloadOf(pkgEntry)
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics)
   if (payload !== undefined) {
-    builder.setTarball({ name, version }, payload)
+    builder.setTarball({ name, version, patch }, payload)
   }
 
   const nodeSc: PnpmNodeSidecar = {}
@@ -1105,12 +1170,40 @@ export function resolveLinkPath(importerPath: string, relTarget: string): string
  * `undefined` when no derivable payload fields are present (verbatim
  * `setTarball` skip semantics). Shared across pnpm-family adapters.
  */
-export function tarballPayloadOf(entry: unknown): TarballPayload | undefined {
+export function tarballPayloadOf(
+  entry: unknown,
+  subject: string,
+  diagnostics: Diagnostic[],
+): TarballPayload | undefined {
   if (!isPlainObject(entry)) return undefined
   const payload: TarballPayload = {}
   const resolution = entry.resolution
   if (isPlainObject(resolution) && typeof resolution.integrity === 'string') {
-    payload.integrity = resolution.integrity
+    const canonical = integrityValidateCanonical(resolution.integrity)
+    if (canonical === undefined) {
+      diagnostics.push(invalidIntegrityDiagnostic('PNPM', subject, resolution.integrity))
+    } else {
+      payload.integrity = canonical
+    }
+  }
+  // ADR-0014 §4.F3 — canonical resolution from pnpm `resolution:` block.
+  // Workspace canonical lives on Node.workspacePath; not on TarballPayload.
+  if (isPlainObject(resolution)) {
+    if (typeof resolution.tarball === 'string') {
+      const canonical = parseResolutionRecipe(resolution.tarball, { sourceKind: 'pnpm-tarball' })
+      if (canonical.type === 'unknown') {
+        diagnostics.push(unknownResolutionDiagnostic(subject, resolution.tarball))
+      }
+      payload.resolution = canonical
+    } else if (typeof resolution.directory === 'string') {
+      payload.resolution = { type: 'directory', path: resolution.directory }
+    } else if (typeof resolution.integrity === 'string') {
+      // Per ADR-0014 §4.F3 pnpm row: `{integrity: …}` shape implies a registry
+      // tarball; URL is derived by convention from name@version (the subject
+      // is `<name>@<version>` per the pnpm packages-block key form).
+      const derived = deriveRegistryTarballFromSubject(subject)
+      if (derived !== undefined) payload.resolution = { type: 'tarball', url: derived }
+    }
   }
   if (isPlainObject(entry.engines)) {
     payload.engines = { ...(entry.engines as Record<string, string>) }
@@ -1120,6 +1213,49 @@ export function tarballPayloadOf(entry: unknown): TarballPayload | undefined {
   if (entry.hasBin === true) payload.bin = 'true'
   if (typeof entry.deprecated === 'string') payload.deprecated = entry.deprecated
   return Object.keys(payload).length === 0 ? undefined : payload
+}
+
+// Recognise the pnpm-default registry URL convention for a (name, version).
+// pnpm treats `https://registry.npmjs.org/<n>/-/<tail>-<v>.tgz` as the
+// implicit canonical for a `resolution: {integrity: …}`-only entry; emitting
+// it back would diverge from pnpm-native output, so the stringify side
+// suppresses the URL field when it matches the convention.
+function isNpmRegistryDefault(url: string, name: string, version: string): boolean {
+  return url === deriveRegistryTarballFromSubject(`${name}@${version}`)
+}
+
+// Derive a registry tarball URL from a `<name>@<version>` subject (pnpm
+// packages-block key form). Strips peer-virt parens before parsing the
+// `<name>@<version>` head so peer-virt sibling NodeIds project onto the
+// shared base TarballKey URL.
+function deriveRegistryTarballFromSubject(subject: string): string | undefined {
+  const base = stripPeerContextFromNodeId(subject)
+  const atIdx = base.lastIndexOf('@')
+  if (atIdx <= 0) return undefined
+  const name    = base.slice(0, atIdx)
+  const version = base.slice(atIdx + 1)
+  if (name === '' || version === '') return undefined
+  const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
+  if (tail === '') return undefined
+  return `https://registry.npmjs.org/${name}/-/${tail}-${version}.tgz`
+}
+
+// ADR-0014 §4.F3 — project canonical resolution to pnpm `resolution:` block
+// shape for cross-format fallback. Workspace canonical is encoded elsewhere
+// (importers/ block); returns undefined here.
+function derivePnpmResolutionFromCanonical(
+  canonical: ResolutionCanonical | undefined,
+): { tarball?: string; directory?: string } | undefined {
+  if (canonical === undefined) return undefined
+  const out = stringifyForPnpm(canonical)
+  if (out === undefined) return undefined
+  const result: { tarball?: string; directory?: string } = {}
+  if (out.tarball !== undefined) result.tarball = out.tarball
+  if (out.directory !== undefined) result.directory = out.directory
+  if (out.tarball === undefined && out.directory === undefined && out.extra?.tarball !== undefined) {
+    result.tarball = out.extra.tarball
+  }
+  return result.tarball === undefined && result.directory === undefined ? undefined : result
 }
 
 function extractSettings(value: unknown): PnpmSettings {
@@ -1240,13 +1376,35 @@ function buildPackageEntry(
 ): YamlMap {
   const entry: YamlMap = {}
   const tarball = graph.tarballOf(representative.id)
+  // ADR-0014 §4.F3 — pnpm emits `tarball:` only for non-registry shapes
+  // (git codeload, explicit external URL). Registry tarballs derive their
+  // URL by convention from name@version and emit `integrity:` alone.
+  // PM-native sidecar `node.resolution` is honoured when URL-shaped (same-
+  // format round-trip preserves the cross-format-carried URL); for tarball
+  // canonical from a registry-derived URL we suppress the field.
+  const nativeIsPnpmUrl = representative.resolution !== undefined
+    && (representative.resolution.startsWith('http://')
+      || representative.resolution.startsWith('https://'))
+  const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
+  // For tarball canonical: only emit the URL when the source explicitly
+  // supplied one (non-registry-default origin). The registry-default URL is
+  // the convention pnpm assumes; emitting it would diverge from pnpm-native
+  // output for round-trip-source-faithful tarball entries.
+  const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
+    && isNpmRegistryDefault(tarball.resolution.url, representative.name, representative.version)
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
     if (tarball.integrity !== undefined) resolution.integrity = tarball.integrity
-    if (representative.resolution !== undefined) resolution.tarball = representative.resolution
+    if (nativeIsPnpmUrl) resolution.tarball = representative.resolution!
+    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
+    else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)
-  } else if (representative.resolution !== undefined) {
-    entry.resolution = flowMap({ tarball: representative.resolution })
+  } else if (nativeIsPnpmUrl) {
+    entry.resolution = flowMap({ tarball: representative.resolution! })
+  } else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+    entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
+  } else if (derivedPnpm?.directory !== undefined) {
+    entry.resolution = flowMap({ directory: derivedPnpm.directory })
   }
 
   const nodeSc = sidecar?.nodes.get(representative.id)
@@ -1353,20 +1511,195 @@ export function derivePeerCandidates(graph: Graph, peerName: string, peerRange: 
   return candidates.sort(cmpStr)
 }
 
-function warnPatchDrop(
-  shape: PnpmLayoutShape,
-  node: Node,
-  warned: Set<string>,
-  emitDiagnostic: (diagnostic: Diagnostic) => void,
-): void {
-  if (node.patch === undefined || warned.has(node.id)) return
-  warned.add(node.id)
-  emitDiagnostic({
-    code: `${shape.diagnosticPrefix}_PATCH_DROPPED`,
-    severity: 'warning',
-    subject: node.id,
-    message: `patch slot ${JSON.stringify(node.patch)} is unsupported in pnpm-v${shape.lockfileVersion.split('.')[0]} emit; dropping`,
-  })
+// ADR-0014 §4.F2 — parse-side overrides patch extraction.
+//
+// Scans the pnpm `overrides:` block для entries whose value is a `patch:`
+// locator and returns a directive list. Each directive carries the
+// verbatim `overrides:` key (preserved per ADR-0011 sentinel-input rule),
+// the raw patch value, a parsed `PatchMatcher` per pnpm key grammar
+// (bare / range / exact), and a pre-computed canonical sha512-hex when
+// source bytes are readable. Per-node resolution walks the directive list,
+// returning the canonical hash on match or the ADR-0011 sentinel
+// `unresolved-<sha256(<name>@<version>:<literal-key>)>` when bytes are
+// unavailable.
+
+/**
+ * pnpm override key grammar per ADR-0011 / pnpm docs:
+ *   - bare `<name>` — matches every node of that name
+ *   - `<name>@<range>` — semver range; matches versions satisfying range
+ *   - `<name>@<version>` — exact version; literal match
+ * The leading `npm:` protocol prefix on the version-half is accepted and
+ * stripped (pnpm permits both `lodash@4.17.21` и `lodash@npm:4.17.21`).
+ */
+type PatchMatcher =
+  | { readonly kind: 'bare';  readonly name: string }
+  | { readonly kind: 'range'; readonly name: string; readonly range: string }
+  | { readonly kind: 'exact'; readonly name: string; readonly version: string }
+
+interface PatchDirective {
+  /** Verbatim `overrides:` key as written in the lockfile. */
+  readonly literalKey: string
+  /** Raw value (always starts with `patch:`). */
+  readonly rawValue:   string
+  /** Matcher derived from `literalKey` per pnpm key grammar. */
+  readonly match:      PatchMatcher
+  /** Canonical sha512-hex iff patch source bytes were readable at parse. */
+  readonly canonical?: string
+  /** True iff ADR-0014 §4.F5 byte normalisation altered ≥ 1 source byte
+   * (drives per-node `RECIPE_PATCH_NORMALISED` emission). */
+  readonly normalised?: boolean
+}
+
+function parseOverridePatches(
+  overrides: Record<string, string> | undefined,
+  workspaceRoot: string | undefined,
+): PatchDirective[] {
+  const out: PatchDirective[] = []
+  if (overrides === undefined) return out
+  for (const [literalKey, rawValue] of Object.entries(overrides)) {
+    if (typeof rawValue !== 'string' || !rawValue.startsWith('patch:')) continue
+    const match = parseOverrideKey(literalKey)
+    if (match === undefined) continue
+    let canonical: string | undefined
+    let normalised: boolean | undefined
+    const hashIdx = rawValue.indexOf('#')
+    if (hashIdx >= 0 && workspaceRoot !== undefined) {
+      const workspacePath = rawValue.slice(hashIdx + 1)
+      try {
+        const bytes = readWorkspaceFileBytes(workspaceRoot, workspacePath, rawValue)
+        if (bytes !== undefined) {
+          // ADR-0014 §4.F5 — normalise CRLF / strip leading BOM BEFORE the
+          // F2 sha512 fingerprint; track whether ≥ 1 byte changed so per-
+          // node `RECIPE_PATCH_NORMALISED` emits at directive-match time.
+          // Combined helper avoids double-scan via canonicalHashOfBytes.
+          const { hash, normalised: didNormalise } = patchHashAndNormaliseBytes(bytes)
+          canonical  = hash
+          normalised = didNormalise
+        }
+      } catch {
+        // path-escape / non-regular / etc. — leave canonical undefined →
+        // sentinel fallback per ADR-0011.
+      }
+    }
+    out.push({ literalKey, rawValue, match, canonical, normalised })
+  }
+  return out
+}
+
+function parseOverrideKey(key: string): PatchMatcher | undefined {
+  if (key === '') return undefined
+  // Scoped names start с `@scope/` — skip the leading `@` when locating
+  // the name/spec separator.
+  const scoped  = key.startsWith('@')
+  const sepIdx  = scoped ? key.indexOf('@', 1) : key.indexOf('@')
+  if (sepIdx < 0) {
+    return { kind: 'bare', name: key }
+  }
+  const name = key.slice(0, sepIdx)
+  let spec   = key.slice(sepIdx + 1)
+  if (name === '' || spec === '') return undefined
+  if (spec.startsWith('npm:')) spec = spec.slice('npm:'.length)
+  if (spec === '') return undefined
+  // semver.valid() normalises the version (strips build metadata), so a
+  // literal exact key like `foo@1.2.3+build.1` would lose `+build.1` and
+  // fail to match the actual `1.2.3+build.1` node. Use semver.parse() —
+  // non-mutating validity check — and keep the verbatim spec.
+  if (semver.parse(spec, { loose: true }) !== null) {
+    return { kind: 'exact', name, version: spec }
+  }
+  return { kind: 'range', name, range: spec }
+}
+
+function matcherMatches(m: PatchMatcher, name: string, version: string): boolean {
+  if (m.name !== name) return false
+  switch (m.kind) {
+    case 'bare':  return true
+    case 'exact': return m.version === version
+    case 'range':
+      try {
+        // Default semver semantics for override-key range matching: a bare
+        // `^1.2.3` MUST NOT pick up `1.3.0-beta.1`. Ranges that explicitly
+        // name a prerelease (`^1.2.3-beta`) still match per semver spec.
+        return semver.satisfies(version, m.range, { loose: true, includePrerelease: false })
+      } catch {
+        return false
+      }
+  }
+}
+
+function resolvePatchForNode(
+  directives: PatchDirective[],
+  name: string,
+  version: string,
+  nodeId: string,
+  diagnostics: Diagnostic[],
+): string | undefined {
+  for (const dir of directives) {
+    if (!matcherMatches(dir.match, name, version)) continue
+    if (dir.canonical !== undefined) {
+      if (dir.normalised === true) {
+        diagnostics.push(patchNormalisedDiagnostic(nodeId))
+      }
+      return dir.canonical
+    }
+    // ADR-0011 sentinel input для pnpm: `<name>@<version>:<literal-key>`
+    // (verbatim `overrides:` key). Distinct keys collapsing to the same
+    // (name, version) yield distinct sentinels per spec.
+    return patchSentinelHashOf(`${name}@${version}:${dir.literalKey}`)
+  }
+  return undefined
+}
+
+// ADR-0014 §4.F2 stringify-side: pnpm v6/v9 SUPPORT patch slots via the
+// `overrides:` block carrier. When `Node.patch` is set on the graph, the
+// adapter ensures the overrides block carries an entry; sidecar.overrides
+// attribution wins when present, else a default entry is synthesised из
+// `Node.resolution` (preserves cross-format conversion's source-side
+// path) или from a generic per-hash convention.
+function synthesiseOverridePatches(
+  graph: Graph,
+  sidecar: PnpmSidecar | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = { ...(sidecar?.overrides ?? {}) }
+  const seenForNode = new Set<string>()
+  for (const node of graph.nodes()) {
+    if (node.patch === undefined || seenForNode.has(node.id)) continue
+    seenForNode.add(node.id)
+    // Sidecar entry already covers this node via ANY admissible pnpm key
+    // shape (bare / range / exact, с or без `npm:` protocol) — skip
+    // synthesis. Reuse the parse-side matcher so the membership test
+    // mirrors the grammar accepted at parse.
+    if (Object.entries(out).some(([k, v]) => {
+      if (typeof v !== 'string' || !v.startsWith('patch:')) return false
+      const m = parseOverrideKey(k)
+      return m !== undefined && matcherMatches(m, node.name, node.version)
+    })) continue
+    const overrideKey = `${node.name}@npm:${node.version}`
+    const sourcePath = patchPathOfResolution(node.resolution) ?? `./.lockfile-patches/${node.patch}.patch`
+    const encodedSpec = `${encodeURIComponent(node.name)}@npm%3A${encodeURIComponent(node.version)}`
+    out[overrideKey] = `patch:${encodedSpec}#${sourcePath}`
+  }
+  return out
+}
+
+// Extract the workspace-relative patch path из a yarn-berry-style
+// `@patch:<spec>#<path>::version=…` resolution string. Cross-format
+// conversion path: yarn-berry parse populates node.resolution с the
+// patch locator; pnpm stringify reuses the same workspace path so the
+// emitted lockfile round-trips к the source patch bytes.
+function patchPathOfResolution(resolution: string | undefined): string | undefined {
+  if (resolution === undefined) return undefined
+  const patchIdx = resolution.indexOf('@patch:')
+  const locator = patchIdx >= 0
+    ? resolution.slice(patchIdx + 1)
+    : resolution.startsWith('patch:') ? resolution : undefined
+  if (locator === undefined) return undefined
+  const hashIdx = locator.indexOf('#')
+  if (hashIdx < 0) return undefined
+  const paramsIdx = locator.indexOf('::', hashIdx + 1)
+  return paramsIdx < 0
+    ? locator.slice(hashIdx + 1)
+    : locator.slice(hashIdx + 1, paramsIdx)
 }
 
 interface EnrichPlan {

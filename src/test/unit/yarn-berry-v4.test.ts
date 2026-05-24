@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+
+const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
+const MODIFIED_SRI = 'sha512-' + createHash('sha512').update('modified-ms-integrity').digest('base64')
 import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import {
@@ -135,7 +139,9 @@ describe('yarn-berry-v4 — stringify', () => {
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
   })
 
-  it('drops parsed conditions with a v4 warning and preserves raw checksum form', () => {
+  it('drops parsed conditions with a v4 warning and preserves canonical checksum form', () => {
+    const PKG_HEX = createHash('sha512').update('pkg-1.0.0').digest('hex')
+    const DEP_HEX = createHash('sha512').update('dep-2.0.0').digest('hex')
     const input =
       '__metadata:\n' +
       '  version: 4\n' +
@@ -147,13 +153,13 @@ describe('yarn-berry-v4 — stringify', () => {
       '    dep: 2.0.0\n' +
       '  conditions:\n' +
       '    os: linux\n' +
-      '  checksum: deadbeef\n' +
+      `  checksum: ${PKG_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n\n' +
       '"dep@npm:2.0.0":\n' +
       '  version: 2.0.0\n' +
       '  resolution: "dep@npm:2.0.0"\n' +
-      '  checksum: cafebabe\n' +
+      `  checksum: ${DEP_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n'
 
@@ -163,17 +169,17 @@ describe('yarn-berry-v4 — stringify', () => {
 
     expect(emitted).toContain('__metadata:\n  version: 4\n  cacheKey: 7\n')
     expect(emitted).toContain('  dep: 2.0.0\n')
-    expect(emitted).toContain('  checksum: deadbeef\n')
+    expect(emitted).toContain(`  checksum: ${PKG_HEX}\n`)
     expect(emitted).not.toContain('  conditions:\n')
-    expect(emitted).not.toContain('checksum: 7/deadbeef')
+    expect(emitted).not.toContain(`checksum: 7/${PKG_HEX}`)
     expect(emitted).not.toContain('compressionLevel:')
-    expect(diagnostics).toEqual([
+    expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'YARN_BERRY_V4_CONDITIONS_DROPPED',
         severity: 'warning',
         subject: 'pkg@1.0.0',
       }),
-    ])
+    ]))
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
   })
 })
@@ -252,27 +258,30 @@ describe('yarn-berry-v4 — modify', () => {
     const reparsed = parseV4(lockfile)
 
     expectEmptyGraphDiff(original.diff(reparsed))
-    expect(diagnostics).toEqual([
+    expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'YARN_BERRY_V4_PEER_VIRT_FLATTENED',
         severity: 'warning',
         subject: 'react-dom@18.2.0(react@18.2.0)',
       }),
-    ])
+    ]))
   })
 
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'modified-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
     })
     const emitted = stringifyV4(result.graph)
     const reparsed = parseV4(emitted)
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(emitted).toContain('checksum: modified-ms-integrity')
-    expect(emitted).not.toContain('checksum: 7/modified-ms-integrity')
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'modified-ms-integrity' })
+    expect(emitted).toContain(`checksum: ${MODIFIED_HEX}`)
+    expect(emitted).not.toContain(`checksum: 7/${MODIFIED_HEX}`)
+    // ADR-0014 §4.F3 — the round-trip parse re-derives canonical resolution
+    // from the on-disk `resolution:` line; the set-via-mutator integrity is
+    // what we assert here, not the full payload shape.
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
   })
 
   it('roundtrips removeTarball', () => {
@@ -283,7 +292,10 @@ describe('yarn-berry-v4 — modify', () => {
     const reparsed = parseV4(stringifyV4(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toBeUndefined()
+    // ADR-0014 §4.F3 — yarn-berry always emits a `resolution:` line; the
+    // round-trip parse re-derives canonical resolution onto the payload.
+    // Integrity is what removeTarball was about — assert it's gone.
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
 })
 

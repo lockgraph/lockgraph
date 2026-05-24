@@ -12,10 +12,11 @@ import {
   fixture,
   graphSnapshot,
   expectEmptyGraphDiff,
+  templateRootOf,
   stringifyWithDiagnostics as sharedStringifyWithDiagnostics,
 } from '../helpers/lockfile-test-utils.ts'
 
-export { fixture, graphSnapshot, expectEmptyGraphDiff }
+export { fixture, graphSnapshot, expectEmptyGraphDiff, templateRootOf }
 
 // 8-fixture matrix per ADR-0022 §A.pnpm-* acceptance gate.
 export const FIXTURES = [
@@ -33,7 +34,7 @@ export type FixtureName = typeof FIXTURES[number]
 
 export interface PnpmFamilyAdapter {
   check(input: string): boolean
-  parse(input: string, options?: { onDiagnostic?: (d: Diagnostic) => void }): Graph
+  parse(input: string, options?: { workspaceRoot?: string; onDiagnostic?: (d: Diagnostic) => void }): Graph
   stringify(graph: Graph, options?: { lineEnding?: 'lf' | 'crlf'; onDiagnostic?: (d: Diagnostic) => void }): string
   enrich(graph: Graph, options?: { manifests?: Record<string, any> }): { graph: Graph; diagnostics: Diagnostic[] }
   optimize(graph: Graph, options?: {}): { graph: Graph; diagnostics: Diagnostic[] }
@@ -55,7 +56,14 @@ export interface PnpmFamilySpec {
 }
 
 export function parseFixtureGraph(spec: PnpmFamilySpec, name: FixtureName): Graph {
-  return spec.adapter.parse(fixture(`${name}/${spec.fixtureSuffix}`))
+  // Thread workspaceRoot so the family-common patch-yarn fixture exercises
+  // canonical byte hashing (ADR-0014 §4.F2) rather than the sentinel
+  // fallback. A workspaceRoot pointing at a fixture без `.yarn/patches/`
+  // is a no-op for patch-free fixtures.
+  return spec.adapter.parse(
+    fixture(`${name}/${spec.fixtureSuffix}`),
+    { workspaceRoot: templateRootOf(name) },
+  )
 }
 
 export function stringifyWithDiagnostics(

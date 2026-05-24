@@ -10,11 +10,16 @@
 // live in `_npm-flat-test-utils.ts` so they can be imported without
 // pulling in the describe/it registrations defined here.
 
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Graph } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
+
+const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+const MODIFIED_SRI = sriOf('modified-ms-integrity')
+const BUMPED_SRI = sriOf('bumped-ms-integrity')
 import {
   FIXTURES,
   expectEmptyGraphDiff,
@@ -329,14 +334,12 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
     it('roundtrips setTarball', () => {
       const original = parseFixtureGraph(spec, 'simple')
       const result = original.mutate(m => {
-        m.setTarball({ name: 'ms', version: '2.1.3' }, {
-          integrity: 'sha512-modified-ms-integrity',
-        })
+        m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
       })
       const reparsed = adapter.parse(adapter.stringify(result.graph))
 
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: 'sha512-modified-ms-integrity' })
+      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: MODIFIED_SRI })
       expect(result.applied).toEqual([
         { kind: 'tarball-set', subject: 'ms@2.1.3' },
       ])
@@ -352,7 +355,7 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
           id: 'ms@2.1.4',
           version: '2.1.4',
         })
-        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: 'sha512-bumped-ms-integrity' })
+        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
         m.removeTarball({ name: 'ms', version: '2.1.3' })
         m.addEdge('case-simple@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
       })
@@ -384,7 +387,7 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
       expect(diagnostics[0]?.message).toContain('["react@18.2.0"]')
     })
 
-    it(`setNode patch drops on emit with ${diagPrefix}_PATCH_DROPPED`, () => {
+    it(`setNode patch drops on emit with RECIPE_FEATURE_DROPPED`, () => {
       const original = parseFixtureGraph(spec, 'simple')
       const patch = 'a'.repeat(128)
       const current = original.getNode('ms@2.1.3')!
@@ -398,9 +401,9 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
       const reparsed = adapter.parse(lockfile)
 
       expect(reparsed.getNode('ms@2.1.3')?.patch).toBeUndefined()
-      expect(diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)).toEqual([
+      expect(diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'ms@2.1.3')).toEqual([
         expect.objectContaining({
-          code: `${diagPrefix}_PATCH_DROPPED`,
+          code: 'RECIPE_FEATURE_DROPPED',
           severity: 'warning',
           subject: 'ms@2.1.3',
         }),
@@ -420,7 +423,7 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
       const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
 
       const peerVirt = diagnostics.filter(d => d.code === `${diagPrefix}_PEER_VIRT_FLATTENED`)
-      const patchDrop = diagnostics.filter(d => d.code === `${diagPrefix}_PATCH_DROPPED`)
+      const patchDrop = diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === 'react-dom@18.2.0(react@18.2.0)')
       expect(peerVirt).toHaveLength(1)
       expect(patchDrop).toHaveLength(1)
     })

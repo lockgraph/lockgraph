@@ -42,9 +42,9 @@
 //   - NO `snapshots` block (v9-only).
 //
 // §B Lossy-but-acceptable (pnpm-v5 specific):
-//   - `PNPM_V5_PATCH_DROPPED` — patch slot drops on emit (v5 has no
-//     on-disk `patch:` protocol slot in the working corpus; cross-
-//     format patch translation is deferred to ADR-0014).
+//   - `RECIPE_FEATURE_DROPPED` (feature='patch') — patch slot drops on
+//     emit (v5 has no on-disk `patch:` protocol slot in the working
+//     corpus) per ADR-0014 §5 canonical loss code.
 //   - `PNPM_V5_SETTINGS_DROPPED` — sidecar `settings` block dropped
 //     when present (v5 schema has no settings).
 //   - `PNPM_V5_DUAL_TOP_LEVEL_DRIFT` — both `specifiers`/`dependencies`
@@ -75,7 +75,32 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
+import { nodeVersionOf } from './_node-id.ts'
+import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
+import {
+  stringifyForPnpm,
+  type ResolutionCanonical,
+} from '../recipe/resolution.ts'
 import { readYaml, emitYaml, flowMap, type YamlMap } from './_pnpm-yaml.ts'
+
+function tailOfName(name: string): string {
+  return name.startsWith('@') ? name.split('/').slice(1).join('/') : name
+}
+
+function derivePnpmResolutionFromCanonical(
+  canonical: ResolutionCanonical | undefined,
+): { tarball?: string; directory?: string } | undefined {
+  if (canonical === undefined) return undefined
+  const out = stringifyForPnpm(canonical)
+  if (out === undefined) return undefined
+  const result: { tarball?: string; directory?: string } = {}
+  if (out.tarball !== undefined) result.tarball = out.tarball
+  if (out.directory !== undefined) result.directory = out.directory
+  if (out.tarball === undefined && out.directory === undefined && out.extra?.tarball !== undefined) {
+    result.tarball = out.extra.tarball
+  }
+  return result.tarball === undefined && result.directory === undefined ? undefined : result
+}
 import {
   cmpStr,
   derivePeerCandidates,
@@ -253,7 +278,7 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
     if (seenIds.has(nodeId)) continue
     seenIds.add(nodeId)
     idByPackagesKey.set(pkgKey, nodeId)
-    addPackageNode(builder, sidecar, name, ver, peerContext, nodeId, packagesMap[pkgKey])
+    addPackageNode(builder, sidecar, name, ver, peerContext, nodeId, packagesMap[pkgKey], diagnostics)
   }
 
   // --- Pass 2: importers — single-importer collapsed-root vs multi. ---
@@ -368,7 +393,21 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
             })
             continue
           }
-          const attrs: { range: string; workspace: boolean } = { range: specifier ?? depValue, workspace: true }
+          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
+          // pnpm-v5 carries `workspace:<spec>` via the specifiers map;
+          // the dep value (`link:<path>`) is resolution, not range.
+          // resolvedVersion is the synthesised member node version
+          // parsed from the targetId (`<importerPath>@<version>`).
+          const rawSpecifier = specifier ?? ''
+          const targetVersion = nodeVersionOf(targetId)
+          const workspaceRange = targetVersion !== undefined && targetVersion !== ''
+            ? { specifier: rawSpecifier, resolvedVersion: targetVersion }
+            : { specifier: rawSpecifier }
+          const attrs: { range: string; workspace: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = {
+            range: specifier ?? depValue,
+            workspace: true,
+            workspaceRange,
+          }
           try {
             builder.addEdge(srcId, targetId, kind, attrs)
           } catch (error) {
@@ -444,12 +483,12 @@ export function stringify(graph: Graph, options: PnpmV5StringifyOptions = {}): s
   for (const node of graph.nodes()) {
     if (node.patch !== undefined && !warnedPatches.has(node.id)) {
       warnedPatches.add(node.id)
-      emitDiagnostic({
-        code: 'PNPM_V5_PATCH_DROPPED',
-        severity: 'warning',
-        subject: node.id,
-        message: `patch slot ${JSON.stringify(node.patch)} is unsupported in pnpm-v5 emit; dropping`,
-      })
+      patchEmitDropped(
+        node.id,
+        'patch',
+        `pnpm-v5 has no patch slot in the working corpus; ${JSON.stringify(node.patch)} dropped`,
+        emitDiagnostic,
+      )
     }
   }
 
@@ -726,6 +765,7 @@ function addPackageNode(
   peerContext: string[],
   nodeId: string,
   pkgEntry: unknown,
+  diagnostics: Diagnostic[],
 ): void {
   const node: Node = {
     id: nodeId,
@@ -741,7 +781,7 @@ function addPackageNode(
   }
   builder.addNode(node)
 
-  const payload = tarballPayloadOf(pkgEntry)
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics)
   if (payload !== undefined) {
     builder.setTarball({ name, version }, payload)
   }
@@ -921,13 +961,28 @@ function buildPackageEntry(
 ): YamlMap {
   const entry: YamlMap = {}
   const tarball = graph.tarballOf(representative.id)
+  // ADR-0014 §4.F3 — see pnpm-flat-core for the field semantics. Suppress
+  // registry-default URLs (pnpm's implicit convention) and emit verbatim
+  // URL only for non-registry shapes.
+  const nativeIsPnpmUrl = representative.resolution !== undefined
+    && (representative.resolution.startsWith('http://')
+      || representative.resolution.startsWith('https://'))
+  const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
+  const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
+    && tarball.resolution.url === `https://registry.npmjs.org/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
     if (tarball.integrity !== undefined) resolution.integrity = tarball.integrity
-    if (representative.resolution !== undefined) resolution.tarball = representative.resolution
+    if (nativeIsPnpmUrl) resolution.tarball = representative.resolution!
+    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
+    else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)
-  } else if (representative.resolution !== undefined) {
-    entry.resolution = flowMap({ tarball: representative.resolution })
+  } else if (nativeIsPnpmUrl) {
+    entry.resolution = flowMap({ tarball: representative.resolution! })
+  } else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+    entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
+  } else if (derivedPnpm?.directory !== undefined) {
+    entry.resolution = flowMap({ directory: derivedPnpm.directory })
   }
 
   const nodeSc = sidecar?.nodes.get(representative.id)
@@ -1005,9 +1060,15 @@ function planManifestEnrich(
       for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
         const dstId = resolveManifestTarget(graph, name, range, memberByName)
         if (dstId === undefined) continue
-        const attrs: { range: string; workspace?: boolean } = { range }
+        const attrs: { range: string; workspace?: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = { range }
         if (isWorkspaceProtocolRange(range) || memberByName.has(name)) {
           attrs.workspace = true
+          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
+          const rawSpecifier = isWorkspaceProtocolRange(range) ? range : ''
+          const dst = graph.getNode(dstId)
+          attrs.workspaceRange = dst?.version !== undefined && dst.version !== ''
+            ? { specifier: rawSpecifier, resolvedVersion: dst.version }
+            : { specifier: rawSpecifier }
         }
         desired.push({ src: rootNodeId, dst: dstId, kind, attrs })
       }
@@ -1036,11 +1097,18 @@ function planManifestEnrich(
       const dst = graph.getNode(edge.dst)
       if (dst === undefined) continue
       if (dst.workspacePath === undefined || dst.workspacePath === '') continue
+      // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
+      const rawSpecifier = edge.attrs?.range !== undefined && edge.attrs.range.startsWith('workspace:')
+        ? edge.attrs.range
+        : ''
+      const workspaceRange = dst.version !== undefined && dst.version !== ''
+        ? { specifier: rawSpecifier, resolvedVersion: dst.version }
+        : { specifier: rawSpecifier }
       markWorkspaceEdges.push({
         src: edge.src,
         dst: edge.dst,
         kind: edge.kind,
-        attrs: { ...edge.attrs, workspace: true },
+        attrs: { ...edge.attrs, workspace: true, workspaceRange },
       })
     }
   }
