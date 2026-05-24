@@ -5,8 +5,11 @@ on:
     branches: [master]
   pull_request:
 
-permissions:
-  contents: read
+env:
+  npm_config_audit: false
+  npm_config_fund: false
+
+permissions: {}
 
 jobs:
   test:
@@ -17,9 +20,11 @@ jobs:
       matrix:
         node-version: ['20', '22', '24']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -29,3 +34,42 @@ jobs:
       - run: npm run typecheck
 
       - run: npm test
+
+  release:
+    name: Release ${{ github.ref }}
+    needs: test
+    #   if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: false
+    runs-on: ubuntu-latest
+    permissions:
+      checks:    read
+      statuses:  write
+      contents:  write
+      packages:  write
+      id-token:  write   # OIDC к npm registry — passwordless publish + provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Release via zx-semrel (OIDC scheme)
+        env:
+          NPM_OIDC:           true
+          GH_TOKEN:           ${{ secrets.GITHUB_TOKEN }}
+          GH_USER:            'x-access-token'
+          GIT_BRANCH:         'master'
+          GIT_AUTHOR_NAME:    ${{ vars.GIT_AUTHOR_NAME }}
+          GIT_AUTHOR_EMAIL:   ${{ vars.GIT_AUTHOR_EMAIL }}
+          GIT_COMMITTER_NAME: ${{ vars.GIT_COMMITTER_NAME }}
+          GIT_COMMITTER_EMAIL: ${{ vars.GIT_COMMITTER_EMAIL }}
+        run: npx zx-semrel
