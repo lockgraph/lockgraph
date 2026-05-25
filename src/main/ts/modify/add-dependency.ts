@@ -68,8 +68,9 @@ export async function addDependency(
     })
   }
 
-  // §3.2 step 2 — find-up first.
-  const existingId = resolveFindUp(graph, parentId, name, range)
+  // §3.2 step 2 — find-up first. `kind` threaded for ADR-0023 §5.1 signature
+  // parity; v1 find-up body is kind-agnostic but the parameter is reserved.
+  const existingId = resolveFindUp(graph, parentId, name, range, kind)
   if (existingId !== undefined) {
     // Reuse branch — addEdge to the existing sibling (if it's not already wired).
     if (hasEdge(graph, parentId, existingId, kind)) {

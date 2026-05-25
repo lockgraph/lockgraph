@@ -7,7 +7,7 @@
 
 // @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
-import type { Graph, Node, NodeId } from '../graph.ts'
+import type { EdgeKind, Graph, Node, NodeId } from '../graph.ts'
 
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 
@@ -51,13 +51,27 @@ export function ancestorsOf(graph: Graph, consumer: NodeId): Node[] {
  * Tiebreaker:
  *   1. Highest semver-comparable version wins (`semver.rcompare`).
  *   2. On version tie, lowest NodeId lex order wins.
+ *
+ * `depKind` is part of the §5.1 normative signature but does NOT affect the
+ * algorithm body in v1: every dep-kind (dep / dev / optional / peer) follows
+ * the same closest-ancestor reuse + block-hoist contract. The parameter is
+ * carried verbatim so future kind-filtered hoist policies (e.g. peer-deps
+ * needing a stricter find-up, or optional-deps allowed to silently fail
+ * differently from regular deps) can branch on it without a signature
+ * migration. Per the ADR §5.1 pseudocode body and the v1 normative scope, no
+ * kind-specific branch is taken yet.
  */
 export function resolveFindUp(
   graph: Graph,
   consumerId: NodeId,
   name: string,
   range: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  depKind: EdgeKind,
 ): NodeId | undefined {
+  // depKind reserved per the §5.1 ADR signature; v1 algorithm is kind-agnostic.
+  // Reference the parameter so noUnusedParameters / strict modes do not flag it.
+  void depKind
   const path = ancestorsOf(graph, consumerId)
 
   for (const ancestor of path) {

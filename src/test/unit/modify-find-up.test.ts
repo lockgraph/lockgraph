@@ -14,7 +14,7 @@ describe('complete/find-up', () => {
       addEdge(builder, ws, lodash, 'dep')
     })
 
-    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4.17.0')).toBe('lodash@4.17.21')
+    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4.17.0', 'dep')).toBe('lodash@4.17.21')
   })
 
   it('block-hoist — ancestor has the name but version conflicts → undefined', async () => {
@@ -27,7 +27,7 @@ describe('complete/find-up', () => {
     })
 
     // Ancestor 'app' declares lodash@3.10.1; consumer 'a' wants ^4 → conflict.
-    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4.0.0')).toBeUndefined()
+    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4.0.0', 'dep')).toBeUndefined()
   })
 
   it('returns undefined when no ancestor declares the name', async () => {
@@ -37,7 +37,7 @@ describe('complete/find-up', () => {
       addEdge(builder, ws, a, 'dep')
     })
 
-    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4')).toBeUndefined()
+    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4', 'dep')).toBeUndefined()
   })
 
   it('F1 tiebreaker — highest semver-version wins on multiple satisfying candidates', async () => {
@@ -53,7 +53,7 @@ describe('complete/find-up', () => {
       addEdge(builder, ws, lodash3, 'dep')
     })
 
-    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4.0.0')).toBe('lodash@4.17.21')
+    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '^4.0.0', 'dep')).toBe('lodash@4.17.21')
   })
 
   it('F1 tiebreaker — on version tie, lowest NodeId lex wins', async () => {
@@ -82,7 +82,7 @@ describe('complete/find-up', () => {
     })
 
     // Both react-dom@18.0.0 peer-virt siblings satisfy; tiebreaker = lowest NodeId lex.
-    const id = resolveFindUp(graph, 'a@1.0.0', 'react-dom', '^18')
+    const id = resolveFindUp(graph, 'a@1.0.0', 'react-dom', '^18', 'dep')
     // Lowest lex of:
     //   react-dom@18.0.0(react@18.0.0)
     //   react-dom@18.0.0(react@18.0.1)
@@ -117,6 +117,6 @@ describe('complete/find-up', () => {
       addEdge(builder, ws, lodash, 'dep')
     })
 
-    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '4.17.21')).toBe('lodash@4.17.21')
+    expect(resolveFindUp(graph, 'a@1.0.0', 'lodash', '4.17.21', 'dep')).toBe('lodash@4.17.21')
   })
 })

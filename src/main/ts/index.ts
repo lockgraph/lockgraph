@@ -38,6 +38,21 @@ export type {
   RegistryAdapter,
 } from './registry/types.ts'
 
+// ADR-0023 §8.2 — `modify()` orchestrator + its `Primitive` discriminated
+// union and unified `ModifyResult` shape. The orchestrator is the single
+// dispatch entry point for the modifier vocabulary; per-primitive functions
+// remain individually importable via `@antongolub/lockfile/modify`.
+export { modify } from './modify/modify.ts'
+export type {
+  ModifyResult,
+  ModifyResultBase,
+  Primitive,
+} from './modify/modify.ts'
+export type {
+  ModifyContext,
+  ModifyOptions,
+} from './modify/context.ts'
+
 export type FormatId =
   | 'yarn-berry-v4'
   | 'yarn-berry-v5'

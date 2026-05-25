@@ -271,4 +271,95 @@ describe('complete/completeTransitives', () => {
     const codes = result.graph.diagnostics().map(d => d.code)
     expect(codes).toContain('COMPLETION_UNRESOLVED')
   })
+
+  // NIT-C — info-severity diagnostics flow through ModifyResult.unresolved
+  // (previous build dropped them, asymmetric with per-primitive modifiers).
+  it('§7.5 — info-severity COMPLETION_NODE_ADDED appears in unresolved (NIT-C symmetry)', async () => {
+    const graph = graphOf(builder => {
+      const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      addPackage(builder, { name: 'lodash', version: '4.17.21' })
+      addEdge(builder, ws, 'lodash@4.17.21', 'dep')
+    })
+
+    const lodashPkg: Packument = {
+      name: 'lodash',
+      distTags: { latest: '4.17.21' },
+      versions: {
+        '4.17.21': {
+          name:         'lodash',
+          version:      '4.17.21',
+          dependencies: { ms: '^2.0.0' },
+        },
+      },
+    }
+    const msPkg: Packument = {
+      name:     'ms',
+      distTags: { latest: '2.1.3' },
+      versions: { '2.1.3': { name: 'ms', version: '2.1.3' } },
+    }
+    const fakeRegistry: RegistryAdapter = {
+      async packument(name) {
+        if (name === 'lodash') return lodashPkg
+        if (name === 'ms')     return msPkg
+        return undefined
+      },
+      async resolve(name, range) {
+        if (name === 'lodash')                        return { name: 'lodash', version: '4.17.21' }
+        if (name === 'ms' && range === '^2.0.0')      return { name: 'ms', version: '2.1.3' }
+        return undefined
+      },
+    }
+
+    const result = await completeTransitives(graph, fakeRegistry)
+    const codes  = result.unresolved.map(d => d.code)
+    // The added ms node fires an info-level COMPLETION_NODE_ADDED — must
+    // appear in unresolved post-NIT-C (was previously dropped by the
+    // severity filter at L78).
+    expect(codes).toContain('COMPLETION_NODE_ADDED')
+  })
+
+  it('§7.5 — Graph.diagnostics() and unresolved are symmetric across severities (NIT-C)', async () => {
+    // The two channels (Graph-level + streaming hook) must carry the same
+    // diagnostic set after NIT-C alignment — previously info-severity events
+    // landed on Graph but were filtered out of unresolved.
+    const graph = graphOf(builder => {
+      const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      addPackage(builder, { name: 'lodash', version: '4.17.21' })
+      addEdge(builder, ws, 'lodash@4.17.21', 'dep')
+    })
+
+    const lodashPkg: Packument = {
+      name: 'lodash',
+      distTags: { latest: '4.17.21' },
+      versions: {
+        '4.17.21': {
+          name:         'lodash',
+          version:      '4.17.21',
+          dependencies: { ms: '^2.0.0' },
+        },
+      },
+    }
+    const msPkg: Packument = {
+      name:     'ms',
+      distTags: { latest: '2.1.3' },
+      versions: { '2.1.3': { name: 'ms', version: '2.1.3' } },
+    }
+    const fakeRegistry: RegistryAdapter = {
+      async packument(name) {
+        if (name === 'lodash') return lodashPkg
+        if (name === 'ms')     return msPkg
+        return undefined
+      },
+      async resolve(name, range) {
+        if (name === 'lodash')                   return { name: 'lodash', version: '4.17.21' }
+        if (name === 'ms' && range === '^2.0.0') return { name: 'ms', version: '2.1.3' }
+        return undefined
+      },
+    }
+
+    const result      = await completeTransitives(graph, fakeRegistry)
+    const graphCodes  = result.graph.diagnostics().map(d => d.code).sort()
+    const streamCodes = result.unresolved.map(d => d.code).sort()
+    expect(streamCodes).toEqual(graphCodes)
+  })
 })

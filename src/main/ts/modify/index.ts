@@ -3,6 +3,9 @@
 // Six modifier primitives + their result types, the ModifyContext shape,
 // the MODIFY_* diagnostic taxonomy, and helper factories. Per ADR §8.1
 // directory layout.
+//
+// Also re-exports the §8.2 single-dispatch `modify()` orchestrator + its
+// `Primitive` / `ModifyResult` discriminated unions.
 
 export { addDependency, type AddableEdgeKind, type AddDependencyResult } from './add-dependency.ts'
 export { applyPatch, type ApplyPatchResult, type ApplyPatchSpec } from './apply-patch.ts'
@@ -19,6 +22,13 @@ export {
   type ReplaceVersionResult,
   type ReplaceVersionSelector,
 } from './replace-version.ts'
+
+export {
+  modify,
+  type ModifyResult,
+  type ModifyResultBase,
+  type Primitive,
+} from './modify.ts'
 
 export {
   resolveContext,

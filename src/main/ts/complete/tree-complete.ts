@@ -75,8 +75,12 @@ export async function completeTransitives(
   // so stringify-side adapters see them via the canonical read channel. Where
   // no mutation is in flight (e.g. node-unknown / peer-incomplete), we emit
   // via a one-line mutate transaction.
+  //
+  // ADR-0023 §7.5 — `unresolved` carries ALL diagnostic severities emitted
+  // by this call (info / warning / error) to match per-primitive modify
+  // semantics. The `onDiagnostic` callback mirrors the same events.
   const emit = (d: Diagnostic): void => {
-    if (d.severity === 'warning' || d.severity === 'error') unresolved.push(d)
+    unresolved.push(d)
     if (onDiagnostic !== undefined) onDiagnostic(d)
   }
   const emitAndLand = (d: Diagnostic): void => {
@@ -147,7 +151,7 @@ export async function completeTransitives(
         const depRange = deps[depName]!
         if (alreadyWired(currentGraph, nodeId, depName, kind)) continue
 
-        const targetId = resolveFindUp(currentGraph, nodeId, depName, depRange)
+        const targetId = resolveFindUp(currentGraph, nodeId, depName, depRange, kind)
         if (targetId !== undefined) {
           // For peer deps, adding the edge requires updating the consumer's
           // peerContext (peer-edge ↔ peerContext coherence invariant). Peer-
