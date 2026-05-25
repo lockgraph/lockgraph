@@ -1,0 +1,123 @@
+# `yarn-berry-v7` — yarn berry `yarn.lock` (`__metadata.version: 7`)
+
+> Status: preview.
+> Provenance: **Source-only**.
+
+The completeness contract — stringify, modify, enrich, optimize —
+is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
+This spec records compatibility and fixture provenance; the normative
+emit / mutate / enrich / prune rules live in the version-invariant
+sections ADR-0018 inherits from ADR-0016. ADR-0018 does not currently
+carry а dedicated §A.v7 — v7 reuses §A.v6 (raw-hex checksum) overlaid
+with v8's quoted-protocol inner ranges; see §Schema sketch below.
+
+## Compatibility
+
+### Writers — PM semvers that *emit* this format
+
+| PM | semver range | Default? | How to opt in |
+|----|--------------|:--------:|---------------|
+| yarn | `>=4.0.0-rc.27 <4.0.0` | ✓ | Yarn 4 RC transitional window: bumped 6 → 7 mid-RC cycle, then 7 → 8 at the 4.0 stable cut |
+
+### Readers — PM semvers that *install* from this format
+
+| PM | semver range | Notes |
+|----|--------------|-------|
+| yarn | `>=4.0.0-rc.27` | Stable 4.x readers still accept v7; the format was deprecated as а default but не rejected on parse |
+
+## File
+
+Same as [yarn-berry-v4](./yarn-berry-v4.md#file).
+
+## Sources
+
+- Yarn 4 RC release tags between `4.0.0-rc.27` and `4.0.0` mid-stream
+  in 2023 — the period when `LOCKFILE_VERSION` constant was set to `7`
+  before settling on `8` at the stable cut.
+- Wild prevalence: production repos pinned during the Yarn 4 RC window
+  retain v7 lockfiles unless force-regenerated. Two real-world fixtures
+  observed (see §Fixtures): `qiwi/uniconfig` (commit `c5e7d5a3`),
+  `qiwi/nestjs-enterprise` (commit `1a002336`).
+- [`collab/research/lockfile-schema-history-yarn.md`](../../collab/research/lockfile-schema-history-yarn.md)
+  — release-tag walk including the 6 → 7 → 8 RC bumps.
+
+## Schema sketch
+
+Hybrid of v6 (checksum encoding) and v8 (inner-range encoding):
+
+- `__metadata.version: 7` discriminant.
+- Inner `dependencies` / `optionalDependencies` emit the **quoted
+  protocol-bearing form** (`lodash: "npm:4.17.21"`) — matches v8/v9,
+  not v4/v5/v6's bare form.
+- `checksum` values are **raw sha512 hex** with no `<cacheKey>/`
+  prefix — matches v4/v5/v6, not v8/v9.
+- `conditions` are supported (v5+ inheritance).
+- `__metadata.cacheKey` empirically takes integer values (`9` in
+  `qiwi/nestjs-enterprise`, `10` in `qiwi/uniconfig`) — pre-v8 bare
+  numeric literal form, not v8/v9's quoted hex.
+
+## Capabilities
+
+Parse / stringify / graph-level mutate roundtrip / enrich / optimize
+implemented against the fixture matrix at
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v7.lock` (synthesised
+by parsing each existing `yarn-berry-v8.lock` and re-emitting through
+the v7 stringifier; the family pipeline guarantees this is а lossless
+graph roundtrip).
+
+Real-world parse coverage at
+`src/test/resources/fixtures/real-world/{qiwi-uniconfig,qiwi-nestjs-enterprise}/yarn.lock`.
+
+## Conversion inputs
+
+Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
+
+## Emit
+
+Emit (`stringify(graph, options?)`) is governed by the
+version-invariant sections ADR-0018 inherits from ADR-0016, with the
+v7-specific config tuple `{ lockfileVersion: 7, codePrefix:
+'YARN_BERRY_V7', rangeEmit: 'quoted-protocol', checksumPrefix: false,
+conditionsAllowed: true }`:
+
+- `__metadata.version` emits the literal `7`.
+- `__metadata.cacheKey` defaults to absent; when present (caller-
+  supplied via `options.cacheKey` or sidecar-preserved from parse) it
+  emits as а bare numeric literal — pre-v8 form, no string quoting.
+- Inner `dependencies` / `optionalDependencies` emit the quoted
+  protocol-bearing form (`dep: "npm:2.0.0"`) — borrowed from v8/v9.
+- `checksum` values are raw sha512 hex (no `<cacheKey>/` prefix) —
+  shared with v4/v5/v6.
+- `conditions` are supported and roundtrip via sidecar preservation.
+- `compressionLevel`, where present, is preserved as pass-through
+  `__metadata` sidecar data via the same mechanism as v8.
+
+## Quirks
+
+- v7 was а transitional default только during the Yarn 4 RC window.
+  Stable Yarn 4.0.0 jumped its default к v8; v7 lockfiles in the wild
+  are typically RC-era artefacts that survived without regeneration.
+- The hybrid encoding (v8-style ranges + v6-style checksum) is the
+  defining marker — neither v6 nor v8 patterns match in isolation.
+- `__metadata.cacheKey` empirically tracks the RC tag where the
+  lockfile was last written (`9` mid-RC, `10` later RC); both forms
+  parse equally.
+
+## Degradation rules
+
+Inherits v6 (raw-hex checksum side) and v8 (quoted-protocol inner
+range side). No v7-specific degradation rules.
+
+## Fixtures
+
+- Synthetic: `src/test/resources/fixtures/lockfiles/*/yarn-berry-v7.lock`
+  (8 fixtures generated via v8 → v7 lossless roundtrip).
+- Real-world: `src/test/resources/fixtures/real-world/qiwi-uniconfig/yarn.lock`
+  and `src/test/resources/fixtures/real-world/qiwi-nestjs-enterprise/yarn.lock`.
+
+## Open questions
+
+> None at preview. The current fixture set matches the hybrid schema
+> sketch above; cross-family conversion coverage gates the v7 contract
+> through the same ADR-0020 interop matrix as the other yarn-berry
+> versions.

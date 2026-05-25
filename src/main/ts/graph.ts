@@ -118,6 +118,12 @@ export interface Mutator {
   replacePeerContext(id: NodeId, peers: NodeId[]):                          void
   setTarball(inputs: TarballKeyInputs, payload: TarballPayload):            void
   removeTarball(inputs: TarballKeyInputs):                                  void
+  // ADR-0023 §8.6 — write-side diagnostic surface. Appends the supplied
+  // Diagnostic to the resulting Graph's diagnostic list; visible via
+  // Graph.diagnostics() once the surrounding mutate() call settles.
+  // Mirrors Builder.diagnostic so parse-time and modify-time emit paths
+  // share one implementation.
+  diagnostic(d: Diagnostic):                                                void
 }
 
 export interface Graph {
@@ -786,6 +792,12 @@ class GraphImpl implements Graph {
           throw new GraphError('PATCH_REJECTED', `removeTarball: ${key} missing`)
         }
         applied.push({ kind: 'tarball-removed', subject: key })
+      },
+      // ADR-0023 §8.6 — write-side diagnostic emit. Append to the staged
+      // diagnostics list; the resulting Graph.diagnostics() surfaces it
+      // once mutate() settles. Same append semantics as Builder.diagnostic.
+      diagnostic(d) {
+        next.diagnostics.push(d)
       },
     }
 

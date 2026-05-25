@@ -12,8 +12,36 @@ env:
 permissions: {}
 
 jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: build
+          path: |
+            dist
+            package.json
+          retention-days: 1
+
   test:
     name: Test (Node ${{ matrix.node-version }})
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -29,15 +57,19 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - run: npm ci
+      - uses: actions/download-artifact@v5
+        with:
+          name: build
 
-      - run: npm run typecheck
+      - run: npm ci
 
       - run: npm test
 
   release:
     name: Release ${{ github.ref }}
     needs: test
+    # zx-semrel pre-wired (OIDC scheme + permissions) but kept inactive
+    # until publish gate opens. Flip к the live condition when 0.1.0 ships:
     #   if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     if: false
     runs-on: ubuntu-latest
@@ -59,6 +91,10 @@ jobs:
         with:
           node-version: 24
           cache: 'npm'
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: build
 
       - run: npm ci
 

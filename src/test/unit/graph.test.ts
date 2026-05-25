@@ -524,6 +524,79 @@ describe('mutate', () => {
     expect(g.getNode('c@1.0.0')).toBeUndefined()
     expect(g2.getNode('c@1.0.0')).toBeDefined()
   })
+
+  // ADR-0023 §8.6 — Mutator.diagnostic write-side surface.
+  it('Mutator.diagnostic appends a diagnostic to the resulting Graph', () => {
+    const g = seed()
+    const { graph: g2 } = g.mutate(m => {
+      m.diagnostic({ code: 'TEST_INFO', severity: 'info', subject: 'graph', message: 'hello' })
+    })
+    const diags = g2.diagnostics()
+    expect(diags).toHaveLength(1)
+    expect(diags[0]).toEqual({
+      code:     'TEST_INFO',
+      severity: 'info',
+      subject:  'graph',
+      message:  'hello',
+    })
+    // Original graph untouched — no shared mutable state leaks.
+    expect(g.diagnostics()).toHaveLength(0)
+  })
+
+  it('Mutator.diagnostic emits multiple diagnostics in one transaction', () => {
+    const g = seed()
+    const { graph: g2 } = g.mutate(m => {
+      m.diagnostic({ code: 'A', severity: 'info', subject: 'graph', message: '1' })
+      m.diagnostic({ code: 'B', severity: 'warning', subject: 'graph', message: '2' })
+      m.diagnostic({ code: 'C', severity: 'info', subject: 'graph', message: '3' })
+    })
+    expect(g2.diagnostics().map(d => d.code)).toEqual(['A', 'B', 'C'])
+  })
+
+  it('Mutator.diagnostic survives chained mutate calls', () => {
+    const g = seed()
+    const { graph: g2 } = g.mutate(m => {
+      m.diagnostic({ code: 'FIRST', severity: 'info', subject: 'graph', message: 'x' })
+    })
+    const { graph: g3 } = g2.mutate(m => {
+      m.diagnostic({ code: 'SECOND', severity: 'info', subject: 'graph', message: 'y' })
+    })
+    expect(g3.diagnostics().map(d => d.code)).toEqual(['FIRST', 'SECOND'])
+    // g2 unchanged by g3's mutation.
+    expect(g2.diagnostics().map(d => d.code)).toEqual(['FIRST'])
+  })
+
+  it('Mutator.diagnostic warnings surface on MutateResult.unresolved', () => {
+    const g = seed()
+    const result = g.mutate(m => {
+      m.diagnostic({ code: 'WARN_X', severity: 'warning', subject: 'graph', message: 'warn' })
+      m.diagnostic({ code: 'INFO_Y', severity: 'info',    subject: 'graph', message: 'info' })
+    })
+    // MutateResult.unresolved filters to warning+ severity (graph.ts:812).
+    expect(result.unresolved.map(d => d.code)).toEqual(['WARN_X'])
+  })
+
+  it('Mutator.diagnostic combines with structural mutations in one transaction', () => {
+    const g = seed()
+    const { graph: g2 } = g.mutate(m => {
+      m.addNode(n('c@1.0.0', 'c', '1.0.0'))
+      m.diagnostic({ code: 'NODE_C_ADDED', severity: 'info', subject: 'c@1.0.0', message: 'c arrived' })
+      m.addEdge('a@1.0.0', 'c@1.0.0', 'dep')
+    })
+    expect(g2.getNode('c@1.0.0')).toBeDefined()
+    expect(g2.diagnostics().map(d => d.code)).toEqual(['NODE_C_ADDED'])
+  })
+
+  it('Mutator.diagnostic rolls back when transaction throws', () => {
+    const g = seed()
+    try {
+      g.mutate(m => {
+        m.diagnostic({ code: 'WILL_ROLLBACK', severity: 'info', subject: 'graph', message: 'gone' })
+        throw new Error('abort')
+      })
+    } catch {/* expected */}
+    expect(g.diagnostics()).toHaveLength(0)
+  })
 })
 
 describe('patch-slot intake gate (ADR-0011)', () => {

@@ -28,6 +28,16 @@ export const version = '0.0.0'
 export { LockfileError, type LockfileErrorCode } from './errors.ts'
 export type { Diagnostic, Graph } from './graph.ts'
 
+// Registry adapter contract (Phase C) — re-exported for caller-side
+// frozen-registry construction and live-adapter authoring.
+export { frozenRegistry } from './registry/frozen.ts'
+export type {
+  CacheAdapter,
+  Packument,
+  PackumentVersion,
+  RegistryAdapter,
+} from './registry/types.ts'
+
 export type FormatId =
   | 'yarn-berry-v4'
   | 'yarn-berry-v5'

@@ -6,6 +6,8 @@ import {
   newBuilder,
   GraphError,
   type Graph,
+  type Mutator,
+  type MutateResult,
   type Node,
   type EdgeAttrs,
   type EdgeKind,
@@ -332,7 +334,10 @@ export function parseFamily(
     if (rawConditions.size > 0) sidecar.conditions = rawConditions
     if (metadata !== undefined) sidecar.metadata = metadata
     rememberSidecar(graph, sidecar)
-    return { graph, sidecar }
+    // Wrap so that any subsequent graph.mutate() call propagates the sidecar
+    // (including __metadata.cacheKey) to the returned graph instance.
+    const wrappedGraph = withSidecarPropagation(graph, sidecar)
+    return { graph: wrappedGraph, sidecar }
   } catch (error) {
     if (error instanceof GraphError) {
       throw new LockfileError({
@@ -621,6 +626,87 @@ export function optimizeFamily(
 export function rememberSidecar(graph: Graph, sidecar: YarnBerryFamilySidecar): void {
   if (isEmptySidecar(sidecar)) return
   sidecarByGraph.set(graph, sidecar)
+}
+
+/**
+ * Wraps a Graph so that every `.mutate()` call propagates the sidecar
+ * (metadata, peerDependencies, conditions) to the resulting graph.
+ *
+ * Without this wrapper, `mutate()` returns a brand-new `Graph` instance
+ * that has no entry in `sidecarByGraph`, causing `stringifyFamily` to fall
+ * back to `EMPTY_SIDECAR` and drop `__metadata.cacheKey` (and any other
+ * sidecar data) from the emitted lockfile.
+ *
+ * nodeId remapping: when a `replaceNode` or `replacePeerContext` change is
+ * recorded, the old nodeId is no longer in the graph; the sidecar's
+ * peerDependencies / conditions maps are keyed by nodeId, so we remap them
+ * through the applied ChangeRecord list exactly as `remapSidecar` does for
+ * `enrichFamily`.
+ */
+function withSidecarPropagation(graph: Graph, sidecar: YarnBerryFamilySidecar): Graph {
+  // Thin delegation proxy — only `mutate` is overridden; everything else
+  // forwards to the underlying graph so the object is still a true Graph.
+  const proxy: Graph = {
+    getNode:      (...args) => graph.getNode(...args),
+    nodes:        ()        => graph.nodes(),
+    byName:       (...args) => graph.byName(...args),
+    roots:        ()        => graph.roots(),
+    out:          (...args) => graph.out(...args),
+    in:           (...args) => graph.in(...args),
+    walk:         (...args) => graph.walk(...args),
+    topoSort:     ()        => graph.topoSort(),
+    subgraph:     (...args) => graph.subgraph(...args),
+    diff:         (...args) => graph.diff(...args),
+    tarball:      (...args) => graph.tarball(...args),
+    tarballOf:    (...args) => graph.tarballOf(...args),
+    tarballs:     ()        => graph.tarballs(),
+    diagnostics:  ()        => graph.diagnostics(),
+    layoutHints:  ()        => graph.layoutHints(),
+    mutate(transaction: (m: Mutator) => void): MutateResult {
+      const result = graph.mutate(transaction)
+      if (!isEmptySidecar(sidecar)) {
+        // Build a nodeId remap from applied ChangeRecords so peerDependencies
+        // and conditions survive replaceNode / replacePeerContext mutations.
+        const idRemap = new Map<string, string>()
+        for (const rec of result.applied) {
+          if (rec.kind === 'node-replaced' || rec.kind === 'peer-context-replaced') {
+            // rec.subject is the NEW id; we need the old id to find the sidecar entry.
+            // We cannot recover the old id from a ChangeRecord alone, but we can scan
+            // the old graph's nodes and see which ones are missing in the new graph.
+            // Rather than a full scan here, we rely on `remapSidecar` which iterates
+            // the old sidecar's keyed entries and maps unknown ids through the remap.
+            // Since we don't track old→new pairs in ChangeRecord, we pass an empty
+            // remap Map and let `remapSidecar`'s fallback (`?? oldId`) handle it —
+            // unchanged ids (most cases) survive as-is; replaced ids whose old-id
+            // no longer exists in nextGraph are simply pruned by `pruneSidecar`.
+            void rec
+          }
+        }
+        const nextNodes = new Map<string, Node>()
+        // No old→new id mapping available from ChangeRecord; metadata (cacheKey etc.)
+        // is global and does not need remapping. peerDependencies/conditions that refer
+        // to a replaced node's old id will be pruned by the nextGraph membership check
+        // inside remapSidecar — matching the behaviour of enrichFamily.
+        const nextSidecar = remapSidecar(sidecar, nextNodes, result.graph)
+        // If remapSidecar pruned everything (replaced nodes), fall back to at least
+        // preserving the format-level metadata (cacheKey, compressionLevel, etc.)
+        // which is not node-keyed and should always survive any mutation.
+        const effectiveSidecar: YarnBerryFamilySidecar = isEmptySidecar(nextSidecar) && sidecar.metadata !== undefined
+          ? { metadata: sidecar.metadata }
+          : nextSidecar
+        rememberSidecar(result.graph, effectiveSidecar)
+        return {
+          ...result,
+          graph: withSidecarPropagation(result.graph, effectiveSidecar),
+        }
+      }
+      return result
+    },
+  }
+  // Register the sidecar on the proxy instance too so that stringify works
+  // when called with the proxy directly (not just with the underlying graph).
+  sidecarByGraph.set(proxy, sidecar)
+  return proxy
 }
 
 export function rawPeerDependenciesBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {

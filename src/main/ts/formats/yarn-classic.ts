@@ -514,8 +514,49 @@ function parseEntries(input: string): YarnClassicEntry[] {
   return entries
 }
 
+// Splits a comma-separated entry-key token into individual descriptor strings,
+// handling mixed quoted/unquoted descriptors in the same list as real yarn 1
+// lockfiles freely use (e.g. `"foo@1 || 2", foo@^2.0.0`).
+// Each descriptor is un-quoted individually; the result is rejoined with ', '
+// so that the downstream splitEntryKey(', ') split works on plain strings.
 function parseEntryKeyToken(token: string): string {
-  return token.startsWith('"') ? parseQuotedToken(token) : token
+  const parts = splitMixedDescriptorList(token)
+  return parts
+    .map(part => (part.startsWith('"') ? parseQuotedToken(part) : part))
+    .join(', ')
+}
+
+// Splits a raw entry-key token on top-level ', ' boundaries, respecting quoted
+// segments so that a range like `"foo@1 || 2"` is never split mid-descriptor.
+function splitMixedDescriptorList(token: string): string[] {
+  const parts: string[] = []
+  let start = 0
+  let quoted = false
+  let escaped = false
+
+  for (let i = 0; i < token.length; i++) {
+    const char = token[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      quoted = !quoted
+      continue
+    }
+    // A top-level comma followed by a space is our delimiter
+    if (!quoted && char === ',' && token[i + 1] === ' ') {
+      parts.push(token.slice(start, i))
+      start = i + 2 // skip ', '
+      i++ // skip the space
+    }
+  }
+  parts.push(token.slice(start))
+  return parts
 }
 
 function parseDependencyLine(line: string): [string, string] {

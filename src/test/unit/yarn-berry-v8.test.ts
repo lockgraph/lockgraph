@@ -332,6 +332,35 @@ describe('yarn-berry-v8 — modify', () => {
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
+
+  // Regression: __metadata.cacheKey was lost after any graph.mutate() call
+  // because mutate() returns a new Graph instance not present in the sidecar
+  // WeakMap. Fix: parseFamily wraps the returned graph so mutate() propagates
+  // the sidecar (including metadata.cacheKey) to the new graph instance.
+  it('preserves __metadata.cacheKey through a no-op mutate()', () => {
+    const raw = fixture('simple/yarn-berry-v8.lock')
+    expect(raw).toContain('cacheKey: 10c0')
+
+    const g = parseV8(raw)
+    const { graph: g2 } = g.mutate(_m => {})
+
+    const emitted = stringifyV8(g2)
+    expect(emitted).toContain('cacheKey: 10c0')
+  })
+
+  it('preserves __metadata.cacheKey through a non-trivial mutate()', () => {
+    const raw = fixture('simple/yarn-berry-v8.lock')
+    const g = parseV8(raw)
+    const { graph: g2 } = g.mutate(m => {
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'dep', { range: 'npm:2.1.3' })
+    })
+
+    const emitted = stringifyV8(g2)
+    expect(emitted).toContain('cacheKey: 10c0')
+    // verify cacheKey also propagates a second mutate hop
+    const { graph: g3 } = g2.mutate(_m => {})
+    expect(stringifyV8(g3)).toContain('cacheKey: 10c0')
+  })
 })
 
 describe('yarn-berry-v8 — enrich', () => {

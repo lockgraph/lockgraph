@@ -1,14 +1,97 @@
 {
   "name": "@antongolub/lockfile",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.0-snapshot.44",
+  "private": false,
   "description": "Universal lockfile model and converter for npm, yarn, pnpm, bun",
   "type": "module",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./modify": {
+      "types": "./dist/modify.d.ts",
+      "default": "./dist/modify.js"
+    },
+    "./complete": {
+      "types": "./dist/complete.d.ts",
+      "default": "./dist/complete.js"
+    },
+    "./formats/bun-text": {
+      "types": "./dist/formats/bun-text.d.ts",
+      "default": "./dist/formats/bun-text.js"
+    },
+    "./formats/npm-1": {
+      "types": "./dist/formats/npm-1.d.ts",
+      "default": "./dist/formats/npm-1.js"
+    },
+    "./formats/npm-2": {
+      "types": "./dist/formats/npm-2.d.ts",
+      "default": "./dist/formats/npm-2.js"
+    },
+    "./formats/npm-3": {
+      "types": "./dist/formats/npm-3.d.ts",
+      "default": "./dist/formats/npm-3.js"
+    },
+    "./formats/pnpm-v5": {
+      "types": "./dist/formats/pnpm-v5.d.ts",
+      "default": "./dist/formats/pnpm-v5.js"
+    },
+    "./formats/pnpm-v6": {
+      "types": "./dist/formats/pnpm-v6.d.ts",
+      "default": "./dist/formats/pnpm-v6.js"
+    },
+    "./formats/pnpm-v9": {
+      "types": "./dist/formats/pnpm-v9.d.ts",
+      "default": "./dist/formats/pnpm-v9.js"
+    },
+    "./formats/yarn-berry-v4": {
+      "types": "./dist/formats/yarn-berry-v4.d.ts",
+      "default": "./dist/formats/yarn-berry-v4.js"
+    },
+    "./formats/yarn-berry-v5": {
+      "types": "./dist/formats/yarn-berry-v5.d.ts",
+      "default": "./dist/formats/yarn-berry-v5.js"
+    },
+    "./formats/yarn-berry-v6": {
+      "types": "./dist/formats/yarn-berry-v6.d.ts",
+      "default": "./dist/formats/yarn-berry-v6.js"
+    },
+    "./formats/yarn-berry-v7": {
+      "types": "./dist/formats/yarn-berry-v7.d.ts",
+      "default": "./dist/formats/yarn-berry-v7.js"
+    },
+    "./formats/yarn-berry-v8": {
+      "types": "./dist/formats/yarn-berry-v8.d.ts",
+      "default": "./dist/formats/yarn-berry-v8.js"
+    },
+    "./formats/yarn-berry-v9": {
+      "types": "./dist/formats/yarn-berry-v9.d.ts",
+      "default": "./dist/formats/yarn-berry-v9.js"
+    },
+    "./formats/yarn-classic": {
+      "types": "./dist/formats/yarn-classic.d.ts",
+      "default": "./dist/formats/yarn-classic.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SCHEMAS.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
+    "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "gen:fixtures": "node src/test/resources/fixtures/_gen.mjs"
+    "gen:fixtures": "node src/test/resources/fixtures/_gen.mjs",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "semver": "^7.6.0"
@@ -30,6 +113,7 @@
     "pm-pnpm-9": "npm:pnpm@9.15.0",
     "pm-yarn-1": "npm:yarn@1.22.22",
     "pm-yarn-2": "npm:yarn@2.4.3",
+    "tsup": "^8.3.5",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },
