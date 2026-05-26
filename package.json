@@ -19,6 +19,10 @@
       "types": "./dist/complete.d.ts",
       "default": "./dist/complete.js"
     },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "default": "./dist/registry.js"
+    },
     "./formats/bun-text": {
       "types": "./dist/formats/bun-text.d.ts",
       "default": "./dist/formats/bun-text.js"

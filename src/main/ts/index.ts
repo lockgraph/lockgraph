@@ -29,8 +29,14 @@ export { LockfileError, type LockfileErrorCode } from './errors.ts'
 export type { Diagnostic, Graph } from './graph.ts'
 
 // Registry adapter contract (Phase C) — re-exported for caller-side
-// frozen-registry construction and live-adapter authoring.
+// frozen-registry construction and live-adapter authoring. Phase D-A
+// adds `liveRegistry` (HTTPS-backed) alongside the offline frozen
+// reference impl; Phase D-B adds `fsCache` — a filesystem CacheAdapter
+// reading yarn-berry `.yarn/cache/` directly. All honour the same
+// registry/cache adapter shapes.
 export { frozenRegistry } from './registry/frozen.ts'
+export { liveRegistry, type LiveRegistryOptions } from './registry/live.ts'
+export { fsCache, type FsCacheOptions } from './registry/cache.ts'
 export type {
   CacheAdapter,
   Packument,

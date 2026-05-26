@@ -26,8 +26,11 @@ export default defineConfig({
     // ADR-0023 §8.2 — modification subpath publishes the modifier vocabulary
     // (`@antongolub/lockfile/modify`) and the completion subpath publishes the
     // tree-completion + find-up algorithms (`@antongolub/lockfile/complete`).
+    // Phase D-A — `@antongolub/lockfile/registry` publishes both the offline
+    // `frozenRegistry` reference impl and the HTTPS-backed `liveRegistry`.
     modify:   'src/main/ts/modify/index.ts',
     complete: 'src/main/ts/complete/index.ts',
+    registry: 'src/main/ts/registry/index.ts',
     ...Object.fromEntries(
       adapters.map(id => [`formats/${id}`, `src/main/ts/formats/${id}.ts`]),
     ),
