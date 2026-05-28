@@ -103,6 +103,7 @@
   "devDependencies": {
     "@antongolub/artel": "^0.3.0",
     "@types/node": "^22.10.0",
+    "@types/semver": "^7.7.1",
     "bun": "1.2.0",
     "pm-npm-10": "npm:npm@10.9.2",
     "pm-npm-11": "npm:npm@11.0.0",

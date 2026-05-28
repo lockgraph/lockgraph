@@ -1,4 +1,3 @@
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import type { Graph, Node, TarballPayload } from '../graph.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'

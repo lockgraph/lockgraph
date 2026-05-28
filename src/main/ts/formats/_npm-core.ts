@@ -32,7 +32,6 @@
 // Diagnostic codes carry the per-version prefix from
 // `config.diagnosticPrefix` (e.g. `NPM_V2_PEER_VIRT_FLATTENED`).
 
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import {
   GraphError,

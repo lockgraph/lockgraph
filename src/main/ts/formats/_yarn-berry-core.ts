@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import {
   newBuilder,

@@ -5,7 +5,6 @@
 // in lexicographic order wins (matches ADR-0007 content-sorted
 // iteration order at resolve time).
 
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import type { EdgeKind, Graph, Node, NodeId } from '../graph.ts'
 

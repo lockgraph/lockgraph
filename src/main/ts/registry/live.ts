@@ -18,7 +18,6 @@
 // callers in tests pass a spy. Real network calls happen ONLY when no
 // `fetch` override is supplied AND the consumer triggers a method.
 
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 

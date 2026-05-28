@@ -38,7 +38,6 @@
 // YAML in/out is delegated к `_pnpm-yaml.ts`; this module owns only
 // the higher-level pnpm family semantics.
 
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import {
   GraphError,

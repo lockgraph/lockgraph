@@ -10,7 +10,6 @@
 // once per applyPatch call. Both that and MODIFY_PATCH_APPLIED land on
 // Graph.diagnostics() via Mutator.diagnostic (§8.6 emission path).
 
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import {
   serializeNodeId,

@@ -12,7 +12,6 @@
 //   F3: merge transaction retargets incoming edges FIRST, then removeNode.
 //   F4: async; convergence checks between awaits.
 
-// @ts-ignore -- local fixture installs do not provide semver typings.
 import semver from 'semver'
 import {
   serializeNodeId,
