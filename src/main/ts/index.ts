@@ -31,12 +31,16 @@ export type { Diagnostic, Graph } from './graph.ts'
 // Registry adapter contract (Phase C) — re-exported for caller-side
 // frozen-registry construction and live-adapter authoring. Phase D-A
 // adds `liveRegistry` (HTTPS-backed) alongside the offline frozen
-// reference impl; Phase D-B adds `fsCache` — a filesystem CacheAdapter
-// reading yarn-berry `.yarn/cache/` directly. All honour the same
-// registry/cache adapter shapes.
+// reference impl; Phase D-B adds the filesystem CacheAdapter family —
+// `fsCache` over yarn-berry `.yarn/cache/`, `npmCache` over the
+// cacache CAS under `~/.npm/_cacache/`, and `pnpmCache` over the
+// pnpm content-addressable store under `~/.pnpm-store/v3/`. All
+// honour the same registry/cache adapter shapes.
 export { frozenRegistry } from './registry/frozen.ts'
 export { liveRegistry, type LiveRegistryOptions } from './registry/live.ts'
 export { fsCache, type FsCacheOptions } from './registry/cache.ts'
+export { npmCache, type NpmCacheOptions } from './registry/cache-npm.ts'
+export { pnpmCache, type PnpmCacheOptions } from './registry/cache-pnpm.ts'
 export type {
   CacheAdapter,
   Packument,

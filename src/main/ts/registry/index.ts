@@ -3,13 +3,17 @@
 // Contract types (RegistryAdapter / CacheAdapter / Packument / PackumentVersion)
 // land via Phase C alongside frozenRegistry (graph-derived offline adapter).
 // Phase D-A adds the live HTTPS adapter; Phase D-B adds the filesystem
-// CacheAdapter (`fsCache`) over yarn-berry `.yarn/cache/`. All three
-// coexist and share the same registry/cache shapes so consumers can
-// swap one for the other без touching modifier / completion call sites.
+// CacheAdapter family — `fsCache` (yarn-berry `.yarn/cache/`), `npmCache`
+// (cacache CAS under `~/.npm/_cacache/`), and `pnpmCache` (content-
+// addressable store under `~/.pnpm-store/v3/`). All four coexist and
+// share the same registry/cache shapes so consumers can swap one for
+// the other без touching modifier / completion call sites.
 
 export { frozenRegistry } from './frozen.ts'
 export { liveRegistry, type LiveRegistryOptions } from './live.ts'
 export { fsCache, type FsCacheOptions } from './cache.ts'
+export { npmCache, type NpmCacheOptions } from './cache-npm.ts'
+export { pnpmCache, type PnpmCacheOptions } from './cache-pnpm.ts'
 export type {
   CacheAdapter,
   Packument,
