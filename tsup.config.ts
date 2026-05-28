@@ -30,6 +30,7 @@ export default defineConfig({
     // `frozenRegistry` reference impl and the HTTPS-backed `liveRegistry`.
     modify:   'src/main/ts/modify/index.ts',
     complete: 'src/main/ts/complete/index.ts',
+    optimize: 'src/main/ts/optimize/index.ts',
     registry: 'src/main/ts/registry/index.ts',
     ...Object.fromEntries(
       adapters.map(id => [`formats/${id}`, `src/main/ts/formats/${id}.ts`]),

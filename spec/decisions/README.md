@@ -48,5 +48,6 @@ zero-padded to 4 digits.
 | [0021](./0021-npm-family-completeness-contract.md) | `npm` package-lock family completeness contract | proposed | 2026-05-12 |
 | [0022](./0022-pnpm-family-completeness-contract.md) | `pnpm` lockfile family completeness contract | proposed | 2026-05-12 |
 | [0023](./0023-graph-modification-and-completion.md) | Graph modification, tree completion, and find-up resolve semantics | accepted | 2026-05-24 |
+| [0024](./0024-optimize-phase.md) | Optimize phase: orphan garbage collection (monotone-reductive) | accepted | 2026-05-25 |
 
-Next free number: **0024**.
+Next free number: **0025**.

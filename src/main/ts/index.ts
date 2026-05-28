@@ -63,6 +63,13 @@ export type {
   ModifyOptions,
 } from './modify/context.ts'
 
+// ADR-0024 — `optimize()` post-completion, pre-stringify orphan GC.
+// Monotone-reductive: removes unreachable nodes from the
+// roots/workspaces/preserve mark-set, never adds. Per-primitive importable
+// via `@antongolub/lockfile/optimize`.
+export { optimize } from './optimize/optimize.ts'
+export type { OptimizeOptions, OptimizeResult } from './optimize/optimize.ts'
+
 export type FormatId =
   | 'yarn-berry-v4'
   | 'yarn-berry-v5'

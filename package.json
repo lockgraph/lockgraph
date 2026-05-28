@@ -19,6 +19,10 @@
       "types": "./dist/complete.d.ts",
       "default": "./dist/complete.js"
     },
+    "./optimize": {
+      "types": "./dist/optimize.d.ts",
+      "default": "./dist/optimize.js"
+    },
     "./registry": {
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"
