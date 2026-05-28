@@ -152,6 +152,60 @@ describe('yarn-berry-v8 — parse fixtures', () => {
     expect(graph.in('@scope/lib@0.0.0-use.local')).toHaveLength(1)
   })
 
+  // Real-world regression (sister-session canary, jest's yarn.lock — RN/Metro
+  // family). `metro-source-map` declares BOTH the canonical `@babel/traverse`
+  // dep AND an npm-aliased `@babel/traverse--for-generate-function-map`
+  // pointing at the SAME resolved target. Two edges from the same parent to
+  // the same dst with the same kind used to trip the seal's
+  // duplicate-`(src, dst, kind)` invariant; edge identity now includes
+  // `attrs.alias`, so alias-distinct siblings are permitted. Pin the parse,
+  // both edges' presence, и stringify round-trip.
+  it('preserves npm-aliased dep + canonical dep against the same target as alias-distinct edges', () => {
+    const input =
+      '__metadata:\n' +
+      '  version: 8\n' +
+      '  cacheKey: 10c0\n\n' +
+      '"@babel/traverse--for-generate-function-map@npm:@babel/traverse@^7.25.3, @babel/traverse@npm:^7.25.3":\n' +
+      '  version: 7.25.3\n' +
+      '  resolution: "@babel/traverse@npm:7.25.3"\n' +
+      '  languageName: node\n' +
+      '  linkType: hard\n\n' +
+      '"metro-source-map@npm:0.83.2":\n' +
+      '  version: 0.83.2\n' +
+      '  resolution: "metro-source-map@npm:0.83.2"\n' +
+      '  dependencies:\n' +
+      '    "@babel/traverse": "npm:^7.25.3"\n' +
+      '    "@babel/traverse--for-generate-function-map": "npm:@babel/traverse@^7.25.3"\n' +
+      '  languageName: node\n' +
+      '  linkType: hard\n'
+
+    expect(() => parseV8(input)).not.toThrow()
+    const graph = parseV8(input)
+    // String construction avoids editor email-redaction on `name@version`.
+    const at = '@'
+    const metro = `metro-source-map${at}0.83.2`
+    const traverse = `${at}babel/traverse${at}7.25.3`
+    expect(graph.getNode(metro)).toBeDefined()
+    expect(graph.getNode(traverse)).toBeDefined()
+
+    const outs = graph.out(metro, 'dep').filter(e => e.dst === traverse)
+    expect(outs).toHaveLength(2)
+    // Canonical edge has alias=undefined; aliased edge carries the
+    // descriptor key as the alias slot. Iteration order is content-sorted
+    // (ADR-0007) — alias=undefined sorts before any string alias.
+    const aliases = outs.map(e => e.attrs?.alias)
+    expect(aliases).toContain(undefined)
+    expect(aliases).toContain('@babel/traverse--for-generate-function-map')
+
+    // Round-trip preserves both descriptors in the emitted dependencies block.
+    const emitted = stringifyV8(graph)
+    expect(emitted).toContain('"@babel/traverse--for-generate-function-map": "npm:@babel/traverse@^7.25.3"')
+    expect(emitted).toContain('"@babel/traverse": "npm:^7.25.3"')
+
+    const reparsed = parseV8(emitted)
+    expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(graph))
+  })
+
   // Real-world regression (qiwi/mware fixture, commit 0775b26): yarn 4 emits
   // a compound entry-key where one half is a bare `<name>@<version>` token
   // (no `<protocol>:` colon) when a workspace package is also published to

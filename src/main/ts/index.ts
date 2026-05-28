@@ -21,6 +21,7 @@ import * as yarnBerryV6  from './formats/yarn-berry-v6.ts'
 import * as yarnBerryV7  from './formats/yarn-berry-v7.ts'
 import * as yarnBerryV8  from './formats/yarn-berry-v8.ts'
 import * as yarnBerryV9  from './formats/yarn-berry-v9.ts'
+import * as yarnBerryV10 from './formats/yarn-berry-v10.ts'
 import * as yarnClassic  from './formats/yarn-classic.ts'
 
 export const version = '0.0.0'
@@ -77,6 +78,7 @@ export type FormatId =
   | 'yarn-berry-v7'
   | 'yarn-berry-v8'
   | 'yarn-berry-v9'
+  | 'yarn-berry-v10'
   | 'yarn-classic'
   | 'npm-1'
   | 'npm-2'
@@ -124,6 +126,7 @@ export type ConvertOptions = {
 // against future loosening with newest-first / family-distinctive-first.
 const DETECT_ORDER: readonly FormatId[] = [
   'bun-text',
+  'yarn-berry-v10',
   'yarn-berry-v9',
   'yarn-berry-v8',
   'yarn-berry-v7',
@@ -152,9 +155,10 @@ function checkOne(format: FormatId, input: string): boolean {
     case 'yarn-berry-v5': return yarnBerryV5.check(input)
     case 'yarn-berry-v6': return yarnBerryV6.check(input)
     case 'yarn-berry-v7': return yarnBerryV7.check(input)
-    case 'yarn-berry-v8': return yarnBerryV8.check(input)
-    case 'yarn-berry-v9': return yarnBerryV9.check(input)
-    case 'yarn-classic':  return yarnClassic.check(input)
+    case 'yarn-berry-v8':  return yarnBerryV8.check(input)
+    case 'yarn-berry-v9':  return yarnBerryV9.check(input)
+    case 'yarn-berry-v10': return yarnBerryV10.check(input)
+    case 'yarn-classic':   return yarnClassic.check(input)
   }
 }
 
@@ -172,9 +176,10 @@ function parseOne(format: FormatId, input: string, options: ParseOptions): Graph
     case 'yarn-berry-v5': return yarnBerryV5.parse(input, { workspaceRoot })
     case 'yarn-berry-v6': return yarnBerryV6.parse(input, { workspaceRoot })
     case 'yarn-berry-v7': return yarnBerryV7.parse(input, { workspaceRoot })
-    case 'yarn-berry-v8': return yarnBerryV8.parse(input, { workspaceRoot })
-    case 'yarn-berry-v9': return yarnBerryV9.parse(input, { workspaceRoot })
-    case 'yarn-classic':  return yarnClassic.parse(input)
+    case 'yarn-berry-v8':  return yarnBerryV8.parse(input, { workspaceRoot })
+    case 'yarn-berry-v9':  return yarnBerryV9.parse(input, { workspaceRoot })
+    case 'yarn-berry-v10': return yarnBerryV10.parse(input, { workspaceRoot })
+    case 'yarn-classic':   return yarnClassic.parse(input)
   }
 }
 
@@ -194,9 +199,10 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions)
     case 'yarn-berry-v5': return yarnBerryV5.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v6': return yarnBerryV6.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v7': return yarnBerryV7.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
-    case 'yarn-berry-v8': return yarnBerryV8.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
-    case 'yarn-berry-v9': return yarnBerryV9.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
-    case 'yarn-classic':  return yarnClassic.stringify(graph, { lineEnding, onDiagnostic })
+    case 'yarn-berry-v8':  return yarnBerryV8.stringify(graph,  { lineEnding, cacheKey, onDiagnostic })
+    case 'yarn-berry-v9':  return yarnBerryV9.stringify(graph,  { lineEnding, cacheKey, onDiagnostic })
+    case 'yarn-berry-v10': return yarnBerryV10.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
+    case 'yarn-classic':   return yarnClassic.stringify(graph,  { lineEnding, onDiagnostic })
   }
 }
 

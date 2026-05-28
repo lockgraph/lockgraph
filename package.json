@@ -79,6 +79,10 @@
       "types": "./dist/formats/yarn-berry-v9.d.ts",
       "default": "./dist/formats/yarn-berry-v9.js"
     },
+    "./formats/yarn-berry-v10": {
+      "types": "./dist/formats/yarn-berry-v10.d.ts",
+      "default": "./dist/formats/yarn-berry-v10.js"
+    },
     "./formats/yarn-classic": {
       "types": "./dist/formats/yarn-classic.d.ts",
       "default": "./dist/formats/yarn-classic.js"

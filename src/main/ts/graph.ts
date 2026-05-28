@@ -53,6 +53,19 @@ export type EdgeAttrs = {
   range?:          string
   optional?:       boolean
   workspace?:      boolean
+  // Local descriptor name when it differs from the target node's actual
+  // name — i.e. npm-alias deps like
+  //   `"@babel/traverse--for-generate-function-map": "npm:@babel/traverse@…"`
+  //   `"react-is-18": "npm:react-is@^18"`,
+  // and `dependencies.foo: "npm:bar@…"` in npm/pnpm/bun manifests. Unlike
+  // the other attrs (which are opaque per-instance metadata), `alias`
+  // PARTICIPATES IN EDGE IDENTITY: two edges (src, dst, kind) from the
+  // same source to the same target are permitted iff their `alias` slots
+  // differ. `alias === undefined` denotes the canonical descriptor where
+  // the parent's dependencies-block key matches `dst`'s actual name; a
+  // string value is the alias. Sort key: tertiary after (dst, kind) per
+  // ADR-0007.
+  alias?:          string
   // ADR-0014 §4.F4 — canonical workspace-specifier pair. Populated by
   // adapters at parse time on edges where `workspace === true`; consumed
   // at stringify time to drive RECIPE_WORKSPACE_* diagnostics.
@@ -287,9 +300,17 @@ function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch'>):
 
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 
+// Tertiary key on alias (ADR-0007 — content-sorted iteration). `undefined`
+// sorts before any string so canonical descriptors lead aliased siblings.
+const cmpAlias = (a: string | undefined, b: string | undefined): number =>
+  a === b ? 0 : a === undefined ? -1 : b === undefined ? 1 : cmpStr(a, b)
+
 const cmpEdgeBy = (end: 'dst' | 'src') => (a: Edge, b: Edge): number => {
   const c = cmpStr(end === 'dst' ? a.dst : a.src, end === 'dst' ? b.dst : b.src)
-  return c !== 0 ? c : cmpStr(a.kind, b.kind)
+  if (c !== 0) return c
+  const k = cmpStr(a.kind, b.kind)
+  if (k !== 0) return k
+  return cmpAlias(a.attrs?.alias, b.attrs?.alias)
 }
 
 // === Internal state ===
@@ -342,8 +363,14 @@ function removeMatching<T>(arr: T[], pred: (x: T) => boolean): boolean {
   return true
 }
 
-const tripleKey = (e: { src: NodeId; dst: NodeId; kind: EdgeKind }): string =>
-  `${e.src}\0${e.kind}\0${e.dst}`
+// Identity key. `alias` (when set) is the 4th component — two edges with
+// the same (src, dst, kind) but distinct aliases are distinct edges. The
+// empty-string slot for `alias === undefined` ensures the canonical-edge
+// key remains `src\0kind\0dst\0` (deterministic regardless of attrs).
+// Callers that supply only an EdgeTriple (e.g. removeEdge change-records,
+// diff output) pass no attrs and land on the canonical-slot variant.
+const tripleKey = (e: { src: NodeId; dst: NodeId; kind: EdgeKind; attrs?: EdgeAttrs }): string =>
+  `${e.src}\0${e.kind}\0${e.dst}\0${e.attrs?.alias ?? ''}`
 
 /** Re-keys a node from oldId to newId, rebinding every reference. Caller's responsibility to ensure newId not in use. */
 function rebindNodeId(s: State, oldId: NodeId, newId: NodeId, newNode: Node): void {
@@ -356,7 +383,13 @@ function rebindNodeId(s: State, oldId: NodeId, newId: NodeId, newNode: Node): vo
   for (const e of outs) {
     const peerInc = s.incoming.get(e.dst)
     if (peerInc) {
-      const idx = peerInc.findIndex(x => x.src === oldId && x.kind === e.kind && x.dst === e.dst)
+      // Alias participates in identity (per EdgeAttrs.alias comment) — when
+      // two outgoing edges share (src, kind, dst) but carry distinct aliases,
+      // each one rebinds its OWN paired incoming-side entry, not the first
+      // tripleKey match.
+      const idx = peerInc.findIndex(x =>
+        x.src === oldId && x.kind === e.kind && x.dst === e.dst && x.attrs?.alias === e.attrs?.alias,
+      )
       if (idx >= 0) peerInc[idx] = e
     }
   }
@@ -367,7 +400,9 @@ function rebindNodeId(s: State, oldId: NodeId, newId: NodeId, newNode: Node): vo
   for (const e of ins) {
     const peerOut = s.outgoing.get(e.src)
     if (peerOut) {
-      const idx = peerOut.findIndex(x => x.src === e.src && x.kind === e.kind && x.dst === oldId)
+      const idx = peerOut.findIndex(x =>
+        x.src === e.src && x.kind === e.kind && x.dst === oldId && x.attrs?.alias === e.attrs?.alias,
+      )
       if (idx >= 0) peerOut[idx] = e
     }
   }
@@ -393,7 +428,8 @@ function validate(s: State): void {
       }
       const k = tripleKey(e)
       if (seen.has(k)) {
-        throw new GraphError('INVARIANT_VIOLATION', `duplicate edge: ${e.src} →${e.kind} ${e.dst}`)
+        const aliasSuffix = e.attrs?.alias !== undefined ? ` (alias=${e.attrs.alias})` : ''
+        throw new GraphError('INVARIANT_VIOLATION', `duplicate edge: ${e.src} →${e.kind} ${e.dst}${aliasSuffix}`)
       }
       seen.add(k)
     }
@@ -726,8 +762,10 @@ class GraphImpl implements Graph {
         if (!next.nodes.has(src)) throw new GraphError('PATCH_REJECTED', `addEdge: src ${src} missing`)
         if (!next.nodes.has(dst)) throw new GraphError('PATCH_REJECTED', `addEdge: dst ${dst} missing`)
         const existing = next.outgoing.get(src) ?? []
-        if (existing.some(e => e.dst === dst && e.kind === kind)) {
-          throw new GraphError('PATCH_REJECTED', `addEdge: duplicate ${src} →${kind} ${dst}`)
+        const newAlias = attrs?.alias
+        if (existing.some(e => e.dst === dst && e.kind === kind && e.attrs?.alias === newAlias)) {
+          const aliasSuffix = newAlias !== undefined ? ` (alias=${newAlias})` : ''
+          throw new GraphError('PATCH_REJECTED', `addEdge: duplicate ${src} →${kind} ${dst}${aliasSuffix}`)
         }
         const e: Edge = attrs ? { src, dst, kind, attrs } : { src, dst, kind }
         pushTo(next.outgoing, src, e)
@@ -736,11 +774,21 @@ class GraphImpl implements Graph {
       },
       removeEdge(src, dst, kind) {
         const outs = next.outgoing.get(src)
-        if (!outs || !removeMatching(outs, e => e.dst === dst && e.kind === kind)) {
+        // Identify-and-extract: capture the alias slot of the dropped
+        // outgoing edge so we can purge the matching incoming-side entry
+        // (avoiding alias-sibling collisions when two edges share
+        // (src, dst, kind) but differ on alias). EdgeTriple change-records
+        // omit `alias` — this matches the public Mutator signature; for
+        // alias-precise removal callers can use the diff/replay path.
+        let removedAlias: string | undefined
+        const found = outs?.findIndex(e => e.dst === dst && e.kind === kind) ?? -1
+        if (!outs || found < 0) {
           throw new GraphError('PATCH_REJECTED', `removeEdge: ${src} →${kind} ${dst} missing`)
         }
+        removedAlias = outs[found]?.attrs?.alias
+        outs.splice(found, 1)
         const ins = next.incoming.get(dst)
-        if (ins) removeMatching(ins, e => e.src === src && e.kind === kind)
+        if (ins) removeMatching(ins, e => e.src === src && e.kind === kind && e.attrs?.alias === removedAlias)
         applied.push({ kind: 'edge-removed', subject: { src, dst, kind } })
       },
       replacePeerContext(id, peers) {

@@ -166,7 +166,9 @@ export async function replaceVersion(
     const mergeResult: MutateResult = currentGraph.mutate(m => {
       for (const inc of incoming) {
         // Check existing-edge guard before retargeting; addEdge throws on duplicate.
-        if (!hasEdge(currentGraph, inc.src, targetId, inc.kind)) {
+        // Alias participates in edge identity — guard per-alias so aliased
+        // siblings (e.g. `foo` + `foo-alias: npm:foo@…`) both retarget.
+        if (!hasEdge(currentGraph, inc.src, targetId, inc.kind, inc.attrs?.alias)) {
           m.addEdge(inc.src, targetId, inc.kind, inc.attrs)
           const rewireDiag = modifyEdgeRewired({ src: inc.src, dst: targetId, kind: inc.kind })
           rewireDiags.push(rewireDiag)
@@ -205,9 +207,9 @@ function matchesRange(version: string, range: string): boolean {
   }
 }
 
-function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind): boolean {
+function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind, alias?: string): boolean {
   for (const e of graph.out(src, kind)) {
-    if (e.dst === dst) return true
+    if (e.dst === dst && e.attrs?.alias === alias) return true
   }
   return false
 }

@@ -6,6 +6,7 @@ import { parse as parseV6, stringify as stringifyV6 } from '../../main/ts/format
 import { parse as parseV7, stringify as stringifyV7 } from '../../main/ts/formats/yarn-berry-v7.ts'
 import { parse as parseV8, stringify as stringifyV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { parse as parseV9, stringify as stringifyV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { parse as parseV10, stringify as stringifyV10 } from '../../main/ts/formats/yarn-berry-v10.ts'
 import { parse as parseNpm1, stringify as stringifyNpm1 } from '../../main/ts/formats/npm-1.ts'
 import { parse as parseNpm2, stringify as stringifyNpm2 } from '../../main/ts/formats/npm-2.ts'
 import { parse as parseNpm3, stringify as stringifyNpm3 } from '../../main/ts/formats/npm-3.ts'
@@ -46,6 +47,7 @@ const PARSERS: Record<FormatId, ((lockfile: string) => Graph) | undefined> = {
   'yarn-berry-v7': parseV7,
   'yarn-berry-v8': parseV8,
   'yarn-berry-v9': parseV9,
+  'yarn-berry-v10': parseV10,
   'yarn-classic': parseClassic,
   'npm-1': parseNpm1,
   'npm-2': parseNpm2,
@@ -63,6 +65,7 @@ const STRINGIFIERS: Record<FormatId, Stringifier | undefined> = {
   'yarn-berry-v7': { kind: 'berry', emit: stringifyV7 },
   'yarn-berry-v8': { kind: 'berry', emit: stringifyV8 },
   'yarn-berry-v9': { kind: 'berry', emit: stringifyV9 },
+  'yarn-berry-v10': { kind: 'berry', emit: stringifyV10 },
   'yarn-classic': { kind: 'classic', emit: stringifyClassic },
   'npm-1': { kind: 'classic', emit: stringifyNpm1 },
   'npm-2': { kind: 'classic', emit: stringifyNpm2 },
@@ -80,6 +83,7 @@ const BERRY_CACHE_KEYS: Record<Extract<FormatId, `yarn-berry-${string}`>, string
   'yarn-berry-v7': '10',
   'yarn-berry-v8': '10c0',
   'yarn-berry-v9': '10c0',
+  'yarn-berry-v10': '10c0',
 }
 
 export function parseFormat(format: FormatId, lockfile: string): Graph {

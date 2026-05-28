@@ -35,6 +35,7 @@
 import semver from 'semver'
 import {
   GraphError,
+  nameOf,
   newBuilder,
   toTarballKey,
   type Diagnostic,
@@ -750,12 +751,28 @@ function addDepEdges(
       })
       continue
     }
+    // EdgeAttrs.alias — preserved when the manifest dep key differs from
+    // the target's actual name. npm encodes aliases via `node_modules/<alias>`
+    // entries whose `entry.name` is the target's real name; we already
+    // resolve dstId through that channel, so a mismatch between `name`
+    // (the manifest key) and the dst node's name reveals the alias.
+    // `edgeRanges` / `edgeDeclaredNames` keep the existing 3-part key
+    // shape (pruneSidecar splits on `|`); cross-format consumers that
+    // need per-alias data read `edge.attrs.alias` directly.
+    const aliasSlot = name === nameOf(dstId) ? undefined : name
     const edgeKey = edgeTripleKey(srcId, kind, dstId)
-    if (edgeRanges.has(edgeKey)) continue
-    edgeRanges.set(edgeKey, range)
-    edgeDeclaredNames.set(edgeKey, name)
+    if (edgeRanges.has(edgeKey) && aliasSlot === undefined) continue
+    if (aliasSlot === undefined) {
+      edgeRanges.set(edgeKey, range)
+      edgeDeclaredNames.set(edgeKey, name)
+    } else if (!edgeRanges.has(edgeKey)) {
+      edgeRanges.set(edgeKey, range)
+      edgeDeclaredNames.set(edgeKey, name)
+    }
     try {
-      builder.addEdge(srcId, dstId, kind, { range })
+      const attrs: { range: string; alias?: string } = { range }
+      if (aliasSlot !== undefined) attrs.alias = aliasSlot
+      builder.addEdge(srcId, dstId, kind, attrs)
     } catch (error) {
       if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') {
         continue
@@ -1090,7 +1107,12 @@ function collectManifestBlocks(
       : undefined
     if (target === undefined) continue
     const edgeKey = edgeTripleKey(edge.src, edge.kind, edge.dst)
-    const declaredName = sidecar?.edgeDeclaredNames.get(edgeKey) ?? dst.name
+    // EdgeAttrs.alias is the canonical source for the per-edge declared
+    // descriptor key — sidecar.edgeDeclaredNames is a legacy parse-side
+    // cache kept for the rare case where the edge lost its attrs through
+    // a cross-format detour. Prefer the attrs slot; fall back to sidecar;
+    // fall back to dst.name (canonical descriptor).
+    const declaredName = edge.attrs?.alias ?? sidecar?.edgeDeclaredNames.get(edgeKey) ?? dst.name
 
     // ADR-0014 §4.F4 — workspace edges: npm lacks the `workspace:` protocol
     // entirely (link entries carry workspace identity; the dep range itself

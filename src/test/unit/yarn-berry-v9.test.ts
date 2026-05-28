@@ -563,6 +563,157 @@ describe('yarn-berry-v9 — alias collision rejection (ADR-0010)', () => {
   })
 })
 
+describe('yarn-berry-v9 — link: / portal: locator disambiguation (sister-session canary bug #2)', () => {
+  // backstage / babel-style monorepo: workspace `example-app` is both
+  // defined as a workspace member AND referenced via `link:` from a
+  // sibling workspace (`example-backend`). Yarn's `::locator=…` qualifier
+  // disambiguates which consumer owns the link — without disambiguation
+  // both entries collapse onto `example-app@0.0.0-use.local` and trip
+  // IRREDUCIBLE_LOSS. The parse-side sentinel-patch keeps the workspace
+  // entry bare (no patch) while the link entry carries a sentinel patch
+  // derived from the verbatim locator string.
+
+  const backstageInput =
+    '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+    '"example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend":\n' +
+    '  version: 0.0.0-use.local\n' +
+    '  resolution: "example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend"\n' +
+    '  languageName: node\n' +
+    '  linkType: soft\n\n' +
+    '"example-app@workspace:packages/app":\n' +
+    '  version: 0.0.0-use.local\n' +
+    '  resolution: "example-app@workspace:packages/app"\n' +
+    '  languageName: unknown\n' +
+    '  linkType: soft\n\n' +
+    '"example-backend@workspace:packages/backend":\n' +
+    '  version: 0.0.0-use.local\n' +
+    '  resolution: "example-backend@workspace:packages/backend"\n' +
+    '  languageName: unknown\n' +
+    '  linkType: soft\n'
+
+  it('does NOT trip IRREDUCIBLE_LOSS on backstage-style link: + workspace: collision', () => {
+    expect(() => parse(backstageInput)).not.toThrow()
+  })
+
+  it('produces two distinct NodeIds for the link: + workspace: entries', () => {
+    const graph = parse(backstageInput)
+    const exampleAppIds = graph.byName('example-app').slice().sort()
+    expect(exampleAppIds).toHaveLength(2)
+    // The bare workspace entry has no patch slot (no `+patch=` in NodeId);
+    // the link entry has a sentinel-patch slot — two distinct NodeIds.
+    expect(exampleAppIds[0]).toBe('example-app@0.0.0-use.local')
+    expect(exampleAppIds[1]).toMatch(/^example-app@0\.0\.0-use\.local\+patch=unresolved-[0-9a-f]{64}$/)
+  })
+
+  it('preserves both resolution: strings verbatim across the two entries', () => {
+    const graph = parse(backstageInput)
+    const nodes = graph.byName('example-app').map(id => graph.getNode(id)!)
+    const resolutions = nodes.map(n => n.resolution).sort()
+    expect(resolutions).toEqual([
+      'example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend',
+      'example-app@workspace:packages/app',
+    ])
+  })
+
+  it('workspace entry still carries workspacePath; link entry does not', () => {
+    const graph = parse(backstageInput)
+    const workspaceNode = graph.getNode('example-app@0.0.0-use.local')!
+    expect(workspaceNode.workspacePath).toBe('packages/app')
+
+    const linkNodeId = graph.byName('example-app').find(id => id !== 'example-app@0.0.0-use.local')!
+    const linkNode = graph.getNode(linkNodeId)!
+    expect(linkNode.workspacePath).toBeUndefined()
+  })
+
+  it('two distinct link: references to same workspace stay distinct (babel-style)', () => {
+    // Multiple consumers (`pkg-a`, `pkg-b`) each carry their own `link:`
+    // reference to the same physical workspace `shared`. The `::locator=…`
+    // qualifier differs per consumer; both entries must survive parse.
+    const babelInput =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n' +
+      '  languageName: node\n' +
+      '  linkType: soft\n\n' +
+      '"shared@link:../shared::locator=pkg-b%40workspace%3Apackages%2Fb":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "shared@link:../shared::locator=pkg-b%40workspace%3Apackages%2Fb"\n' +
+      '  languageName: node\n' +
+      '  linkType: soft\n'
+
+    const graph = parse(babelInput)
+    const sharedIds = graph.byName('shared').slice().sort()
+    expect(sharedIds).toHaveLength(2)
+    expect(sharedIds[0]).not.toBe(sharedIds[1])
+    // Both must carry distinct sentinel-patches.
+    const sharedNodes = sharedIds.map(id => graph.getNode(id)!)
+    expect(sharedNodes[0]!.patch).toMatch(/^unresolved-[0-9a-f]{64}$/)
+    expect(sharedNodes[1]!.patch).toMatch(/^unresolved-[0-9a-f]{64}$/)
+    expect(sharedNodes[0]!.patch).not.toBe(sharedNodes[1]!.patch)
+  })
+
+  it('stringify of link-locator-disambiguated graph preserves resolution verbatim and emits no RECIPE_FEATURE_DROPPED', () => {
+    const graph = parse(backstageInput)
+    const { lockfile, diagnostics } = stringifyWithDiagnostics(graph)
+
+    // No RECIPE_FEATURE_DROPPED — the link-locator sentinel is not a "lost
+    // patch", it's a NodeId disambiguator that round-trips losslessly via
+    // node.resolution.
+    expect(diagnostics.find(d => d.code === 'RECIPE_FEATURE_DROPPED')).toBeUndefined()
+
+    // Both verbatim resolutions emit unchanged.
+    expect(lockfile).toContain(
+      'resolution: "example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend"',
+    )
+    expect(lockfile).toContain('resolution: "example-app@workspace:packages/app"')
+
+    // Round-trip parse re-derives the same two-node split.
+    const reparsed = parse(lockfile)
+    expect(reparsed.byName('example-app').slice().sort()).toEqual(graph.byName('example-app').slice().sort())
+  })
+
+  it('still throws IRREDUCIBLE_LOSS when two link: entries collide on identical locators', () => {
+    // Pathological: identical resolution strings on two entries — no
+    // disambiguator available, sentinel hashes collide. The hint mentions
+    // workspace link: locator collision so callers get a usable signal.
+    const dupInput =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n\n' +
+      '"shared@link:../shared":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n'
+
+    expect(() => parse(dupInput)).toThrow(LockfileError)
+    try {
+      parse(dupInput)
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
+      expect((error as Error).message).toMatch(/workspace link:.*locator collision/)
+    }
+  })
+
+  it('IRREDUCIBLE_LOSS hint surfaces both colliding resolution strings', () => {
+    // Original alias-style collision case from yarn-berry-v9 — verify the
+    // tailored hint still lists both resolution strings to aid diagnosis.
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"foo@npm:1.0.0":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n\n' +
+      '"foo@npm:1.0.0-alias":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n'
+
+    try {
+      parse(input)
+      throw new Error('expected throw')
+    } catch (error) {
+      const msg = (error as Error).message
+      // Hint must include both resolution strings for callers to debug.
+      expect(msg).toContain('"foo@npm:1.0.0"')
+    }
+  })
+})
+
 describe('yarn-berry-v9 — diagnostics', () => {
   it('unresolvable dep emits warning, not error', () => {
     const input =

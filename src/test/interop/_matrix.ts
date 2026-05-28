@@ -142,9 +142,9 @@ const withoutFeatures = (...features: PreservedFeature[]): PreservedFeature[] =>
   ALL_FEATURES.filter(feature => !features.includes(feature))
 
 type BerryFormat = Extract<FormatId, `yarn-berry-${string}`>
-type BerryVersion = 4 | 5 | 6 | 7 | 8 | 9
+type BerryVersion = 4 | 5 | 6 | 7 | 8 | 9 | 10
 type MidBerryFormat = Extract<BerryFormat, 'yarn-berry-v5' | 'yarn-berry-v6' | 'yarn-berry-v8'>
-type MidBerryVersion = Exclude<BerryVersion, 4 | 7 | 9>
+type MidBerryVersion = Exclude<BerryVersion, 4 | 7 | 9 | 10>
 const BERRY_VERSION: Record<BerryFormat, BerryVersion> = {
   'yarn-berry-v4': 4,
   'yarn-berry-v5': 5,
@@ -152,6 +152,7 @@ const BERRY_VERSION: Record<BerryFormat, BerryVersion> = {
   'yarn-berry-v7': 7,
   'yarn-berry-v8': 8,
   'yarn-berry-v9': 9,
+  'yarn-berry-v10': 10,
 }
 const BERRY_FORMATS: BerryFormat[] = ['yarn-berry-v4', 'yarn-berry-v5', 'yarn-berry-v6', 'yarn-berry-v7', 'yarn-berry-v8', 'yarn-berry-v9']
 const MID_BERRY_VERSIONS: MidBerryVersion[] = [5, 6, 8]
@@ -2139,7 +2140,7 @@ const CROSS_FAMILY_YB9_BUN_CONTRACTS: ConversionContract[] = [
 // probe demand outside intra-family + real-world v7 sources. Cross-family
 // v7 contracts can be added under a follow-up dispatch if a v7-bearing
 // corpus lands.
-type OlderBerryFormat = Exclude<BerryFormat, 'yarn-berry-v7' | 'yarn-berry-v9'>
+type OlderBerryFormat = Exclude<BerryFormat, 'yarn-berry-v7' | 'yarn-berry-v9' | 'yarn-berry-v10'>
 
 const OLDER_BERRY_BUN_FORMATS: OlderBerryFormat[] = [
   'yarn-berry-v4',

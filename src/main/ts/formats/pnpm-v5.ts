@@ -420,7 +420,15 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
         }
 
         // Bare version (with optional `_peer@version` suffix per v5 syntax).
-        const targetId = resolveDependencyTarget(seenIds, depName, depValue)
+        let targetId = resolveDependencyTarget(seenIds, depName, depValue)
+        let aliasSlot: string | undefined
+        if (targetId === undefined) {
+          const aliased = resolveAliasedDependencyTarget(seenIds, depValue)
+          if (aliased !== undefined) {
+            targetId = aliased
+            aliasSlot = depName
+          }
+        }
         if (targetId === undefined) {
           diagnostics.push({
             code: 'PNPM_UNRESOLVED_DEP',
@@ -431,7 +439,9 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
           continue
         }
         try {
-          builder.addEdge(srcId, targetId, kind, { range: specifier ?? depValue })
+          const attrs: { range: string; alias?: string } = { range: specifier ?? depValue }
+          if (aliasSlot !== undefined) attrs.alias = aliasSlot
+          builder.addEdge(srcId, targetId, kind, attrs)
         } catch (error) {
           if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
           throw error
@@ -757,6 +767,31 @@ function resolveDependencyTarget(
   return undefined
 }
 
+/** pnpm v5 npm-alias variant: rawValue carries `<target>@<version>` rather than a bare version. */
+function resolveAliasedDependencyTarget(
+  seenIds: Set<string>,
+  rawValue: string,
+): string | undefined {
+  if (rawValue.indexOf('@', 1) <= 0) return undefined
+  // Split at last `@` to peel target name + version (peer-tail handled
+  // independently via peelPeerTail).
+  let lastAt = -1
+  for (let i = 1; i < rawValue.length; i++) {
+    if (rawValue[i] === '@' && (rawValue[i + 1] !== undefined && rawValue[i + 1] !== '(')) lastAt = i
+  }
+  if (lastAt <= 0) return undefined
+  const targetName = rawValue.slice(0, lastAt)
+  const rest = rawValue.slice(lastAt + 1)
+  const peeled = peelPeerTail(rest)
+  if (peeled === undefined) return undefined
+  const peerContext = peeled.peers.map(p => `${p.name}@${p.version}`).sort(cmpStr)
+  const candidate = serializeNodeId(targetName, peeled.version, peerContext)
+  if (seenIds.has(candidate)) return candidate
+  const bare = `${targetName}@${peeled.version}`
+  if (seenIds.has(bare)) return bare
+  return undefined
+}
+
 function addPackageNode(
   builder: ReturnType<typeof newBuilder>,
   sidecar: PnpmV5Sidecar,
@@ -821,7 +856,15 @@ function addResolvedTreeEdges(
     const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
     for (const [depName, rawValue] of entries) {
       if (typeof rawValue !== 'string') continue
-      const targetId = resolveDependencyTarget(seenIds, depName, rawValue)
+      let targetId = resolveDependencyTarget(seenIds, depName, rawValue)
+      let aliasSlot: string | undefined
+      if (targetId === undefined) {
+        const aliased = resolveAliasedDependencyTarget(seenIds, rawValue)
+        if (aliased !== undefined) {
+          targetId = aliased
+          aliasSlot = depName
+        }
+      }
       if (targetId === undefined) {
         diagnostics.push({
           code: 'PNPM_UNRESOLVED_DEP',
@@ -832,7 +875,9 @@ function addResolvedTreeEdges(
         continue
       }
       try {
-        builder.addEdge(srcId, targetId, kind, { range: rawValue })
+        const attrs: { range: string; alias?: string } = { range: rawValue }
+        if (aliasSlot !== undefined) attrs.alias = aliasSlot
+        builder.addEdge(srcId, targetId, kind, attrs)
       } catch (error) {
         if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
         throw error

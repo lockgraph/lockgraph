@@ -33,6 +33,7 @@ berry's `__metadata`.
 | `yarn-berry-v6`   | `__metadata.version: 6`      | yarn `>=3.2 <4`      | yarn `>=3.2` |
 | `yarn-berry-v8`   | `__metadata.version: 8`      | yarn `>=4.0 <4.14`   | yarn `>=4` |
 | `yarn-berry-v9`   | `__metadata.version: 9`      | yarn `>=4.14`        | yarn `>=4.14` |
+| `yarn-berry-v10`  | `__metadata.version: 10`     | yarn 5 (dev branch)  | yarn 5+ (preview — reverse-engineered from yarnpkg/berry master) |
 
 **Schema numbers that don't exist:**
 - `__metadata.version: 1` and `2` were never used by berry.

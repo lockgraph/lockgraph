@@ -17,6 +17,7 @@ export const ALL_FORMATS: FormatId[] = [
   'yarn-berry-v7',
   'yarn-berry-v8',
   'yarn-berry-v9',
+  'yarn-berry-v10',
   'yarn-classic',
   'npm-1',
   'npm-2',

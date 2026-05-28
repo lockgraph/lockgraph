@@ -17,6 +17,7 @@ const adapters = [
   'yarn-berry-v7',
   'yarn-berry-v8',
   'yarn-berry-v9',
+  'yarn-berry-v10',
   'yarn-classic',
 ]
 

@@ -1,0 +1,98 @@
+# `yarn-berry-v10` — yarn berry `yarn.lock` (`__metadata.version: 10`)
+
+> Status: preview.
+> Provenance: **Source-only** (reverse-engineered from yarnpkg/berry dev branch).
+
+The completeness contract — stringify, modify, enrich, optimize —
+inherits from yarn-berry-v9 (per [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md)).
+This spec records read-side capabilities and points to ADR-0016 for
+the normative emit / mutate / enrich / prune rules.
+
+## Compatibility
+
+### Writers — PM semvers that *emit* this format
+
+| PM | semver range | Default? | How to opt in |
+|----|--------------|:--------:|---------------|
+| yarn | yarn 5 (dev branch / unreleased) | ✓ | bumped in yarnpkg/berry master ahead of yarn 5 GA |
+
+Spotted in real-world canary against yarnpkg/berry's own self-hosted
+lockfile and prettier (both consume yarn from upstream dev tags).
+
+### Readers — PM semvers that *install* from this format
+
+| PM | semver range | Notes |
+|----|--------------|-------|
+| yarn | yarn 5+ | older berry refuses; the schema-version handshake is strict |
+
+## File
+
+Same as [yarn-berry-v4](./yarn-berry-v4.md#file).
+
+## Sources
+
+- yarn 5 dev-branch `Project.ts` — `LOCKFILE_VERSION = 10` constant.
+  Pin a permalink against the yarnpkg/berry master commit that bumps
+  the constant once the yarn 5 release tag exists.
+- [`Project.ts` at yarn 4.14.1 (v9 baseline)](https://github.com/yarnpkg/berry/blob/@yarnpkg/cli/4.14.1/packages/yarnpkg-core/sources/Project.ts)
+  for diff anchor.
+
+## Conversion inputs
+
+Same as [yarn-berry-v9](./yarn-berry-v9.md#conversion-inputs). The
+patch-slot fingerprint recipe (file-backed and `~builtin<…>`),
+sentinel input shape, and path-confinement rule carry over verbatim
+— v10 inherits v9's rules without re-statement. The workspace
+`link:` / `portal:` `::locator=…` locator-disambiguator (sister-session
+canary bug #2; see `_yarn-berry-core.ts` `isLinkOrPortalResolution`)
+also applies uniformly across v4–v10.
+
+## Emit
+
+Emit (`stringify(graph, options?)`) inherits ADR-0016 §A semantics
+verbatim — see [yarn-berry-v9](./yarn-berry-v9.md#emit). The only
+on-disk delta from v9 is the `__metadata.version: 10` field.
+
+## Schema sketch
+
+Identical to v9. The bump is mechanical (a `version: N` field) ahead
+of yarn 5 GA. If yarn 5 ships a structural change, the family config
+forks here без re-pointing v10 to share v9's identity.
+
+## Capabilities
+
+Inherits v9.
+
+## Quirks
+
+- Brand-new (yarn 5 dev-branch, not yet GA) — most of the ecosystem
+  still writes v9. Treat as forward-compat target rather than canonical
+  input.
+- The bump itself is mechanical; historical evidence (yarn 4 → 6
+  introduced cacheKey, yarn 4 → 8 added `compressionLevel`) suggests
+  v10 may also pair with at least one structural change as yarn 5
+  matures. Verify against yarn 5 release-tag `Project.ts` when GA
+  ships.
+- Real-world canary first observed at: yarnpkg/berry repo self-host,
+  prettier upstream.
+
+## Degradation rules
+
+Inherits v9.
+
+## Fixtures
+
+> **TBD:** unproducible from current matrix; gated on
+> [ADR-0005](../decisions/0005-pm-delivery-off-npm.md). When unblocked,
+> canonical writer is yarn 5+. Synthetic fixtures derived from v9 by
+> bumping the `version: 10` marker (per [yarn-berry-v7](./yarn-berry-v7.md)
+> precedent) are admissible for round-trip regression coverage until
+> a producer is wired up.
+
+## Open questions
+
+> **Deferred to yarn 5 GA.** What fields beyond `__metadata.version`
+> actually change в the v9 → v10 transition? Diff yarn 5 release
+> `Project.ts` against 4.14.x once a GA tag exists. The ADR-0016 §A
+> canonical form is *our* canonical form; byte-identity to yarn 5
+> output is a bonus, not a contract.

@@ -23,7 +23,14 @@ const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (scenario: string, file: string): string =>
   readFileSync(resolve(here, '../resources/fixtures/lockfiles', scenario, file), 'utf8')
 
-const ALL_FORMATS: FormatId[] = [
+// `yarn-berry-v10` is a forward-compat preview adapter (yarn 5 dev branch)
+// — no canonical fixture exists in the matrix yet (see spec/formats/
+// yarn-berry-v10.md). Excluded from this fixture-based dispatcher sweep;
+// the dedicated v10 unit test (src/test/unit/yarn-berry-v10.test.ts)
+// exercises the dispatcher path via synthesised content.
+type FixturedFormatId = Exclude<FormatId, 'yarn-berry-v10'>
+
+const ALL_FORMATS: FixturedFormatId[] = [
   'yarn-berry-v4',
   'yarn-berry-v5',
   'yarn-berry-v6',
@@ -40,7 +47,7 @@ const ALL_FORMATS: FormatId[] = [
   'bun-text',
 ]
 
-const FIXTURE_FILE: Record<FormatId, string> = {
+const FIXTURE_FILE: Record<FixturedFormatId, string> = {
   'yarn-berry-v4': 'yarn-berry-v4.lock',
   'yarn-berry-v5': 'yarn-berry-v5.lock',
   'yarn-berry-v6': 'yarn-berry-v6.lock',

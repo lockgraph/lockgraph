@@ -506,8 +506,20 @@ export function parseFamily(
           continue
         }
 
-        // Bare version — resolve to a node.
-        const targetId = resolveSnapshotTarget(seenIds, depName, version)
+        // Bare version — resolve to a node. pnpm encodes npm-alias deps
+        // with `version: <target>@<ver>` (e.g.
+        // `react-is-cjs: { specifier: 'npm:react-is@^17', version: 'react-is@17.0.2' }`)
+        // — try the canonical form when the dep block key produces no
+        // snapshot match, and record the descriptor key as the alias.
+        let targetId = resolveSnapshotTarget(seenIds, depName, version)
+        let aliasSlot: string | undefined
+        if (targetId === undefined) {
+          const aliasTarget = resolveAliasedSnapshotTarget(seenIds, version)
+          if (aliasTarget !== undefined) {
+            targetId = aliasTarget
+            aliasSlot = depName
+          }
+        }
         if (targetId === undefined) {
           diagnostics.push({
             code: 'PNPM_UNRESOLVED_DEP',
@@ -518,7 +530,9 @@ export function parseFamily(
           continue
         }
         try {
-          builder.addEdge(srcId, targetId, kind, { range: specifier ?? version })
+          const attrs: { range: string; alias?: string } = { range: specifier ?? version }
+          if (aliasSlot !== undefined) attrs.alias = aliasSlot
+          builder.addEdge(srcId, targetId, kind, attrs)
         } catch (error) {
           if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
           throw error
@@ -1049,7 +1063,15 @@ function addResolvedTreeEdges(
     const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
     for (const [depName, rawValue] of entries) {
       if (typeof rawValue !== 'string') continue
-      const targetId = resolveSnapshotTarget(seenIds, depName, rawValue)
+      let targetId = resolveSnapshotTarget(seenIds, depName, rawValue)
+      let aliasSlot: string | undefined
+      if (targetId === undefined) {
+        const aliasTarget = resolveAliasedSnapshotTarget(seenIds, rawValue)
+        if (aliasTarget !== undefined) {
+          targetId = aliasTarget
+          aliasSlot = depName
+        }
+      }
       if (targetId === undefined) {
         diagnostics.push({
           code: 'PNPM_UNRESOLVED_DEP',
@@ -1060,7 +1082,9 @@ function addResolvedTreeEdges(
         continue
       }
       try {
-        builder.addEdge(srcId, targetId, kind, { range: rawValue })
+        const attrs: { range: string; alias?: string } = { range: rawValue }
+        if (aliasSlot !== undefined) attrs.alias = aliasSlot
+        builder.addEdge(srcId, targetId, kind, attrs)
       } catch (error) {
         if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
         throw error
@@ -1123,6 +1147,31 @@ function resolveSnapshotTarget(
   const candidateId = serializeNodeId(parsedTail.name, parsedTail.version, peerContext)
   if (seenIds.has(candidateId)) return candidateId
   const bareId = `${parsedTail.name}@${parsedTail.version}`
+  if (seenIds.has(bareId)) return bareId
+  return undefined
+}
+
+/**
+ * Try to resolve a snapshot target when the dep value embeds the canonical
+ * `<name>@<version>` (npm-alias case). Returns undefined when the raw value
+ * is a bare semver.
+ */
+function resolveAliasedSnapshotTarget(
+  seenIds: Set<string>,
+  rawValue: string,
+): string | undefined {
+  // `rawValue` must contain an `@` past position 0 (scoped names) to be
+  // a `<name>@<version>` shape. parsePackagesOrSnapshotKey requires at
+  // least one non-leading `@`.
+  if (rawValue.length < 2) return undefined
+  const hasInteriorAt = rawValue.indexOf('@', 1) > 0
+  if (!hasInteriorAt) return undefined
+  const parsed = parsePackagesOrSnapshotKey(rawValue)
+  if (parsed === undefined) return undefined
+  const peerContext = parsed.peers.map(p => `${p.name}@${p.version}`).sort()
+  const candidateId = serializeNodeId(parsed.name, parsed.version, peerContext)
+  if (seenIds.has(candidateId)) return candidateId
+  const bareId = `${parsed.name}@${parsed.version}`
   if (seenIds.has(bareId)) return bareId
   return undefined
 }

@@ -159,9 +159,13 @@ export async function addDependency(
   }
 }
 
+// `addDependency` always wires the canonical descriptor (no alias) — guard
+// only the canonical slot so an existing aliased sibling (e.g. via parser
+// or another modifier) does not block adding the unaliased edge, and vice
+// versa.
 function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind): boolean {
   for (const e of graph.out(src, kind)) {
-    if (e.dst === dst) return true
+    if (e.dst === dst && e.attrs?.alias === undefined) return true
   }
   return false
 }
