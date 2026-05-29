@@ -66,7 +66,7 @@ the v7 stringifier; the family pipeline guarantees this is а lossless
 graph roundtrip).
 
 Real-world parse coverage at
-`src/test/resources/fixtures/real-world/{qiwi-uniconfig,qiwi-nestjs-enterprise}/yarn.lock`.
+`src/test/resources/fixtures/real-world/{qiwi-uniconfig-master-c5e7d5a,qiwi-nestjs-enterprise-master-1a00233}/yarn.lock`.
 
 ## Conversion inputs
 
@@ -112,8 +112,8 @@ range side). No v7-specific degradation rules.
 
 - Synthetic: `src/test/resources/fixtures/lockfiles/*/yarn-berry-v7.lock`
   (8 fixtures generated via v8 → v7 lossless roundtrip).
-- Real-world: `src/test/resources/fixtures/real-world/qiwi-uniconfig/yarn.lock`
-  and `src/test/resources/fixtures/real-world/qiwi-nestjs-enterprise/yarn.lock`.
+- Real-world: `src/test/resources/fixtures/real-world/qiwi-uniconfig-master-c5e7d5a/yarn.lock`
+  and `src/test/resources/fixtures/real-world/qiwi-nestjs-enterprise-master-1a00233/yarn.lock`.
 
 ## Open questions
 
