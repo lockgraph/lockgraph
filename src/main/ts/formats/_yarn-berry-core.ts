@@ -344,8 +344,11 @@ export function parseFamily(
     const srcId = entryIds.get(key)
     if (srcId === undefined) continue
 
-    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, diagnostics)
-    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, diagnostics)
+    // The source entry's own resolution doubles as its locator for resolving
+    // any `link:` / `portal:` deps it declares (see addEdgesFromBlock).
+    const srcResolution = asString(value['resolution'])
+    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, diagnostics, srcResolution)
+    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, diagnostics, srcResolution)
   }
 
   // Sort diagnostics by subject + code to keep graph.diagnostics() order
@@ -1506,13 +1509,27 @@ function addEdgesFromBlock(
   kind: EdgeKind,
   index: Map<string, string>,
   diagnostics: Diagnostic[],
+  srcResolution?: string,
 ): void {
   if (!block) return
   for (const [depName, depRange] of Object.entries(block)) {
     if (typeof depRange !== 'string') continue
     const normalizedRange = normalizedEdgeRange(kind, depRange)
     const lookup = `${depName}@${normalizedRange}`
-    const dstId = index.get(lookup)
+    let dstId = index.get(lookup)
+    if (dstId === undefined && srcResolution !== undefined && isLinkOrPortalRange(normalizedRange)) {
+      // `link:` / `portal:` deps are recorded per consumer: yarn appends a
+      // `::locator=<encoded-consumer-locator>` qualifier to the entry key so
+      // the same on-disk path linked from different workspaces stays distinct
+      // (see isLinkOrPortalResolution + the NodeId-disambiguation note above).
+      // The deps-block descriptor is bare (no qualifier), so reconstruct the
+      // locator-qualified specIndex key from the source consumer's own
+      // resolution. encodeURIComponent matches yarn's entry-key encoding
+      // (`@`->%40, `:`->%3A, `/`->%2F), e.g. `babel@workspace:.` ->
+      // `babel%40workspace%3A.`.
+      const qualified = `${lookup}::locator=${encodeURIComponent(srcResolution)}`
+      dstId = index.get(qualified)
+    }
     if (!dstId) {
       diagnostics.push({
         code: 'YARN_BERRY_UNRESOLVED_DEP',
@@ -1548,6 +1565,10 @@ function hasExplicitProtocol(range: string): boolean {
   if (colonIdx <= 0) return false
   const prefix = range.slice(0, colonIdx)
   return /^[a-z][a-z0-9+.-]*$/i.test(prefix)
+}
+
+function isLinkOrPortalRange(range: string): boolean {
+  return range.startsWith('link:') || range.startsWith('portal:')
 }
 
 function remapSidecar(

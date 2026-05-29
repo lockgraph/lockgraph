@@ -673,6 +673,75 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation (sister-sessi
     expect(reparsed.byName('example-app').slice().sort()).toEqual(graph.byName('example-app').slice().sort())
   })
 
+  it('resolves a consumer link: dep edge to the locator-qualified entry (#31)', () => {
+    // The consumer workspace declares `example-app: link:../app` (bare, no
+    // qualifier) in its dependencies block. The matching entry key carries
+    // `::locator=<encoded consumer resolution>`. Edge resolution reconstructs
+    // the qualified specIndex key from the consumer's own resolution
+    // (encodeURIComponent), so the edge wires instead of dangling as an
+    // unresolved-dep warning (sister-session canary follow-up: babel/backstage
+    // link: edges previously emitted YARN_BERRY_UNRESOLVED_DEP).
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend"\n' +
+      '  languageName: node\n' +
+      '  linkType: soft\n\n' +
+      '"example-backend@workspace:packages/backend":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "example-backend@workspace:packages/backend"\n' +
+      '  dependencies:\n' +
+      '    example-app: "link:../app"\n' +
+      '  languageName: unknown\n' +
+      '  linkType: soft\n'
+
+    const graph = parse(input)
+
+    // No unresolved-dep warning for the link: edge.
+    const unresolved = graph.diagnostics().filter(
+      d => d.code === 'YARN_BERRY_UNRESOLVED_DEP' && /example-app/.test(d.message ?? ''),
+    )
+    expect(unresolved).toEqual([])
+
+    // The consumer workspace has an out-edge to the locator-qualified link entry.
+    const linkId = graph.byName('example-app')[0]!
+    expect(linkId).toMatch(/^example-app@0\.0\.0-use\.local\+patch=unresolved-/)
+    const out = graph.out('example-backend@0.0.0-use.local').map(e => e.dst)
+    expect(out).toContain(linkId)
+  })
+
+  it('does NOT mis-resolve a link: dep when the source locator differs (negative)', () => {
+    // The link entry is owned by a DIFFERENT consumer (pkg-other). The
+    // consumer pkg-backend references `link:../app` but its own locator does
+    // not match the entry's `::locator=` — so the qualified lookup misses and
+    // the edge stays unresolved (we must NOT fall back to a bare match that
+    // would wire the wrong consumer's link).
+    const input =
+      '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+      '"example-app@link:../app::locator=pkg-other%40workspace%3Apackages%2Fother":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "example-app@link:../app::locator=pkg-other%40workspace%3Apackages%2Fother"\n' +
+      '  languageName: node\n' +
+      '  linkType: soft\n\n' +
+      '"pkg-backend@workspace:packages/backend":\n' +
+      '  version: 0.0.0-use.local\n' +
+      '  resolution: "pkg-backend@workspace:packages/backend"\n' +
+      '  dependencies:\n' +
+      '    example-app: "link:../app"\n' +
+      '  languageName: unknown\n' +
+      '  linkType: soft\n'
+
+    const graph = parse(input)
+    const out = graph.out('pkg-backend@0.0.0-use.local').map(e => e.dst)
+    // No edge to the other consumer's link entry — locator mismatch.
+    expect(out.some(d => d.startsWith('example-app@'))).toBe(false)
+    const unresolved = graph.diagnostics().filter(
+      d => d.code === 'YARN_BERRY_UNRESOLVED_DEP' && /example-app/.test(d.message ?? ''),
+    )
+    expect(unresolved).toHaveLength(1)
+  })
+
   it('still throws IRREDUCIBLE_LOSS when two link: entries collide on identical locators', () => {
     // Pathological: identical resolution strings on two entries — no
     // disambiguator available, sentinel hashes collide. The hint mentions
