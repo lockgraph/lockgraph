@@ -78,6 +78,42 @@ describe('SYML — synthetic', () => {
   it('keys without value followed by no children → empty map', () => {
     expect(parse('a:\n')).toEqual({ a: {} })
   })
+
+  // YAML 1.2 §8.1.3 explicit block-mapping key (`? <key>` / `:`). yarn's
+  // writer falls back to this form for over-long composite descriptor keys
+  // (sister-session canary bug #5, highlight/highlight: ~15 patched-typescript
+  // descriptors in one ~2 KB key). The `:` value-indicator line previously
+  // tokenised as an empty unquoted key → spurious `duplicate key:` collision.
+  it('explicit ? key with block value', () => {
+    expect(parse('? "long@key:with:colons"\n:\n  version: 1.2.3\n')).toEqual({
+      'long@key:with:colons': { version: '1.2.3' },
+    })
+  })
+
+  it('explicit ? key coexists with canonical entries', () => {
+    const input =
+      'first: 1\n' +
+      '? "x@patch:foo, x@patch:bar"\n' +
+      ':\n' +
+      '  version: 5.8.2\n' +
+      '  linkType: hard\n' +
+      'last: 2\n'
+    expect(parse(input)).toEqual({
+      first: '1',
+      'x@patch:foo, x@patch:bar': { version: '5.8.2', linkType: 'hard' },
+      last: '2',
+    })
+  })
+
+  it('explicit ? key with in-key `#` (quote-protected, not a comment)', () => {
+    expect(parse('? "ts@patch:ts#optional!builtin<compat>"\n:\n  v: 1\n')).toEqual({
+      'ts@patch:ts#optional!builtin<compat>': { v: '1' },
+    })
+  })
+
+  it('explicit ? key missing `:` indicator rejected', () => {
+    expect(() => parse('? "k"\n  version: 1\n')).toThrow(SymlParseError)
+  })
 })
 
 describe('SYML — yarn-berry-v9 fixtures', () => {

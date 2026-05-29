@@ -54,8 +54,9 @@ the recorded SHA — provenance is verifiable, not approximate).
 | `facebook-jest-main-4c3091b` | `https://github.com/facebook/jest` | 45k | `main` | `yarn-berry-v10` | Bug #3 (aliased `metro-source-map`→`@babel/traverse`) + Bug #4 (published-self-link `jest-preset-angular`→`@jest/environment-jsdom-abstract`) |
 | `prettier-prettier-main-08c9bbd` | `https://github.com/prettier/prettier` | 52k | `main` | `yarn-berry-v10` | Bug #1 — `__metadata.version: 10` adapter (yarn 5 dev-branch) |
 | `yarnpkg-berry-master-6861e75` | `https://github.com/yarnpkg/berry` | 8k | `master` | `yarn-berry-v10` | Bug #1 — `__metadata.version: 10` adapter |
+| `highlight-highlight-main-7a297b5` | `https://github.com/highlight/highlight` | 9k | `main` | `yarn-berry-v8` | Bug #5 — YAML explicit `? key` / `:` block-mapping (over-long composite `typescript@patch:` descriptor, ~2 KB key) |
 
-All eight now parse + round-trip clean at HEAD (8/8). Bugs #1–#4 are fixed
+All nine now parse + round-trip clean at HEAD (9/9). Bugs #1–#5 are fixed
 and additionally pinned by synthetic unit tests (`graph.test.ts`,
 `yarn-berry-v9.test.ts`); these real-world fixtures provide breadth-canary
 coverage. Note the 2026-05-29 re-pin moved `facebook-jest` from a v9 to a

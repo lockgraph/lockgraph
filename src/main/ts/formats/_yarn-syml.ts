@@ -46,9 +46,9 @@ function unquote(s: string): string {
   return s.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
 }
 
-function tokenizeLine(line: string, lineNum: number): Token | null {
-  // Strip a `#` comment that is not inside a quoted string. We scan the
-  // line tracking quote state; any unquoted `#` ends the line.
+// Strip a `#` comment that is not inside a quoted string, then right-trim.
+// Scans tracking quote state; any unquoted `#` ends the line.
+function stripComment(line: string): string {
   let inQuote = false
   let cutAt = line.length
   for (let i = 0; i < line.length; i++) {
@@ -57,7 +57,29 @@ function tokenizeLine(line: string, lineNum: number): Token | null {
     if (c === '"') inQuote = !inQuote
     else if (c === '#' && !inQuote) { cutAt = i; break }
   }
-  const stripped = line.slice(0, cutAt).replace(/\s+$/, '')
+  return line.slice(0, cutAt).replace(/\s+$/, '')
+}
+
+// Leading-space count (even-multiple-of-2 enforced by callers).
+function leadingSpaces(s: string): number {
+  let p = 0
+  while (p < s.length && s[p] === ' ') p++
+  return p
+}
+
+// Parse the key half of an explicit `? <key>` line (the text after `? `).
+// yarn only emits this form for long (quoted) keys, but accept bare too.
+function parseExplicitKey(keyPart: string): string {
+  const trimmed = keyPart.replace(/\s+$/, '')
+  if (trimmed[0] === '"') {
+    const end = findClosingQuote(trimmed, 0)
+    return unquote(trimmed.slice(0, end + 1))
+  }
+  return trimmed
+}
+
+function tokenizeLine(line: string, lineNum: number): Token | null {
+  const stripped = stripComment(line)
   if (stripped === '') return null
 
   // Indent — must be even.
@@ -116,6 +138,45 @@ function tokenize(input: string): Token[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (line === undefined) continue
+
+    // YAML 1.2 §8.1.3 explicit block-mapping key. yarn's writer falls back
+    // to the `? <key>` / `:` form when a (composite) descriptor key exceeds
+    // an internal line-width threshold — e.g. ~15 patched-`typescript`
+    // descriptors concatenated into one ~2 KB key (highlight/highlight).
+    // Normalise it here into the same block-key token the canonical
+    // `"<key>":` form produces, so the parse loop is unchanged:
+    //
+    //   ? "<key>"          <- explicit-key marker + key (this line)
+    //   :                  <- value indicator (next non-blank line)
+    //     <block at +1>    <- the value map, parsed normally
+    //
+    // Stringify always emits the canonical inline form; yarn re-reads it.
+    const stripped = stripComment(line)
+    const pos = leadingSpaces(stripped)
+    if (stripped !== '' && stripped[pos] === '?' && stripped[pos + 1] === ' ') {
+      if (pos % 2 !== 0) throw new SymlParseError('indent must be a multiple of 2', i)
+      const indent = pos / 2
+      const key = parseExplicitKey(stripped.slice(pos + 2))
+
+      // Consume the `:` value-indicator line (the next non-blank line).
+      let j = i + 1
+      let found = false
+      for (; j < lines.length; j++) {
+        const peek = stripComment(lines[j] ?? '')
+        if (peek === '') continue
+        if (peek.slice(leadingSpaces(peek)) !== ':') {
+          throw new SymlParseError(`expected ':' value indicator after explicit '?' key`, j)
+        }
+        found = true
+        break
+      }
+      if (!found) throw new SymlParseError(`explicit '?' key missing ':' value indicator`, i)
+
+      tokens.push({ indent, key, line: i })
+      i = j // skip through the `:` line; the loop's i++ advances to the block
+      continue
+    }
+
     let t: Token | null
     try {
       t = tokenizeLine(line, i)
