@@ -1,6 +1,6 @@
 {
   "name": "@antongolub/lockfile",
-  "version": "0.0.0-snapshot.45",
+  "version": "0.0.0-snapshot.46",
   "private": false,
   "description": "Universal lockfile model and converter for npm, yarn, pnpm, bun",
   "type": "module",
