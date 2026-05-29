@@ -5,12 +5,12 @@ __metadata:
   version: 10
   cacheKey: 10
 
-"@angular/compiler@npm:21.2.14":
-  version: 21.2.14
-  resolution: "@angular/compiler@npm:21.2.14"
+"@angular/compiler@npm:21.2.15":
+  version: 21.2.15
+  resolution: "@angular/compiler@npm:21.2.15"
   dependencies:
     tslib: "npm:^2.3.0"
-  checksum: 10/6b4eb48608cf7c532688ce2427010239222585ba1ca896e2d641dd6baad7810018770c0527c07547bbe0306e88eb0aec89d5e10df2b70eea2d4a3062306f9801
+  checksum: 10/083cbfa1fa90865b9c15cd91e4710d2c15e8834034c15bfa3056b180e76f9714b2cdbc0a084d34163a2589dbe6d2ddb8df8779979e5081af4b87e78fa5971ded
   languageName: node
   linkType: hard
 
@@ -4890,12 +4890,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"find-in-directory@npm:^3.2.0":
-  version: 3.2.0
-  resolution: "find-in-directory@npm:3.2.0"
+"find-in-directory@npm:^5.0.0":
+  version: 5.0.1
+  resolution: "find-in-directory@npm:5.0.1"
   dependencies:
     url-or-path: "npm:2.6.1"
-  checksum: 10/39b5309e0137af1c69d730e8a711cd96aef7856e93bc3fdec6ce7d1b62d0051413b7dc2e781332d1a494f7c847d3fe798e0540fa7b009b7d8e0f121972bb2842
+  checksum: 10/c727ee9175b78a60075d7e3e8b4d823a0ffc14a4804f7634a8b3f5c6990f0efa4a44ddbb837b39d944ff28b3064f65b3ee9658c6339b769d4d3b2dd925b64382
   languageName: node
   linkType: hard
 
@@ -4977,10 +4977,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"flow-parser@npm:0.314.0":
-  version: 0.314.0
-  resolution: "flow-parser@npm:0.314.0"
-  checksum: 10/4d494c3b8433b3076674a06b3b45ffb1c92e0d4d2e6c6f1f59033579d9ffa7bfc4f07982c0341da5b85431cc4bd5941550fbd6ca3a4c5be369909970eba3f7f9
+"flow-parser@npm:0.315.0":
+  version: 0.315.0
+  resolution: "flow-parser@npm:0.315.0"
+  checksum: 10/92fed186c9ea5d4983b0ba062f98fe1b99127f5bb5e2f8a67983aa199b2989a85600f3ff2554295662b9812dadfce6421f629b4132917cbdadece5eb216e6ae3
   languageName: node
   linkType: hard
 
@@ -8076,7 +8076,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "prettier@workspace:."
   dependencies:
-    "@angular/compiler": "npm:21.2.14"
+    "@angular/compiler": "npm:21.2.15"
     "@babel/code-frame": "npm:8.0.0-rc.6"
     "@babel/generator": "npm:8.0.0-rc.6"
     "@babel/parser": "npm:8.0.0-rc.6"
@@ -8134,7 +8134,7 @@ __metadata:
     fast-json-stable-stringify: "npm:2.1.0"
     file-entry-cache: "npm:11.1.3"
     find-cache-directory: "npm:6.0.0"
-    flow-parser: "npm:0.314.0"
+    flow-parser: "npm:0.315.0"
     get-east-asian-width: "npm:1.6.0"
     get-port: "npm:7.2.0"
     get-stdin: "npm:9.0.0"
@@ -8203,7 +8203,7 @@ __metadata:
     remark-parse: "npm:8.0.3"
     rollup-plugin-license: "npm:3.7.1"
     sdbm: "npm:3.0.0"
-    search-closest: "npm:1.3.0"
+    search-closest: "npm:3.0.0"
     semver: "npm:7.8.1"
     serialize-javascript: "npm:7.0.5"
     smol-toml: "npm:1.6.1"
@@ -8549,13 +8549,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"search-closest@npm:1.3.0":
-  version: 1.3.0
-  resolution: "search-closest@npm:1.3.0"
+"search-closest@npm:3.0.0":
+  version: 3.0.0
+  resolution: "search-closest@npm:3.0.0"
   dependencies:
-    find-in-directory: "npm:^3.2.0"
+    find-in-directory: "npm:^5.0.0"
     iterate-directory-up: "npm:^1.5.1"
-  checksum: 10/dcd61bed36350544e9402b667e0294258f5bd1dffc370e442add8d089d2f6d5f55a414c5d3c6339a744dc1cd89e4f220d3087bbc255708caf0e6d797c93d2a58
+  checksum: 10/9ee847347fd296606e8815808e84e19f280b758535766a57f1e5888abc1d74de6c78741a34bd18b289f3afb8b51e9cd3861db860b83512492b4882a60aef5e62
   languageName: node
   linkType: hard
 

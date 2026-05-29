@@ -37,27 +37,30 @@ transitional shape onto the shared `_yarn-berry-core` family pipeline
 
 ### Sister-session canary import — Yarn 4 large monorepos
 
-Fetch date: `2026-05-28`. Sourced via the `yarn-audit-fix` sister-session's
-real-world canary against `@antongolub/lockfile@0.0.0-snapshot.45`. Each
-lockfile is the latest `main`-branch tip from its upstream repo at the
-import date; no specific commit SHA pinning (re-snapshot for stability if
-the canary suite needs determinism).
+Discovered via the `yarn-audit-fix` sister-session's real-world canary
+(first run against `@antongolub/lockfile@0.0.0-snapshot.45`, 2026-05-28).
+Re-pinned 2026-05-29 to exact commits: each fixture's directory handle is
+`<space>-<repo>-<branch>-<sha7>` and its `yarn.lock` is byte-identical to
+that commit's `yarn.lock` (re-fetched from `raw.githubusercontent.com` at
+the recorded SHA — provenance is verifiable, not approximate).
 
-| Repo handle | Source repo | Stars | File | Detected format | snapshot.45 outcome |
+| Repo handle | Source repo | Stars | Branch | Format | Historically exercised |
 | --- | --- | ---: | --- | --- | --- |
-| `storybookjs-storybook` | `https://github.com/storybookjs/storybook` | 90k | `yarn.lock` | `yarn-berry-v8` | ✅ 3073 nodes, parse + round-trip + patch clean |
-| `parcel-bundler-parcel` | `https://github.com/parcel-bundler/parcel` | 44k | `yarn.lock` | `yarn-berry-v8` | ✅ 2216 nodes |
-| `redwoodjs-redwood` | `https://github.com/redwoodjs/redwood` | 17k | `yarn.lock` | `yarn-berry-v8` | ✅ 2840 nodes |
-| `backstage-backstage` | `https://github.com/backstage/backstage` | 33k | `yarn.lock` | `yarn-berry-v8` | ❌ Bug #2 — `link:` NodeId collision on multi-workspace links |
-| `babel-babel` | `https://github.com/babel/babel` | 44k | `yarn.lock` | `yarn-berry-v9` | ❌ Bug #2 — `link:` NodeId collision (`$repo-utils`) |
-| `facebook-jest` | `https://github.com/facebook/jest` | 45k | `yarn.lock` | `yarn-berry-v9` | ❌ Bug #3 — duplicate edge on aliased dep (`metro-source-map` → `@babel/traverse--for-generate-function-map`) |
-| `prettier-prettier` | `https://github.com/prettier/prettier` | 52k | `yarn.lock` | `yarn-berry-v10` | ❌ Bug #1 — `__metadata.version: 10` adapter missing (yarn 5 dev-branch) |
-| `yarnpkg-berry` | `https://github.com/yarnpkg/berry` | 8k | `yarn.lock` | `yarn-berry-v10` | ❌ Bug #1 — `__metadata.version: 10` adapter missing |
+| `storybookjs-storybook-next-d6ce689` | `https://github.com/storybookjs/storybook` | 90k | `next` | `yarn-berry-v8` | clean baseline (3074 nodes) |
+| `parcel-bundler-parcel-v2-5948485` | `https://github.com/parcel-bundler/parcel` | 44k | `v2` | `yarn-berry-v8` | clean baseline (2216 nodes) |
+| `redwoodjs-redwood-main-a7852fb` | `https://github.com/redwoodjs/redwood` | 17k | `main` | `yarn-berry-v8` | clean baseline (2840 nodes) |
+| `backstage-backstage-master-b55138e` | `https://github.com/backstage/backstage` | 33k | `master` | `yarn-berry-v8` | Bug #2 — `link:` NodeId collision on multi-workspace links |
+| `babel-babel-main-ae57969` | `https://github.com/babel/babel` | 44k | `main` | `yarn-berry-v9` | Bug #2 — `link:` NodeId collision (`$repo-utils`) |
+| `facebook-jest-main-4c3091b` | `https://github.com/facebook/jest` | 45k | `main` | `yarn-berry-v10` | Bug #3 (aliased `metro-source-map`→`@babel/traverse`) + Bug #4 (published-self-link `jest-preset-angular`→`@jest/environment-jsdom-abstract`) |
+| `prettier-prettier-main-08c9bbd` | `https://github.com/prettier/prettier` | 52k | `main` | `yarn-berry-v10` | Bug #1 — `__metadata.version: 10` adapter (yarn 5 dev-branch) |
+| `yarnpkg-berry-master-6861e75` | `https://github.com/yarnpkg/berry` | 8k | `master` | `yarn-berry-v10` | Bug #1 — `__metadata.version: 10` adapter |
 
-Bug fixes for #1 / #2 / #3 are in flight on
-`implementer/edge-descriptor-identity` and
-`implementer/yarn-berry-link-and-v10`; these fixtures pin the regression
-surface for snapshot.46.
+All eight now parse + round-trip clean at HEAD (8/8). Bugs #1–#4 are fixed
+and additionally pinned by synthetic unit tests (`graph.test.ts`,
+`yarn-berry-v9.test.ts`); these real-world fixtures provide breadth-canary
+coverage. Note the 2026-05-29 re-pin moved `facebook-jest` from a v9 to a
+v10 lockfile (the repo regenerated upstream), which now also exercises the
+`yarn-berry-v10` adapter against a published-self-link graph.
 
 See [findings.md](./findings.md) for the per-fixture cross-family probe
 catalogue.
