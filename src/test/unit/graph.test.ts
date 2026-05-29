@@ -194,6 +194,82 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).not.toThrow()
   })
 
+  // === ADR-0017 amendment (Bug #4): published-self-link carve-out ===
+  // A workspace node MAY have an incoming edge from a non-workspace node iff the
+  // edge's descriptor uses a registry protocol (npm: / bare semver) — yarn
+  // resolved a published dependency onto a co-located workspace.
+
+  it('permits a published self-link (npm: range) and emits SEAL_PUBLISHED_SELF_LINK', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('publisher@1.0.0', 'publisher', '1.0.0'))
+    b.addEdge('publisher@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: 'npm:^1.0.0' })
+    let g: ReturnType<typeof b.seal> | undefined
+    expect(() => { g = b.seal() }).not.toThrow()
+    const diag = g!.diagnostics().filter(d => d.code === 'SEAL_PUBLISHED_SELF_LINK')
+    expect(diag).toHaveLength(1)
+    expect(diag[0]?.severity).toBe('info')
+    expect(diag[0]?.subject).toBe('ws@0.0.0-use.local')
+    expect(diag[0]?.message).toContain('publisher@1.0.0')
+    expect(diag[0]?.message).toContain('npm:^1.0.0')
+  })
+
+  it('permits a published self-link with a BARE semver range (registry-equivalent)', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('publisher@1.0.0', 'publisher', '1.0.0'))
+    b.addEdge('publisher@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: '^1.0.0' })
+    let g: ReturnType<typeof b.seal> | undefined
+    expect(() => { g = b.seal() }).not.toThrow()
+    expect(g!.diagnostics().filter(d => d.code === 'SEAL_PUBLISHED_SELF_LINK')).toHaveLength(1)
+  })
+
+  it('rejects a non-workspace incoming edge with a link: range (not a published self-link)', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('publisher@1.0.0', 'publisher', '1.0.0'))
+    b.addEdge('publisher@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: 'link:../ws' })
+    expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+  })
+
+  it.each(['file:./ws', 'portal:../ws', 'patch:ws@npm%3A1.0.0#~/p.patch', 'git+https://x/ws.git', 'https://x/ws.tgz', 'workspace:*'])(
+    'rejects a non-workspace incoming edge with a non-registry range %s',
+    (range) => {
+      const b = newBuilder()
+      b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+      b.addNode(n('publisher@1.0.0', 'publisher', '1.0.0'))
+      b.addEdge('publisher@1.0.0', 'ws@0.0.0-use.local', 'dep', { range })
+      expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+    },
+  )
+
+  it('rejects a non-workspace incoming edge with an ABSENT range (conservative reject)', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('publisher@1.0.0', 'publisher', '1.0.0'))
+    b.addEdge('publisher@1.0.0', 'ws@0.0.0-use.local', 'dep') // no attrs.range
+    expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+  })
+
+  it('does not emit SEAL_PUBLISHED_SELF_LINK for a workspace→workspace edge', () => {
+    const b = newBuilder()
+    b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
+    b.addNode(n('core@1.0.0', 'core', '1.0.0', [], { workspacePath: 'packages/core' }))
+    b.addEdge('app@1.0.0', 'core@1.0.0', 'dep', { range: 'workspace:*' })
+    const g = b.seal()
+    expect(g.diagnostics().filter(d => d.code === 'SEAL_PUBLISHED_SELF_LINK')).toHaveLength(0)
+  })
+
+  it('rejects ANY genuinely-forbidden edge even when another permitted self-link is present', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('ok@1.0.0', 'ok', '1.0.0'))
+    b.addNode(n('bad@1.0.0', 'bad', '1.0.0'))
+    b.addEdge('ok@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: 'npm:^1.0.0' })
+    b.addEdge('bad@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: 'link:../ws' })
+    expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+  })
+
   it('rejects error-severity diagnostics at seal', () => {
     const b = newBuilder()
     b.addNode(n('a@1.0.0', 'a', '1.0.0'))

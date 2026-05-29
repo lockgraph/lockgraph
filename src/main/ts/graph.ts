@@ -408,6 +408,44 @@ function rebindNodeId(s: State, oldId: NodeId, newId: NodeId, newNode: Node): vo
   }
 }
 
+// === Published-self-link seal carve-out (ADR-0017 amendment, Bug #4) ===
+
+// Extracts the protocol prefix of a descriptor range (the substring before the
+// first `:`), or `undefined` for a bare/unprefixed range. Mirrors the
+// `hasExplicitProtocol` detector in `_yarn-berry-core.ts` but lives here because
+// graph.ts is the platform-invariant layer and must not import format internals.
+// A bare range (`^1.0.0`, `1.2.3`, `*`, `~2`) has no protocol and is treated as
+// registry-equivalent (npm:) by `isPublishedSelfLink`.
+function protocolOf(range: string): string | undefined {
+  const colonIdx = range.indexOf(':')
+  if (colonIdx <= 0) return undefined
+  const prefix = range.slice(0, colonIdx)
+  return /^[a-z][a-z0-9+.-]*$/i.test(prefix) ? prefix : undefined
+}
+
+// A workspace node MAY have an incoming edge from a non-workspace node iff the
+// edge is a *published self-link*: its source descriptor uses a registry
+// protocol (`npm:` or a bare/unprefixed semver range, treated as
+// registry-equivalent) AND the workspace is the resolution yarn recorded for
+// that descriptor. The structural signal (the edge resolved to a workspace
+// node, i.e. it exists targeting `n`) is the faithful one — we do NOT
+// `semver.satisfies`-test the workspace's sentinel version (ADR-0011's
+// `0.0.0-use.local` does not satisfy e.g. `^30.0.0`; the satisfaction was
+// performed by yarn at install time and recorded structurally via entry-key
+// fusion, not re-derivable here). Every other protocol
+// (`file:`/`link:`/`portal:`/`patch:`/`git`/`git+*`/`http(s):`/`workspace:`)
+// stays a seal failure. Conservative fallback: a range that is ABSENT
+// (undefined) is NOT a published self-link — the safe direction per the
+// amendment's cross-adapter caveat (an adapter that drops the range correctly
+// rejects rather than admits an unattested shape).
+function isPublishedSelfLink(edge: Edge): boolean {
+  const range = edge.attrs?.range
+  if (range === undefined) return false
+  const proto = protocolOf(range)
+  // Registry-class iff `npm:` prefix OR no protocol prefix at all (bare semver).
+  return proto === undefined || proto === 'npm'
+}
+
 // === Validation ===
 
 function validate(s: State): void {
@@ -437,11 +475,24 @@ function validate(s: State): void {
 
   for (const [id, node] of s.nodes) {
     if (node.workspacePath !== undefined) {
-      const inc = s.incoming.get(id)
-      // Workspace-to-workspace edges are kind-agnostic by design here; the seal only
-      // blocks incoming edges sourced from non-workspace nodes.
-      const hasNonWorkspaceIncoming = inc?.some(edge => s.nodes.get(edge.src)?.workspacePath === undefined) ?? false
-      if (hasNonWorkspaceIncoming) {
+      const inc = s.incoming.get(id) ?? []
+      // Workspace-to-workspace edges are kind-agnostic by design here; the seal
+      // blocks incoming edges sourced from non-workspace nodes — EXCEPT a
+      // published self-link (ADR-0017 amendment, Bug #4): a registry-protocol
+      // descriptor that yarn resolved onto a co-located workspace. Partition the
+      // non-workspace incoming edges; permit published self-links (emitting an
+      // info diagnostic each), reject everything else with the verbatim message.
+      for (const edge of inc) {
+        if (s.nodes.get(edge.src)?.workspacePath !== undefined) continue // ws→ws: permitted
+        if (isPublishedSelfLink(edge)) {
+          s.diagnostics.push({
+            code:     'SEAL_PUBLISHED_SELF_LINK',
+            subject:  id,
+            severity: 'info',
+            message:  `published self-link: ${edge.src} →${edge.kind} ${id} (range ${edge.attrs?.range}) — published dependency resolved to co-located workspace`,
+          })
+          continue
+        }
         throw new GraphError('INVARIANT_VIOLATION', `workspace node has incoming edges: ${id}`)
       }
     }
