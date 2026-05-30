@@ -318,6 +318,10 @@ export function parseFamily(
     if (entry.dev === true) nodeSide.dev = true
     if (entry.optional === true) nodeSide.optional = true
     if (entry.peer === true) nodeSide.peer = true
+    // WS-LINK (ADR-0027 §4): capture npm's `extraneous` flag so a workspace
+    // member that npm did NOT link (present on disk, absent from the install
+    // graph) re-emits without a top-level link on replay.
+    if (entry.extraneous === true) nodeSide.extraneous = true
 
     // Adapter-specific per-entry capture (npm-2 mirror: stash `resolved`
     // URL for legacy-mirror emit). Core stays version-neutral — it does
@@ -506,9 +510,19 @@ export function stringifyFamily(
   }
   for (const node of workspaceMembers) {
     packages[node.workspacePath!] = buildWorkspaceMemberEntry(graph, node, sidecar, emitDiagnostic)
-    packages[`node_modules/${node.name}`] = {
-      resolved: node.workspacePath,
-      link: true,
+    // WS-LINK (ADR-0027 §4): emit the top-level node_modules/<name> symlink for a
+    // workspace member UNLESS it is `extraneous` — npm omits the link for a member
+    // present on disk but absent from the install graph (e.g. socket.io's
+    // `@socket.io/clustered-engine`: would be 13 links emitted vs npm's 12). The
+    // flag is captured layout attribution, replayed here. A cross-PM / post-mutate
+    // graph carries no sidecar, so the default (no flag ⇒ linked) links every
+    // member — matching the prior unconditional behaviour for the generate path.
+    const extraneous = sidecar?.nodes.get(node.id)?.extraneous === true
+    if (!extraneous) {
+      packages[`node_modules/${node.name}`] = {
+        resolved: node.workspacePath,
+        link: true,
+      }
     }
   }
 

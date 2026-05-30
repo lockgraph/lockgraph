@@ -14,18 +14,16 @@ const realWorld = (rel: string): string =>
 //   - re-stringifies WITHOUT IRREDUCIBLE_LOSS (vscode — the THROW manifestation),
 //   - preserves the install-path key-set (socket.io — the same-version-multipath
 //     COLLAPSE manifestation),
-// modulo two out-of-#10-scope entry classes excluded from BOTH sides:
-//   - `{optional:true}` uninstalled-optional placeholders (Bug #11 non-nodes), and
-//   - workspace symlinks (`{link:true}`) — these are emitted by a separate code
-//     path (workspace-member linking), and a known emission divergence exists
-//     there for non-depended-on members (tracked separately, not #10).
-// The comparison is the RESOLVED-node install-path key-set — exactly what the
-// install-path replay governs.
+// modulo `{optional:true}` uninstalled-optional placeholders (Bug #11 non-nodes),
+// excluded from BOTH sides. Workspace symlinks (`{link:true}`) ARE now compared:
+// ADR-0027 §4 (WS-LINK) fixed the over-emit (previously a link per member) so the
+// emitted link-set matches npm's — link iff referenced; socket.io's unreferenced
+// `@socket.io/clustered-engine` correctly gets none.
+// The comparison is the RESOLVED-node + link install-path key-set.
 const installPathKeys = (pkgs: Record<string, unknown>): string[] =>
   Object.keys(pkgs)
     .filter(k => {
-      const e = pkgs[k] as { optional?: boolean; version?: unknown; link?: boolean } | null
-      if (e !== null && typeof e === 'object' && e.link === true) return false
+      const e = pkgs[k] as { optional?: boolean } | null
       if (JSON.stringify(e) === '{"optional":true}') return false
       return true
     })

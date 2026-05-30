@@ -118,6 +118,7 @@ export interface NpmEntry {
   optional?: boolean
   peer?: boolean
   inBundle?: boolean
+  extraneous?: boolean
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
@@ -191,6 +192,11 @@ export interface NpmFlatSidecar {
   dev?: boolean
   optional?: boolean
   peer?: boolean
+  // npm marks a workspace member `extraneous: true` when it is present on disk
+  // but not part of the install graph (no top-level `node_modules/<name>` link).
+  // Captured layout attribution (ADR-0027 §4 / WS-LINK): replayed on stringify so
+  // an extraneous member re-emits WITHOUT a link, matching npm. Absent ⇒ linked.
+  extraneous?: boolean
   peerDependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   devDependencies?: Record<string, string>
