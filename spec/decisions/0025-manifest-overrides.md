@@ -2,6 +2,7 @@
 
 > Status: `proposed`
 > Date: `2026-05-30`
+> Amended: 2026-05-30 — §6 Override exposure (A2): `overridesOf(graph)` accessor + graph-keyed manifest carrier.
 
 ## Context
 
@@ -178,6 +179,101 @@ channel for a pin — by adding `Manifest.overrides` as the *declarative*
 carrier alongside that imperative diagnostic channel. The two are
 complementary inputs to one per-PM projection, not competing channels.
 
+### 6. Override exposure — `overridesOf(graph)` (A2)
+
+§3 captures a manifest's overrides; §4 projects a *caller-supplied* option. The
+missing link is **cross-PM carry**: yarn resolutions live only in
+`package.json` (never the lock), so `parse('yarn-berry-v9', lock, { manifests })`
+→ `stringify('npm-3', g)` has no path for the resolutions to reach the npm
+projection. Lock-borne overrides (npm `rootMeta.overrides`, pnpm
+`sidecar.overrides`) sit in format-private sidecars the caller cannot read.
+
+**Decision — explicit accessor, caller threads (model E2):**
+
+```ts
+export function overridesOf(graph: Graph): OverrideConstraint[]
+//   → stringify(to, g, { overrides: overridesOf(g) })
+```
+
+A free function (matching `getFlatSidecar(graph)` / `frozenRegistry(graph)` —
+graph-*associated*, format/recipe-derived state is a free function over `Graph`;
+`Graph` *methods* are reserved for intrinsic L2 structure). It returns the
+**union** of every captured override source for the graph, canonical:
+
+- **manifest-F6** — when `ParseOptions.manifests` is supplied, `parse` runs
+  `captureOverrides` on each manifest's `native` block and stashes the canonical
+  result on a **recipe-owned `WeakMap<Graph, OverrideConstraint[]>`** carrier.
+- **lock-borne** — npm `rootMeta.overrides` (already canonical) / pnpm
+  `sidecar.overrides` (verbatim → canonicalised on read). Exactly one is ever
+  populated (a graph is parsed from one format).
+
+**Precedence.** Collisions are keyed by the tuple
+`(package, parentPath, versionCondition)`, where `parentPath` compares as an
+**ordered** sequence by element-wise string equality (join on the reserved `>`
+separator for the map key — `a>b>c`). Manifest-F6 wins over lock-borne — the
+manifest is the *current authored declaration*; the lock is a resolved snapshot
+with the override already baked in. This mirrors the §4 stringify ladder
+(caller-authored beats lock-borne `nativeOverrides`); `overridesOf` is the
+programmatic "what the caller would supply", feeding that ladder's tier-1 slot.
+Within one source, last-wins on duplicate tuples. A `selfRef`/`to` divergence on
+an otherwise-equal tuple is moot across sources (manifest wins outright) and
+last-wins within a source.
+
+**Empty, never `undefined`.** `[]` means "found none from *any* source" (data),
+distinct from *omitting* the stringify option (which triggers the §4 lock-borne
+fallback). Because `overridesOf` folds lock-borne **into** its union,
+`overridesOf(g) === []` genuinely means no overrides anywhere, so threading it
+can never suppress a lock-borne block `overridesOf` would itself have surfaced.
+Callers **MUST NOT** hand-thread `[]` from some *other* source into
+`StringifyOptions.overrides` expecting the lock-borne fallback — pass `undefined`
+(omit the option) for that.
+
+**Layering.** Recipe is *below* format; it must not import the npm/pnpm cores.
+So the recipe layer owns only the manifest carrier WeakMap + the merge helper;
+the source-unifying `overridesOf` lives in `index.ts` (the one module that
+imports every format), delegating per-format reads to small exported accessors
+(`getFlatSidecar`; a new pnpm `getPnpmOverridesCanonical`). Placing the unify in
+recipe would create a recipe→format cycle.
+
+**Carrier lifecycle (normative).** The WeakMap carrier is dropped by every
+`graph.mutate()` / enrich / optimize (which rebuild the graph). The format
+sidecars survive only because each re-attaches via a per-format
+`rebindGraph(oldGraph, newGraph)` hook (`_npm-flat-types.ts`); there is **no**
+shared mutate-rebind hub in `graph.ts`. The recipe carrier MUST register an
+analogous rebind callback — and, since the consumer flow is parse → **modify** →
+stringify (audit-fix), that callback MUST be invoked from the modify/optimize
+rebuild path, **which does not exist today** (the existing `rebindGraph` fires
+only at npm stringify-time). Wiring a modify-side rebind invocation is part of
+this slice; without it `overridesOf` silently returns `[]` after the first
+mutation, inside the consumer's pipeline.
+
+**Reconciliation with "Canonical-on-Graph (sidecar)" (rejected below).** The
+load-bearing test is mechanical, not rhetorical: the rejected option put
+overrides into the **resolved L2 node/edge structure** or a **`Graph`-interface
+field** — observable by seal `validate()` and changing the `Graph` type. The §6
+carrier is neither: a graph-*keyed* `WeakMap` side-table (the established posture
+of every existing format sidecar, including the §3-blessed pnpm
+`sidecar.overrides`), invisible to seal (`graph.ts` `validate()` reads no
+WeakMap) and adding no `Graph` field. ADR-0013 §3 explicitly homes
+derived/attribution PM state in exactly such a format-layer carrier and *rejects*
+"attribution in the core Graph model" — so the carrier is the ADR-0013-**blessed**
+posture, not the rejected one. The declarative *authority* remains the
+caller-owned `Manifest` / lock verbatim block; the carrier holds a write-once,
+read-only **copy** for the `overridesOf` read path.
+
+**Scope (v1).** Lock-borne + **parse-time** manifest capture only. Deferred:
+(i) **modify-time** manifest capture (`ModifyContext.manifests` stays a
+half-wired type until re-resolution lands, near ADR-0026) — this is also where
+§5's imperative-pin→`Manifest.overrides` merge lives, so that §5 reconcile sits
+outside v1's parse-time union by construction, not contradiction; (ii) the
+**imperative `pinOverride` channel** — `overridesOf` surfaces *declarative*
+overrides only; a pin remains a separate stringify input via `Graph.diagnostics()`
+per §5 (complementary channels — do **not** unify them in `overridesOf`). Auto-
+projection at stringify (model E3 = stringify calling `overridesOf` internally
+when the option is absent) remains deferred — it needs a lock-vs-manifest
+*policy* at emit, overlapping the §202 translation boundary. E2 is a strict
+subset of E3, so this forecloses nothing.
+
 ## Consequences
 
 - **Positive:** overrides become first-class — captured from manifests,
@@ -237,12 +333,23 @@ complementary inputs to one per-PM projection, not competing channels.
    collide resolves caller-wins, except synthesised `patch:` entries win.
 6. The three tail-forms emit their typed loss diagnostics on cross-PM
    projection; the intersection forms project clean.
+7. (A2 §6) `overridesOf(graph)` returns the canonical union of lock-borne +
+   parse-time-manifest overrides (manifest-wins on collision), is mutation-free
+   on caller input, and survives `mutate`/enrich/optimize so a
+   parse→modify→stringify pipeline still surfaces them; `parse` actually runs
+   F6 capture from `ParseOptions.manifests` (no longer a dead option).
 
 ## Alternatives considered
 
-- *Canonical-on-Graph (sidecar/metadata).* Rejected — overrides are declared
-  inputs upstream of resolution, not resolved instances; storing them on the
-  Graph collapses the declared-vs-resolved separation (ADR-0001).
+- *Canonical-on-Graph (sidecar/metadata) as the override HOME.* Rejected —
+  overrides are declared inputs upstream of resolution, not resolved instances;
+  making the Graph their *authority* (embedded in resolved L2 node/edge
+  structure, or a `Graph`-interface field) collapses the declared-vs-resolved
+  separation (ADR-0001). Narrower than it first reads: §6's A2 carrier is a
+  graph-*keyed* `WeakMap` side-table — the established posture of every existing
+  format sidecar, including the §3-blessed pnpm `sidecar.overrides` — holding a
+  transient write-once **copy** for the `overridesOf` read path; association,
+  not authority, and *not* the rejected option. See §6 Reconciliation.
 - *Recipe-layer auto-translation between PM grammars.* Rejected — the N×N
   table ADR-0013 forbids; override translation belongs in an opt-in modifier
   (ADR-0027), not the always-on recipe/interop path.
