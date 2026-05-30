@@ -308,86 +308,14 @@ export function parseFamily(
 
   const packagesMap = isPlainObject(yaml.packages) ? yaml.packages : {}
 
-  // --- Pass 1: build node set from packages or snapshots. ---
+  // --- Pass 0: importer synthesis — workspace member nodes + path→NodeId map. ---
   //
-  // v9: `snapshots` keys are authoritative — peer-virt instances exist as
-  // separate snapshot entries with matching bare `packages[bare-id]`.
-  // v6: `packages` keys are authoritative — peer-virt is encoded directly
-  // on the packages key (no separate snapshots block).
-
-  const seenIds = new Set<string>()
-  const idByPackagesKey = new Map<string, string>()
-
-  if (shape.hasSnapshots) {
-    // v9 mode: walk snapshots, cross-reference packages.
-    const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
-    const snapshotKeys = Object.keys(snapshotsMap)
-    for (const snapshotKey of snapshotKeys) {
-      const parsed = parsePackagesOrSnapshotKey(snapshotKey)
-      if (parsed === undefined) {
-        diagnostics.push({
-          code: 'PNPM_BAD_ENTRY',
-          severity: 'warning',
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot key ${JSON.stringify(snapshotKey)} not parseable`,
-        })
-        continue
-      }
-      const { name, version, peers } = parsed
-      const peerContext = peers.map(p => `${p.name}@${p.version}`).sort()
-      const nodeId = serializeNodeId(name, version, peerContext)
-      if (seenIds.has(nodeId)) continue
-      seenIds.add(nodeId)
-
-      const bareKey = `${name}@${version}`
-      const pkgEntry = packagesMap[bareKey]
-      if (pkgEntry === undefined) {
-        diagnostics.push({
-          code: `${shape.diagnosticPrefix}_SNAPSHOTS_MISSING`,
-          severity: 'warning',
-          subject: nodeId,
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot ${JSON.stringify(snapshotKey)} has no matching packages[${JSON.stringify(bareKey)}] baseline`,
-        })
-        continue
-      }
-      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
-      const snapEntry = snapshotsMap[snapshotKey]
-      if (isPlainObject(snapEntry) && Array.isArray(snapEntry.transitivePeerDependencies)) {
-        const sc = sidecar.nodes.get(nodeId)
-        if (sc !== undefined) {
-          sc.transitivePeerDependencies = (snapEntry.transitivePeerDependencies as string[]).slice()
-        }
-      }
-    }
-  } else {
-    // v6 mode: walk packages — keys carry peer-context directly.
-    for (const pkgKey of Object.keys(packagesMap)) {
-      const stripped = stripPackagesKeyPrefix(pkgKey, shape.packagesKeyShape)
-      const parsed = parsePackagesOrSnapshotKey(stripped)
-      if (parsed === undefined) {
-        diagnostics.push({
-          code: 'PNPM_BAD_ENTRY',
-          severity: 'warning',
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} packages key ${JSON.stringify(pkgKey)} not parseable`,
-        })
-        continue
-      }
-      const { name, version, peers } = parsed
-      const peerContext = peers.map(p => `${p.name}@${p.version}`).sort()
-      const nodeId = serializeNodeId(name, version, peerContext)
-      if (seenIds.has(nodeId)) continue
-      seenIds.add(nodeId)
-      idByPackagesKey.set(pkgKey, nodeId)
-      const pkgEntry = packagesMap[pkgKey]!
-      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
-      // v6 carries `dev` per-entry — capture for round-trip.
-      if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
-        const sc = sidecar.nodes.get(nodeId)
-        if (sc !== undefined) sc.dev = pkgEntry.dev
-      }
-    }
-  }
-
-  // --- Pass 2: importers — workspace synthesis + importer edges. ---
+  // MUST run BEFORE Pass 1: a workspace peer (#8b-A) encodes its importer
+  // directory in the peer version slot with `/` → `+` (e.g.
+  // `vue@packages+vue` → importer `packages/vue`). Pass 1 bakes the resolved
+  // peerContext into the NodeId via `serializeNodeId`, so `importerByPath`
+  // must already be populated when the snapshot/packages keys are parsed.
+  // Importer EDGES still wire in Pass 3 (they need Pass-1 `seenIds`).
   //
   // v9: `importers` is ALWAYS present. Single-importer collapses to `.`.
   // v6: `importers` is present ONLY for multi-importer projects;
@@ -446,7 +374,87 @@ export function parseFamily(
   }
   sidecar.importerPaths = importerPaths.slice()
 
+  // --- Pass 1: build node set from packages or snapshots. ---
+  //
+  // v9: `snapshots` keys are authoritative — peer-virt instances exist as
+  // separate snapshot entries with matching bare `packages[bare-id]`.
+  // v6: `packages` keys are authoritative — peer-virt is encoded directly
+  // on the packages key (no separate snapshots block).
+
+  const seenIds = new Set<string>()
+  const idByPackagesKey = new Map<string, string>()
+
+  if (shape.hasSnapshots) {
+    // v9 mode: walk snapshots, cross-reference packages.
+    const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
+    const snapshotKeys = Object.keys(snapshotsMap)
+    for (const snapshotKey of snapshotKeys) {
+      const parsed = parsePackagesOrSnapshotKey(snapshotKey)
+      if (parsed === undefined) {
+        diagnostics.push({
+          code: 'PNPM_BAD_ENTRY',
+          severity: 'warning',
+          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot key ${JSON.stringify(snapshotKey)} not parseable`,
+        })
+        continue
+      }
+      const { name, version, peers } = parsed
+      const peerContext = buildPeerContext(peers, sidecar.importerByPath)
+      const nodeId = serializeNodeId(name, version, peerContext)
+      if (seenIds.has(nodeId)) continue
+      seenIds.add(nodeId)
+
+      const bareKey = `${name}@${version}`
+      const pkgEntry = packagesMap[bareKey]
+      if (pkgEntry === undefined) {
+        diagnostics.push({
+          code: `${shape.diagnosticPrefix}_SNAPSHOTS_MISSING`,
+          severity: 'warning',
+          subject: nodeId,
+          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot ${JSON.stringify(snapshotKey)} has no matching packages[${JSON.stringify(bareKey)}] baseline`,
+        })
+        continue
+      }
+      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+      const snapEntry = snapshotsMap[snapshotKey]
+      if (isPlainObject(snapEntry) && Array.isArray(snapEntry.transitivePeerDependencies)) {
+        const sc = sidecar.nodes.get(nodeId)
+        if (sc !== undefined) {
+          sc.transitivePeerDependencies = (snapEntry.transitivePeerDependencies as string[]).slice()
+        }
+      }
+    }
+  } else {
+    // v6 mode: walk packages — keys carry peer-context directly.
+    for (const pkgKey of Object.keys(packagesMap)) {
+      const stripped = stripPackagesKeyPrefix(pkgKey, shape.packagesKeyShape)
+      const parsed = parsePackagesOrSnapshotKey(stripped)
+      if (parsed === undefined) {
+        diagnostics.push({
+          code: 'PNPM_BAD_ENTRY',
+          severity: 'warning',
+          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} packages key ${JSON.stringify(pkgKey)} not parseable`,
+        })
+        continue
+      }
+      const { name, version, peers } = parsed
+      const peerContext = buildPeerContext(peers, sidecar.importerByPath)
+      const nodeId = serializeNodeId(name, version, peerContext)
+      if (seenIds.has(nodeId)) continue
+      seenIds.add(nodeId)
+      idByPackagesKey.set(pkgKey, nodeId)
+      const pkgEntry = packagesMap[pkgKey]!
+      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+      // v6 carries `dev` per-entry — capture for round-trip.
+      if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
+        const sc = sidecar.nodes.get(nodeId)
+        if (sc !== undefined) sc.dev = pkgEntry.dev
+      }
+    }
+  }
+
   // --- Pass 3: importer edges — root + member → snapshot nodes. ---
+  // (Importer member nodes + `importerByPath` were synthesised in Pass 0.)
   for (const importerPath of importerPaths) {
     const srcId = sidecar.importerByPath.get(importerPath)
     if (srcId === undefined) continue
@@ -544,18 +552,31 @@ export function parseFamily(
   }
 
   // --- Pass 4: resolved-tree edges (snapshot → snapshot for v9, package → package for v6). ---
+  //
+  // #8b-C — peer-of-a-peer collapse dedup. After the depth-0 split (#8b-B),
+  // several distinct snapshot keys that differ ONLY in NESTED peer-of-peer
+  // versions (e.g. `(vite@8.0.8(esbuild@0.26.0))` vs `(…(esbuild@0.27.3))`)
+  // project to ONE depth-0 NodeId. Pass 1 keeps the first via `seenIds`, but
+  // Pass 4 walks EVERY snapshot key, so a collapsed source would emit each of
+  // its resolved-tree edges once PER colliding key → seal `duplicate edge`.
+  // `emittedEdges` tracks the seal's tripleKey (src\0kind\0dst\0alias) per
+  // source so an edge already wired by an earlier colliding key is skipped;
+  // edges with a DISTINCT resolved target (e.g. the two `vite` variants) keep
+  // their own slot. This stays in bijection with peerContext (identical for
+  // all colliding keys) under the seal's base-key projection.
+  const emittedEdges = new Map<string, Set<string>>()
   if (shape.hasSnapshots) {
     const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
     for (const snapshotKey of Object.keys(snapshotsMap)) {
       const parsed = parsePackagesOrSnapshotKey(snapshotKey)
       if (parsed === undefined) continue
       const { name, version, peers } = parsed
-      const peerContext = peers.map(p => `${p.name}@${p.version}`).sort()
+      const peerContext = buildPeerContext(peers, sidecar.importerByPath)
       const srcId = serializeNodeId(name, version, peerContext)
       if (!seenIds.has(srcId)) continue
       const snapEntry = snapshotsMap[snapshotKey]
       if (!isPlainObject(snapEntry)) continue
-      addResolvedTreeEdges(builder, diagnostics, srcId, snapEntry, peers, seenIds, sidecar, shape)
+      addResolvedTreeEdges(builder, diagnostics, srcId, snapEntry, peers, seenIds, sidecar, shape, emittedEdges)
     }
   } else {
     // v6: walk packages entries themselves for inline dependencies + peerDependencies.
@@ -567,7 +588,7 @@ export function parseFamily(
       if (parsed === undefined) continue
       const pkgEntry = packagesMap[pkgKey]
       if (!isPlainObject(pkgEntry)) continue
-      addResolvedTreeEdges(builder, diagnostics, srcId, pkgEntry, parsed.peers, seenIds, sidecar, shape)
+      addResolvedTreeEdges(builder, diagnostics, srcId, pkgEntry, parsed.peers, seenIds, sidecar, shape, emittedEdges)
     }
   }
 
@@ -917,6 +938,19 @@ interface ParsedPackagesOrSnapshotKey {
 }
 
 /**
+ * True when a depth-0 suffix segment is a pnpm PATCH-HASH marker rather than a
+ * peer (#8b-C residue). pnpm v9 emits two spellings inside a key's `(...)`
+ * suffix: the labelled `patch_hash=<sha256-hex>` and the bare hex digest from
+ * `patchedDependencies` (e.g. `(359268677529d8dcdba6ee615fa4d73c)`). A real
+ * peer always carries a `name@version` (a depth-0 `@`); a patch hash never
+ * does — it is pure lowercase hex, optionally `patch_hash=`-prefixed.
+ */
+function isPatchHashSegment(segBase: string): boolean {
+  if (segBase.startsWith('patch_hash=')) return true
+  return segBase.length > 0 && !segBase.includes('@') && /^[0-9a-f]+$/.test(segBase)
+}
+
+/**
  * Parse a `<name>@<version>` or `<name>@<version>(peer@v)(peer2@v2)…` key.
  * Scoped names (leading `@`) retained verbatim; the split uses the LAST
  * `@` at depth 0.
@@ -962,6 +996,7 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
     }
     if (close < 0) return undefined
     const segment = peerSuffix.slice(pos + 1, close)
+    pos = close + 1
     // The segment may itself carry nested `(...)` peers (a transitive peer-
     // of-a-peer, pnpm v9 — e.g. `@astrojs/markdoc@0.15.1(yaml@2.9.0)
     // (react@18.3.1)`). Split off the segment's OWN base at its first depth-0
@@ -979,6 +1014,18 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
       else if (c === ')') sd--
     }
     const segBase = segment.slice(0, segBaseEnd)
+    // pnpm v9 encodes a patched dependency by injecting a PATCH-HASH segment
+    // into the key suffix ALONGSIDE the real peers — two spellings:
+    //   `(patch_hash=<sha256-hex>)`  — labelled (e.g. `@astrojs/starlight@…`)
+    //   `(<hex>)`                    — bare digest from `patchedDependencies`
+    //                                  (e.g. `@nx/eslint@23.0.0-beta.18(3592…)`)
+    // Neither is a peer — there is no `name@version`. Skip it so the key still
+    // parses; aborting (the old `segAt <= 0` failure) would drop the patched
+    // node entirely, leaving any peer that targets it unresolvable → seal
+    // `disagree with peerContext`. Patch ATTRIBUTION flows through the
+    // `overrides:` block (resolvePatchForNode); the bare/patched NodeId
+    // duality is accepted by graph.ts `acceptedNodeIds`.
+    if (isPatchHashSegment(segBase)) continue
     let segAt = -1
     for (let i = 1; i < segBase.length; i++) {
       if (segBase[i] === '@') segAt = i
@@ -988,7 +1035,6 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
     const pVer = segBase.slice(segAt + 1)
     if (pName.length === 0 || pVer.length === 0) return undefined
     peers.push({ name: pName, version: pVer })
-    pos = close + 1
   }
 
   return { name, version, peers }
@@ -1070,7 +1116,24 @@ function addResolvedTreeEdges(
   seenIds: Set<string>,
   sidecar: PnpmSidecar,
   shape: PnpmLayoutShape,
+  emittedEdges: Map<string, Set<string>>,
 ): void {
+  // #8b-C dedup — per-source set of already-wired seal tripleKeys
+  // (`kind\0dst\0alias`; `src` is constant here). Shared across every
+  // snapshot key that collapses to this `srcId`, so a resolved edge is wired
+  // at most once regardless of how many colliding keys reference it.
+  let wired = emittedEdges.get(srcId)
+  if (wired === undefined) {
+    wired = new Set<string>()
+    emittedEdges.set(srcId, wired)
+  }
+  const tryWire = (kind: EdgeKind, dst: string, alias: string | undefined): boolean => {
+    const key = `${kind}\0${dst}\0${alias ?? ''}`
+    if (wired!.has(key)) return false
+    wired!.add(key)
+    return true
+  }
+
   for (const [kind, blockName] of [
     ['dep', 'dependencies'],
     ['optional', 'optionalDependencies'],
@@ -1098,6 +1161,7 @@ function addResolvedTreeEdges(
         })
         continue
       }
+      if (!tryWire(kind, targetId, aliasSlot)) continue
       try {
         const attrs: { range: string; alias?: string } = { range: rawValue }
         if (aliasSlot !== undefined) attrs.alias = aliasSlot
@@ -1112,6 +1176,11 @@ function addResolvedTreeEdges(
   // Peer edges — derive from peerContext per ADR-0006.
   for (const peer of peers) {
     const peerId = peer.name + '@' + peer.version
+    // #8b-A — a workspace peer (`vue@packages+vue`) is satisfied by a
+    // workspace importer node; the seal forbids a registry node owning an
+    // edge into a workspace node, so it is dropped symmetrically with its
+    // peerContext entry (see buildPeerContext / resolveWorkspacePeerId).
+    if (resolveWorkspacePeerId(peer.version, sidecar.importerByPath) !== undefined) continue
     const peerNodeId = resolvePeerTargetById(seenIds, peer.name, peer.version)
     if (peerNodeId === undefined) {
       diagnostics.push({
@@ -1122,6 +1191,7 @@ function addResolvedTreeEdges(
       })
       continue
     }
+    if (!tryWire('peer', peerNodeId, undefined)) continue
     try {
       const sc = sidecar.nodes.get(srcId)
       const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
@@ -1205,6 +1275,49 @@ export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, pe
     if (id.startsWith(bareId + '(')) return id
   }
   return undefined
+}
+
+/**
+ * #8b-A — workspace-peer detection. pnpm encodes a peer that is satisfied by a
+ * workspace importer by stuffing the importer directory into the peer's
+ * version slot with `/` → `+` (e.g. `vue@packages+vue` → importer dir
+ * `packages/vue`, materialised in the snapshot's `dependencies` as
+ * `vue: link:packages/vue`). Such a peer's true target is the synthesised
+ * importer member node (`packages/vue@0.0.0`).
+ *
+ * That target is a WORKSPACE node, and the graph seal (graph.ts §validate)
+ * forbids a non-workspace node from owning an incoming edge into a workspace
+ * node (the published-self-link carve-out covers registry ranges only, not a
+ * `link:`-class workspace peer). The format already DROPS the matching
+ * `link:` snapshot dependency for the same reason. So a workspace peer is
+ * dropped symmetrically from BOTH the peerContext and the peer edge set —
+ * keeping the two in bijection under the seal's base-key projection. Returns
+ * the importer member NodeId when `peerVersion` decodes to a known importer
+ * path (i.e. this IS a workspace peer), else `undefined` (a registry peer).
+ */
+export function resolveWorkspacePeerId(
+  peerVersion: string,
+  importerByPath: Map<string, string>,
+): string | undefined {
+  const importerPath = peerVersion.replace(/\+/g, '/')
+  return importerByPath.get(importerPath)
+}
+
+/**
+ * Build the ADR-0006 peerContext for a node from its parsed suffix peers.
+ * Workspace peers (#8b-A) are filtered out so the recorded context stays in
+ * bijection with the wired peer edges (a workspace peer is droppable — see
+ * `resolveWorkspacePeerId`). Registry peers keep their bare `name@version`
+ * token. Result is sorted (caller contract).
+ */
+function buildPeerContext(
+  peers: Array<{ name: string; version: string }>,
+  importerByPath: Map<string, string>,
+): string[] {
+  return peers
+    .filter(p => resolveWorkspacePeerId(p.version, importerByPath) === undefined)
+    .map(p => `${p.name}@${p.version}`)
+    .sort()
 }
 
 function importerSpec(value: unknown): { specifier?: string; version: string } | undefined {

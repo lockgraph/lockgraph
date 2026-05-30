@@ -155,3 +155,105 @@ describe('pnpm-v9 — multi-peer rendering', () => {
     // Validation of cross-adapter rejection happens in shared suite per spec.
   })
 })
+
+describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedup + patch-hash)', () => {
+  it('#8b-A: a workspace peer (`lib@packages+lib`) is dropped from peerContext AND edges, not sealed as a registry peer', () => {
+    // `consumer` peers on the workspace package `packages/lib`, encoded by pnpm
+    // as `lib@packages+lib` (importer dir `packages/lib` with `/` → `+`). The
+    // workspace target is a workspace node; the seal forbids a registry node
+    // owning an incoming edge into it, so the peer is dropped symmetrically.
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n` +
+      `  .:\n    dependencies:\n` +
+      `      consumer:\n        specifier: 1.0.0\n        version: 1.0.0(lib@packages+lib)\n` +
+      `  packages/lib:\n    dependencies:\n` +
+      `      left-pad:\n        specifier: 1.3.0\n        version: 1.3.0\n\n` +
+      `packages:\n\n` +
+      `  consumer@1.0.0:\n    resolution: {integrity: sha512-a}\n` +
+      `    peerDependencies:\n      lib: '*'\n` +
+      `  left-pad@1.3.0:\n    resolution: {integrity: sha512-b}\n\n` +
+      `snapshots:\n\n` +
+      `  consumer@1.0.0(lib@packages+lib):\n    dependencies:\n      lib: link:packages/lib\n` +
+      `  left-pad@1.3.0: {}\n`
+    const graph = parse(lock) // throws on seal failure — the regression guard
+
+    // The workspace peer was filtered out: NodeId has NO peer suffix.
+    const consumer = graph.getNode('consumer@1.0.0')
+    expect(consumer).toBeDefined()
+    expect(consumer!.peerContext).toEqual([])
+    expect(graph.getNode('consumer@1.0.0(lib@packages+lib)')).toBeUndefined()
+    // No peer edge into the workspace member node.
+    const member = graph.getNode('packages/lib@0.0.0')
+    expect(member).toBeDefined()
+    expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
+  })
+
+  it('#8b-C: two snapshot keys colliding on one depth-0 NodeId (differ only in a nested peer-of-peer) wire each resolved edge once', () => {
+    // `host@1.0.0(dep@2.0.0)` appears twice — the two keys differ ONLY in the
+    // nested peer of `dep` (`(util@1.0.0)` vs `(util@2.0.0)`), which the depth-0
+    // split discards. Both project to `host@1.0.0(dep@2.0.0)`; Pass 4 walks
+    // both, so the shared `@scope/x` dep would be wired twice → seal duplicate
+    // without the dedup. The distinct `dep` variants keep their own edges.
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .:\n    dependencies:\n` +
+      `      host:\n        specifier: 1.0.0\n        version: 1.0.0(dep@2.0.0)\n\n` +
+      `packages:\n\n` +
+      `  '@scope/x@3.0.0':\n    resolution: {integrity: sha512-x}\n` +
+      `  dep@2.0.0:\n    resolution: {integrity: sha512-d}\n` +
+      `  host@1.0.0:\n    resolution: {integrity: sha512-h}\n` +
+      `    peerDependencies:\n      dep: '*'\n` +
+      `  util@1.0.0:\n    resolution: {integrity: sha512-u1}\n` +
+      `  util@2.0.0:\n    resolution: {integrity: sha512-u2}\n\n` +
+      `snapshots:\n\n` +
+      `  '@scope/x@3.0.0': {}\n` +
+      `  dep@2.0.0(util@1.0.0):\n    dependencies:\n      util: 1.0.0\n` +
+      `  dep@2.0.0(util@2.0.0):\n    dependencies:\n      util: 2.0.0\n` +
+      `  host@1.0.0(dep@2.0.0(util@1.0.0)):\n    dependencies:\n      '@scope/x': 3.0.0\n      dep: 2.0.0(util@1.0.0)\n` +
+      `  host@1.0.0(dep@2.0.0(util@2.0.0)):\n    dependencies:\n      '@scope/x': 3.0.0\n      dep: 2.0.0(util@2.0.0)\n` +
+      `  util@1.0.0: {}\n` +
+      `  util@2.0.0: {}\n`
+    const graph = parse(lock) // throws `duplicate edge` on seal without the dedup
+
+    // The two host snapshot keys collapse to ONE node.
+    const host = graph.getNode('host@1.0.0(dep@2.0.0)')
+    expect(host).toBeDefined()
+    // The shared `@scope/x` dep is wired exactly once.
+    const xEdges = graph.out('host@1.0.0(dep@2.0.0)', 'dep').filter(e => e.dst === '@scope/x@3.0.0')
+    expect(xEdges).toHaveLength(1)
+    // The peer edge to dep is wired once and agrees with peerContext.
+    expect(host!.peerContext).toEqual(['dep@2.0.0'])
+    expect(graph.out('host@1.0.0(dep@2.0.0)', 'peer')).toHaveLength(1)
+  })
+
+  it('#8b-C residue: a `patch_hash=` / bare-hex patch-hash segment is not mistaken for a peer', () => {
+    // `tool@1.0.0` is patched (bare-hex digest from `patchedDependencies`) and
+    // referenced as a peer by `plugin`. The patch-hash key must still parse so
+    // the patched node is registered and the peer resolves (else: seal
+    // `disagree with peerContext`).
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .:\n    dependencies:\n` +
+      `      plugin:\n        specifier: 1.0.0\n        version: 1.0.0(tool@1.0.0(deadbeef00112233))\n\n` +
+      `packages:\n\n` +
+      `  plugin@1.0.0:\n    resolution: {integrity: sha512-p}\n` +
+      `    peerDependencies:\n      tool: '*'\n` +
+      `  tool@1.0.0:\n    resolution: {integrity: sha512-t}\n\n` +
+      `snapshots:\n\n` +
+      `  plugin@1.0.0(tool@1.0.0(deadbeef00112233)):\n    dependencies:\n      tool: 1.0.0(deadbeef00112233)\n` +
+      `  tool@1.0.0(deadbeef00112233): {}\n`
+    const graph = parse(lock)
+
+    // Patched node registered under its bare NodeId (patch-hash skipped).
+    expect(graph.getNode('tool@1.0.0')).toBeDefined()
+    const plugin = graph.getNode('plugin@1.0.0(tool@1.0.0)')
+    expect(plugin).toBeDefined()
+    expect(plugin!.peerContext).toEqual(['tool@1.0.0'])
+    // The peer edge resolved to the patched node, satisfying the seal bijection.
+    expect(graph.out('plugin@1.0.0(tool@1.0.0)', 'peer').map(e => e.dst)).toEqual(['tool@1.0.0'])
+  })
+})
