@@ -49,5 +49,6 @@ zero-padded to 4 digits.
 | [0022](./0022-pnpm-family-completeness-contract.md) | `pnpm` lockfile family completeness contract | proposed | 2026-05-12 |
 | [0023](./0023-graph-modification-and-completion.md) | Graph modification, tree completion, and find-up resolve semantics | accepted | 2026-05-24 |
 | [0024](./0024-optimize-phase.md) | Optimize phase: orphan garbage collection (monotone-reductive) | accepted | 2026-05-25 |
+| [0025](./0025-manifest-overrides.md) | Manifest layer materialisation & dependency-override capture | proposed | 2026-05-30 |
 
-Next free number: **0025**.
+Next free number: **0026**.

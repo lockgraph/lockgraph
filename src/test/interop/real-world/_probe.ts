@@ -79,6 +79,10 @@ export function loadRealWorldFixtures(): RealWorldFixture[] {
     const files = readdirSync(repoRoot, { withFileTypes: true })
       .filter(entry => entry.isFile())
       .map(entry => entry.name)
+      // `package.json` is the manifest, not a lockfile — fixtures now ship it
+      // alongside the lock for manifest-aware work (ADR-0025). The cross-family
+      // probe detects + converts LOCKFILES only; skip the manifest here.
+      .filter(name => name !== 'package.json')
       .sort()
 
     for (const fileName of files) {
