@@ -343,8 +343,22 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   // Pass 3: emit packages inner-block edges. Resolution uses a per-consumer
   // scoped index, since bun de-hoists conflicting entries под `<consumer>/<dep>`
   // packages keys и those shadow the flat lookup for that consumer.
+  //
+  // A single NodeId can appear under multiple `packages` keys — via npm-alias
+  // siblings (`string-width` + `string-width-cjs`, both `string-width@4.2.3`)
+  // and via de-hoist keys (`<consumer>/<dep>`). Node registration already
+  // dedups on NodeId (`seenNodeIds`), but `entriesByKey` keeps one entry per
+  // key, so without a guard `addBlockEdges` re-emits the identical
+  // `(src, dep, kind)` edge 2-3× → seal `duplicate edge`. Emit each source
+  // node's inner-block exactly once; the first key wins (its de-hoist scope
+  // applies). The package's own dependency set is invariant across its keys,
+  // so collapsing is lossless — stringify re-expands one tuple per
+  // name@version regardless.
+  const emittedSrc = new Set<string>()
   for (const [packagesKey, entry] of entriesByKey) {
     if (entry.inner === undefined) continue
+    if (emittedSrc.has(entry.id)) continue
+    emittedSrc.add(entry.id)
     const consumerScope = buildConsumerScope(packagesKey, packages, packageByName)
     addBlockEdges(builder, diagnostics, entry.id, entry.inner, consumerScope, undefined, peerDeclarations)
   }

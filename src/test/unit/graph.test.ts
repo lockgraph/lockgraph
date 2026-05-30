@@ -167,6 +167,30 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
   })
 
+  it('seals a transitive peer whose edge targets a peer-variant (base-key projection, ADR-0017)', () => {
+    // pnpm v9: `a`'s peer `b` is itself a peer-variant `b@1.0.0(c@1.0.0)`.
+    // peerContext records the BARE base key `b@1.0.0`; the peer edge targets
+    // the fully-qualified variant. Base-key projection makes them cohere.
+    const b = newBuilder()
+    b.addNode(n('c@1.0.0', 'c', '1.0.0'))
+    b.addNode(n('b@1.0.0(c@1.0.0)', 'b', '1.0.0', ['c@1.0.0']))
+    b.addNode(n('a@1.0.0(b@1.0.0)', 'a', '1.0.0', ['b@1.0.0']))
+    b.addEdge('b@1.0.0(c@1.0.0)', 'c@1.0.0', 'peer')
+    b.addEdge('a@1.0.0(b@1.0.0)', 'b@1.0.0(c@1.0.0)', 'peer') // target is the VARIANT
+    expect(() => b.seal()).not.toThrow()
+  })
+
+  it('still rejects a peer edge whose base-key is absent from peerContext (projection not gutted)', () => {
+    // The loosened seal must not accept arbitrary peer edges: projecting to
+    // base keys, `wrong@1.0.0` ≠ peerContext `right@1.0.0`.
+    const b = newBuilder()
+    b.addNode(n('right@1.0.0', 'right', '1.0.0'))
+    b.addNode(n('wrong@2.0.0', 'wrong', '2.0.0'))
+    b.addNode(n('a@1.0.0(right@1.0.0)', 'a', '1.0.0', ['right@1.0.0']))
+    b.addEdge('a@1.0.0(right@1.0.0)', 'wrong@2.0.0', 'peer') // base-key not in peerContext
+    expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
+  })
+
   it('workspace nodes must have no incoming edges from non-workspace nodes', () => {
     const b = newBuilder()
     b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))

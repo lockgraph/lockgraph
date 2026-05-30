@@ -502,11 +502,22 @@ function validate(s: State): void {
       throw new GraphError('INVARIANT_VIOLATION', `node id ${id} disagrees with derived id ${expected.join(' or ')}`)
     }
 
+    // Peer-edge ↔ peerContext coherence is checked by BASE-KEY PROJECTION
+    // (NodeId stripped of its `(...)` peer-context suffix), not full-NodeId
+    // string equality. pnpm's suffix grammar (ADR-0006) is one-level: a
+    // node's peerContext records bare `name@version` base keys, but a peer
+    // edge must target a real node — and when that peer is itself a peer-
+    // variant (transitive peer-of-a-peer, e.g. pnpm v9
+    // `css-parser-algorithms@4.0.0(css-tokenizer@4.0.0)`), the edge target is
+    // the fully-qualified variant NodeId. Full-id bijection only holds for
+    // leaf peers; projecting both sides to base keys restores the invariant
+    // at the granularity the suffix actually encodes. The no-orphan /
+    // no-missing intent is preserved — just matched on base key. (ADR-0017.)
     const peerEdgeTargets = (s.outgoing.get(id) ?? [])
       .filter(e => e.kind === 'peer')
-      .map(e => e.dst)
+      .map(e => stripPeerContextFromNodeId(e.dst))
       .sort()
-    const peerCtx = node.peerContext.slice().sort()
+    const peerCtx = node.peerContext.map(stripPeerContextFromNodeId).sort()
     if (peerEdgeTargets.length !== peerCtx.length || peerEdgeTargets.some((t, i) => t !== peerCtx[i])) {
       throw new GraphError('INVARIANT_VIOLATION', `peer edges of ${id} disagree with peerContext`)
     }

@@ -168,10 +168,24 @@ export function parseFamily(
   const pathToId = new Map<string, string>()
   const idToEntry = new Map<string, NpmEntry>()
 
-  const rootName = rootEntry.name ?? lf.name
-  const rootVersion = rootEntry.version ?? lf.version
-  if (rootName === undefined || rootVersion === undefined) {
-    throw parseFailed(config, 'root entry must carry name and version')
+  // npm's `packages[""]` (the project root, a workspace node per ADR-0017)
+  // legitimately omits `name` and/or `version` for private / unpublished
+  // roots — the dominant shape for apps and monorepo roots (e.g.
+  // create-react-app omits both; socket.io carries name but no version).
+  // Synthesize the missing pieces rather than refusing to parse: name falls
+  // back to npm's own root key `.`; version to the unpublished sentinel
+  // `0.0.0` (cf. yarn-berry's `0.0.0-use.local`, ADR-0017). A diagnostic
+  // records the synthesis so the round-trip stays auditable. Workspace
+  // MEMBERS (below) keep the strict name/version requirement.
+  const rootName = rootEntry.name ?? lf.name ?? '.'
+  const rootVersion = rootEntry.version ?? lf.version ?? '0.0.0'
+  if (rootEntry.version === undefined && lf.version === undefined) {
+    builder.diagnostic({
+      code:     `${config.diagnosticPrefix}_ROOT_VERSION_SYNTHESIZED`,
+      severity: 'info',
+      subject:  'graph',
+      message:  `private root entry carries no version; synthesised '${rootVersion}'`,
+    })
   }
   const rootId = `${rootName}@${rootVersion}`
   pathToId.set('', rootId)
@@ -184,16 +198,44 @@ export function parseFamily(
     workspacePath: '',
   })
 
+  // npm `link: true` entries are the symlinks (`node_modules/<pkgname>` →
+  // `resolved: <member-path>`) through which the rest of the tree references
+  // a workspace member. They are the authoritative source of a member's
+  // package name when the member's own `packages/<path>` entry omits it
+  // (private workspaces routinely do — e.g. socket.io's `packages/engine.io`
+  // carries a version but no name). Unlike the path's last segment, the link
+  // name handles scoped packages (`@scope/pkg` linked from a `packages/pkg`
+  // dir). Build the path → link-name map up front.
+  const linkNameByPath = new Map<string, string>()
+  for (const [key, entry] of Object.entries(packages)) {
+    if (entry.link !== true || typeof entry.resolved !== 'string') continue
+    const at = key.lastIndexOf('node_modules/')
+    if (at < 0) continue
+    const linkName = key.slice(at + 'node_modules/'.length)
+    if (!linkNameByPath.has(entry.resolved)) linkNameByPath.set(entry.resolved, linkName)
+  }
+
   // Pass 1a: workspace member entries (under bare `<wsPath>` keys).
   for (const [path, entry] of Object.entries(packages)) {
     if (path === '' || path.startsWith('node_modules/')) continue
     if (path.includes('/node_modules/')) continue
     if (entry.link === true) continue
-    const name = entry.name
-    const version = entry.version
-    if (name === undefined || version === undefined) {
-      throw parseFailed(config, `workspace entry ${JSON.stringify(path)} missing name/version`)
+    // Synthesize a missing name from the symlink that references this member
+    // (falling back to the path's last segment), and a missing version from
+    // the unpublished sentinel `0.0.0` (cf. the root entry above). A private
+    // workspace member legitimately omits either.
+    const synthName = entry.name ?? linkNameByPath.get(path) ?? path.slice(path.lastIndexOf('/') + 1)
+    const synthVersion = entry.version ?? '0.0.0'
+    if (entry.name === undefined || entry.version === undefined) {
+      builder.diagnostic({
+        code:     `${config.diagnosticPrefix}_WORKSPACE_MEMBER_SYNTHESIZED`,
+        severity: 'info',
+        subject:  'graph',
+        message:  `private workspace member ${JSON.stringify(path)} omits ${entry.name === undefined ? 'name' : ''}${entry.name === undefined && entry.version === undefined ? '/' : ''}${entry.version === undefined ? 'version' : ''}; synthesised ${synthName}@${synthVersion}`,
+      })
     }
+    const name = synthName
+    const version = synthVersion
     const id = `${name}@${version}`
     if (idToEntry.has(id) && idToEntry.get(id) !== entry) {
       throw new LockfileError({
@@ -897,10 +939,19 @@ function deriveInstallPathsForStringify(
       for (const edge of edges) {
         const dst = graph.getNode(edge.dst)
         if (dst === undefined || dst.workspacePath !== undefined) continue
-        if (resolveDepTarget(current.path, dst.name, pathToId) === dst.id) continue
+        // npm installs an npm-aliased dep under its ALIAS directory, not the
+        // real package name (`string-width-cjs: npm:string-width@^4` lives at
+        // `node_modules/string-width-cjs`). Keying the path tail off the real
+        // name collides when a consumer has both a direct dep and an aliased
+        // dep onto the same package at different versions (the `*-cjs`
+        // dual-publish pattern under `@isaacs/cliui`). Use the edge's alias
+        // when present. `buildNodeModulesEntry` re-emits `name:` whenever the
+        // path tail differs from the node name, so the round-trip stays sound.
+        const segment = edge.attrs?.alias ?? dst.name
+        if (resolveDepTarget(current.path, segment, pathToId) === dst.id) continue
         const installPath = current.path === ''
-          ? `node_modules/${dst.name}`
-          : `${current.path}/node_modules/${dst.name}`
+          ? `node_modules/${segment}`
+          : `${current.path}/node_modules/${segment}`
         addPlacement(dst.id, installPath)
       }
     }
