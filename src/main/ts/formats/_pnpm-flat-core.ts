@@ -168,6 +168,7 @@ interface PnpmLayoutShape {
 const TOP_LEVEL_ORDER_V9: readonly string[] = [
   'lockfileVersion',
   'settings',
+  'catalogs',
   'overrides',
   'importers',
   'packages',
@@ -249,6 +250,13 @@ export interface PnpmSidecar {
   nodes: Map<string, PnpmNodeSidecar>
   importerEdges: Map<string, PnpmEdgeSidecar>
   overrides?: Record<string, string>
+  /** Verbatim top-level `catalogs:` block (pnpm v9+ catalog protocol). Captured
+   *  at parse, replayed on emit. The importer `specifier: 'catalog:'` refs
+   *  already round-trip on edges; WITHOUT re-emitting the `catalogs:` definitions
+   *  those refs resolve to nothing → invalid pnpm lockfile (e.g. directus: 662
+   *  catalog refs). Cross-PM `catalog:`→concrete-version resolution is a separate
+   *  concern (#56 layer 2); this just stops the same-PM round-trip drop. */
+  catalogs?: YamlMap
 }
 
 const sidecarByGraph = new WeakMap<Graph, PnpmSidecar>()
@@ -317,6 +325,13 @@ export function parseFamily(
 
   if (yaml.overrides !== undefined && typeof yaml.overrides === 'object') {
     sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
+  }
+
+  // Top-level `catalogs:` block (pnpm v9+ catalog protocol) — captured verbatim,
+  // replayed on emit. Importer `specifier: 'catalog:'` refs round-trip on edges;
+  // dropping the `catalogs:` definitions orphans them → invalid lockfile.
+  if (yaml.catalogs !== undefined && typeof yaml.catalogs === 'object') {
+    sidecar.catalogs = yaml.catalogs as YamlMap
   }
 
   // ADR-0014 §4.F2 — compile patch directives from the overrides block.
@@ -701,6 +716,12 @@ export function stringifyFamily(
 
   if (Object.keys(effectiveOverrides).length > 0) {
     out.overrides = sortRecord(effectiveOverrides) as YamlMap
+  }
+
+  // Replay the captured top-level `catalogs:` block verbatim (pnpm v9+); emit
+  // order (settings → catalogs → overrides) matches pnpm via TOP_LEVEL_ORDER_V9.
+  if (sidecar?.catalogs !== undefined && Object.keys(sidecar.catalogs).length > 0) {
+    out.catalogs = sidecar.catalogs
   }
 
   // importers vs collapsed dependencies — v9 always emits importers; v6
