@@ -169,6 +169,17 @@ export interface NpmRootMeta {
   devDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
+  /** Canonical overrides captured from the root entry's `overrides` block
+   *  (ADR-0025 §3). The name-chain abstraction — used for cross-PM projection,
+   *  query, and the manifest-capture (A2) path where no npm verbatim exists. */
+  overrides?: OverrideConstraint[]
+  /** VERBATIM npm `overrides` block as written in the lock (ADR-0025 §3). This
+   *  is the lossless same-PM round-trip carrier — re-emitted byte-for-byte when
+   *  the caller supplies no `StringifyOptions.overrides`, symmetric to pnpm's
+   *  `sidecar.overrides`. Preferred over the canonical form on npm→npm re-emit
+   *  because the canonical name-chain drops npm-specific tails (`pkg@version`
+   *  key qualifiers, self-key ordering). */
+  nativeOverrides?: Record<string, unknown>
 }
 
 // Per-NodeId sidecar shared by every flat-family adapter (npm-2 + npm-3).

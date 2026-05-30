@@ -66,7 +66,7 @@ import {
   stringifyForVersionOnly,
   workspaceRangeOfEdge,
 } from '../recipe/workspace.ts'
-import { projectOverrides } from '../recipe/overrides.ts'
+import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -365,6 +365,21 @@ export function parseFamily(
   if (rootEntry.peerDependencies !== undefined) rootMeta.peerDependencies = { ...rootEntry.peerDependencies }
   if (rootEntry.optionalDependencies !== undefined) rootMeta.optionalDependencies = { ...rootEntry.optionalDependencies }
 
+  // ADR-0025 §3 — capture the root entry's `overrides` block (npm mirrors the
+  // root manifest's overrides into `packages[""]`). Store BOTH the verbatim
+  // block (`nativeOverrides`, the lossless same-PM round-trip carrier symmetric
+  // to pnpm's `sidecar.overrides`) AND the canonical name-chain (`overrides`,
+  // for cross-PM projection / query). F6 capture is recipe-pure; the
+  // RECIPE_OVERRIDE_NORMALISED info funnels through the same `diagnostics`
+  // buffer the rest of parse uses.
+  if (rootEntry.overrides !== undefined) {
+    const captured = captureOverrides(rootEntry.overrides, 'npm', d => diagnostics.push(d))
+    if (captured.canonical.length > 0) rootMeta.overrides = captured.canonical
+    if (captured.native.npmOverrides !== undefined) {
+      rootMeta.nativeOverrides = captured.native.npmOverrides as Record<string, unknown>
+    }
+  }
+
   for (const sc of nodeSidecar.values()) {
     sc.installPaths = Array.from(new Set(sc.installPaths)).sort(cmpStr)
   }
@@ -441,18 +456,32 @@ export function stringifyFamily(
     packages[''] = { name: rootName, version: rootVersion }
   }
 
-  // ADR-0025 §4 — project caller-declared overrides into the root entry's
-  // `overrides` block. Only the packages-keyed shape (lockfileVersion ≥ 2)
-  // carries it; npm-1's recursive `dependencies` tree has no override slot,
-  // so the constraints are dropped with a loss diagnostic instead.
-  if (options.overrides !== undefined && options.overrides.length > 0) {
+  // ADR-0025 §3/§4 — emit the root entry's `overrides` block. Source precedence:
+  //   1. caller `options.overrides` (canonical) → project to npm nested form.
+  //      An explicit `[]` (not undefined) emits nothing — the caller asked for
+  //      none, suppressing the captured fallback.
+  //   2. else the VERBATIM lock-borne block (`rootMeta.nativeOverrides`) →
+  //      re-emit byte-for-byte: the lossless same-PM round-trip carrier,
+  //      symmetric to pnpm's `sidecar.overrides`. Preferred over canonical
+  //      because the name-chain abstraction drops npm tails (`pkg@version` key
+  //      qualifiers, self-key ordering) per ADR-0025 §2.
+  //   3. else a canonical-only carrier (`rootMeta.overrides`, e.g. captured from
+  //      a cross-PM manifest with no npm verbatim — the A2 path) → project.
+  // Only the packages-keyed shape (lockfileVersion ≥ 2) carries it.
+  let overrideBlock: Record<string, unknown> | undefined
+  if (options.overrides !== undefined) {
+    if (options.overrides.length > 0) {
+      overrideBlock = projectOverrides(options.overrides, 'npm', emitDiagnostic)
+    }
+  } else if (rootMeta?.nativeOverrides !== undefined) {
+    overrideBlock = rootMeta.nativeOverrides
+  } else if (rootMeta?.overrides !== undefined && rootMeta.overrides.length > 0) {
+    overrideBlock = projectOverrides(rootMeta.overrides, 'npm', emitDiagnostic)
+  }
+  if (overrideBlock !== undefined) {
     const rootEntry = packages['']
     if (config.lockfileVersion >= 2 && typeof rootEntry === 'object' && rootEntry !== null) {
-      ;(rootEntry as Record<string, unknown>).overrides = projectOverrides(
-        options.overrides,
-        'npm',
-        emitDiagnostic,
-      )
+      ;(rootEntry as Record<string, unknown>).overrides = overrideBlock
     } else {
       // Defensive only: every FormatId routed through `stringifyFamily` today
       // pins lockfileVersion ≥ 2 (npm-2 → 2, npm-3 → 3), and npm-1 owns a
@@ -461,7 +490,7 @@ export function stringifyFamily(
       emitDiagnostic({
         code:     `${config.diagnosticPrefix}_OVERRIDES_UNSUPPORTED`,
         severity: 'warning',
-        message:  `lockfileVersion ${config.lockfileVersion} has no packages[""].overrides slot; ${options.overrides.length} override(s) not projected`,
+        message:  `lockfileVersion ${config.lockfileVersion} has no packages[""].overrides slot; ${Object.keys(overrideBlock).length} override key(s) not projected`,
       })
     }
   }

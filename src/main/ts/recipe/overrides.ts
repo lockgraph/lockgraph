@@ -340,7 +340,17 @@ function projectNpm(canonical: readonly OverrideConstraint[]): Record<string, un
         node = nested
       }
     }
-    node[leafKey] = c.to // npm understands `$name` self-refs verbatim
+    const existingLeaf = node[leafKey]
+    if (existingLeaf !== null && typeof existingLeaf === 'object') {
+      // A nested scope already lives at this leaf (a deeper override was
+      // projected first — order-dependent). The scalar is the leaf's OWN forced
+      // version → npm's `.` self-key, NOT an overwrite that would silently drop
+      // the nested children. Symmetric to the scalar-then-object rescue above;
+      // together they make projection order-independent.
+      ;(existingLeaf as Record<string, unknown>)['.'] = c.to
+    } else {
+      node[leafKey] = c.to // npm understands `$name` self-refs verbatim
+    }
   }
   return root
 }

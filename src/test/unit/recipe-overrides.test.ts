@@ -435,6 +435,26 @@ describe('projectOverrides — canonical → PM-native (ADR-0025 §4)', () => {
     expect(projectOverrides(canonical, 'npm')).toEqual(npm)
   })
 
+  it('npm: projection is order-independent for a self-key-LAST source', () => {
+    // `.` (the parent's own forced version) authored AFTER the child override:
+    // capture yields [{foo, parentPath:[bar]}, {bar, to:2.0.0}] (nested first),
+    // and projectNpm must land the `bar` scalar on the `.` self-key, NOT
+    // overwrite the nested scope destructively (ADR-0025 §2 order-independence).
+    const npm = { bar: { foo: '1.0.0', '.': '2.0.0' } }
+    const { canonical } = captureOverrides(npm, 'npm')
+    expect(projectOverrides(canonical, 'npm')).toEqual(npm)
+  })
+
+  it('npm: a hand-built nested-then-scalar canonical keeps both entries', () => {
+    // Directly exercise the projectNpm leaf-collision branch independent of
+    // capture ordering — the scalar parent must not clobber the nested child.
+    const canonical = [
+      { package: 'foo', parentPath: ['bar'], to: '1.0.0' },
+      { package: 'bar', to: '2.0.0' },
+    ]
+    expect(projectOverrides(canonical, 'npm')).toEqual({ bar: { foo: '1.0.0', '.': '2.0.0' } })
+  })
+
   it('pnpm: capture → project round-trips flat `>`/`@`/global selectors', () => {
     const pnpm = { foo: '1.0.0', 'a>b': '2.0.0', 'a>b>c': '3.0.0', 'minimatch@9': '9.9.9' }
     const { canonical } = captureOverrides(pnpm, 'pnpm')
