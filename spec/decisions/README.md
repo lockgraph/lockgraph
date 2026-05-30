@@ -50,5 +50,6 @@ zero-padded to 4 digits.
 | [0023](./0023-graph-modification-and-completion.md) | Graph modification, tree completion, and find-up resolve semantics | accepted | 2026-05-24 |
 | [0024](./0024-optimize-phase.md) | Optimize phase: orphan garbage collection (monotone-reductive) | accepted | 2026-05-25 |
 | [0025](./0025-manifest-overrides.md) | Manifest layer materialisation & dependency-override capture | proposed | 2026-05-30 |
+| [0026](./0026-layout-attribution.md) | Layout attribution: install-path placement carrier (L3 round-trip slice) | proposed | 2026-05-30 |
 
-Next free number: **0026**.
+Next free number: **0027**.
