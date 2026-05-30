@@ -1,7 +1,12 @@
-# ADR-0026 — Layout attribution: install-path placement carrier (L3 round-trip slice)
+# ADR-0026 — Layout attribution: a round-trip cache for npm install-path placement (not the L3 model)
 
-> Status: `proposed`
+> Status: `accepted`
 > Date: `2026-05-30`
+> Reframed 2026-05-30 (architect deliberation): this carrier is **format-attribution
+> — a read-before-modify round-trip *cache*, NOT an L3 model instance**. The
+> canonical representation is the L2 graph; this cache pins ONE valid L3 projection
+> when one was observed at parse. The generative L3 model (`Layout`/`LayoutEntry`,
+> `spec/04-layouts.md`) is ADR-0027. See §Crux.
 
 ## Context
 
@@ -154,6 +159,45 @@ silent homes for strategy.
   application waits on ADR-0027.
 - **Open:** the generative `Layout` type, scoped-override application, and pnpm
   virtual-store synthesis → ADR-0027.
+
+## Round-trip guarantee & crux (architect deliberation, 2026-05-30)
+
+**The snapshot is format-attribution, NOT the canonical model** — three independent
+reasons, each sufficient:
+
+1. **It fails the canonical test: it does not survive the canonical operation.**
+   `graph.mutate()` shallow-clones into a fresh `Graph` handle (`graph.ts:823-824`);
+   every carrier is a `WeakMap<Graph,…>`, so the snapshot is dropped on the first
+   mutation — *by construction, not policy*. A thing the flagship consumer
+   (audit-fix) discards on its central operation cannot be the source of truth.
+2. **It is disambiguation, not information.** The L2 graph is already complete; the
+   snapshot adds zero resolution facts — it only selects WHICH of several
+   find-up-equivalent trees npm chose. Textbook PM-native attribution (ADR-0013),
+   same kind as npm `nativeOverrides` / pnpm `sidecar.overrides`.
+3. **It is co-observed-then-independent:** observed at parse, never reconciled
+   after — a cache, not a maintained model.
+
+The canonical representation is **the L2 graph**. This snapshot pins ONE valid L3
+projection when one was observed; the generative L3 *model* (`Layout`/`LayoutEntry`)
+is ADR-0027.
+
+**Per-flow round-trip guarantee (what we honestly promise):**
+
+| Flow | Snapshot | Guarantee |
+|------|----------|-----------|
+| no-op same-PM (npm→npm, unchanged) | present (parse handle) | **structure-identical** — emitted `packages` key-set **and per-key path-strings** == original |
+| cross-PM (npm→pnpm, …) | absent (doesn't map across PMs) | **semantic-equivalent** — valid find-up-correct tree + `LAYOUT_PLACEMENT_RESYNTHESISED` |
+| audit-fix (parse→mutate→stringify) | dropped at `mutate` | **semantic-equivalent**; min-churn target → ADR-0027 |
+| read-only inspection | n/a | none (no stringify) |
+
+**No full byte-identity is promised to anyone.** Byte / key-**order** fidelity is
+unattainable in principle: even plain `JSON.parse → JSON.stringify` does not
+preserve key order (V8 reorders integer-like keys; the object round-trip discards
+source ordering). **Structure-identity** (key-set + path-strings) is the honest,
+achievable bar. Consequently the no-op gate (§Acceptance 2) asserts the **path
+string per key**, not merely the set of NodeIds — otherwise #10's sibling class
+(right nodes, wrong nesting) slips below the predicate exactly as #10 slipped below
+the Graph-level round-trip check.
 
 ## Scope boundaries (explicit non-goals → ADR-0027)
 
