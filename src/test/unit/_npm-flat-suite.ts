@@ -376,15 +376,23 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
 
       expect(reparsed.getNode('react-dom@18.2.0(react@18.2.0)')).toBeUndefined()
       expect(reparsed.getNode('react-dom@18.2.0')).toBeDefined()
-      expect(diagnostics.map(d => d.code)).toEqual([`${diagPrefix}_PEER_VIRT_FLATTENED`])
-      expect(diagnostics[0]).toEqual(
+      // mutate() drops the parse-captured install-path sidecar, so this emit
+      // re-synthesises the npm layout → LAYOUT_PLACEMENT_RESYNTHESISED (info,
+      // ADR-0026) fires alongside the peer-flatten warning. Target the peer
+      // diagnostic by code rather than assuming list shape/position.
+      const peerFlattened = diagnostics.filter(
+        d => d.code === `${diagPrefix}_PEER_VIRT_FLATTENED`,
+      )
+      expect(peerFlattened).toHaveLength(1)
+      expect(peerFlattened[0]).toEqual(
         expect.objectContaining({
           code: `${diagPrefix}_PEER_VIRT_FLATTENED`,
           severity: 'warning',
           subject: 'react-dom@18.2.0(react@18.2.0)',
         }),
       )
-      expect(diagnostics[0]?.message).toContain('["react@18.2.0"]')
+      expect(peerFlattened[0]?.message).toContain('["react@18.2.0"]')
+      expect(diagnostics.map(d => d.code)).toContain('LAYOUT_PLACEMENT_RESYNTHESISED')
     })
 
     it(`setNode patch drops on emit with RECIPE_FEATURE_DROPPED`, () => {

@@ -441,7 +441,7 @@ export function stringifyFamily(
   const rootMeta = sidecar?.rootMeta
   const rootName = rootMeta?.name ?? rootNode?.name ?? ''
   const rootVersion = rootMeta?.version ?? rootNode?.version ?? '0.0.0'
-  const plannedInstallPaths = deriveInstallPathsForStringify(graph, sidecar, rootNode)
+  const plannedInstallPaths = deriveInstallPathsForStringify(graph, sidecar, rootNode, emitDiagnostic)
 
   const packages: Record<string, unknown> = {}
 
@@ -935,6 +935,7 @@ function deriveInstallPathsForStringify(
   graph: Graph,
   sidecar: NpmSidecar | undefined,
   rootNode: Node | undefined,
+  onDiagnostic?: (d: Diagnostic) => void,
 ): Map<string, string[]> {
   const byNodeId = new Map<string, Set<string>>()
   const pathToId = new Map<string, string>()
@@ -1033,22 +1034,46 @@ function deriveInstallPathsForStringify(
   // `lcov-parse@1.0.0`). Node-flat sources (npm-2 / npm-3) carry sidecar
   // install paths that have already filled every position above, so this
   // BFS is a no-op for them.
-  drainBfsQueue()
-
-  // Lexicographic fallback for nodes not reachable from any root or
-  // workspace consumer (e.g. orphaned packages preserved by the graph but
-  // disconnected from the root manifest). After each fallback placement
-  // re-drain the consumer queue so the orphan's transitive dependencies
-  // nest under its install path. Without the per-iteration drain, a non-
-  // dominant version reached only via the synthetic fallback path (e.g.
-  // peers-multi `react-dom@18.2.0` in the yarn-classic shape) cannot pull
-  // its scoped deps (`scheduler@0.23.2`) into its capsule and npm's
-  // node-resolution at parse time falls back to the dominant root version
-  // of the same name.
-  for (const node of seededNodes) {
-    if (byNodeId.has(node.id)) continue
-    addPlacement(node.id, fallbackInstallPathForNode(node, pathToId))
+  // ADR-0026 replay vs generate. When every resolved node carries a
+  // parse-captured install path (an un-mutated same-PM npm round-trip), the
+  // seeded placement IS npm's own authoritative, valid, collision-free tree —
+  // SKIP the re-hoisting BFS entirely. The BFS re-derives synthetic nested
+  // paths and can route two versions onto one (`IRREDUCIBLE_LOSS` / #10, e.g.
+  // microsoft-vscode's `…/minimatch/node_modules/brace-expansion`) even though
+  // the captured tree is sound. Otherwise — cross-PM input or a post-`mutate`
+  // graph (no sidecar, or partial capture) — GENERATE the placement via the BFS
+  // + lexicographic fallback.
+  const captureComplete =
+    seededNodes.length > 0 &&
+    seededNodes.every(node => (sidecar?.nodes.get(node.id)?.installPaths?.length ?? 0) > 0)
+  if (!captureComplete) {
     drainBfsQueue()
+
+    // Lexicographic fallback for nodes not reachable from any root or
+    // workspace consumer (e.g. orphaned packages preserved by the graph but
+    // disconnected from the root manifest). After each fallback placement
+    // re-drain the consumer queue so the orphan's transitive dependencies
+    // nest under its install path. Without the per-iteration drain, a non-
+    // dominant version reached only via the synthetic fallback path (e.g.
+    // peers-multi `react-dom@18.2.0` in the yarn-classic shape) cannot pull
+    // its scoped deps (`scheduler@0.23.2`) into its capsule and npm's
+    // node-resolution at parse time falls back to the dominant root version
+    // of the same name.
+    for (const node of seededNodes) {
+      if (byNodeId.has(node.id)) continue
+      addPlacement(node.id, fallbackInstallPathForNode(node, pathToId))
+      drainBfsQueue()
+    }
+    // ADR-0026 §Diagnostics — the emitted tree is a re-synthesised valid
+    // projection, not a byte/structure copy of any original (cross-PM input or
+    // post-mutate). Surface it so byte-divergence is attributed, not silent.
+    onDiagnostic?.({
+      code: 'LAYOUT_PLACEMENT_RESYNTHESISED',
+      severity: 'info',
+      message:
+        'npm install-path layout re-synthesised — no complete parse-captured placement ' +
+        '(cross-PM input or post-mutate graph); emitted a valid find-up tree, not the original projection',
+    })
   }
 
   const planned = new Map<string, string[]>()
