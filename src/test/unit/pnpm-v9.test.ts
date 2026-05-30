@@ -190,6 +190,34 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
     expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
   })
 
+  it('#8d (sister #7): a workspace peer published from a SUB-DIR (`lib@packages+lib+build`) resolves to the ancestor importer + drops from peerContext', () => {
+    // mui encodes `@mui/material` as `packages+mui-material+build`
+    // (`packages/mui-material/build`) while the importer is `packages/mui-material`.
+    // resolveWorkspacePeerId must walk up to the ancestor importer; otherwise the
+    // peer stays in peerContext and the seal "disagrees".
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n` +
+      `  .:\n    dependencies:\n` +
+      `      consumer:\n        specifier: 1.0.0\n        version: 1.0.0(lib@packages+lib+build)\n` +
+      `  packages/lib:\n    dependencies:\n` +
+      `      left-pad:\n        specifier: 1.3.0\n        version: 1.3.0\n\n` +
+      `packages:\n\n` +
+      `  consumer@1.0.0:\n    resolution: {integrity: sha512-a}\n` +
+      `    peerDependencies:\n      lib: '*'\n` +
+      `  left-pad@1.3.0:\n    resolution: {integrity: sha512-b}\n\n` +
+      `snapshots:\n\n` +
+      `  consumer@1.0.0(lib@packages+lib+build):\n    dependencies:\n      lib: link:packages/lib\n` +
+      `  left-pad@1.3.0: {}\n`
+    const graph = parse(lock) // throws on seal failure — the sister-#7 regression guard
+    const consumer = graph.getNode('consumer@1.0.0')
+    expect(consumer).toBeDefined()
+    expect(consumer!.peerContext).toEqual([])
+    expect(graph.getNode('consumer@1.0.0(lib@packages+lib+build)')).toBeUndefined()
+    expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
+  })
+
   it('#8b-C: two snapshot keys colliding on one depth-0 NodeId (differ only in a nested peer-of-peer) wire each resolved edge once', () => {
     // `host@1.0.0(dep@2.0.0)` appears twice — the two keys differ ONLY in the
     // nested peer of `dep` (`(util@1.0.0)` vs `(util@2.0.0)`), which the depth-0

@@ -1336,8 +1336,21 @@ export function resolveWorkspacePeerId(
   peerVersion: string,
   importerByPath: Map<string, string>,
 ): string | undefined {
-  const importerPath = peerVersion.replace(/\+/g, '/')
-  return importerByPath.get(importerPath)
+  let path = peerVersion.replace(/\+/g, '/')
+  const exact = importerByPath.get(path)
+  if (exact !== undefined) return exact
+  // A workspace package may be published from a SUB-DIRECTORY of its importer —
+  // e.g. mui encodes `@mui/material` as `packages+mui-material+build`
+  // (`packages/mui-material/build`) while the importer is `packages/mui-material`.
+  // Walk up to the nearest ANCESTOR importer. Never match the root `.` (it
+  // prefixes every path); a real semver `+build` tail simply finds no importer.
+  while (path.includes('/')) {
+    path = path.slice(0, path.lastIndexOf('/'))
+    if (path.length === 0 || path === '.') break
+    const ancestor = importerByPath.get(path)
+    if (ancestor !== undefined) return ancestor
+  }
+  return undefined
 }
 
 /**
