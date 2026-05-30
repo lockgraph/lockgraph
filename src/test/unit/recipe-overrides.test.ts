@@ -9,6 +9,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   captureOverrides,
+  noteYarnOverridesNotProjected,
+  projectOverrides,
   splitNameVersion,
   type CapturedOverrides,
 } from '../../main/ts/recipe/overrides.ts'
@@ -423,5 +425,42 @@ describe('recipe/overrides — real manifests', () => {
     })
 
     expect(native.npmOverrides).toBe(block)
+  })
+})
+
+describe('projectOverrides — canonical → PM-native (ADR-0025 §4)', () => {
+  it('npm: capture → project round-trips the nested block', () => {
+    const npm = { foo: '1.0.0', parent: { bar: '2.0.0' }, baz: { '.': '3.0.0', qux: '4.0.0' } }
+    const { canonical } = captureOverrides(npm, 'npm')
+    expect(projectOverrides(canonical, 'npm')).toEqual(npm)
+  })
+
+  it('pnpm: capture → project round-trips flat `>`/`@`/global selectors', () => {
+    const pnpm = { foo: '1.0.0', 'a>b': '2.0.0', 'a>b>c': '3.0.0', 'minimatch@9': '9.9.9' }
+    const { canonical } = captureOverrides(pnpm, 'pnpm')
+    expect(projectOverrides(canonical, 'pnpm')).toEqual(pnpm)
+  })
+
+  it('npm keeps a `$name` self-ref; projecting it to pnpm warns', () => {
+    const { canonical } = captureOverrides({ react: { 'react-dom': '$react' } }, 'npm')
+    // npm projection preserves the self-ref verbatim, no diagnostic.
+    const npmDiags: string[] = []
+    const npmBlock = projectOverrides(canonical, 'npm', d => npmDiags.push(d.code))
+    expect(npmBlock).toEqual({ react: { 'react-dom': '$react' } })
+    expect(npmDiags).toEqual([])
+    // pnpm has no back-reference → loss diagnostic.
+    const pnpmDiags: string[] = []
+    projectOverrides(canonical, 'pnpm', d => pnpmDiags.push(d.code))
+    expect(pnpmDiags).toContain('OVERRIDE_PARENT_REF_DROPPED')
+  })
+
+  it('yarn note emits INTEROP_OVERRIDE_NOT_PROJECTED when overrides are present', () => {
+    const diags: string[] = []
+    noteYarnOverridesNotProjected(3, d => diags.push(d.code))
+    expect(diags).toEqual(['INTEROP_OVERRIDE_NOT_PROJECTED'])
+    // No diagnostic for an empty override set.
+    const none: string[] = []
+    noteYarnOverridesNotProjected(0, d => none.push(d.code))
+    expect(none).toEqual([])
   })
 })

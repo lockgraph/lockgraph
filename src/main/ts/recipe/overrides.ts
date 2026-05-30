@@ -26,7 +26,11 @@
 // `OVERRIDE_TRANSITIVE_HINT_DROPPED`) fire at stringify (Phase-1c), NOT here.
 
 import type { Diagnostic, Manifest, OverrideConstraint } from '../graph.ts'
-import { recipeOverrideNormalised } from './diagnostics.ts'
+import {
+  interopOverrideNotProjected,
+  overrideParentRefDropped,
+  recipeOverrideNormalised,
+} from './diagnostics.ts'
 
 export type OverridePM = 'npm' | 'yarn' | 'pnpm'
 
@@ -280,6 +284,81 @@ function asStringRecord(block: object): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(block)) {
     if (typeof v === 'string') out[k] = v
+  }
+  return out
+}
+
+// === projection (canonical → PM-native) =====================================
+
+/**
+ * Project canonical override constraints into a target PM's native override
+ * block (ADR-0025 §4) — the inverse of `captureOverrides`. npm returns a nested
+ * object; pnpm a flat `Record` keyed by `>`-separated ancestor selectors. The
+ * adapter writes the block into its lockfile (npm `packages[""].overrides` /
+ * pnpm top-level `overrides:`). yarn has no lockfile overrides target — callers
+ * use `noteYarnOverridesNotProjected` instead.
+ *
+ * Loss: an npm `$name` self-ref lowered to pnpm emits OVERRIDE_PARENT_REF_DROPPED.
+ * The yarn deep-glob and pnpm leading-`>` transitive-only tails lose their
+ * distinguishing info at *capture* (the canonical carries no origin marker), so
+ * they project as plain global/scoped constraints; faithfully surfacing
+ * OVERRIDE_GLOB_NARROWED / OVERRIDE_TRANSITIVE_HINT_DROPPED needs an `origin?`
+ * field on OverrideConstraint — a tracked follow-up, not this slice.
+ */
+export function projectOverrides(
+  canonical: readonly OverrideConstraint[],
+  pm: 'npm' | 'pnpm',
+  onDiagnostic?: (d: Diagnostic) => void,
+): Record<string, unknown> {
+  return pm === 'npm' ? projectNpm(canonical) : projectPnpm(canonical, onDiagnostic)
+}
+
+/** yarn-berry carries no lockfile overrides block; signal the non-projection. */
+export function noteYarnOverridesNotProjected(
+  count: number,
+  onDiagnostic?: (d: Diagnostic) => void,
+): void {
+  if (count > 0 && onDiagnostic !== undefined) {
+    onDiagnostic(interopOverrideNotProjected('yarn', count))
+  }
+}
+
+function projectNpm(canonical: readonly OverrideConstraint[]): Record<string, unknown> {
+  const root: Record<string, unknown> = {}
+  for (const c of canonical) {
+    const leafKey = c.versionCondition ? `${c.package}@${c.versionCondition}` : c.package
+    let node = root
+    for (const seg of c.parentPath ?? []) {
+      const existing = node[seg]
+      if (typeof existing === 'object' && existing !== null) {
+        node = existing as Record<string, unknown>
+      } else {
+        // A scalar override already at `seg` becomes `{'.': scalar}` so we can
+        // nest a child under it (npm's self-key convention).
+        const nested: Record<string, unknown> = typeof existing === 'string' ? { '.': existing } : {}
+        node[seg] = nested
+        node = nested
+      }
+    }
+    node[leafKey] = c.to // npm understands `$name` self-refs verbatim
+  }
+  return root
+}
+
+function projectPnpm(
+  canonical: readonly OverrideConstraint[],
+  onDiagnostic?: (d: Diagnostic) => void,
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const c of canonical) {
+    const leaf = c.versionCondition ? `${c.package}@${c.versionCondition}` : c.package
+    const key = c.parentPath && c.parentPath.length > 0
+      ? `${c.parentPath.join('>')}>${leaf}`
+      : leaf
+    if (c.selfRef && onDiagnostic !== undefined) {
+      onDiagnostic(overrideParentRefDropped(c.package, c.to))
+    }
+    out[key] = c.to
   }
   return out
 }

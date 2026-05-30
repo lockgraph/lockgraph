@@ -224,6 +224,32 @@ export function emitOverrideNormalised(
   onDiagnostic(recipeOverrideNormalised(pm, count))
 }
 
+// Projection-side override loss diagnostics (ADR-0025 §6). Fire when
+// `projectOverrides` lowers a canonical constraint to a target PM whose grammar
+// cannot express it faithfully.
+
+// `OVERRIDE_PARENT_REF_DROPPED` (warning) — an npm `$name` self-ref is projected
+// to yarn/pnpm, which have no parent-version back-reference; the `$`-target is
+// emitted verbatim and will not resolve in the target PM.
+export function overrideParentRefDropped(pkg: string, to: string): Diagnostic {
+  return {
+    code:     'OVERRIDE_PARENT_REF_DROPPED',
+    severity: 'warning',
+    message:  `override ${pkg}=${to}: npm $name self-ref has no yarn/pnpm equivalent; emitted verbatim`,
+  }
+}
+
+// `INTEROP_OVERRIDE_NOT_PROJECTED` (warning) — caller-supplied overrides were
+// passed to a stringify target whose lockfile carries no overrides block
+// (yarn-berry: forced resolutions live only in the manifest, never the lock).
+export function interopOverrideNotProjected(pm: 'yarn', count: number): Diagnostic {
+  return {
+    code:     'INTEROP_OVERRIDE_NOT_PROJECTED',
+    severity: 'warning',
+    message:  `${count} override${count === 1 ? '' : 's'} not projected: ${pm} lockfiles carry no overrides block (declare in package.json resolutions)`,
+  }
+}
+
 /**
  * Iterate every `Node.patch !== undefined` on `graph` and fire
  * `RECIPE_FEATURE_DROPPED (feature='patch')` once per affected node.
