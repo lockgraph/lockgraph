@@ -384,7 +384,7 @@ export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): str
   // Surface peer-edge drops (one warning per affected edge).
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id, 'peer')) {
-      const key = `${edge.src} ${edge.dst} ${edge.attrs?.range ?? ''}`
+      const key = `${edge.src}\u0000${edge.dst}\u0000${edge.attrs?.range ?? ''}`
       if (warnedPeerEdges.has(key)) continue
       warnedPeerEdges.add(key)
       const dst = graph.getNode(edge.dst)
