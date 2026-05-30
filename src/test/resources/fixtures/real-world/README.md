@@ -95,5 +95,21 @@ npm `packages[""].overrides` round-trip through the lock (captured on parse);
 yarn-style `resolutions` (angular, bun) live only in `package.json` and surface
 via `ParseOptions.manifests` + `overridesOf(graph)` (A2).
 
+### Yarn lockfile-version diversity
+
+Fills the version gaps below the yarn-monorepo table (which spans v6–v10).
+`webpack` is a current yarn-classic (v1) lock; `jest` is pinned to its `v26.6.0`
+release — a `__metadata: version: 4` berry lock (jest migrated classic → berry
+between 26.0 and 26.3, then to v10 at HEAD, exercised separately as
+`facebook-jest-main-…`). Real-world `__metadata: version: 5` is **not**
+represented — it was a razor-thin yarn-2.2/2.4 sub-window (every tag probed in
+that range emitted v4); the synthetic `fixtures/lockfiles/` corpus covers the v5
+adapter.
+
+| Repo handle | Source repo | Branch / tag | Lockfile |
+| --- | --- | --- | --- |
+| `webpack-webpack-main-66f71f8` | `https://github.com/webpack/webpack` | `main` | `yarn-classic` (v1) |
+| `jestjs-jest-v26.6.0-b254fd8` | `https://github.com/jestjs/jest` | `v26.6.0` | `yarn-berry-v4` (`__metadata.version: 4`) |
+
 See [findings.md](./findings.md) for the per-fixture cross-family probe
 catalogue.

@@ -1,0 +1,22 @@
+{
+  "private": true,
+  "version": "0.0.0",
+  "name": "example-enzyme",
+  "dependencies": {
+    "react": "*",
+    "react-dom": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "*",
+    "@babel/plugin-proposal-class-properties": "*",
+    "@babel/preset-env": "*",
+    "@babel/preset-react": "*",
+    "babel-jest": "*",
+    "enzyme": "*",
+    "enzyme-adapter-react-16": "*",
+    "jest": "*"
+  },
+  "scripts": {
+    "test": "jest"
+  }
+}
