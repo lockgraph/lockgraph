@@ -51,5 +51,8 @@ zero-padded to 4 digits.
 | [0024](./0024-optimize-phase.md) | Optimize phase: orphan garbage collection (monotone-reductive) | accepted | 2026-05-25 |
 | [0025](./0025-manifest-overrides.md) | Manifest layer materialisation & dependency-override capture | proposed | 2026-05-30 |
 | [0026](./0026-layout-attribution.md) | Layout attribution: a round-trip cache for npm install-path placement (not the L3 model) | accepted | 2026-05-30 |
+| [0027](./0027-npm-layout-generator.md) | npm L3 layout generator (multi-strategy projection) | accepted | 2026-05-30 |
 
-Next free number: **0027**.
+> ADR-0027 §5 satisfies ADR-0026 acceptance gates 1/5/6 (the `layoutOf`/`rememberLayout` placement carrier): the #10 fix shipped 0026's replay *behaviour* via the `installPaths` sidecar; 0027 builds the read/write accessor.
+
+Next free number: **0028**.
