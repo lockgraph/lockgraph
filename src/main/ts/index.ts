@@ -7,7 +7,10 @@
 // hooks без plumbing recipe primitives yet.
 
 import type { Diagnostic, Graph, Manifest, OverrideConstraint } from './graph.ts'
-import { noteYarnOverridesNotProjected } from './recipe/overrides.ts'
+import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
+import { getManifestOverrides, mergeOverrides, rememberManifestOverrides } from './recipe/override-carrier.ts'
+import { getFlatSidecar } from './formats/_npm-core.ts'
+import { getPnpmOverridesCanonical } from './formats/_pnpm-flat-core.ts'
 
 import * as bunText      from './formats/bun-text.ts'
 import * as npm1         from './formats/npm-1.ts'
@@ -238,10 +241,79 @@ export function detect(input: string): FormatId | undefined {
 
 export function parse(format: FormatId, input: string, options: ParseOptions = {}): Graph {
   const graph = parseOne(format, input, options)
+  // ADR-0025 §3/§6 (A2) — F6-capture overrides from supplied manifests onto the
+  // parse-time carrier; read later via `overridesOf(graph)`.
+  if (options.manifests !== undefined) {
+    captureManifestOverrides(format, options.manifests, graph, options.onDiagnostic)
+  }
   if (options.onDiagnostic !== undefined) {
     for (const d of graph.diagnostics()) options.onDiagnostic(d)
   }
   return graph
+}
+
+/** Map a FormatId to its override grammar family (ADR-0025 §6 capture). */
+function pmFamilyOf(format: FormatId): OverridePM {
+  if (format.startsWith('yarn')) return 'yarn'
+  if (format.startsWith('pnpm')) return 'pnpm'
+  return 'npm' // npm-1/2/3 + bun-text (npm-shaped overrides)
+}
+
+/**
+ * F6-capture overrides from `ParseOptions.manifests` into the recipe carrier
+ * (ADR-0025 §6, A2). Prefers a manifest's already-canonical `overrides`; else
+ * captures the PM-native block matching the source format's grammar. Iterates
+ * workspace-path keys deterministically; later keys win on tuple collision via
+ * `mergeOverrides`.
+ */
+function captureManifestOverrides(
+  format: FormatId,
+  manifests: Record<string, Manifest>,
+  graph: Graph,
+  onDiagnostic?: (d: Diagnostic) => void,
+): void {
+  const pm = pmFamilyOf(format)
+  let captured: OverrideConstraint[] = []
+  for (const key of Object.keys(manifests).sort()) {
+    const m = manifests[key]!
+    if (m.overrides !== undefined && m.overrides.length > 0) {
+      captured = mergeOverrides(captured, m.overrides)
+      continue
+    }
+    const block =
+      pm === 'npm'  ? m.native?.npmOverrides :
+      pm === 'yarn' ? m.native?.yarnResolutions :
+                      m.native?.pnpmOverrides
+    if (block === undefined) continue
+    captured = mergeOverrides(captured, captureOverrides(block, pm, onDiagnostic).canonical)
+  }
+  rememberManifestOverrides(graph, captured)
+}
+
+/**
+ * Canonical union of a graph's captured overrides (ADR-0025 §6, A2): lock-borne
+ * (npm `rootMeta.overrides` / pnpm `sidecar.overrides` canonicalised) folded
+ * under manifest-F6 (which wins on `(package, parentPath, versionCondition)`
+ * collision). Always an array (`[]` = none from any source).
+ *
+ * READ-BEFORE-MODIFY: reflects parse-time sources read off the parsed-graph
+ * handle; NOT guaranteed to survive `graph.mutate()` / modify / optimize.
+ * Capture it right after `parse`, then thread into
+ * `stringify(to, g, { overrides: overridesOf(g) })`. After a bare `mutate` it
+ * returns `[]` — BOTH manifest-F6 and the (also-sidecar-borne) lock-borne sources
+ * drop with the rebuilt graph; re-attachment fires only inside an adapter's own
+ * enrich/optimize/stringify, never from `mutate()`. Cross-PM is the intended use:
+ * for a SAME-PM round-trip prefer plain `parse → stringify` (the verbatim carrier
+ * is byte-stable); threading `overridesOf` back routes through canonical and
+ * degrades the documented lossy tail-forms (ADR-0025 §2).
+ */
+export function overridesOf(graph: Graph): OverrideConstraint[] {
+  const manifest = getManifestOverrides(graph) ?? []
+  const lockBorne =
+    getFlatSidecar(graph)?.rootMeta?.overrides ??
+    getPnpmOverridesCanonical(graph) ??
+    []
+  return mergeOverrides(lockBorne, manifest)
 }
 
 export function stringify(format: FormatId, graph: Graph, options: StringifyOptions = {}): string {

@@ -57,7 +57,7 @@ import {
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
-import { projectOverrides } from '../recipe/overrides.ts'
+import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
 import {
   parse as parseResolutionRecipe,
@@ -255,6 +255,24 @@ const sidecarByGraph = new WeakMap<Graph, PnpmSidecar>()
 
 function rememberSidecar(graph: Graph, sidecar: PnpmSidecar): void {
   sidecarByGraph.set(graph, sidecar)
+}
+
+/**
+ * Lock-borne pnpm overrides as canonical `OverrideConstraint[]` (ADR-0025 §6,
+ * A2). Reads the verbatim `sidecar.overrides` block captured at parse and
+ * canonicalises it via the F6 `captureOverrides('pnpm')` grammar. F2 `patch:`
+ * directives are dropped — those are patch slots, not version overrides.
+ * Returns undefined when the graph carries no pnpm overrides block (or the
+ * sidecar was lost to a `mutate`). Consumed by `index.ts` `overridesOf`.
+ */
+export function getPnpmOverridesCanonical(graph: Graph): OverrideConstraint[] | undefined {
+  const sidecar = sidecarByGraph.get(graph)
+  if (sidecar?.overrides === undefined) return undefined
+  const versionOnly: Record<string, string> = {}
+  for (const [key, value] of Object.entries(sidecar.overrides)) {
+    if (!value.startsWith('patch:')) versionOnly[key] = value
+  }
+  return captureOverrides(versionOnly, 'pnpm').canonical
 }
 
 // === Public API: check / parse / stringify / enrich / optimize =============

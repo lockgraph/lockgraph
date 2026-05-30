@@ -235,17 +235,42 @@ imports every format), delegating per-format reads to small exported accessors
 (`getFlatSidecar`; a new pnpm `getPnpmOverridesCanonical`). Placing the unify in
 recipe would create a recipe→format cycle.
 
-**Carrier lifecycle (normative).** The WeakMap carrier is dropped by every
-`graph.mutate()` / enrich / optimize (which rebuild the graph). The format
-sidecars survive only because each re-attaches via a per-format
-`rebindGraph(oldGraph, newGraph)` hook (`_npm-flat-types.ts`); there is **no**
-shared mutate-rebind hub in `graph.ts`. The recipe carrier MUST register an
-analogous rebind callback — and, since the consumer flow is parse → **modify** →
-stringify (audit-fix), that callback MUST be invoked from the modify/optimize
-rebuild path, **which does not exist today** (the existing `rebindGraph` fires
-only at npm stringify-time). Wiring a modify-side rebind invocation is part of
-this slice; without it `overridesOf` silently returns `[]` after the first
-mutation, inside the consumer's pipeline.
+**Carrier lifecycle (normative — Option-S, read-before-modify).** The WeakMap
+carrier is written **once at parse** (keyed by the adapter-returned graph) and
+read by `overridesOf` off that same handle. It is **not** propagated across
+`graph.mutate()` / enrich / optimize, and `overridesOf` is **not** guaranteed to
+reflect manifest-F6 overrides on a post-`mutate` graph. This deliberately matches
+the real lifetime of the format sidecars on the **modify path**: `rebindGraph`
+(`_npm-flat-types.ts`) fires only inside an adapter's own `enrich`/`optimize`/
+`stringify`, never from `modify()`, so a bare `graph.mutate()` already drops
+every format sidecar from the new graph instance (only yarn-berry's parse-time
+`withSidecarPropagation` proxy re-attaches its *format* sidecar, and it is unaware
+of this recipe carrier). The consumer contract is therefore **read-before-modify**:
+capture `const ov = overridesOf(g)` immediately after `parse`, then thread
+`stringify(to, gN, { overrides: ov })`. This is the natural audit-fix usage —
+overrides are parse-time declared/resolved data, invariant under version fixes.
+**No** recipe-level mutate-rebind hub is introduced (it would be a guarantee
+inversion: the recipe copy outliving the very sidecars cited as its precedent,
+and composing a second propagating proxy with yarn-berry's risks breaking the
+`cacheKey` survival that proxy exists for). After a bare `mutate`, `overridesOf`
+returns **`[]`** for every format — both manifest-F6 AND the (also-sidecar-borne)
+lock-borne sources drop with the rebuilt graph, since re-attachment fires only
+inside an adapter's own enrich/optimize/stringify, never from `mutate()`. Nothing
+wrong is surfaced — `[]` is returned, not stale data — so the loss is documented,
+not silent. A mutate-surviving carrier is a deferred, purely-additive concern
+(§Scope (v1) iii).
+
+**Byte-stability scope (when threading back).** `overridesOf` is for **cross-PM
+carry**. For a SAME-PM round-trip, plain `parse → stringify` is byte-stable (the
+verbatim carriers — npm `nativeOverrides`, pnpm `sidecar.overrides` — re-emit
+unchanged). Threading `overridesOf(g)` back into `stringify(samePM, …,
+{ overrides })` instead routes through the **canonical** form and so degrades the
+documented lossy tail-forms (npm `pkg@version` keys + self-key ordering, pnpm
+`parent@version` ancestor qualifiers + leading-`>`) — and the qualifier-drop
+cases carry **no** loss diagnostic (only `selfRef` / glob / transitive emit one).
+So gate #4 / §Consequences "byte-stable / lossless same-PM round-trip" scopes to
+the no-threading path; `overridesOf` round-trips are canonical-faithful, not
+byte-faithful, for those tails.
 
 **Reconciliation with "Canonical-on-Graph (sidecar)" (rejected below).** The
 load-bearing test is mechanical, not rhetorical: the rejected option put
@@ -268,11 +293,20 @@ half-wired type until re-resolution lands, near ADR-0026) — this is also where
 outside v1's parse-time union by construction, not contradiction; (ii) the
 **imperative `pinOverride` channel** — `overridesOf` surfaces *declarative*
 overrides only; a pin remains a separate stringify input via `Graph.diagnostics()`
-per §5 (complementary channels — do **not** unify them in `overridesOf`). Auto-
-projection at stringify (model E3 = stringify calling `overridesOf` internally
-when the option is absent) remains deferred — it needs a lock-vs-manifest
-*policy* at emit, overlapping the §202 translation boundary. E2 is a strict
-subset of E3, so this forecloses nothing.
+per §5 (complementary channels — do **not** unify them in `overridesOf`);
+(iii) **mutate-surviving `overridesOf`** — propagating the manifest carrier
+across the modify/optimize rebuild (a recipe-level mutate-rebind hub). v1 is
+read-before-modify (see §6 Carrier lifecycle); this is an E3-adjacent concern
+requiring a shared rebind hub `graph.ts` does not have, and would invert the
+format sidecars' own modify-path lifetime; (iv) **bun manifest `resolutions`
+capture** — `pmFamilyOf('bun-text')` routes to the npm `overrides` block, so a
+bun manifest's yarn-style `resolutions` field is captured only if the caller
+pre-populates canonical `Manifest.overrides` (bun's *lockfile* override surface
+is already npm-shaped; this gap is manifest-capture only). Auto-projection at stringify (model
+E3 = stringify calling `overridesOf` internally when the option is absent)
+remains deferred — it needs a lock-vs-manifest *policy* at emit, overlapping the
+§202 translation boundary. E2 is a strict subset of E3, so this forecloses
+nothing.
 
 ## Consequences
 
@@ -334,10 +368,14 @@ subset of E3, so this forecloses nothing.
 6. The three tail-forms emit their typed loss diagnostics on cross-PM
    projection; the intersection forms project clean.
 7. (A2 §6) `overridesOf(graph)` returns the canonical union of lock-borne +
-   parse-time-manifest overrides (manifest-wins on collision), is mutation-free
-   on caller input, and survives `mutate`/enrich/optimize so a
-   parse→modify→stringify pipeline still surfaces them; `parse` actually runs
-   F6 capture from `ParseOptions.manifests` (no longer a dead option).
+   parse-time-manifest overrides (manifest-wins on collision) and is mutation-free
+   on caller input; it reflects **parse-time** sources read off the parsed-graph
+   handle (read-before-modify contract — **not** required to survive
+   `mutate`/enrich/optimize, matching the format sidecars' own modify-path
+   lifetime). `parse` actually runs F6 capture from `ParseOptions.manifests` (no
+   longer a dead option). A `parse → overridesOf → stringify({ overrides })`
+   pipeline surfaces them; reading `overridesOf` *after* a bare `modify` returns
+   `[]` (all sidecar/carrier-borne sources drop with the rebuilt graph).
 
 ## Alternatives considered
 
