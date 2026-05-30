@@ -272,6 +272,17 @@ export function parseFamily(
       continue
     }
 
+    // An uninstalled optional dependency: npm records a bare `{optional: true}`
+    // placeholder (no version / resolved / integrity) for a platform-specific
+    // optional native it did not install on this platform — e.g.
+    // `node_modules/ssh2/node_modules/cpu-features` in vscode's lock. There is
+    // no resolved instance to model, so skip it; the consumer's
+    // `optionalDependencies` edge simply finds no target, which is valid for
+    // an optional dep (emits a benign unresolved-dep warning at most).
+    if (entry.version === undefined && entry.resolved === undefined && entry.optional === true) {
+      continue
+    }
+
     const tailName = nameFromInstallPath(config, path, entry)
     const version = entry.version
     if (version === undefined) {

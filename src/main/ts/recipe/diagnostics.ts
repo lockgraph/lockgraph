@@ -194,6 +194,36 @@ export function emitPatchNormalised(
   onDiagnostic(patchNormalisedDiagnostic(nodeId))
 }
 
+// === F6 manifest override capture diagnostics ==============================
+//
+// `RECIPE_OVERRIDE_NORMALISED` (info, per ADR-0025 §6) — emitted once per
+// successful `captureOverrides` call when a manifest's PM-native override
+// block is normalised into the canonical `OverrideConstraint[]` form. Carries
+// the source PM and the canonical entry count for observability. This is the
+// CAPTURE-side info diagnostic; the projection-side loss codes
+// (`OVERRIDE_PARENT_REF_DROPPED` / `OVERRIDE_GLOB_NARROWED` /
+// `OVERRIDE_TRANSITIVE_HINT_DROPPED`) fire at stringify, not here. Subjectless
+// — a manifest override block is not a NodeId or an edge.
+export function recipeOverrideNormalised(
+  pm: 'npm' | 'yarn' | 'pnpm',
+  count: number,
+): Diagnostic {
+  return {
+    code:     'RECIPE_OVERRIDE_NORMALISED',
+    severity: 'info',
+    message:  `captured ${count} ${pm} override${count === 1 ? '' : 's'} into canonical form`,
+  }
+}
+
+export function emitOverrideNormalised(
+  pm: 'npm' | 'yarn' | 'pnpm',
+  count: number,
+  onDiagnostic?: (d: Diagnostic) => void,
+): void {
+  if (onDiagnostic === undefined) return
+  onDiagnostic(recipeOverrideNormalised(pm, count))
+}
+
 /**
  * Iterate every `Node.patch !== undefined` on `graph` and fire
  * `RECIPE_FEATURE_DROPPED (feature='patch')` once per affected node.

@@ -47,4 +47,28 @@ describe('npm-3 — parse deltas', () => {
     const v2 = fixture('simple/npm-2.lock')
     expect(check(v2)).toBe(false)
   })
+
+  it('skips an uninstalled optional-dependency placeholder ({optional:true}, no version) (#11)', () => {
+    // npm records a bare `{optional:true}` entry for a platform-specific
+    // optional native it did not install on this platform (real case:
+    // `node_modules/ssh2/node_modules/cpu-features` in vscode's lock). There
+    // is no resolved instance — parse must skip it, not throw "missing version".
+    const input = JSON.stringify({
+      name: 'x', version: '0.0.0', lockfileVersion: 3,
+      packages: {
+        '': { name: 'x', version: '0.0.0', dependencies: { ssh2: '1.0.0' } },
+        'node_modules/ssh2': {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/ssh2/-/ssh2-1.0.0.tgz',
+          integrity: 'sha512-abc',
+          optionalDependencies: { 'cpu-features': '0.0.10' },
+        },
+        'node_modules/ssh2/node_modules/cpu-features': { optional: true },
+      },
+    }, null, 2)
+    expect(() => parse(input)).not.toThrow()
+    const graph = parse(input)
+    expect(graph.byName('cpu-features')).toEqual([]) // placeholder → no node
+    expect(graph.getNode('ssh2@1.0.0')).toBeDefined()
+  })
 })
