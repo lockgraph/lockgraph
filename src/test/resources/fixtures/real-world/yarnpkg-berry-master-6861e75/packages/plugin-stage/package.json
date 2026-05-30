@@ -1,0 +1,47 @@
+{
+  "name": "@yarnpkg/plugin-stage",
+  "version": "4.0.2",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@yarnpkg/fslib": "workspace:^",
+    "clipanion": "^4.0.0-rc.2",
+    "tslib": "^2.4.0"
+  },
+  "peerDependencies": {
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@yarnpkg/builder": "workspace:^",
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/plugin-stage"
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "exports": {
+      ".": "./lib/index.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*"
+  ],
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.0.2"
+}

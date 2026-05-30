@@ -1,0 +1,61 @@
+{
+  "name": "@nx/storybook",
+  "version": "0.0.1",
+  "private": false,
+  "description": "The Nx Plugin for Storybook contains executors and generators for allowing your workspace to use the powerful Storybook integration testing & documenting capabilities.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/storybook"
+  },
+  "keywords": [
+    "Angular",
+    "React",
+    "Web",
+    "Storybook",
+    "Cypress",
+    "CLI",
+    "Front-end",
+    "Testing"
+  ],
+  "main": "./index.js",
+  "type": "commonjs",
+  "types": "./index.d.ts",
+  "author": "Isaac Mann",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "generators": "./generators.json",
+  "executors": "./executors.json",
+  "ng-update": {
+    "requirements": {},
+    "migrations": "./migrations.json"
+  },
+  "dependencies": {
+    "@nx/devkit": "workspace:*",
+    "@phenomnomnominal/tsquery": "catalog:typescript",
+    "semver": "catalog:",
+    "tslib": "catalog:typescript",
+    "@nx/cypress": "workspace:*",
+    "@nx/js": "workspace:*",
+    "@nx/eslint": "workspace:*"
+  },
+  "devDependencies": {
+    "nx": "workspace:*",
+    "storybook": "9.0.6"
+  },
+  "peerDependencies": {
+    "@nx/web": "workspace:*",
+    "storybook": ">=8.0.0 <11.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@nx/web": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

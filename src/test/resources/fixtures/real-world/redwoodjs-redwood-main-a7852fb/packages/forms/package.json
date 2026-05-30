@@ -1,0 +1,62 @@
+{
+  "name": "@redwoodjs/forms",
+  "version": "8.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redwoodjs/redwood.git",
+    "directory": "packages/forms"
+  },
+  "license": "MIT",
+  "type": "commonjs",
+  "exports": {
+    ".": {
+      "default": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsx ./build.mts && yarn build:types",
+    "build:pack": "yarn pack -o redwoodjs-forms.tgz",
+    "build:types": "tsc --build --verbose ./tsconfig.build.json",
+    "build:watch": "nodemon --watch src --ext \"js,jsx,ts,tsx\" --ignore dist --exec \"yarn build\"",
+    "check:attw": "yarn rw-fwtools-attw",
+    "check:package": "concurrently npm:check:attw yarn:publint",
+    "prepublishOnly": "NODE_ENV=production yarn build",
+    "test": "vitest run",
+    "test:watch": "vitest watch"
+  },
+  "dependencies": {
+    "graphql": "16.9.0",
+    "pascalcase": "1.0.0",
+    "react-hook-form": "7.54.2"
+  },
+  "devDependencies": {
+    "@redwoodjs/framework-tools": "workspace:*",
+    "@testing-library/dom": "9.3.4",
+    "@testing-library/jest-dom": "6.5.0",
+    "@testing-library/react": "14.3.1",
+    "@testing-library/user-event": "14.5.2",
+    "@types/pascalcase": "1.0.3",
+    "@types/react": "^18.2.55",
+    "@types/react-dom": "^18.2.19",
+    "concurrently": "8.2.2",
+    "nodemon": "3.1.9",
+    "publint": "0.3.12",
+    "react": "19.0.0-rc-f2df5694-20240916",
+    "react-dom": "19.0.0-rc-f2df5694-20240916",
+    "tsx": "4.19.2",
+    "typescript": "5.6.2",
+    "vitest": "2.1.9"
+  },
+  "peerDependencies": {
+    "react": "19.0.0-rc-f2df5694-20240916"
+  },
+  "gitHead": "3905ed045508b861b495f8d5630d76c7a157d8f1"
+}

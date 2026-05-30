@@ -1,0 +1,9 @@
+{
+  "name": "@vitejs/test-dep-alias-using-absolute-path",
+  "private": true,
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@vitejs/test-dep-lodash": "file:../dep-lodash"
+  }
+}

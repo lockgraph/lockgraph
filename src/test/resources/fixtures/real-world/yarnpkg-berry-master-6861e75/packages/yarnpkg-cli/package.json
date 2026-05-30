@@ -1,0 +1,118 @@
+{
+  "name": "@yarnpkg/cli",
+  "version": "4.15.0",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./polyfills": "./sources/polyfills.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/fslib": "workspace:^",
+    "@yarnpkg/libzip": "workspace:^",
+    "@yarnpkg/parsers": "workspace:^",
+    "@yarnpkg/plugin-catalog": "workspace:^",
+    "@yarnpkg/plugin-compat": "workspace:^",
+    "@yarnpkg/plugin-constraints": "workspace:^",
+    "@yarnpkg/plugin-dlx": "workspace:^",
+    "@yarnpkg/plugin-essentials": "workspace:^",
+    "@yarnpkg/plugin-exec": "workspace:^",
+    "@yarnpkg/plugin-file": "workspace:^",
+    "@yarnpkg/plugin-git": "workspace:^",
+    "@yarnpkg/plugin-github": "workspace:^",
+    "@yarnpkg/plugin-http": "workspace:^",
+    "@yarnpkg/plugin-init": "workspace:^",
+    "@yarnpkg/plugin-interactive-tools": "workspace:^",
+    "@yarnpkg/plugin-jsr": "workspace:^",
+    "@yarnpkg/plugin-link": "workspace:^",
+    "@yarnpkg/plugin-nm": "workspace:^",
+    "@yarnpkg/plugin-npm": "workspace:^",
+    "@yarnpkg/plugin-npm-cli": "workspace:^",
+    "@yarnpkg/plugin-pack": "workspace:^",
+    "@yarnpkg/plugin-patch": "workspace:^",
+    "@yarnpkg/plugin-pnp": "workspace:^",
+    "@yarnpkg/plugin-pnpm": "workspace:^",
+    "@yarnpkg/plugin-stage": "workspace:^",
+    "@yarnpkg/plugin-typescript": "workspace:^",
+    "@yarnpkg/plugin-version": "workspace:^",
+    "@yarnpkg/plugin-workspace-tools": "workspace:^",
+    "@yarnpkg/shell": "workspace:^",
+    "ci-info": "^4.0.0",
+    "clipanion": "^4.0.0-rc.2",
+    "semver": "^7.1.2",
+    "tslib": "^2.4.0",
+    "typanion": "^3.14.0"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.1.0",
+    "@yarnpkg/builder": "workspace:^",
+    "@yarnpkg/monorepo": "workspace:^",
+    "@yarnpkg/pnpify": "workspace:^"
+  },
+  "peerDependencies": {
+    "@yarnpkg/core": "workspace:^"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\"",
+    "build:cli+hook": "run build:pnp:hook && builder build bundle",
+    "build:cli": "builder build bundle",
+    "run:cli": "builder run",
+    "update-local": "run build:cli --no-git-hash && rsync -a --delete bundles/ bin/"
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "bin": null,
+    "exports": {
+      ".": "./lib/index.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*",
+    "!/lib/pluginConfiguration.*",
+    "!/lib/cli.*"
+  ],
+  "@yarnpkg/builder": {
+    "bundles": {
+      "standard": [
+        "@yarnpkg/plugin-essentials",
+        "@yarnpkg/plugin-catalog",
+        "@yarnpkg/plugin-compat",
+        "@yarnpkg/plugin-constraints",
+        "@yarnpkg/plugin-dlx",
+        "@yarnpkg/plugin-exec",
+        "@yarnpkg/plugin-file",
+        "@yarnpkg/plugin-git",
+        "@yarnpkg/plugin-github",
+        "@yarnpkg/plugin-http",
+        "@yarnpkg/plugin-init",
+        "@yarnpkg/plugin-interactive-tools",
+        "@yarnpkg/plugin-jsr",
+        "@yarnpkg/plugin-link",
+        "@yarnpkg/plugin-nm",
+        "@yarnpkg/plugin-npm",
+        "@yarnpkg/plugin-npm-cli",
+        "@yarnpkg/plugin-pack",
+        "@yarnpkg/plugin-patch",
+        "@yarnpkg/plugin-pnp",
+        "@yarnpkg/plugin-pnpm",
+        "@yarnpkg/plugin-stage",
+        "@yarnpkg/plugin-typescript",
+        "@yarnpkg/plugin-version",
+        "@yarnpkg/plugin-workspace-tools"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-cli"
+  },
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.15.0"
+}

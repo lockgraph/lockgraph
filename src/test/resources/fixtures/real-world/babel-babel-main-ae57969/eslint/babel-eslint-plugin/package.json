@@ -1,0 +1,47 @@
+{
+  "name": "@babel/eslint-plugin",
+  "version": "8.0.0-rc.6",
+  "description": "Companion rules for @babel/eslint-parser",
+  "main": "./lib/index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/babel/babel.git",
+    "directory": "eslint/babel-eslint-plugin"
+  },
+  "keywords": [
+    "babel",
+    "eslint",
+    "eslintplugin",
+    "eslint-plugin",
+    "babel-eslint"
+  ],
+  "author": "The Babel Team (https://babel.dev/team)",
+  "license": "MIT",
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
+  "bugs": {
+    "url": "https://github.com/babel/babel/issues"
+  },
+  "homepage": "https://babel.dev/",
+  "peerDependencies": {
+    "@babel/core": "workspace:^",
+    "@babel/eslint-parser": "workspace:^",
+    "eslint": "^9.0.0 || ^10.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "workspace:^",
+    "eslint": "^10.0.0"
+  }
+}

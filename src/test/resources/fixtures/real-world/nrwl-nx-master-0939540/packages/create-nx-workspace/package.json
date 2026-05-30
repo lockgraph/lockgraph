@@ -1,0 +1,46 @@
+{
+  "name": "create-nx-workspace",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Smart Monorepos · Fast Builds",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/create-nx-workspace"
+  },
+  "keywords": [
+    "Monorepo",
+    "Angular",
+    "React",
+    "Web",
+    "Node",
+    "Nest",
+    "Jest",
+    "Cypress",
+    "Playwright",
+    "CLI"
+  ],
+  "bin": {
+    "create-nx-workspace": "./bin/index.js"
+  },
+  "author": "Victor Savkin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "dependencies": {
+    "axios": "1.16.0",
+    "chalk": "catalog:",
+    "enquirer": "catalog:",
+    "flat": "^5.0.2",
+    "open": "^8.4.0",
+    "ora": "catalog:",
+    "tmp": "catalog:",
+    "tslib": "catalog:typescript",
+    "yargs": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

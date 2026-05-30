@@ -1,0 +1,87 @@
+{
+  "name": "@nx/rspack",
+  "description": "The Nx Plugin for Rspack contains executors and generators that support building applications using Rspack.",
+  "version": "0.0.1",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/rspack"
+  },
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "keywords": [
+    "Monorepo",
+    "Rspack",
+    "Bundling",
+    "Module Federation"
+  ],
+  "author": "Jack Hsu",
+  "license": "MIT",
+  "homepage": "https://nx.dev",
+  "main": "src/index.js",
+  "generators": "./generators.json",
+  "executors": "./executors.json",
+  "dependencies": {
+    "@nx/devkit": "workspace:*",
+    "@nx/js": "workspace:*",
+    "@nx/module-federation": "workspace:*",
+    "@nx/web": "workspace:*",
+    "@phenomnomnominal/tsquery": "catalog:typescript",
+    "autoprefixer": "catalog:css",
+    "browserslist": "^4.26.0",
+    "css-loader": "^6.4.0",
+    "enquirer": "catalog:",
+    "express": "^4.21.2",
+    "http-proxy-middleware": "catalog:",
+    "less-loader": "catalog:css",
+    "license-webpack-plugin": "^4.0.2",
+    "loader-utils": "^2.0.3",
+    "parse5": "4.0.0",
+    "picocolors": "catalog:",
+    "postcss": "catalog:css",
+    "postcss-import": "~14.1.0",
+    "postcss-loader": "catalog:css",
+    "sass": "catalog:css",
+    "sass-embedded": "catalog:css",
+    "sass-loader": "catalog:css",
+    "semver": "catalog:",
+    "source-map-loader": "^5.0.0",
+    "style-loader": "^3.3.0",
+    "ts-checker-rspack-plugin": "catalog:rspack",
+    "tslib": "catalog:typescript",
+    "webpack": "catalog:",
+    "webpack-node-externals": "^3.0.0"
+  },
+  "devDependencies": {
+    "nx": "workspace:*",
+    "@nx/nest": "workspace:*"
+  },
+  "peerDependencies": {
+    "@rspack/cli": "^1.0.0",
+    "@rspack/core": "^1.0.0",
+    "@rspack/dev-server": "^1.0.0",
+    "@rspack/plugin-react-refresh": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@rspack/cli": {
+      "optional": true
+    },
+    "@rspack/core": {
+      "optional": true
+    },
+    "@rspack/dev-server": {
+      "optional": true
+    },
+    "@rspack/plugin-react-refresh": {
+      "optional": true
+    }
+  },
+  "nx-migrations": {
+    "migrations": "./migrations.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

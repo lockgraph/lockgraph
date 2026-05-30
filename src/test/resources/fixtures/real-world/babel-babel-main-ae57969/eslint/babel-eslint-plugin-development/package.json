@@ -1,0 +1,42 @@
+{
+  "name": "@babel/eslint-plugin-development",
+  "version": "8.0.0-rc.6",
+  "description": "ESLint rules that enforce best practices in the development of Babel plugins.",
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "eslint-plugin"
+  ],
+  "author": "The Babel Team (https://babel.dev/team)",
+  "main": "./lib/index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/babel/babel.git",
+    "directory": "eslint/babel-eslint-plugin-development"
+  },
+  "bugs": {
+    "url": "https://github.com/babel/babel/issues"
+  },
+  "homepage": "https://babel.dev/",
+  "peerDependencies": {
+    "eslint": "^9.0.0 || ^10.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.0.0"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "name": "@nx/rsbuild",
+  "description": "The Nx Plugin for Rsbuild contains an Nx plugin, executors and utilities that support building applications using Rsbuild.",
+  "version": "0.0.1",
+  "type": "commonjs",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/rsbuild"
+  },
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "keywords": [
+    "Monorepo",
+    "Rspack",
+    "Webpack",
+    "Bundling",
+    "Module Federation",
+    "Rsbuild"
+  ],
+  "author": "Colum Ferry",
+  "license": "MIT",
+  "homepage": "https://nx.dev",
+  "main": "index.js",
+  "generators": "./generators.json",
+  "executors": "./executors.json",
+  "dependencies": {
+    "tslib": "catalog:typescript",
+    "@nx/devkit": "workspace:*",
+    "@nx/js": "workspace:*",
+    "minimatch": "catalog:",
+    "semver": "catalog:",
+    "@phenomnomnominal/tsquery": "catalog:typescript"
+  },
+  "devDependencies": {
+    "nx": "workspace:*"
+  },
+  "peerDependencies": {
+    "@rsbuild/core": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@rsbuild/core": {
+      "optional": true
+    }
+  },
+  "nx-migrations": {
+    "migrations": "./migrations.json"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./executors/*/schema.json": "./src/executors/*/schema.json",
+    "./executors/*/schema": "./src/executors/*/schema.d.ts",
+    "./generators/*/schema.json": "./src/generators/*/schema.json",
+    "./generators/*/schema": "./src/generators/*/schema.d.ts",
+    "./package.json": {
+      "default": "./package.json"
+    },
+    "./generators": {
+      "types": "./generators.d.ts",
+      "default": "./generators.js"
+    },
+    "./config-utils": {
+      "types": "./config-utils.d.ts",
+      "default": "./config-utils.js"
+    }
+  }
+}

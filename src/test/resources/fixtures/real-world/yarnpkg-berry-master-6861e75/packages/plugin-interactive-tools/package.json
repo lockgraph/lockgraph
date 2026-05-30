@@ -1,0 +1,59 @@
+{
+  "name": "@yarnpkg/plugin-interactive-tools",
+  "version": "4.1.0",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@yarnpkg/libui": "workspace:^",
+    "algoliasearch": "^4.2.0",
+    "clipanion": "^4.0.0-rc.2",
+    "diff": "^5.1.0",
+    "ink": "^3.2.0",
+    "ink-text-input": "^4.0.3",
+    "react": "^17.0.2",
+    "semver": "^7.1.2",
+    "tslib": "^2.4.0",
+    "typanion": "^3.14.0"
+  },
+  "peerDependencies": {
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/plugin-essentials": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.0.0",
+    "@types/react": "^16.8.0",
+    "@types/semver": "^7.1.0",
+    "@yarnpkg/builder": "workspace:^",
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/plugin-essentials": "workspace:^"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/plugin-interactive-tools"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\""
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "exports": {
+      ".": "./lib/index.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*"
+  ],
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.1.0"
+}

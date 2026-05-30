@@ -1,0 +1,55 @@
+{
+  "name": "@yarnpkg/pnp",
+  "version": "4.1.6",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./sources/esm-loader/loaderFlags": "./sources/esm-loader/loaderFlags.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@types/node": "^18.19.124",
+    "@yarnpkg/fslib": "workspace:^"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^21.0.1",
+    "@rollup/plugin-node-resolve": "^11.0.1",
+    "@types/semver": "^7.1.0",
+    "@yarnpkg/libzip": "workspace:^",
+    "arg": "^5.0.2",
+    "esbuild": "npm:esbuild-wasm@^0.23.0",
+    "rollup": "^2.59.0",
+    "rollup-plugin-esbuild": "^3.0.2",
+    "semver": "^7.1.2",
+    "tslib": "^2.4.0"
+  },
+  "scripts": {
+    "build:pnp:hook": "rollup -c",
+    "update:pnp:hook": "run build:pnp:hook && yarn install",
+    "build:pnp": "rollup -c",
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile packages/yarnpkg-pnp --emitDeclarationOnly && run build:pnp",
+    "release": "yarn npm publish",
+    "update-local": "run build:pnp:hook"
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "exports": {
+      ".": "./lib/index.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-pnp"
+  },
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.1.6"
+}

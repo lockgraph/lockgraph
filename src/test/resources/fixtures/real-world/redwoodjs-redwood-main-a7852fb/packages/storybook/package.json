@@ -1,0 +1,88 @@
+{
+  "name": "storybook-framework-redwoodjs-vite",
+  "version": "8.0.0",
+  "description": "Storybook for RedwoodJS with Vite",
+  "keywords": [
+    "Storybook",
+    "RedwoodJS",
+    "React",
+    "Vite"
+  ],
+  "bugs": {
+    "url": "git+https://github.com/redwoodjs/redwood/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redwoodjs/redwood.git",
+    "directory": "packages/storybook"
+  },
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./preset": {
+      "types": "./dist/preset.d.ts",
+      "default": "./dist/preset.js"
+    },
+    "./dist/mocks/MockRouter": {
+      "default": "./dist/mocks/MockRouter.js"
+    },
+    "./dist/preview.js": "./dist/preview.js",
+    "./package.json": "./package.json"
+  },
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "*.js",
+    "*.d.ts",
+    "!src/**/*"
+  ],
+  "scripts": {
+    "build": "tsx build.ts && yarn build:types",
+    "build:pack": "yarn pack -o storybook-framework-redwoodjs-vite.tgz",
+    "build:types": "tsc --build --verbose"
+  },
+  "dependencies": {
+    "@joshwooding/vite-plugin-react-docgen-typescript": "0.4.2",
+    "@redwoodjs/testing": "workspace:*",
+    "@rollup/pluginutils": "5.1.4",
+    "@storybook/addon-essentials": "7.6.20",
+    "@storybook/builder-vite": "7.6.20",
+    "@storybook/react": "7.6.20",
+    "magic-string": "0.30.11",
+    "react-docgen": "7.0.3",
+    "unplugin-auto-import": "0.18.3",
+    "vite-plugin-node-polyfills": "0.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.10",
+    "tsx": "4.19.2",
+    "typescript": "5.6.2",
+    "vite": "5.4.20"
+  },
+  "peerDependencies": {
+    "@redwoodjs/project-config": "workspace:*",
+    "@redwoodjs/router": "workspace:*",
+    "react": "19.0.0-rc-f2df5694-20240916",
+    "react-dom": "19.0.0-rc-f2df5694-20240916",
+    "storybook": "7.6.20"
+  },
+  "engines": {
+    "node": "=20.x"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bundler": {
+    "entries": [
+      "./src/index.ts",
+      "./src/preset.ts"
+    ],
+    "platform": "node"
+  }
+}

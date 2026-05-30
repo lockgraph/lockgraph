@@ -1,0 +1,9 @@
+{
+  "name": "@vitejs/test-resolve-sharp-dir",
+  "private": true,
+  "version": "1.0.0",
+  "main": "./index.cjs",
+  "dependencies": {
+    "@vitejs/test-resolve-sharp-dir-nested": "file:../sharp-dir-nested"
+  }
+}

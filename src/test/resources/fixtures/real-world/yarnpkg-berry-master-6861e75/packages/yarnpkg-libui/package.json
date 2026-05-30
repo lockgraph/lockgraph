@@ -1,0 +1,34 @@
+{
+  "name": "@yarnpkg/libui",
+  "version": "3.1.0",
+  "license": "BSD-2-Clause",
+  "sideEffects": false,
+  "files": [
+    "sources"
+  ],
+  "peerDependencies": {
+    "ink": "^3.0.8",
+    "react": "^17.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^16.8.0",
+    "ink": "^3.2.0",
+    "react": "^17.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-libui"
+  },
+  "dependencies": {
+    "tslib": "^2.4.0"
+  },
+  "scripts": {
+    "postpack": "find sources -name '*.js' -delete -or -name '*.d.ts' -delete",
+    "prepack": "run build:compile \"$(pwd)\" --inline"
+  },
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "3.1.0"
+}

@@ -1,0 +1,36 @@
+{
+  "name": "examples-angular-rspack-zoneless-ssg-css",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {},
+  "dependencies": {
+    "@nx/angular-rspack": "workspace:*"
+  },
+  "devDependencies": {
+    "@rspack/core": "catalog:rspack",
+    "@rspack/cli": "catalog:rspack"
+  },
+  "nx": {
+    "targets": {
+      "build": {
+        "inputs": [
+          "production",
+          "^production",
+          {
+            "dependentTasksOutputFiles": "**/*.js",
+            "transitive": true
+          },
+          "{workspaceRoot}/examples/angular-rspack/tsconfig.base.json",
+          "{workspaceRoot}/LICENSE",
+          "{workspaceRoot}/tsconfig.json"
+        ],
+        "outputs": [
+          "{projectRoot}/dist"
+        ],
+        "dependsOn": [
+          "^build"
+        ]
+      }
+    }
+  }
+}

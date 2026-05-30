@@ -1,0 +1,53 @@
+{
+  "name": "@yarnpkg/plugin-typescript",
+  "version": "4.1.3",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@yarnpkg/fslib": "workspace:^",
+    "@yarnpkg/plugin-pack": "workspace:^",
+    "algoliasearch": "^4.2.0",
+    "semver": "^7.1.2",
+    "tslib": "^2.4.0"
+  },
+  "peerDependencies": {
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/plugin-essentials": "workspace:^"
+  },
+  "devDependencies": {
+    "@algolia/requester-common": "4.0.0-beta.14",
+    "@types/semver": "^7.1.0",
+    "@yarnpkg/builder": "workspace:^",
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/plugin-essentials": "workspace:^"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/plugin-typescript"
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "exports": {
+      ".": "./lib/index.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*"
+  ],
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.1.3"
+}

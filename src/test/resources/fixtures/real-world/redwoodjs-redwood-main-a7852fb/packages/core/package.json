@@ -1,0 +1,63 @@
+{
+  "name": "@redwoodjs/core",
+  "version": "8.0.0",
+  "description": "Foundational packages and config required to build RedwoodJS.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redwoodjs/redwood.git",
+    "directory": "packages/core"
+  },
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cross-env": "./dist/bins/cross-env.js",
+    "eslint": "./dist/bins/eslint.js",
+    "jest": "./dist/bins/jest.js",
+    "nodemon": "./dist/bins/nodemon.js",
+    "redwood": "./dist/bins/redwood.js",
+    "rw": "./dist/bins/redwood.js",
+    "rw-api-server-watch": "./dist/bins/rw-api-server-watch.js",
+    "rw-dev-fe": "./dist/bins/rw-dev-fe.js",
+    "rw-gen": "./dist/bins/rw-gen.js",
+    "rw-gen-watch": "./dist/bins/rw-gen-watch.js",
+    "rw-jobs": "./dist/bins/rw-jobs.js",
+    "rw-jobs-worker": "./dist/bins/rw-jobs-worker.js",
+    "rw-log-formatter": "./dist/bins/rw-log-formatter.js",
+    "rw-serve-api": "./dist/bins/rw-serve-api.js",
+    "rw-serve-fe": "./dist/bins/rw-serve-fe.js",
+    "rw-web-server": "./dist/bins/rw-web-server.js",
+    "rwfw": "./dist/bins/rwfw.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsx ./build.mts",
+    "build:pack": "yarn pack -o redwoodjs-core.tgz",
+    "check:package": "yarn publint",
+    "prepublishOnly": "NODE_ENV=production yarn build"
+  },
+  "dependencies": {
+    "@babel/cli": "7.26.4",
+    "@redwoodjs/api-server": "workspace:*",
+    "@redwoodjs/cli": "workspace:*",
+    "@redwoodjs/eslint-config": "workspace:*",
+    "@redwoodjs/internal": "workspace:*",
+    "@redwoodjs/project-config": "workspace:*",
+    "@redwoodjs/testing": "workspace:*",
+    "@redwoodjs/web-server": "workspace:*",
+    "graphql-tag": "2.12.6",
+    "lodash": "4.17.21",
+    "nodemon": "3.1.9",
+    "react-refresh": "0.14.0",
+    "rimraf": "6.0.1",
+    "typescript": "5.6.2"
+  },
+  "devDependencies": {
+    "@redwoodjs/framework-tools": "workspace:*",
+    "@types/lodash": "4.17.15",
+    "publint": "0.3.12",
+    "tsx": "4.19.2"
+  },
+  "gitHead": "3905ed045508b861b495f8d5630d76c7a157d8f1"
+}

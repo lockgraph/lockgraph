@@ -1,0 +1,58 @@
+{
+  "name": "@nx/rollup",
+  "version": "0.0.1",
+  "private": false,
+  "description": "The Nx Plugin for Rollup contains executors and generators that support building applications using Rollup.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/rollup"
+  },
+  "keywords": [
+    "Monorepo",
+    "Rollup",
+    "Web",
+    "CLI"
+  ],
+  "main": "./index.js",
+  "type": "commonjs",
+  "types": "./index.d.ts",
+  "author": "Victor Savkin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "generators": "./generators.json",
+  "executors": "./executors.json",
+  "ng-update": {
+    "requirements": {},
+    "migrations": "./migrations.json"
+  },
+  "dependencies": {
+    "@nx/devkit": "workspace:*",
+    "@nx/js": "workspace:*",
+    "@phenomnomnominal/tsquery": "catalog:typescript",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-image": "^3.0.3",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-typescript": "^12.1.0",
+    "autoprefixer": "catalog:css",
+    "concat-with-sourcemaps": "^1.1.0",
+    "picocolors": "catalog:",
+    "picomatch": "catalog:",
+    "postcss": "catalog:css",
+    "postcss-modules": "^6.0.1",
+    "rollup": "^4.14.0",
+    "tslib": "catalog:typescript"
+  },
+  "devDependencies": {
+    "nx": "workspace:*",
+    "source-map-js": "^1.2.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

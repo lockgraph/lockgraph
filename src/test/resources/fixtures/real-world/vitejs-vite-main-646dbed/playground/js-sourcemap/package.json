@@ -1,0 +1,18 @@
+{
+  "name": "@vitejs/test-js-sourcemap",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "debug": "node --inspect-brk ../../packages/vite/bin/vite",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/test-dep-malicious-sourcemap": "file:dep-malicious-sourcemap",
+    "@vitejs/test-dep-optimized-malicious": "file:dep-optimized-malicious",
+    "@vitejs/test-importee-pkg": "file:importee-pkg",
+    "magic-string": "^0.30.21"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "name": "@yarnpkg/sdks",
+  "version": "3.2.3",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "bin": "./sources/boot-cli-dev.js",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./cli": "./sources/boot-cli-dev.js",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/fslib": "workspace:^",
+    "@yarnpkg/parsers": "workspace:^",
+    "chalk": "^4.1.2",
+    "clipanion": "^4.0.0-rc.2",
+    "comment-json": "^2.2.0",
+    "es-toolkit": "^1.39.7",
+    "tslib": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/comment-json": "^1.1.1",
+    "@yarnpkg/monorepo": "workspace:^",
+    "@yarnpkg/pnp": "workspace:^"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\"",
+    "release": "yarn npm publish"
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "bin": "./lib/cli.js",
+    "exports": {
+      ".": "./lib/index.js",
+      "./cli": "./lib/cli.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-sdks"
+  },
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "3.2.3"
+}

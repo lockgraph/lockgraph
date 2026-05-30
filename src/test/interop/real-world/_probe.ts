@@ -79,10 +79,13 @@ export function loadRealWorldFixtures(): RealWorldFixture[] {
     const files = readdirSync(repoRoot, { withFileTypes: true })
       .filter(entry => entry.isFile())
       .map(entry => entry.name)
-      // `package.json` is the manifest, not a lockfile — fixtures now ship it
-      // alongside the lock for manifest-aware work (ADR-0025). The cross-family
-      // probe detects + converts LOCKFILES only; skip the manifest here.
-      .filter(name => name !== 'package.json')
+      // `package.json` / `pnpm-workspace.yaml` are manifest/workspace-config
+      // inputs, not lockfiles — fixtures now ship them alongside the lock for
+      // manifest-aware work (ADR-0025). The cross-family probe detects +
+      // converts LOCKFILES only; skip these non-lockfile top-level files.
+      // (Nested workspace-member manifests live in subdirs, which this
+      // top-level-only walk never visits.)
+      .filter(name => name !== 'package.json' && name !== 'pnpm-workspace.yaml')
       .sort()
 
     for (const fileName of files) {

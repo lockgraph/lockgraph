@@ -1,0 +1,22 @@
+{
+  "name": "@babel/eslint-tests",
+  "version": "8.0.0-rc.6",
+  "description": "Tests for babel/eslint-* packages",
+  "private": true,
+  "dependencies": {
+    "@babel/core": "workspace:^",
+    "@babel/eslint-parser": "workspace:^",
+    "@babel/eslint-plugin": "workspace:^",
+    "@babel/parser": "workspace:^",
+    "@babel/plugin-proposal-decorators": "workspace:^",
+    "@babel/plugin-proposal-do-expressions": "workspace:^",
+    "@babel/preset-flow": "workspace:^",
+    "@babel/preset-react": "workspace:^",
+    "dedent": "^1.5.3",
+    "eslint": "^10.0.0",
+    "eslint-plugin-import": "^2.31.0",
+    "globals": "^15.9.0",
+    "npm-babel-parser": "npm:@babel/parser@^7.14.0"
+  },
+  "type": "module"
+}

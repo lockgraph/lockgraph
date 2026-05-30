@@ -1,0 +1,103 @@
+{
+  "name": "@nx/devkit",
+  "version": "0.0.1",
+  "private": false,
+  "type": "commonjs",
+  "files": [
+    "dist",
+    "!dist/tsconfig.tsbuildinfo",
+    "migrations.json"
+  ],
+  "description": "The Nx Devkit is used to customize Nx for different technologies and use cases. It contains many utility functions for reading and writing files, updating configuration, working with Abstract Syntax Trees(ASTs), and more. Learn more about [extending Nx by leveraging the Nx Devkit](https://nx.dev/extending-nx/intro/getting-started) on our docs.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/devkit"
+  },
+  "keywords": [
+    "Monorepo",
+    "Angular",
+    "React",
+    "Web",
+    "Node",
+    "Nest",
+    "Jest",
+    "Cypress",
+    "CLI"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "testing": [
+        "dist/testing.d.ts"
+      ],
+      "ngcli-adapter": [
+        "dist/ngcli-adapter.d.ts"
+      ],
+      "internal": [
+        "dist/internal.d.ts"
+      ],
+      "internal-testing-utils": [
+        "dist/internal-testing-utils.d.ts"
+      ]
+    }
+  },
+  "author": "Victor Savkin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "dependencies": {
+    "@zkochan/js-yaml": "catalog:",
+    "ejs": "5.0.1",
+    "tslib": "catalog:typescript",
+    "semver": "catalog:",
+    "yargs-parser": "catalog:",
+    "minimatch": "catalog:",
+    "enquirer": "catalog:"
+  },
+  "devDependencies": {
+    "jest": "catalog:jest",
+    "nx": "workspace:*"
+  },
+  "peerDependencies": {
+    "nx": ">= 22 <= 24 || ^23.0.0-0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "nx-migrations": {
+    "migrations": "./migrations.json"
+  },
+  "exports": {
+    ".": {
+      "@nx/nx-source": "./index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./migrations.json": "./migrations.json",
+    "./internal": {
+      "@nx/nx-source": "./internal.ts",
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
+    },
+    "./internal-testing-utils": {
+      "@nx/nx-source": "./internal-testing-utils.ts",
+      "types": "./dist/internal-testing-utils.d.ts",
+      "default": "./dist/internal-testing-utils.js"
+    },
+    "./ngcli-adapter": {
+      "@nx/nx-source": "./ngcli-adapter.ts",
+      "types": "./dist/ngcli-adapter.d.ts",
+      "default": "./dist/ngcli-adapter.js"
+    },
+    "./testing": {
+      "@nx/nx-source": "./testing.ts",
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "@nx/gradle",
+  "version": "0.0.1",
+  "private": false,
+  "description": "The Nx Plugin for Gradle allows Gradle tasks to be run through Nx",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/gradle"
+  },
+  "keywords": [
+    "Monorepo",
+    "Java",
+    "Gradle",
+    "CLI",
+    "Backend"
+  ],
+  "main": "./index.js",
+  "type": "commonjs",
+  "types": "./index.d.ts",
+  "author": "Victor Savkin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "generators": "./generators.json",
+  "exports": {
+    ".": "./index.js",
+    "./plugin-v1": "./plugin-v1.js",
+    "./executors/*/schema.json": "./src/executors/*/schema.json",
+    "./executors/*/schema": "./src/executors/*/schema.d.ts",
+    "./generators/*/schema.json": "./src/generators/*/schema.json",
+    "./generators/*/schema": "./src/generators/*/schema.d.ts",
+    "./package.json": "./package.json",
+    "./migrations.json": "./migrations.json",
+    "./generators.json": "./generators.json"
+  },
+  "nx-migrations": {
+    "migrations": "./migrations.json"
+  },
+  "dependencies": {
+    "@nx/devkit": "workspace:*",
+    "toml-eslint-parser": "^0.10.0",
+    "tree-kill": "catalog:",
+    "tslib": "catalog:typescript"
+  },
+  "devDependencies": {
+    "nx": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "executors": "./executors.json"
+}

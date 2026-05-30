@@ -1,0 +1,118 @@
+{
+  "name": "@nx/vite",
+  "version": "0.0.1",
+  "private": false,
+  "type": "commonjs",
+  "files": [
+    "dist",
+    "!dist/tsconfig.tsbuildinfo",
+    "!dist/spec",
+    "migrations.json",
+    "executors.json",
+    "generators.json"
+  ],
+  "description": "The Nx Plugin for building and testing applications using Vite",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/vite"
+  },
+  "keywords": [
+    "Monorepo",
+    "Vite",
+    "Web",
+    "CLI",
+    "Front-end"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "plugin": [
+        "dist/plugin.d.ts"
+      ],
+      "executors": [
+        "dist/executors.d.ts"
+      ],
+      "plugins/nx-copy-assets.plugin": [
+        "dist/plugins/nx-copy-assets.plugin.d.ts"
+      ],
+      "plugins/nx-tsconfig-paths.plugin": [
+        "dist/plugins/nx-tsconfig-paths.plugin.d.ts"
+      ],
+      "plugins/rollup-replace-files.plugin": [
+        "dist/plugins/rollup-replace-files.plugin.d.ts"
+      ]
+    }
+  },
+  "exports": {
+    ".": {
+      "@nx/nx-source": "./index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./migrations.json": "./migrations.json",
+    "./generators.json": "./generators.json",
+    "./executors.json": "./executors.json",
+    "./plugin": {
+      "@nx/nx-source": "./plugin.ts",
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./executors": {
+      "@nx/nx-source": "./executors.ts",
+      "types": "./dist/executors.d.ts",
+      "default": "./dist/executors.js"
+    },
+    "./plugins/nx-copy-assets.plugin": {
+      "@nx/nx-source": "./plugins/nx-copy-assets.plugin.ts",
+      "types": "./dist/plugins/nx-copy-assets.plugin.d.ts",
+      "default": "./dist/plugins/nx-copy-assets.plugin.js"
+    },
+    "./plugins/nx-tsconfig-paths.plugin": {
+      "@nx/nx-source": "./plugins/nx-tsconfig-paths.plugin.ts",
+      "types": "./dist/plugins/nx-tsconfig-paths.plugin.d.ts",
+      "default": "./dist/plugins/nx-tsconfig-paths.plugin.js"
+    },
+    "./plugins/rollup-replace-files.plugin": {
+      "@nx/nx-source": "./plugins/rollup-replace-files.plugin.ts",
+      "types": "./dist/plugins/rollup-replace-files.plugin.d.ts",
+      "default": "./dist/plugins/rollup-replace-files.plugin.js"
+    }
+  },
+  "author": "Victor Savkin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "generators": "./generators.json",
+  "executors": "./executors.json",
+  "ng-update": {
+    "requirements": {},
+    "migrations": "./migrations.json"
+  },
+  "dependencies": {
+    "@nx/devkit": "workspace:*",
+    "@phenomnomnominal/tsquery": "catalog:typescript",
+    "enquirer": "catalog:",
+    "@nx/js": "workspace:*",
+    "@nx/vitest": "workspace:*",
+    "picomatch": "catalog:",
+    "tsconfig-paths": "catalog:typescript",
+    "semver": "catalog:",
+    "tslib": "catalog:typescript",
+    "ajv": "catalog:"
+  },
+  "devDependencies": {
+    "@nx/eslint": "workspace:*",
+    "nx": "workspace:*"
+  },
+  "peerDependencies": {
+    "vite": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

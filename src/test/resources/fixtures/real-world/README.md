@@ -63,5 +63,37 @@ coverage. Note the 2026-05-29 re-pin moved `facebook-jest` from a v9 to a
 v10 lockfile (the repo regenerated upstream), which now also exercises the
 `yarn-berry-v10` adapter against a published-self-link graph.
 
+### Cross-PM exotic fixtures — pnpm / npm / bun
+
+Added to broaden the corpus beyond yarn (the overrides/resolutions sweep + the
+L1 `Manifest` model). Directory handle is `<space>-<repo>-<branch>-<sha7>`; the
+lockfile is byte-identical to that commit, re-fetched from
+`raw.githubusercontent.com` at the `<sha7>` commit. **Nested workspace-member
+`package.json` (and `pnpm-workspace.yaml`) are fetched preserving the repo's
+folder hierarchy** so the manifest model (ADR-0025) gets the full per-workspace
+tree, not just the root — a nested package that is itself a workspace root can
+carry its own `overrides`.
+
+| Repo handle | Source repo | Branch | Lockfile | Root overrides |
+| --- | --- | --- | --- | --- |
+| `directus-directus-main-4290f6e` | `https://github.com/directus/directus` | `main` | `pnpm-v9` | `pnpm.overrides`: 22 |
+| `vitejs-vite-main-646dbed` | `https://github.com/vitejs/vite` | `main` | `pnpm-v9` | — |
+| `vuejs-core-main-86ad076` | `https://github.com/vuejs/core` | `main` | `pnpm-v9` | — |
+| `nrwl-nx-master-0939540` | `https://github.com/nrwl/nx` | `master` | `pnpm-v9` | — |
+| `supabase-supabase-master-a4334a2` | `https://github.com/supabase/supabase` | `master` | `pnpm-v9` | — |
+| `angular-angular-main-45e8fb5` | `https://github.com/angular/angular` | `main` | `pnpm-v9` | `resolutions`: 1 |
+| `microsoft-vscode-main-ddd12d5` | `https://github.com/microsoft/vscode` | `main` | `npm` | `overrides`: 5 |
+| `microsoft-TypeScript-main-f3d3968` | `https://github.com/microsoft/TypeScript` | `main` | `npm` | `overrides`: 1 |
+| `socketio-socket.io-main-190572d` | `https://github.com/socketio/socket.io` | `main` | `npm` | `overrides`: 3 |
+| `facebook-create-react-app-main-6254386` | `https://github.com/facebook/create-react-app` | `main` | `npm` | — |
+| `lodash-lodash-main-a023532` | `https://github.com/lodash/lodash` | `main` | `npm` | — |
+| `oven-sh-bun-main-3a79bd7` | `https://github.com/oven-sh/bun` | `main` | `bun` | `resolutions`: 3 |
+| `honojs-hono-main-2cbeadd` | `https://github.com/honojs/hono` | `main` | `bun` | — |
+
+The override declarations feed the ADR-0025 capture path: pnpm `overrides:` and
+npm `packages[""].overrides` round-trip through the lock (captured on parse);
+yarn-style `resolutions` (angular, bun) live only in `package.json` and surface
+via `ParseOptions.manifests` + `overridesOf(graph)` (A2).
+
 See [findings.md](./findings.md) for the per-fixture cross-family probe
 catalogue.

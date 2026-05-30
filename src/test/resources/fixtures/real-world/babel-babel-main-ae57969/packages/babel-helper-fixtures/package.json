@@ -1,0 +1,39 @@
+{
+  "name": "@babel/helper-fixtures",
+  "version": "8.0.0-rc.6",
+  "description": "Helper function to support fixtures",
+  "author": "The Babel Team (https://babel.dev/team)",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/babel/babel.git",
+    "directory": "packages/babel-helper-fixtures"
+  },
+  "homepage": "https://babel.dev/docs/en/next/babel-helper-fixtures",
+  "main": "./lib/index.js",
+  "dependencies": {
+    "@jridgewell/gen-mapping": "catalog:",
+    "semver": "catalog:"
+  },
+  "devDependencies": {
+    "@babel/core": "workspace:^",
+    "@types/semver": "^7.3.4"
+  },
+  "peerDependencies": {
+    "@babel/core": "workspace:^"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "type": "module"
+}

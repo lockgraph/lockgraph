@@ -1,0 +1,62 @@
+{
+  "name": "@nx/expo",
+  "version": "0.0.1",
+  "private": false,
+  "description": "The Expo Plugin for Nx contains executors and generators for managing and developing an expo application within your workspace. For example, you can directly build for different target platforms as well as generate projects and publish your code.",
+  "keywords": [
+    "Monorepo",
+    "Expo",
+    "React",
+    "Web",
+    "Jest",
+    "Native",
+    "CLI",
+    "Mobile",
+    "Testing"
+  ],
+  "homepage": "https://nx.dev",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/expo"
+  },
+  "license": "MIT",
+  "author": "Victor Savkin",
+  "main": "./index.js",
+  "type": "commonjs",
+  "types": "index.d.ts",
+  "dependencies": {
+    "@nx/devkit": "workspace:*",
+    "@nx/eslint": "workspace:*",
+    "@nx/js": "workspace:*",
+    "@nx/react": "workspace:*",
+    "enhanced-resolve": "^5.8.3",
+    "picocolors": "catalog:",
+    "semver": "catalog:",
+    "tsconfig-paths": "catalog:typescript",
+    "tslib": "catalog:typescript"
+  },
+  "peerDependencies": {
+    "metro-config": ">= 0.82.0",
+    "metro-resolver": ">= 0.82.0"
+  },
+  "devDependencies": {
+    "nx": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@nx/detox": "workspace:*",
+    "@nx/rollup": "workspace:*"
+  },
+  "executors": "./executors.json",
+  "ng-update": {
+    "requirements": {},
+    "migrations": "./migrations.json"
+  },
+  "generators": "./generators.json",
+  "publishConfig": {
+    "access": "public"
+  }
+}

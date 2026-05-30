@@ -1,0 +1,65 @@
+{
+  "name": "@nx/nuxt",
+  "version": "0.0.1",
+  "private": false,
+  "description": "The Nuxt plugin for Nx contains executors and generators for managing Nuxt applications and libraries within an Nx workspace. It provides:\n\n\n- Integration with libraries such as Vitest, Playwright, Cypress, and Storybook.\n\n- Generators for applications, libraries, and more.\n\n- Library build support for publishing packages to npm or other registries.\n\n- Utilities for automatic workspace refactoring.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrwl/nx.git",
+    "directory": "packages/nuxt"
+  },
+  "keywords": [
+    "Monorepo",
+    "Nuxt",
+    "Web",
+    "CLI",
+    "Front-end"
+  ],
+  "main": "./index.js",
+  "type": "commonjs",
+  "types": "./index.d.ts",
+  "author": "Victor Savkin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nrwl/nx/issues"
+  },
+  "homepage": "https://nx.dev",
+  "generators": "./generators.json",
+  "executors": "./executors.json",
+  "exports": {
+    ".": {
+      "default": "./index.js",
+      "types": "./index.d.ts"
+    },
+    "./generators/*/schema.json": "./src/generators/*/schema.json",
+    "./generators/*/schema": "./src/generators/*/schema.d.ts",
+    "./package.json": "./package.json",
+    "./generators.json": "./generators.json",
+    "./executors.json": "./executors.json",
+    "./migrations.json": "./migrations.json",
+    "./plugin": "./plugin.js"
+  },
+  "nx-migrations": {
+    "migrations": "./migrations.json"
+  },
+  "dependencies": {
+    "tslib": "catalog:typescript",
+    "@nuxt/kit": "^3.10.0 || ^4.0.0",
+    "@nx/devkit": "workspace:*",
+    "@nx/js": "workspace:*",
+    "@nx/eslint": "workspace:*",
+    "@nx/vue": "workspace:*",
+    "@nx/vite": "workspace:*",
+    "@nx/vitest": "workspace:*",
+    "semver": "catalog:"
+  },
+  "devDependencies": {
+    "nx": "workspace:*"
+  },
+  "peerDependencies": {
+    "@nuxt/schema": "^3.10.0 || ^4.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

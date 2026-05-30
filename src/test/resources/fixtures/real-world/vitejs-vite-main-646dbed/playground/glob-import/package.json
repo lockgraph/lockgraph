@@ -1,0 +1,18 @@
+{
+  "name": "@vitejs/test-import-context",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#imports/*": "./root/imports-path/*"
+  },
+  "scripts": {
+    "dev": "vite root",
+    "build": "vite build root",
+    "debug": "node --inspect-brk ../../packages/vite/bin/vite",
+    "preview": "vite preview root"
+  },
+  "dependencies": {
+    "@vitejs/test-import-meta-glob-pkg": "file:./root/import-meta-glob-pkg"
+  }
+}

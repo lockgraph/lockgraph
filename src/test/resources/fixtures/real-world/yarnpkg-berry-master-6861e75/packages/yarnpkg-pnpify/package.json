@@ -1,0 +1,54 @@
+{
+  "name": "@yarnpkg/pnpify",
+  "version": "4.1.6",
+  "license": "BSD-2-Clause",
+  "main": "./sources/index.ts",
+  "bin": "./sources/boot-cli-dev.js",
+  "exports": {
+    ".": "./sources/index.ts",
+    "./utils": "./sources/utils.ts",
+    "./cli": "./sources/cli.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/fslib": "workspace:^",
+    "@yarnpkg/nm": "workspace:^",
+    "clipanion": "^4.0.0-rc.2",
+    "tslib": "^2.4.0"
+  },
+  "devDependencies": {
+    "@yarnpkg/monorepo": "workspace:^",
+    "@yarnpkg/pnp": "workspace:^"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\"",
+    "release": "yarn npm publish",
+    "test": "run test:unit \"$(pwd)\""
+  },
+  "publishConfig": {
+    "main": "./lib/index.js",
+    "bin": "./lib/cli.js",
+    "exports": {
+      ".": "./lib/index.js",
+      "./utils": "./lib/utils.js",
+      "./cli": "./lib/cli.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*",
+    "/bin.js"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-pnpify"
+  },
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.1.6"
+}

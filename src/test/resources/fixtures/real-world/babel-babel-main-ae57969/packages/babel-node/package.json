@@ -1,0 +1,52 @@
+{
+  "name": "@babel/node",
+  "version": "8.0.0-rc.6",
+  "description": "Babel command line",
+  "author": "The Babel Team (https://babel.dev/team)",
+  "homepage": "https://babel.dev/docs/en/next/babel-node",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/babel/babel.git",
+    "directory": "packages/babel-node"
+  },
+  "keywords": [
+    "6to5",
+    "babel",
+    "es6",
+    "transpile",
+    "transpiler",
+    "babel-cli",
+    "compiler"
+  ],
+  "dependencies": {
+    "@babel/register": "workspace:^",
+    "commander": "^14.0.2",
+    "core-js": "catalog:",
+    "v8flags": "^4.0.1"
+  },
+  "peerDependencies": {
+    "@babel/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@babel/core": "workspace:^",
+    "@babel/helper-transform-fixture-test-runner": "workspace:^",
+    "@babel/preset-env": "workspace:^",
+    "@babel/preset-react": "workspace:^",
+    "@babel/runtime": "workspace:^",
+    "@types/v8flags": "^3.1.1"
+  },
+  "bin": {
+    "babel-node": "./bin/babel-node.js"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "type": "module"
+}

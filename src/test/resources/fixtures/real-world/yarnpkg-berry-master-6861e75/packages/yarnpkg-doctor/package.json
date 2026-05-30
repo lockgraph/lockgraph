@@ -1,0 +1,48 @@
+{
+  "name": "@yarnpkg/doctor",
+  "version": "4.0.6",
+  "license": "BSD-2-Clause",
+  "bin": "./sources/boot-cli-dev.js",
+  "exports": {
+    "./cli": "./sources/boot-cli-dev.js",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@yarnpkg/cli": "workspace:^",
+    "@yarnpkg/core": "workspace:^",
+    "@yarnpkg/fslib": "workspace:^",
+    "clipanion": "^4.0.0-rc.2",
+    "globby": "^11.0.1",
+    "micromatch": "^4.0.2",
+    "p-limit": "^2.2.0",
+    "tslib": "^2.4.0",
+    "typescript": "catalog:"
+  },
+  "devDependencies": {
+    "@types/micromatch": "^4.0.1",
+    "@yarnpkg/monorepo": "workspace:^"
+  },
+  "scripts": {
+    "postpack": "rm -rf lib",
+    "prepack": "run build:compile \"$(pwd)\""
+  },
+  "publishConfig": {
+    "bin": "./lib/cli.js",
+    "exports": {
+      "./cli": "./lib/cli.js",
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "/lib/**/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-doctor"
+  },
+  "engines": {
+    "node": ">=18.12.0"
+  },
+  "stableVersion": "4.0.6"
+}
