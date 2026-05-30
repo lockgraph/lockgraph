@@ -14,7 +14,7 @@
 //   - npm-{2,3}.ts thin entries: wire core + (optional) mirror via the
 //     `hooks` slot on `NpmFamilyConfig` so core never imports mirror.
 
-import { type Diagnostic, type EdgeKind, type Graph, type Node } from '../graph.ts'
+import { type Diagnostic, type EdgeKind, type Graph, type Node, type OverrideConstraint } from '../graph.ts'
 
 // === Tiny utilities ========================================================
 
@@ -96,6 +96,10 @@ export interface NpmFamilyParseOptions {}
 export interface NpmFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
+  /** Caller-declared overrides (ADR-0025 §4) projected into the root entry's
+   *  `overrides` block at `packages[""]`. npm-1 (no packages block) cannot
+   *  carry them — a loss diagnostic fires instead. */
+  overrides?: OverrideConstraint[]
 }
 
 export interface NpmFamilyEnrichOptions {}

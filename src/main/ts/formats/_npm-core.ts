@@ -66,6 +66,7 @@ import {
   stringifyForVersionOnly,
   workspaceRangeOfEdge,
 } from '../recipe/workspace.ts'
+import { projectOverrides } from '../recipe/overrides.ts'
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -438,6 +439,31 @@ export function stringifyFamily(
     // remains parseable (parseFamily rejects a `packages` map missing the
     // `''` key — see this module's parse path).
     packages[''] = { name: rootName, version: rootVersion }
+  }
+
+  // ADR-0025 §4 — project caller-declared overrides into the root entry's
+  // `overrides` block. Only the packages-keyed shape (lockfileVersion ≥ 2)
+  // carries it; npm-1's recursive `dependencies` tree has no override slot,
+  // so the constraints are dropped with a loss diagnostic instead.
+  if (options.overrides !== undefined && options.overrides.length > 0) {
+    const rootEntry = packages['']
+    if (config.lockfileVersion >= 2 && typeof rootEntry === 'object' && rootEntry !== null) {
+      ;(rootEntry as Record<string, unknown>).overrides = projectOverrides(
+        options.overrides,
+        'npm',
+        emitDiagnostic,
+      )
+    } else {
+      // Defensive only: every FormatId routed through `stringifyFamily` today
+      // pins lockfileVersion ≥ 2 (npm-2 → 2, npm-3 → 3), and npm-1 owns a
+      // separate tree-shape pipeline that never reaches here. This branch
+      // guards a hypothetical future flat npm-1 reuse of the core.
+      emitDiagnostic({
+        code:     `${config.diagnosticPrefix}_OVERRIDES_UNSUPPORTED`,
+        severity: 'warning',
+        message:  `lockfileVersion ${config.lockfileVersion} has no packages[""].overrides slot; ${options.overrides.length} override(s) not projected`,
+      })
+    }
   }
 
   const workspaceMembers: Node[] = []

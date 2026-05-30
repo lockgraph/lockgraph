@@ -7,6 +7,7 @@
 // hooks без plumbing recipe primitives yet.
 
 import type { Diagnostic, Graph, Manifest, OverrideConstraint } from './graph.ts'
+import { noteYarnOverridesNotProjected } from './recipe/overrides.ts'
 
 import * as bunText      from './formats/bun-text.ts'
 import * as npm1         from './formats/npm-1.ts'
@@ -197,14 +198,22 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions)
   const lineEnding   = options.lineEnding
   const onDiagnostic = options.onDiagnostic
   const cacheKey     = options.cacheKey
+  const overrides    = options.overrides
+  // ADR-0025 §4 — yarn lockfiles (classic + berry) carry no overrides block;
+  // forced resolutions live in package.json only. Surface the loss once before
+  // dispatch. npm-2/3 and pnpm project the constraints into their lock below;
+  // bun-text + npm-1 do not yet thread overrides (tracked follow-up).
+  if (overrides !== undefined && overrides.length > 0 && format.startsWith('yarn')) {
+    noteYarnOverridesNotProjected(overrides.length, onDiagnostic)
+  }
   switch (format) {
     case 'bun-text':      return bunText.stringify(graph,     { lineEnding, onDiagnostic })
     case 'npm-1':         return npm1.stringify(graph,        { lineEnding, onDiagnostic })
-    case 'npm-2':         return npm2.stringify(graph,        { lineEnding, onDiagnostic })
-    case 'npm-3':         return npm3.stringify(graph,        { lineEnding, onDiagnostic })
+    case 'npm-2':         return npm2.stringify(graph,        { lineEnding, onDiagnostic, overrides })
+    case 'npm-3':         return npm3.stringify(graph,        { lineEnding, onDiagnostic, overrides })
     case 'pnpm-v5':       return pnpmV5.stringify(graph,      { lineEnding, onDiagnostic })
-    case 'pnpm-v6':       return pnpmV6.stringify(graph,      { lineEnding, onDiagnostic })
-    case 'pnpm-v9':       return pnpmV9.stringify(graph,      { lineEnding, onDiagnostic })
+    case 'pnpm-v6':       return pnpmV6.stringify(graph,      { lineEnding, onDiagnostic, overrides })
+    case 'pnpm-v9':       return pnpmV9.stringify(graph,      { lineEnding, onDiagnostic, overrides })
     case 'yarn-berry-v4': return yarnBerryV4.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v5': return yarnBerryV5.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v6': return yarnBerryV6.stringify(graph, { lineEnding, cacheKey, onDiagnostic })

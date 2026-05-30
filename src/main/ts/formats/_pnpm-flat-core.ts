@@ -51,11 +51,13 @@ import {
   type Graph,
   type Node,
   type NodeId,
+  type OverrideConstraint,
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
+import { projectOverrides } from '../recipe/overrides.ts'
 import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
 import {
   parse as parseResolutionRecipe,
@@ -92,6 +94,10 @@ export interface PnpmFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   settings?: PnpmSettings
   onDiagnostic?: (diagnostic: Diagnostic) => void
+  /** Caller-declared overrides (ADR-0025 §4) overlaid onto the pnpm
+   *  `overrides:` block. Caller wins per key; pre-existing `patch:` directives
+   *  (F2) survive on collision. */
+  overrides?: OverrideConstraint[]
 }
 
 export interface PnpmManifest {
@@ -628,6 +634,19 @@ export function stringifyFamily(
   // (cross-format conversion case where source-side path is recovered
   // from `Node.resolution`). No drop diagnostic in this family.
   const effectiveOverrides = synthesiseOverridePatches(graph, sidecar)
+
+  // ADR-0025 §4 — overlay caller-declared overrides onto the synthesised
+  // block. Caller wins per key, EXCEPT pre-existing `patch:` directives (F2),
+  // which survive: a forced override and a patch slot are orthogonal concerns,
+  // and silently dropping the patch would un-apply a fix on round-trip.
+  if (options.overrides !== undefined && options.overrides.length > 0) {
+    const projected = projectOverrides(options.overrides, 'pnpm', emitDiagnostic)
+    for (const [key, value] of Object.entries(projected)) {
+      const existing = effectiveOverrides[key]
+      if (typeof existing === 'string' && existing.startsWith('patch:')) continue
+      effectiveOverrides[key] = value as string
+    }
+  }
 
   // --- Step 1: classify nodes — root + workspace members + resolved nodes. ---
   const rootNode = locatePnpmRootNode(graph, sidecar)
