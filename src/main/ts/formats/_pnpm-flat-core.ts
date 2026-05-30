@@ -962,13 +962,30 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
     }
     if (close < 0) return undefined
     const segment = peerSuffix.slice(pos + 1, close)
+    // The segment may itself carry nested `(...)` peers (a transitive peer-
+    // of-a-peer, pnpm v9 — e.g. `@astrojs/markdoc@0.15.1(yaml@2.9.0)
+    // (react@18.3.1)`). Split off the segment's OWN base at its first depth-0
+    // `(` before locating the name/version boundary; otherwise the last-`@`
+    // scan lands inside a nested peer (`react@18.3.1`) and yields a garbage
+    // name/version. peerContext records the bare base key per ADR-0006; the
+    // nested suffix belongs to the peer's full edge-target NodeId, reconciled
+    // by the seal's base-key projection (ADR-0017).
+    let segBaseEnd = segment.length
+    let sd = 0
+    for (let i = 0; i < segment.length; i++) {
+      const c = segment[i]
+      if (c === '(' && sd === 0) { segBaseEnd = i; break }
+      if (c === '(') sd++
+      else if (c === ')') sd--
+    }
+    const segBase = segment.slice(0, segBaseEnd)
     let segAt = -1
-    for (let i = 1; i < segment.length; i++) {
-      if (segment[i] === '@') segAt = i
+    for (let i = 1; i < segBase.length; i++) {
+      if (segBase[i] === '@') segAt = i
     }
     if (segAt <= 0) return undefined
-    const pName = segment.slice(0, segAt)
-    const pVer = segment.slice(segAt + 1)
+    const pName = segBase.slice(0, segAt)
+    const pVer = segBase.slice(segAt + 1)
     if (pName.length === 0 || pVer.length === 0) return undefined
     peers.push({ name: pName, version: pVer })
     pos = close + 1
