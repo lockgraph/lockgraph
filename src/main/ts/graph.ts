@@ -92,6 +92,55 @@ export interface LayoutHints {
   strategy?: 'isolated' | 'hoisted' | 'pnp' | 'nm-linked'
 }
 
+/**
+ * Canonical, PM-neutral declaration that a dependency's resolution is forced —
+ * the common form of npm `overrides`, yarn `resolutions`, and pnpm
+ * `pnpm.overrides` (ADR-0025). A *declared* L1 input, never a resolved Graph
+ * instance. Modelled on npm's nested form (the only one expressing
+ * parent-scoping); pnpm `>`-chains and yarn flat patterns derive from it.
+ */
+export interface OverrideConstraint {
+  /** Package whose resolution is forced. */
+  package: string
+  /** Ancestor scope — the override applies only when `package` is reached
+   *  under this consumer chain. Absent/empty = global. One segment for the
+   *  common single-parent case; multiple for pnpm `a>b>c` chains. */
+  parentPath?: string[]
+  /** Version condition gating the override (pnpm `foo@2`, yarn `foo@range`).
+   *  Absent = unconditional. */
+  versionCondition?: string
+  /** The forced resolution — a version, range, dist-tag, `npm:` alias, or an
+   *  npm `$name` parent-version back-reference. Carried verbatim. */
+  to: string
+  /** `to` is an npm `$name` self-ref (no yarn/pnpm equivalent). */
+  selfRef?: boolean
+}
+
+/**
+ * L1 Manifest — declared constraints from a `package.json` (ADR-0001 §L1,
+ * materialised by ADR-0025). PM-neutral; supplied keyed by workspace path as
+ * `Record<string, Manifest>`. Distinct from the resolved Graph (L2): a
+ * Manifest is what was *declared*, not what was *resolved*.
+ */
+export interface Manifest {
+  name?:    string
+  version?: string
+  dependencies?:         Record<string, string>
+  devDependencies?:      Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?:     Record<string, string>
+  workspaces?:           string[]
+  /** Canonical override declarations (load-bearing per ADR-0013). */
+  overrides?: OverrideConstraint[]
+  /** Verbatim PM-native override blocks — attribution per ADR-0013, kept for
+   *  lossless same-PM round-trip. At most one is populated per manifest. */
+  native?: {
+    npmOverrides?:    unknown
+    yarnResolutions?: Record<string, string>
+    pnpmOverrides?:   Record<string, string>
+  }
+}
+
 export interface WalkOpts {
   direction?: 'out' | 'in'
   kinds?:     EdgeKind[]

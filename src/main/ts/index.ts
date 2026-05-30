@@ -6,7 +6,7 @@
 // this skeleton dispatches to existing adapter parse / stringify
 // hooks без plumbing recipe primitives yet.
 
-import type { Diagnostic, Graph } from './graph.ts'
+import type { Diagnostic, Graph, Manifest, OverrideConstraint } from './graph.ts'
 
 import * as bunText      from './formats/bun-text.ts'
 import * as npm1         from './formats/npm-1.ts'
@@ -88,12 +88,11 @@ export type FormatId =
   | 'pnpm-v9'
   | 'bun-text'
 
-// NOTE: per ADR-0014 §3 the public surface also lists `Manifest`,
-// `ResolutionCanonical`, `WorkspaceRange` types и a `manifests?` option
-// on Parse/ConvertOptions. These land с the recipe-layer primitive rounds
-// (F1-F5 per §4); authoring them aspirationally в this skeleton would
-// publish types that don't exist в owning modules yet и a dead option
-// that parseOne can't consume. Held back until the recipe primitives land.
+// L1 Manifest + canonical override types (ADR-0025). The `manifests` /
+// `overrides` options below are the surface ADR-0014 §3 / ADR-0025 specify;
+// they are now backed by real types in graph.ts. Capture + per-PM projection
+// land in the ADR-0025 impl rounds; the option shape is stable.
+export type { Manifest, OverrideConstraint } from './graph.ts'
 
 export type ParseOptions = {
   /**
@@ -102,12 +101,23 @@ export type ParseOptions = {
    * ADR-0014 §4.F2). Adapters without out-of-lockfile reads ignore it.
    */
   workspaceRoot?: string
+  /**
+   * Declared manifests keyed by workspace path (ADR-0025). Supplies override
+   * declarations + workspace context the lockfile alone cannot carry.
+   */
+  manifests?:    Record<string, Manifest>
   onDiagnostic?:  (d: Diagnostic) => void
 }
 
 export type StringifyOptions = {
   lineEnding?:   'lf' | 'crlf'
   cacheKey?:     string
+  /**
+   * Caller-supplied canonical override constraints (ADR-0025). Each adapter
+   * projects them to its native form (pnpm `overrides:` / npm
+   * `packages[""].overrides`); yarn-berry emits a loss diagnostic.
+   */
+  overrides?:    OverrideConstraint[]
   onDiagnostic?: (d: Diagnostic) => void
 }
 

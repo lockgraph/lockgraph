@@ -5,15 +5,16 @@
 // resolves toRange via registry.resolve). Callers that want the offline
 // default supply frozenRegistry(graph) at the call site.
 
-import type { Diagnostic, Graph } from '../graph.ts'
+import type { Diagnostic, Graph, Manifest } from '../graph.ts'
 import { frozenRegistry } from '../registry/frozen.ts'
 import type { CacheAdapter, RegistryAdapter } from '../registry/types.ts'
 
 export interface ModifyContext {
   registry:   RegistryAdapter
   cache?:     CacheAdapter
-  /** Optional per-package manifest overlay (reserved for future enrich plumbing). */
-  manifests?: Record<string, unknown>
+  /** Declared manifests keyed by workspace path (ADR-0025). Carries override
+   *  declarations + workspace context for enrich / re-resolution. */
+  manifests?: Record<string, Manifest>
 }
 
 export interface ModifyOptions {
