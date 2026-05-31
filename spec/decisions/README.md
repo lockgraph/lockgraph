@@ -53,6 +53,7 @@ zero-padded to 4 digits.
 | [0026](./0026-layout-attribution.md) | Layout attribution: a round-trip cache for npm install-path placement (not the L3 model) | accepted | 2026-05-30 |
 | [0027](./0027-npm-layout-generator.md) | npm L3 layout generator (multi-strategy projection) | accepted | 2026-05-30 |
 | [0028](./0028-l3-generalization.md) | Generalised L3: lockfile-encoded placement (`placement-map` ∣ `resolution-graph`) — **amends ADR-0001** | accepted | 2026-05-31 |
+| [0029](./0029-resolution-graph-pnpm.md) | `resolution-graph` (pnpm): INV-RESOLVE made executable + verifier | accepted | 2026-05-31 |
 
 > ADR-0027 §5 satisfies ADR-0026 acceptance gates 1/5/6 (the `layoutOf`/`rememberLayout` placement carrier): the #10 fix shipped 0026's replay *behaviour* via the `installPaths` sidecar; 0027 builds the read/write accessor.
 
@@ -63,4 +64,4 @@ zero-padded to 4 digits.
 > (PnP `resolver-registry` deferred to a separate effort). ADR-0001's L3 bullet is
 > superseded by ADR-0028 §11.
 
-Next free number: **0029**.
+Next free number: **0030**.

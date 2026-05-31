@@ -557,11 +557,106 @@ export function stringify(graph: Graph, options: PnpmV5StringifyOptions = {}): s
   }
   out.packages = packages
 
+  // ADR-0028 INV-RESOLVE — verify the v5 encoding before serialising. v5 ships
+  // a STANDALONE pipeline (it does not call `stringifyFamily`), so the verifier
+  // is wired here separately or it ships uncovered.
+  assertResolveValid(graph, out, rootNode, resolvedNodes, emitDiagnostic)
+
   const text = emitYaml(out, {
     topLevelOrder: TOP_LEVEL_ORDER,
     topLevelSectionKeys: TOP_LEVEL_SECTION_KEYS,
   })
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
+}
+
+// ADR-0028 INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
+// v6/v9 `assertResolveValid` (`_pnpm-flat-core.ts`) over v5's standalone layout:
+//
+//   - consumer hop (`c` is the root or a workspace importer): `importers[path]`
+//     `dependencies`/`devDependencies`/`optionalDependencies` (bare-string
+//     values), or — single-importer collapsed-root — the top-level `out`
+//     blocks. (The parallel `specifiers` map is the DESCRIPTOR, not a resolved
+//     ref, so it is not resolved here.)
+//   - package hop (`c` is a resolved package): the INLINE
+//     `packages[key(c)].dependencies`/`optionalDependencies` (v5 has no
+//     `snapshots:` block) — bare-string values.
+//
+// Resolution uses v5's own oracle (`resolveDependencyTarget` /
+// `resolveAliasedDependencyTarget`) over the emitted packages-key NodeId set.
+// Workspace-target (`link:`) edges are skipped. A miss is a soft
+// `LAYOUT_RESOLVE_VIOLATION` (error) — no throw.
+function assertResolveValid(
+  graph: Graph,
+  out: YamlMap,
+  rootNode: Node | undefined,
+  resolvedNodes: readonly Node[],
+  onDiagnostic: (d: Diagnostic) => void,
+): void {
+  const seenIds = new Set<string>(resolvedNodes.map(n => n.id))
+
+  const importersMap = isPlainObject(out.importers) ? (out.importers as Record<string, unknown>) : undefined
+  const consumerBlockOf = (consumer: Node): Record<string, unknown> | undefined => {
+    const path = consumer.id === rootNode?.id ? '.' : (consumer.workspacePath ?? consumer.name)
+    if (importersMap !== undefined) {
+      const block = importersMap[path]
+      return isPlainObject(block) ? (block as Record<string, unknown>) : undefined
+    }
+    return consumer.id === rootNode?.id ? (out as Record<string, unknown>) : undefined
+  }
+
+  const packagesMap = isPlainObject(out.packages) ? (out.packages as Record<string, unknown>) : undefined
+  const packageBlockOf = (pkg: Node): Record<string, unknown> | undefined => {
+    const entry = packagesMap?.[packagesKeyForNode(pkg)]
+    return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
+  }
+
+  const slotValue = (block: Record<string, unknown>, blockNames: readonly string[], seg: string): string | undefined => {
+    for (const blockName of blockNames) {
+      const sub = block[blockName]
+      if (!isPlainObject(sub)) continue
+      const raw = (sub as Record<string, unknown>)[seg]
+      if (typeof raw === 'string') return raw
+    }
+    return undefined
+  }
+
+  const isImporter = (node: Node): boolean =>
+    node.id === rootNode?.id || (node.workspacePath !== undefined && node.workspacePath !== '')
+  const consumerBlockNames = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
+  const packageBlockNames = ['dependencies', 'optionalDependencies'] as const
+
+  for (const consumer of graph.nodes()) {
+    const consumerIsImporter = isImporter(consumer)
+    if (!consumerIsImporter && !seenIds.has(consumer.id)) continue
+    const block = consumerIsImporter ? consumerBlockOf(consumer) : packageBlockOf(consumer)
+    if (block === undefined) continue
+    const blockNames = consumerIsImporter ? consumerBlockNames : packageBlockNames
+
+    for (const edge of graph.out(consumer.id)) {
+      if (edge.kind !== 'dep' && edge.kind !== 'dev' && edge.kind !== 'optional') continue
+      const dst = graph.getNode(edge.dst)
+      if (dst === undefined) continue
+      if (dst.workspacePath !== undefined && dst.workspacePath !== '') continue
+      if (!consumerIsImporter && (dst.id === consumer.id || dst.id === rootNode?.id)) continue
+
+      const seg = edge.attrs?.alias ?? dst.name
+      const value = slotValue(block, blockNames, seg)
+      const resolved = value === undefined
+        ? undefined
+        : (resolveDependencyTarget(seenIds, seg, value) ?? resolveAliasedDependencyTarget(seenIds, value))
+      if (resolved !== dst.id) {
+        onDiagnostic({
+          code: 'LAYOUT_RESOLVE_VIOLATION',
+          severity: 'error',
+          subject: { src: edge.src, dst: edge.dst, kind: edge.kind },
+          message:
+            `INV-RESOLVE violated: ${consumer.id} resolves ${JSON.stringify(seg)} to ` +
+            `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
+            `expected ${dst.id} (pnpm-v5 encoding defect — ADR-0028 INV-RESOLVE)`,
+        })
+      }
+    }
+  }
 }
 
 export function enrich(
@@ -936,6 +1031,19 @@ function nodeIdToDependencyValue(node: Node): string {
   return `${node.version}${tail}`
 }
 
+// ADR-0028 INV-RESOLVE — the (slot-key, slot-value) pair for one dependency
+// edge in a v5 `dependencies` / `specifiers` / inline-transitive block. A
+// plain dep is `<dst.name>: <version>[_<peer>@v]` (pnpm-v5's bare encoding);
+// an npm-aliased dep (`edge.attrs.alias` set) keys by the alias descriptor and
+// values the CANONICAL `<dst.name>@<version>[_<peer>@v]`, the form parse's
+// resolveAliasedDependencyTarget reconstructs (`pnpm-v5.ts:771-792`).
+function aliasedDependencySlot(edge: Edge, dst: Node): { key: string; value: string } {
+  const bareValue = nodeIdToDependencyValue(dst)
+  const alias = edge.attrs?.alias
+  if (alias === undefined) return { key: dst.name, value: bareValue }
+  return { key: alias, value: `${dst.name}@${bareValue}` }
+}
+
 function buildImporterEntry(
   graph: Graph,
   sidecar: PnpmV5Sidecar | undefined,
@@ -964,15 +1072,32 @@ function buildImporterEntry(
     const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}`
     const edgeSc = sidecar?.importerEdges.get(edgeKey)
 
+    // ADR-0028 INV-RESOLVE — key both `specifiers` and the dep block by the
+    // DESCRIPTOR segment (alias when set, else the package name) and emit the
+    // CANONICAL `<name>@<version>` dep value for an alias. pnpm-v5 keys both
+    // maps by the descriptor (`react-is-cjs:` in both), so an npm-aliased dep
+    // must emit under the alias slot, not `dst.name`. The `importerEdges`
+    // sidecar is keyed by the (src,kind,dst) triple, which an aliased and a
+    // direct edge to the SAME node share, so an aliased edge prefers its own
+    // per-edge descriptor + computed canonical value unless the capture is
+    // already alias-consistent (`<dst.name>@…`); non-aliased edges keep the
+    // round-trip-faithful capture verbatim.
+    const slot = aliasedDependencySlot(edge, dst)
+    const isAliased = edge.attrs?.alias !== undefined
     const range = edge.attrs?.range
-    const specifierFromSidecar = importerSpecs?.[dst.name]
-    const specifier = edgeSc?.specifier ?? specifierFromSidecar ?? range ?? dst.version
+    const specifierFromSidecar = importerSpecs?.[slot.key]
+    const captureIsAliasConsistent = edgeSc?.resolvedVersion?.startsWith(`${dst.name}@`) === true
+    const specifier = isAliased
+      ? (range ?? specifierFromSidecar ?? edgeSc?.specifier ?? dst.version)
+      : (edgeSc?.specifier ?? specifierFromSidecar ?? range ?? dst.version)
     const version = isWorkspaceTarget
       ? `link:${relativeImporterPath(importerPath, dst.workspacePath ?? dst.name)}`
-      : (edgeSc?.resolvedVersion ?? nodeIdToDependencyValue(dst))
+      : isAliased
+        ? (captureIsAliasConsistent ? edgeSc!.resolvedVersion! : slot.value)
+        : (edgeSc?.resolvedVersion ?? slot.value)
 
-    blocks[edge.kind][dst.name] = version
-    specifiers[dst.name] = specifier
+    blocks[edge.kind][slot.key] = version
+    specifiers[slot.key] = specifier
   }
 
   if (Object.keys(specifiers).length > 0) {
@@ -1052,7 +1177,10 @@ function buildPackageEntry(
     if (dst.workspacePath !== undefined && dst.workspacePath !== '') continue
     if (dst.id === sidecar?.rootId) continue
     const block = blocks[edge.kind]!
-    block[dst.name] = nodeIdToDependencyValue(dst)
+    // ADR-0028 INV-RESOLVE — alias slot keying + canonical value (see
+    // buildImporterEntry / aliasedDependencySlot).
+    const slot = aliasedDependencySlot(edge, dst)
+    block[slot.key] = slot.value
   }
   for (const [kind, blockName] of [['dep', 'dependencies'], ['optional', 'optionalDependencies']] as const) {
     const block = blocks[kind]
