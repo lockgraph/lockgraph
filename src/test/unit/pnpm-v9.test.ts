@@ -218,20 +218,27 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
     expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
   })
 
-  it('#8b-C: two snapshot keys colliding on one depth-0 NodeId (differ only in a nested peer-of-peer) wire each resolved edge once', () => {
-    // `host@1.0.0(dep@2.0.0)` appears twice — the two keys differ ONLY in the
-    // nested peer of `dep` (`(util@1.0.0)` vs `(util@2.0.0)`), which the depth-0
-    // split discards. Both project to `host@1.0.0(dep@2.0.0)`; Pass 4 walks
-    // both, so the shared `@scope/x` dep would be wired twice → seal duplicate
-    // without the dedup. The distinct `dep` variants keep their own edges.
+  it('#70: two snapshot keys differing only in a nested peer-of-peer stay DISTINCT NodeIds', () => {
+    // `host@1.0.0` is peer-virtualised against `dep@2.0.0` at two DIFFERENT
+    // nested resolutions of `dep`'s OWN `util` peer (`(util@1.0.0)` vs
+    // `(util@2.0.0)`). Pre-#70-fix the parser FLATTENED the peer entry —
+    // dropping each `dep`'s nested suffix — so both keys collapsed to one
+    // `host@1.0.0(dep@2.0.0)` NodeId carrying TWO `dep` peer edges + a doubled
+    // `@scope/x` dep edge (only the #8b-C dedup kept the seal from tripping,
+    // and the second `dep` instance was lost). The fix carries the nested
+    // suffix into the consumer's peerContext token AND the peer edge target,
+    // so the two instances stay distinct and each resolves `dep` to its OWN
+    // nested instance — no collapse, no data loss.
     const lock =
       `lockfileVersion: '9.0'\n\n` +
       `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
       `importers:\n\n  .:\n    dependencies:\n` +
-      `      host:\n        specifier: 1.0.0\n        version: 1.0.0(dep@2.0.0)\n\n` +
+      `      host:\n        specifier: 1.0.0\n        version: 1.0.0(dep@2.0.0(util@1.0.0))\n` +
+      `      host2:\n        specifier: 1.0.0\n        version: 1.0.0(dep@2.0.0(util@2.0.0))\n\n` +
       `packages:\n\n` +
       `  '@scope/x@3.0.0':\n    resolution: {integrity: sha512-x}\n` +
       `  dep@2.0.0:\n    resolution: {integrity: sha512-d}\n` +
+      `    peerDependencies:\n      util: '*'\n` +
       `  host@1.0.0:\n    resolution: {integrity: sha512-h}\n` +
       `    peerDependencies:\n      dep: '*'\n` +
       `  util@1.0.0:\n    resolution: {integrity: sha512-u1}\n` +
@@ -244,17 +251,57 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
       `  host@1.0.0(dep@2.0.0(util@2.0.0)):\n    dependencies:\n      '@scope/x': 3.0.0\n      dep: 2.0.0(util@2.0.0)\n` +
       `  util@1.0.0: {}\n` +
       `  util@2.0.0: {}\n`
+    const graph = parse(lock)
+
+    // TWO distinct host nodes — the nested `util` suffix is preserved.
+    const hosts = Array.from(graph.nodes()).filter(n => n.name === 'host').map(n => n.id).sort()
+    expect(hosts).toEqual([
+      'host@1.0.0(dep@2.0.0(util@1.0.0))',
+      'host@1.0.0(dep@2.0.0(util@2.0.0))',
+    ])
+
+    for (const [hostId, utilVer] of [
+      ['host@1.0.0(dep@2.0.0(util@1.0.0))', 'util@1.0.0'],
+      ['host@1.0.0(dep@2.0.0(util@2.0.0))', 'util@2.0.0'],
+    ] as const) {
+      const host = graph.getNode(hostId)
+      expect(host).toBeDefined()
+      // Each instance carries its own nested-peer peerContext token.
+      expect(host!.peerContext).toEqual([`dep@2.0.0(${utilVer})`])
+      // The shared `@scope/x` dep is wired exactly once per instance.
+      expect(graph.out(hostId, 'dep').filter(e => e.dst === '@scope/x@3.0.0')).toHaveLength(1)
+      // The `dep` peer edge resolves to the MATCHING nested instance.
+      const peerEdges = graph.out(hostId, 'peer')
+      expect(peerEdges).toHaveLength(1)
+      expect(peerEdges[0]!.dst).toBe(`dep@2.0.0(${utilVer})`)
+    }
+  })
+
+  it('#8b-C dedup: two bare-hex (#69) keys collapsing on one NodeId wire a shared dep once', () => {
+    // The #69 bare-hex hashed-peer-set spelling is STILL dropped (deferred),
+    // so two `host@1.0.0(<hex>)` keys genuinely collapse to one bare
+    // `host@1.0.0` NodeId. Pass 4 walks both keys, so the shared `@scope/x`
+    // dep would be wired twice → seal `duplicate edge` without the
+    // `emittedEdges` dedup. (Distinct from #70, where the keys no longer
+    // collide — this is the genuine remaining collision path the dedup guards.)
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .:\n    dependencies:\n` +
+      `      host:\n        specifier: 1.0.0\n        version: 1.0.0(deadbeef00112233)\n\n` +
+      `packages:\n\n` +
+      `  '@scope/x@3.0.0':\n    resolution: {integrity: sha512-x}\n` +
+      `  host@1.0.0:\n    resolution: {integrity: sha512-h}\n\n` +
+      `snapshots:\n\n` +
+      `  '@scope/x@3.0.0': {}\n` +
+      `  host@1.0.0(deadbeef00112233):\n    dependencies:\n      '@scope/x': 3.0.0\n` +
+      `  host@1.0.0(cafebabe44556677):\n    dependencies:\n      '@scope/x': 3.0.0\n`
     const graph = parse(lock) // throws `duplicate edge` on seal without the dedup
 
-    // The two host snapshot keys collapse to ONE node.
-    const host = graph.getNode('host@1.0.0(dep@2.0.0)')
-    expect(host).toBeDefined()
+    // Both bare-hex keys collapse to ONE node (the hash is dropped, #69).
+    expect(Array.from(graph.nodes()).filter(n => n.name === 'host').map(n => n.id)).toEqual(['host@1.0.0'])
     // The shared `@scope/x` dep is wired exactly once.
-    const xEdges = graph.out('host@1.0.0(dep@2.0.0)', 'dep').filter(e => e.dst === '@scope/x@3.0.0')
-    expect(xEdges).toHaveLength(1)
-    // The peer edge to dep is wired once and agrees with peerContext.
-    expect(host!.peerContext).toEqual(['dep@2.0.0'])
-    expect(graph.out('host@1.0.0(dep@2.0.0)', 'peer')).toHaveLength(1)
+    expect(graph.out('host@1.0.0', 'dep').filter(e => e.dst === '@scope/x@3.0.0')).toHaveLength(1)
   })
 
   it('#8b-C residue: a `patch_hash=` / bare-hex patch-hash segment is not mistaken for a peer', () => {

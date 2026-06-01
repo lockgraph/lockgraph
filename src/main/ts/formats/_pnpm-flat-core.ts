@@ -558,10 +558,10 @@ export function parseFamily(
         // `react-is-cjs: { specifier: 'npm:react-is@^17', version: 'react-is@17.0.2' }`)
         // — try the canonical form when the dep block key produces no
         // snapshot match, and record the descriptor key as the alias.
-        let targetId = resolveSnapshotTarget(seenIds, depName, version)
+        let targetId = resolveSnapshotTarget(seenIds, depName, version, sidecar.importerByPath)
         let aliasSlot: string | undefined
         if (targetId === undefined) {
-          const aliasTarget = resolveAliasedSnapshotTarget(seenIds, version)
+          const aliasTarget = resolveAliasedSnapshotTarget(seenIds, version, sidecar.importerByPath)
           if (aliasTarget !== undefined) {
             targetId = aliasTarget
             aliasSlot = depName
@@ -859,6 +859,19 @@ function assertResolveValid(
   // the `seenIds` the parse oracle checks membership against.
   const seenIds = new Set<string>(resolvedNodes.map(n => n.id))
 
+  // Reconstruct the `importerByPath` the parse oracle uses (workspace path →
+  // member node id) so the verifier's resolve calls drop the SAME workspace
+  // peers (#8b-A / #70). Keys are importer paths: `.` for the root, plus each
+  // member node's `workspacePath`. Only the KEY set matters here (the workspace-
+  // peer filter just needs truthiness on a `+`-decoded path).
+  const importerByPath = new Map<string, string>()
+  if (rootNode !== undefined) importerByPath.set('.', rootNode.id)
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined && node.workspacePath !== '') {
+      importerByPath.set(node.workspacePath, node.id)
+    }
+  }
+
   // The emitted consumer blocks, by consumer NodeId. v9 always has an
   // `importers` map; v6 multi-importer too; v6 single-importer collapses the
   // root's deps to top-level `out` blocks (no `importers`).
@@ -929,7 +942,7 @@ function assertResolveValid(
       const value = slotValue(block, blockNames, seg)
       const resolved = value === undefined
         ? undefined
-        : (resolveSnapshotTarget(seenIds, seg, value) ?? resolveAliasedSnapshotTarget(seenIds, value))
+        : (resolveSnapshotTarget(seenIds, seg, value, importerByPath) ?? resolveAliasedSnapshotTarget(seenIds, value, importerByPath))
       if (resolved !== dst.id) {
         onDiagnostic({
           code: 'LAYOUT_RESOLVE_VIOLATION',
@@ -1119,7 +1132,7 @@ export function isPlainObject(value: unknown): value is Record<string, any> {
 interface ParsedPackagesOrSnapshotKey {
   name: string
   version: string
-  peers: Array<{ name: string; version: string }>
+  peers: Array<{ name: string; version: string; nested: string }>
 }
 
 /**
@@ -1168,7 +1181,29 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
   const version = base.slice(lastAt + 1)
   if (name.length === 0 || version.length === 0) return undefined
 
-  const peers: Array<{ name: string; version: string }> = []
+  const peers = parsePeerSuffix(peerSuffix)
+  if (peers === undefined) return undefined
+
+  return { name, version, peers }
+}
+
+/**
+ * Parse a `(peer@v)(peer2@v2(sub@v))…` suffix into its depth-0 peer records.
+ * Each record carries the peer's BASE `name@version` plus its OWN nested
+ * suffix (`nested`, e.g. `(esbuild@0.26.0)` or '' for a leaf). Returns
+ * `undefined` on a malformed suffix (caller treats as unparseable key).
+ *
+ * `nested` is CARRIED (not dropped) so it can flow into BOTH the consumer's
+ * peerContext token (buildPeerContext) and the peer edge's full target NodeId
+ * (#70): two virtual-store instances of one consumer that differ ONLY in a
+ * transitive peer's resolution thus stay DISTINCT NodeIds — without it they
+ * collapse to one NodeId carrying two edges to the same dep name
+ * (unrepresentable → LAYOUT_RESOLVE_VIOLATION). The seal (graph.ts) reconciles
+ * peerContext token vs edge target by BASE-KEY projection (ADR-0017), so the
+ * carried suffix is invisible to the seal.
+ */
+function parsePeerSuffix(peerSuffix: string): Array<{ name: string; version: string; nested: string }> | undefined {
+  const peers: Array<{ name: string; version: string; nested: string }> = []
   let pos = 0
   while (pos < peerSuffix.length) {
     if (peerSuffix[pos] !== '(') return undefined
@@ -1187,9 +1222,7 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
     // (react@18.3.1)`). Split off the segment's OWN base at its first depth-0
     // `(` before locating the name/version boundary; otherwise the last-`@`
     // scan lands inside a nested peer (`react@18.3.1`) and yields a garbage
-    // name/version. peerContext records the bare base key per ADR-0006; the
-    // nested suffix belongs to the peer's full edge-target NodeId, reconciled
-    // by the seal's base-key projection (ADR-0017).
+    // name/version.
     let segBaseEnd = segment.length
     let sd = 0
     for (let i = 0; i < segment.length; i++) {
@@ -1219,10 +1252,9 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
     const pName = segBase.slice(0, segAt)
     const pVer = segBase.slice(segAt + 1)
     if (pName.length === 0 || pVer.length === 0) return undefined
-    peers.push({ name: pName, version: pVer })
+    peers.push({ name: pName, version: pVer, nested: segment.slice(segBaseEnd) })
   }
-
-  return { name, version, peers }
+  return peers
 }
 
 function stripPackagesKeyPrefix(key: string, packagesKeyShape: PnpmLayoutShape['packagesKeyShape']): string {
@@ -1297,7 +1329,7 @@ function addResolvedTreeEdges(
   diagnostics: Diagnostic[],
   srcId: string,
   entry: Record<string, unknown>,
-  peers: Array<{ name: string; version: string }>,
+  peers: Array<{ name: string; version: string; nested: string }>,
   seenIds: Set<string>,
   sidecar: PnpmSidecar,
   shape: PnpmLayoutShape,
@@ -1328,10 +1360,10 @@ function addResolvedTreeEdges(
     const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
     for (const [depName, rawValue] of entries) {
       if (typeof rawValue !== 'string') continue
-      let targetId = resolveSnapshotTarget(seenIds, depName, rawValue)
+      let targetId = resolveSnapshotTarget(seenIds, depName, rawValue, sidecar.importerByPath)
       let aliasSlot: string | undefined
       if (targetId === undefined) {
-        const aliasTarget = resolveAliasedSnapshotTarget(seenIds, rawValue)
+        const aliasTarget = resolveAliasedSnapshotTarget(seenIds, rawValue, sidecar.importerByPath)
         if (aliasTarget !== undefined) {
           targetId = aliasTarget
           aliasSlot = depName
@@ -1360,13 +1392,23 @@ function addResolvedTreeEdges(
 
   // Peer edges — derive from peerContext per ADR-0006.
   for (const peer of peers) {
-    const peerId = peer.name + '@' + peer.version
+    // The peer reference carries the nested peer-of-a-peer suffix (#70),
+    // selecting the precise virtual-store instance of the peer target (e.g.
+    // `vite@8.0.8(@types/node@…)(esbuild@0.26.0)…` vs the `esbuild@0.27.3`
+    // sibling). Without it the edge would resolve to whichever instance
+    // `resolvePeerTargetById`'s prefix scan hit first, collapsing two distinct
+    // consumer instances onto one. The nested suffix is NORMALISED (workspace
+    // peers dropped, recursively) so it equals the target's own node id; the
+    // BASE version is still used for the workspace-peer probe below (a
+    // `+`-encoded importer dir).
+    const fullPeerVersion = peer.version + normalizeNestedSuffix(peer.nested, sidecar.importerByPath)
+    const peerId = peer.name + '@' + fullPeerVersion
     // #8b-A — a workspace peer (`vue@packages+vue`) is satisfied by a
     // workspace importer node; the seal forbids a registry node owning an
     // edge into a workspace node, so it is dropped symmetrically with its
     // peerContext entry (see buildPeerContext / resolveWorkspacePeerId).
     if (resolveWorkspacePeerId(peer.version, sidecar.importerByPath) !== undefined) continue
-    const peerNodeId = resolvePeerTargetById(seenIds, peer.name, peer.version)
+    const peerNodeId = resolvePeerTargetById(seenIds, peer.name, fullPeerVersion)
     if (peerNodeId === undefined) {
       diagnostics.push({
         code: 'PNPM_UNRESOLVED_DEP',
@@ -1412,10 +1454,15 @@ function resolveSnapshotTarget(
   seenIds: Set<string>,
   depName: string,
   rawValue: string,
+  importerByPath: Map<string, string>,
 ): string | undefined {
   const parsedTail = parsePackagesOrSnapshotKey(`${depName}@${rawValue}`)
   if (parsedTail === undefined) return undefined
-  const peerContext = parsedTail.peers.map(p => `${p.name}@${p.version}`).sort()
+  // buildPeerContext drops workspace peers and embeds each surviving peer's
+  // recursively-normalised nested suffix (#70) — the exact form the target
+  // node id carries, so a dep value whose target carries a transitive peer
+  // resolves to the now-distinct node rather than collapsing onto a base id.
+  const peerContext = buildPeerContext(parsedTail.peers, importerByPath)
   const candidateId = serializeNodeId(parsedTail.name, parsedTail.version, peerContext)
   if (seenIds.has(candidateId)) return candidateId
   const bareId = `${parsedTail.name}@${parsedTail.version}`
@@ -1431,6 +1478,7 @@ function resolveSnapshotTarget(
 function resolveAliasedSnapshotTarget(
   seenIds: Set<string>,
   rawValue: string,
+  importerByPath: Map<string, string>,
 ): string | undefined {
   // `rawValue` must contain an `@` past position 0 (scoped names) to be
   // a `<name>@<version>` shape. parsePackagesOrSnapshotKey requires at
@@ -1440,7 +1488,8 @@ function resolveAliasedSnapshotTarget(
   if (!hasInteriorAt) return undefined
   const parsed = parsePackagesOrSnapshotKey(rawValue)
   if (parsed === undefined) return undefined
-  const peerContext = parsed.peers.map(p => `${p.name}@${p.version}`).sort()
+  // buildPeerContext — drop workspace peers + embed normalised nested (#70).
+  const peerContext = buildPeerContext(parsed.peers, importerByPath)
   const candidateId = serializeNodeId(parsed.name, parsed.version, peerContext)
   if (seenIds.has(candidateId)) return candidateId
   const bareId = `${parsed.name}@${parsed.version}`
@@ -1452,14 +1501,47 @@ function resolveAliasedSnapshotTarget(
  * Resolve a `<peerName>@<peerVersion>` reference to a known node id —
  * either the bare id or a parenthesised peer-virt instance. Used by both
  * v9 snapshot edges и v5 peer edges из `packages` entries.
+ *
+ * `peerVersion` may be a BARE version (`8.0.8`, v5 / leaf peers) or a FULL
+ * peer-virt form carrying the consumer's recorded nested suffix
+ * (`8.0.8(@types/node@…)(esbuild@0.26.0)…`, v9 #70). Resolution order:
+ *   1. EXACT match on the full form — selects the precise virtual-store
+ *      instance when the consumer's suffix equals the target node's id (the
+ *      directus `vite` #70 case: two `vite@8.0.8(…)` siblings differing only
+ *      in `esbuild`, each spelled in full on the consumer).
+ *   2. EXACT match on the bare base.
+ *   3. PREFIX scan on the bare base (`base@ver(`) — first match. pnpm records
+ *      only a SUBSET of a peer's transitive peers on a consumer's reference
+ *      (e.g. supabase's `next@16.2.6(…)` ref omits the target's
+ *      `babel-plugin-macros@3.1.0`), so the full form may match no node id.
+ *      The bare prefix scan still wires the edge to a real instance, keeping
+ *      the peer-edge ↔ peerContext base-key bijection (the seal, ADR-0017)
+ *      intact — the seal compares BASE keys, so any same-base instance
+ *      satisfies it. A consumer carries at most one peer per name, so this
+ *      cannot collapse two distinct same-name peers (that #70 hazard lives in
+ *      the `dependencies` block, fixed by the peerContext token carrying the
+ *      suffix — not here).
  */
 export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, peerVersion: string): string | undefined {
-  const bareId = `${peerName}@${peerVersion}`
-  if (seenIds.has(bareId)) return bareId
+  const fullId = `${peerName}@${peerVersion}`
+  if (seenIds.has(fullId)) return fullId
+  // Strip any nested suffix to recover the bare base key for the fallbacks.
+  const suffixStart = peerVersion.indexOf('(')
+  const bareVersion = suffixStart === -1 ? peerVersion : peerVersion.slice(0, suffixStart)
+  const bareId = `${peerName}@${bareVersion}`
+  if (bareId !== fullId && seenIds.has(bareId)) return bareId
+  // Last resort — a same-base peer-virt instance (partial peer-set references,
+  // e.g. supabase `next@…` omitting a peer the target carries). Any same-base
+  // instance satisfies the seal's base-key projection, but the pick MUST be
+  // deterministic (ADR-0007): take the lexicographically smallest match, not
+  // the first in `seenIds` insertion order (which flips on benign lock
+  // re-orderings). Single pass — no full-set sort.
+  const prefix = bareId + '('
+  let best: string | undefined
   for (const id of seenIds) {
-    if (id.startsWith(bareId + '(')) return id
+    if (id.startsWith(prefix) && (best === undefined || id < best)) best = id
   }
-  return undefined
+  return best
 }
 
 /**
@@ -1502,19 +1584,48 @@ export function resolveWorkspacePeerId(
 }
 
 /**
+ * Recursively normalise a peer's `(...)` nested suffix into the form the
+ * peer's OWN node id carries (#70). pnpm spells a consumer's reference to a
+ * peer with the peer's FULL transitive suffix — INCLUDING workspace peers
+ * (`@angular/common@packages+common`). But the peer's own node drops those
+ * workspace peers (#8b-A — `buildPeerContext`'s filter), so the consumer's raw
+ * nested suffix is NOT a valid node id. Re-running the SAME drop+sort at every
+ * depth reproduces exactly the target node's id, keeping the peerContext token
+ * and the peer-edge target byte-identical to a real node (the seal's
+ * bijection, and `resolvePeerTargetById`'s exact match, both depend on this).
+ * Returns '' for a leaf peer or one whose nested peers are all droppable.
+ */
+function normalizeNestedSuffix(nested: string, importerByPath: Map<string, string>): string {
+  if (nested.length === 0) return ''
+  const sub = parsePeerSuffix(nested)
+  if (sub === undefined) return nested // unparseable — leave verbatim
+  const tokens = buildPeerContext(sub, importerByPath)
+  return tokens.map(t => `(${t})`).join('')
+}
+
+/**
  * Build the ADR-0006 peerContext for a node from its parsed suffix peers.
  * Workspace peers (#8b-A) are filtered out so the recorded context stays in
  * bijection with the wired peer edges (a workspace peer is droppable — see
- * `resolveWorkspacePeerId`). Registry peers keep their bare `name@version`
- * token. Result is sorted (caller contract).
+ * `resolveWorkspacePeerId`). A surviving registry peer keeps its `name@version`
+ * PLUS its recursively-normalised nested peer-of-a-peer suffix (#70) so two
+ * consumer instances that differ only in a transitive peer's resolution stay
+ * distinct NodeIds. The seal (graph.ts) reconciles this token against the peer
+ * edge target by BASE-KEY projection (ADR-0017), which strips the nested
+ * suffix on both sides — so carrying it here does not break peer-edge ↔
+ * peerContext coherence. Result is sorted (caller contract).
+ *
+ * NB the workspace filter checks the BASE `version` only: `resolveWorkspacePeerId`
+ * decodes a `+`-encoded importer dir, and a nested `(...)` suffix would break
+ * that detection.
  */
 function buildPeerContext(
-  peers: Array<{ name: string; version: string }>,
+  peers: Array<{ name: string; version: string; nested: string }>,
   importerByPath: Map<string, string>,
 ): string[] {
   return peers
     .filter(p => resolveWorkspacePeerId(p.version, importerByPath) === undefined)
-    .map(p => `${p.name}@${p.version}`)
+    .map(p => `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`)
     .sort()
 }
 
