@@ -46,6 +46,9 @@ const BERRY_HEADER_RE = /^__metadata:\s*(?:\r?\n|$)/m
 
 interface YarnClassicSidecar {
   entrySpecs: Map<string, string[]>
+  /** Per-NodeId verbatim unknown entry-field lines (see YarnClassicEntry.extras),
+   *  for round-trip re-emit. */
+  entryExtras?: Map<string, string[]>
 }
 
 interface YarnClassicEntry {
@@ -53,6 +56,10 @@ interface YarnClassicEntry {
   version?: string
   resolved?: string
   integrity?: string
+  /** Unknown scalar entry fields captured VERBATIM (sans the 2-space indent) —
+   *  e.g. yarn-1's legacy `uid ""` on link:/file: entries. Tolerated +
+   *  round-tripped rather than rejected (forward-compat for unmodelled fields). */
+  extras?: string[]
   dependencies: Map<string, string>
   optionalDependencies: Map<string, string>
 }
@@ -103,6 +110,8 @@ export function parse(input: string): Graph {
   const entries = parseEntries(normalized)
   const specIndex = new Map<string, string>()
   const sidecar = new Map<string, string[]>()
+  const entryExtras = new Map<string, string[]>()
+  const unknownFields = new Set<string>()
   const entryNodes: Array<{ node: Node; entry: YarnClassicEntry }> = []
   const seenIds = new Set<string>()
 
@@ -169,11 +178,24 @@ export function parse(input: string): Graph {
       }
 
       sidecar.set(id, ranges.map(range => `${name}@${range}`))
+      if (entry.extras !== undefined && entry.extras.length > 0) {
+        entryExtras.set(id, entry.extras)
+        for (const raw of entry.extras) unknownFields.add(raw.split(' ', 1)[0] ?? raw)
+      }
       entryNodes.push({ node, entry })
       for (const range of ranges) {
         specIndex.set(`${name}@${range}`, id)
       }
     }
+  }
+
+  if (unknownFields.size > 0) {
+    diagnostics.push({
+      code: 'YARN_CLASSIC_UNKNOWN_FIELD',
+      severity: 'info',
+      subject: 'yarn-classic',
+      message: `preserved unmodelled yarn-classic entry field(s) verbatim for round-trip: ${Array.from(unknownFields).sort(cmpUtf16).join(', ')}`,
+    })
   }
 
   for (const { node, entry } of entryNodes) {
@@ -187,7 +209,7 @@ export function parse(input: string): Graph {
 
   try {
     const graph = builder.seal()
-    rememberSidecar(graph, { entrySpecs: sidecar })
+    rememberSidecar(graph, { entrySpecs: sidecar, entryExtras })
     return graph
   } catch (error) {
     if (error instanceof GraphError) {
@@ -235,6 +257,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     dedupedNodes.push(node)
   }
 
+  const emitSidecar = sidecarByGraph.get(graph)
   const entries = dedupedNodes.map(node => {
     warnPatchDrop(node, warnedPatches, emitDiagnostic)
     warnPeerContextFlatten(node, warnedPeerContexts, emitDiagnostic)
@@ -256,6 +279,13 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     const integrity = payload?.integrity
     if (integrity !== undefined) {
       lines.push(`  integrity ${integrity}`)
+    }
+
+    // Round-trip unknown scalar entry fields (e.g. yarn-1 `uid ""`) captured
+    // verbatim on parse — re-emitted after the modelled fields, before deps.
+    const extras = emitSidecar?.entryExtras?.get(node.id)
+    if (extras !== undefined) {
+      for (const raw of extras) lines.push(`  ${raw}`)
     }
 
     const dependencies = collectDependencyBlockEntries(graph, node.id, emitDiagnostic)
@@ -414,7 +444,7 @@ export function optimize(
 }
 
 function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
-  if (sidecar.entrySpecs.size === 0) return
+  if (sidecar.entrySpecs.size === 0 && (sidecar.entryExtras?.size ?? 0) === 0) return
   sidecarByGraph.set(graph, sidecar)
 }
 
@@ -426,7 +456,14 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
       entrySpecs.set(nodeId, specs.slice())
     }
   }
-  return { entrySpecs }
+  let entryExtras: Map<string, string[]> | undefined
+  if (sidecar.entryExtras !== undefined) {
+    entryExtras = new Map<string, string[]>()
+    for (const [nodeId, extras] of sidecar.entryExtras) {
+      if (reachableIds.has(nodeId)) entryExtras.set(nodeId, extras.slice())
+    }
+  }
+  return entryExtras !== undefined ? { entrySpecs, entryExtras } : { entrySpecs }
 }
 
 function ensureClassicHeader(input: string): void {
@@ -522,7 +559,14 @@ function parseEntries(input: string): YarnClassicEntry[] {
       continue
     }
 
-    throw parseFailed(`unsupported entry field (${JSON.stringify(line)})`)
+    // Unknown scalar entry field — e.g. yarn-1's legacy `uid ""` on link:/file:
+    // entries (real locks such as facebook/react carry it). A universal
+    // converter must not reject a valid lockfile over an unmodelled field:
+    // capture the line VERBATIM (sans the 2-space indent) for faithful
+    // round-trip. The parse surfaces one info diagnostic listing the names.
+    current.extras ??= []
+    current.extras.push(line.slice(2))
+    continue
   }
 
   return entries

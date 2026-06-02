@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { check, parse } from '../../main/ts/formats/yarn-classic.ts'
+import { check, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
 import { detect } from '../../main/ts/index.ts'
 
 // snapshot.47 sister-canary yarn-classic bugs (#5/#6/#9/#10 in that report):
@@ -37,6 +37,26 @@ describe('yarn-classic — snapshot.47 sister bugs', () => {
     const deps = g.out(foo!.id).map(e => e.dst).sort()
     expect(deps).toContain('bar@2.0.0')
     expect(deps).toContain('baz@0.5.0')
+  })
+
+  // snapshot.48 sister bug — yarn-1 legacy `uid` field on link:/file: entries
+  // (facebook/react). The parser threw `unsupported entry field`; now it is
+  // TOLERATED + round-tripped verbatim (forward-compat for any unmodelled
+  // scalar entry field).
+  it('tolerates + round-trips the legacy `uid` field (link: entry)', () => {
+    const lock =
+      H +
+      '"my-internal-rules@link:./scripts/eslint-rules":\n' +
+      '  version "0.0.0"\n' +
+      '  uid ""\n'
+    expect(() => parse(lock)).not.toThrow()
+    const g = parse(lock)
+    expect(g.getNode('my-internal-rules@0.0.0')).toBeDefined()
+    // uid round-trips verbatim
+    const out = stringify(g)
+    expect(out).toContain('  uid ""')
+    // re-parse is stable (idempotent) and still carries uid
+    expect(stringify(parse(out))).toBe(out)
   })
 
   // #9 — UTF-8 BOM must not defeat detect (was asymmetric: berry OK, classic ∅).
