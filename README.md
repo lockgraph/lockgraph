@@ -5,10 +5,9 @@
 <p><img alt="@antongolub/lockfile — universal lockfile model and converter for npm, yarn, pnpm, bun" src="./pics/lockfile.svg" align="right" width="300">
 
 Each package manager brings its own philosophy of how to describe, store and
-control project dependencies. It looks acceptable to a developer staring at a
-single repo, but it becomes a real headache for IS, DevOps and release
-engineers — and impossible for any tool that needs to reason about
-dependency graphs across the ecosystem.
+control project dependencies. Inside a single repo it's invisible to the
+developer — but it becomes a recurring cost for InfoSec, DevOps and release
+engineers, and makes consistent policy unenforceable across the enterprise.
 
 This library models the dependency graph independent of any specific
 package manager, then projects it back into the format you need.
@@ -19,11 +18,23 @@ license filtering) is the headline.
 
 ## Status
 
-🔒 **Contract preview, implementation in progress.** The public API
-(`parse` / `stringify`) is locked. Adapter implementations are landing
-incrementally — see [SCHEMAS.md](./SCHEMAS.md) for what's recognised.
-Not yet published; `npm install` will appear once the first adapters
-ship end-to-end.
+**Snapshot preview.** Every format below parses and stringifies; conversion is
+*semantically equivalent*, not byte-identical (see [Concept](#concept)).
+Published as `0.0.0-snapshot.*` builds — the first stable release is pending.
+[SCHEMAS.md](./SCHEMAS.md) maps each format id to the package-manager versions
+that emit it.
+
+| Format | `detect` | `parse` | `stringify` |
+|--------|:-:|:-:|:-:|
+| `npm-1` · `npm-2` · `npm-3`        | ✓ | ✓ | ✓ |
+| `yarn-classic`                    | ✓ | ✓ | ✓ |
+| `yarn-berry-v4` … `yarn-berry-v10`| ✓ | ✓ | ✓ |
+| `pnpm-v5` · `pnpm-v6` · `pnpm-v9`  | ✓ | ✓ | ✓ |
+| `bun-text`                        | ✓ | ✓ | ✓ |
+
+Graph-level operations apply to **any** parsed graph, regardless of source
+format: `convert` (parse any → stringify any), `modify` (audit-fix,
+override-pin, license-filter), and `optimize` (orphan GC / dedup).
 
 ## Concept
 
