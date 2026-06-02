@@ -47,6 +47,7 @@ import {
   toTarballKey,
   type Diagnostic,
   type Edge,
+  type EdgeAttrs,
   type EdgeKind,
   type Graph,
   type Node,
@@ -225,11 +226,21 @@ function resolveProfile(profile: PnpmLayoutProfile): PnpmLayoutShape {
 export interface PnpmNodeSidecar {
   /** Declared peerDependencies (range record). */
   peerDependencies?: Record<string, string>
+  /** Declared peerDependenciesMeta — the per-peer `{ optional: true }` markers
+   *  from the package's own manifest. Captured VERBATIM (parallel to
+   *  `peerDependencies`) so it round-trips fully, INCLUDING optional peers that
+   *  pnpm never resolved (no peer-virt instance → no peer edge to carry the
+   *  bit). `EdgeAttrs.optional` mirrors it on BOUND peer edges for the model
+   *  graph, but only the bound subset is edge-representable, so this verbatim
+   *  carrier is the round-trip source of truth. Names map 1:1 onto
+   *  `peerDependencies` keys. */
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   /** Static manifest extras. */
   engines?: Record<string, string>
   hasBin?: boolean
   os?: string[]
   cpu?: string[]
+  libc?: string[]
   /** v9 snapshots extras — preserved across versions for round-trip stability. */
   transitivePeerDependencies?: string[]
   /** v6-only: per-entry dev flag. Treated as `false` if absent. */
@@ -1357,12 +1368,23 @@ function addPackageNode(
     if (isPlainObject(pkgEntry.peerDependencies)) {
       nodeSc.peerDependencies = { ...(pkgEntry.peerDependencies as Record<string, string>) }
     }
+    if (isPlainObject(pkgEntry.peerDependenciesMeta)) {
+      // Verbatim capture — the per-peer `{ optional: true }` markers. Normalise
+      // to `{ optional: boolean }` records; unknown sub-keys are pnpm-foreign
+      // and not preserved (none observed in the corpus).
+      const meta: Record<string, { optional?: boolean }> = {}
+      for (const [peerName, m] of Object.entries(pkgEntry.peerDependenciesMeta as Record<string, unknown>)) {
+        if (isPlainObject(m) && typeof m.optional === 'boolean') meta[peerName] = { optional: m.optional }
+      }
+      if (Object.keys(meta).length > 0) nodeSc.peerDependenciesMeta = meta
+    }
     if (isPlainObject(pkgEntry.engines)) {
       nodeSc.engines = { ...(pkgEntry.engines as Record<string, string>) }
     }
     if (pkgEntry.hasBin === true) nodeSc.hasBin = true
     if (Array.isArray(pkgEntry.os)) nodeSc.os = (pkgEntry.os as string[]).slice()
     if (Array.isArray(pkgEntry.cpu)) nodeSc.cpu = (pkgEntry.cpu as string[]).slice()
+    if (Array.isArray(pkgEntry.libc)) nodeSc.libc = (pkgEntry.libc as string[]).slice()
   }
   sidecar.nodes.set(nodeId, nodeSc)
 }
@@ -1465,7 +1487,16 @@ function addResolvedTreeEdges(
     try {
       const sc = sidecar.nodes.get(srcId)
       const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
-      builder.addEdge(srcId, peerNodeId, 'peer', { range: peerRange })
+      // ADR-0006 / EdgeAttrs.optional — mirror the consumer's
+      // `peerDependenciesMeta[peer].optional` onto the BOUND peer edge so the
+      // model graph reflects optionality. `optional` is invisible to edge
+      // identity (graph.ts tripleKey keys on alias only) and to the seal's
+      // peerContext↔edge coherence (base-key projection), so this perturbs
+      // neither #69/#70 identity nor the peerContext. Optional peers pnpm never
+      // resolved have no edge here — those ride the verbatim sidecar carrier.
+      const peerAttrs: EdgeAttrs = { range: peerRange }
+      if (sc?.peerDependenciesMeta?.[peer.name]?.optional === true) peerAttrs.optional = true
+      builder.addEdge(srcId, peerNodeId, 'peer', peerAttrs)
     } catch (error) {
       if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
       throw error
@@ -1752,6 +1783,7 @@ export function tarballPayloadOf(
   }
   if (Array.isArray(entry.cpu)) payload.cpu = (entry.cpu as string[]).slice()
   if (Array.isArray(entry.os)) payload.os = (entry.os as string[]).slice()
+  if (Array.isArray(entry.libc)) payload.libc = (entry.libc as string[]).slice()
   if (entry.hasBin === true) payload.bin = 'true'
   if (typeof entry.deprecated === 'string') payload.deprecated = entry.deprecated
   return Object.keys(payload).length === 0 ? undefined : payload
@@ -1992,11 +2024,44 @@ function buildPackageEntry(
   } else if (tarball?.engines !== undefined && Object.keys(tarball.engines).length > 0) {
     entry.engines = flowMap({ ...tarball.engines })
   }
+  // `deprecated` rides the shared TarballPayload (parsed by tarballPayloadOf);
+  // re-emit it onto the packages entry. pnpm carries the deprecation message as
+  // a plain scalar (e.g. `deprecated: Use @eslint/config-array instead`).
+  if (tarball?.deprecated !== undefined && tarball.deprecated !== '') {
+    entry.deprecated = tarball.deprecated
+  }
   if (nodeSc?.hasBin === true) entry.hasBin = true
   if (nodeSc?.os !== undefined && nodeSc.os.length > 0) entry.os = nodeSc.os.slice()
   if (nodeSc?.cpu !== undefined && nodeSc.cpu.length > 0) entry.cpu = nodeSc.cpu.slice()
+  if (nodeSc?.libc !== undefined && nodeSc.libc.length > 0) entry.libc = nodeSc.libc.slice()
   if (nodeSc?.peerDependencies !== undefined && Object.keys(nodeSc.peerDependencies).length > 0) {
     entry.peerDependencies = sortRecord(nodeSc.peerDependencies) as YamlMap
+  }
+
+  // peerDependenciesMeta — the per-peer `{ optional: true }` markers. Re-derive
+  // from the optional-flagged BOUND peer edges (EdgeAttrs.optional, the model
+  // carrier per the task) UNIONED with the verbatim sidecar capture. The edge
+  // signal alone is incomplete: an optional peer pnpm never resolved has no
+  // peer-virt instance, hence no edge, so the sidecar carrier is what makes the
+  // round-trip whole. Emitted as a nested block map `<peer>: { optional: true }`
+  // (pnpm's shape), only when ≥ 1 optional peer exists.
+  const optionalPeers = new Set<string>()
+  for (const edge of graph.out(representative.id)) {
+    if (edge.kind !== 'peer' || edge.attrs?.optional !== true) continue
+    const dst = graph.getNode(edge.dst)
+    if (dst !== undefined) optionalPeers.add(dst.name)
+  }
+  if (nodeSc?.peerDependenciesMeta !== undefined) {
+    for (const [peerName, m] of Object.entries(nodeSc.peerDependenciesMeta)) {
+      if (m.optional === true) optionalPeers.add(peerName)
+    }
+  }
+  if (optionalPeers.size > 0) {
+    const meta: YamlMap = {}
+    for (const peerName of Array.from(optionalPeers).sort(cmpStr)) {
+      meta[peerName] = { optional: true } as YamlMap
+    }
+    entry.peerDependenciesMeta = meta
   }
 
   // v6: inline transitive dependencies under each packages entry (since

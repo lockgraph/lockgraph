@@ -172,8 +172,16 @@ function readBlockMap(reader: YamlReader, baseIndent: number): YamlMap {
 
     reader.pos++
     if (restValue === '') {
-      const child = readBlockMap(reader, baseIndent + 2)
-      out[key] = child
+      // The child is either a nested block map or a block SEQUENCE (`- item`
+      // lines). Peek the next non-blank line: a `- `-led item belongs to this
+      // key whether indented DEEPER than the key (pnpm input style, e.g.
+      // `transitivePeerDependencies:` with items at +2) or at the SAME indent
+      // as the key (this codec's own emit style for `cpu`/`os`/`libc`). Both
+      // are valid YAML; without recognising them a block sequence reads back as
+      // `{}` and the list is silently dropped (breaking re-parse round-trip).
+      out[key] = peekIsBlockSequence(reader, baseIndent)
+        ? readBlockSequence(reader, baseIndent)
+        : readBlockMap(reader, baseIndent + 2)
     } else if (restValue === '|' || restValue === '>') {
       while (reader.pos < reader.lines.length) {
         const next = reader.lines[reader.pos]
@@ -186,6 +194,54 @@ function readBlockMap(reader: YamlReader, baseIndent: number): YamlMap {
     } else {
       out[key] = parseInlineValue(restValue)
     }
+  }
+  return out
+}
+
+/**
+ * Peek (without advancing) whether the block following a just-consumed
+ * `<key>:` line is a block SEQUENCE — its first non-blank line, at indent
+ * `>= baseIndent`, has content starting with `- `. A `-` item at the SAME
+ * indent as the key belongs to that key (valid YAML, and this codec's own
+ * emit style for `cpu`/`os`/`libc`); a deeper one does too (pnpm input style,
+ * e.g. `transitivePeerDependencies:`). Any non-`-` line ends the peek as a map
+ * (or sibling). The reader must distinguish sequences from nested block maps
+ * so the items are not lost.
+ */
+function peekIsBlockSequence(reader: YamlReader, baseIndent: number): boolean {
+  for (let i = reader.pos; i < reader.lines.length; i++) {
+    const line = reader.lines[i]
+    if (line === undefined) continue
+    if (isBlankOrComment(line)) continue
+    const indent = leadingSpaces(line)
+    if (indent < baseIndent) return false
+    const content = line.slice(indent)
+    return content === '-' || content.startsWith('- ')
+  }
+  return false
+}
+
+/**
+ * Read a scalar block sequence (`- item` lines) whose items sit at indent
+ * `>= baseIndent` (same-as-key or deeper — see `peekIsBlockSequence`). Items
+ * are parsed with the same inline-scalar grammar as map values (quoted /
+ * bare). Stops at the first line below `baseIndent`, or at any non-`-` line at
+ * `baseIndent` (a sibling key). Scoped to the pnpm/codec subset: scalar items
+ * only (no nested block maps under a `-`).
+ */
+function readBlockSequence(reader: YamlReader, baseIndent: number): unknown[] {
+  const out: unknown[] = []
+  while (reader.pos < reader.lines.length) {
+    const line = reader.lines[reader.pos]
+    if (line === undefined) { reader.pos++; continue }
+    if (isBlankOrComment(line)) { reader.pos++; continue }
+    const indent = leadingSpaces(line)
+    if (indent < baseIndent) break
+    const content = line.slice(indent)
+    if (content !== '-' && !content.startsWith('- ')) break
+    const itemRaw = content === '-' ? '' : content.slice(2)
+    out.push(parseInlineValue(stripInlineComment(itemRaw).trim()))
+    reader.pos++
   }
   return out
 }
