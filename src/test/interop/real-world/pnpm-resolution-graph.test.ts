@@ -130,18 +130,21 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
     }
   }
 
-  // Real-world v9 locks whose peer-resolution is single-valued per
-  // (consumer, dep-name) round-trip cleanly. vuejs-core is the canonical
-  // clean large lock; vitejs-vite exercises npm-aliased `file:` deps (the
-  // alias-on-emit fix) and is also clean. directus and supabase carry
+  // Real-world v9 locks that round-trip with ZERO INV-RESOLVE violations.
+  // vuejs-core is the canonical clean large lock; vitejs-vite exercises
+  // npm-aliased `file:` deps (the alias-on-emit fix). directus + supabase carry
   // nested-peer-suffix consumers (#70 — `@vitejs/plugin-vue`,
-  // `@react-router/fs-routes`) whose distinct virtual-store instances now
-  // stay distinct NodeIds, so both are clean too.
+  // `@react-router/fs-routes`); angular + nrwl-nx carry bare-hex hashed-peer-set
+  // consumers (#69/ADR-0030 — `@angular/build@22.0.0-rc.2(<hex>)`). Both
+  // truncated-peer-context-identity classes are now fixed, so every distinct
+  // virtual-store instance stays a distinct NodeId and all six are clean.
   for (const dir of [
     'vuejs-core-main-86ad076',
     'vitejs-vite-main-646dbed',
     'directus-directus-main-4290f6e',
     'supabase-supabase-master-a4334a2',
+    'angular-angular-main-45e8fb5',
+    'nrwl-nx-master-0939540',
   ]) {
     const p = resolve(realWorld, dir, 'pnpm-lock.yaml')
     if (!existsSync(p)) continue
@@ -150,42 +153,33 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
     })
   }
 
-  // Known limitation (NOT fixed here — #69, deferred behind an ADR): a
-  // bare-HEX hashed-peer-set segment (`name@version(<hex>)`, pnpm v9's "merged
-  // peers" spelling) is dropped by the parser (`isPatchHashSegment`'s bare-hex
-  // branch, `_pnpm-flat-core.ts`), collapsing two such snapshot keys onto one
-  // bare NodeId. That collapsed consumer then carries TWO edges to two distinct
-  // peer-virt instances of the SAME dep name — unrepresentable in one snapshot
-  // dep block (one slot per name), so INV-RESOLVE reports the unrepresentable
-  // edge. Distinct from #70 (nested peer SUFFIX truncation), which IS fixed:
-  // directus/supabase are now clean (asserted above). angular's `@angular/build`
-  // is the canonical bare-hex case (`@angular/build@22.0.0-rc.2(53b8…)` vs
-  // `(76f7…)` differ only by the dropped hash). This test PINS that the verifier
-  // SURFACES the #69 gap on angular (an error diagnostic, never a throw) so the
-  // gap stays tracked, never silently emitted — and that EVERY residual angular
-  // violation is the bare-hex `@angular/build` consumer (no #70 leakage).
-  it('surfaces (not throws) the #69 bare-hex peer-set collapse on angular', () => {
+  // #69/ADR-0030 — pnpm-v9 BARE-HEX "hashed peer-set token". When a resolved
+  // peer-set grows long, pnpm abbreviates the whole `(peerA@v)…` suffix into one
+  // bare-hex digest (e.g. `@angular/build@22.0.0-rc.2(53b8fd9b…)`). Pre-fix the
+  // parser mis-read the bare hex as a patch hash and DROPPED it, collapsing two
+  // virtual-store instances of one `name@version` (forking on a transitive peer
+  // like `@types/node`) onto one NodeId whose divergent dep edges then collided
+  // → LAYOUT_RESOLVE_VIOLATION. ADR-0030 keeps the token as an opaque,
+  // non-edge-bearing peerContext discriminator so the instances stay distinct
+  // (angular is asserted fully clean in the zero-violation set above).
+  it('#69: angular `@angular/build` bare-hex instances stay distinct + round-trip (ADR-0030)', () => {
     const lock = readFileSync(resolve(realWorld, 'angular-angular-main-45e8fb5/pnpm-lock.yaml'), 'utf8')
-    let out = ''
-    const diagnostics: Diagnostic[] = []
-    expect(() => {
-      out = stringify('pnpm-v9', parse('pnpm-v9', lock), { onDiagnostic: d => diagnostics.push(d) })
-    }).not.toThrow()
-    const violations = diagnostics.filter(d => d.code === 'LAYOUT_RESOLVE_VIOLATION')
-    expect(violations.length).toBeGreaterThanOrEqual(1)
-    expect(violations.every(d => d.severity === 'error')).toBe(true)
-    // Every residual violation is the bare-hex `@angular/build` consumer (#69)
-    // — NOT a #70 nested-suffix consumer (those are now fixed). This keeps the
-    // #69 gap pinned and proves the #70 fix did not regress into a new class.
     const graph = parse('pnpm-v9', lock)
-    for (const d of violations) {
-      const subj = d.subject as { src: string; dst: string; kind: string }
-      expect(d.message).toContain('INV-RESOLVE violated')
-      expect(subj.src).toBe('@angular/build@22.0.0-rc.2')
-      expect(graph.getNode(subj.dst)).toBeDefined()
+    // The two bare-hex `@angular/build@22.0.0-rc.2` snapshot keys are now two
+    // distinct nodes, each carrying its hash token in peerContext; the bare
+    // collapsed node is gone.
+    const builds = Array.from(graph.nodes()).filter(nn => nn.name === '@angular/build' && nn.version === '22.0.0-rc.2')
+    expect(builds.length).toBe(2)
+    expect(graph.getNode('@angular/build@22.0.0-rc.2')).toBeUndefined()
+    for (const nn of builds) {
+      expect(nn.peerContext.length).toBe(1)
+      expect(nn.peerContext[0]).toMatch(/^[0-9a-f]{16,}$/)
     }
-    // Still emits a parseable lock.
-    expect(() => parse('pnpm-v9', out)).not.toThrow()
+    // Round-trip: emit re-parses with BOTH hash-discriminated instances intact
+    // (the opaque token rides through serializeNodeId verbatim).
+    const reparsed = parse('pnpm-v9', stringify('pnpm-v9', graph))
+    const rebuilds = Array.from(reparsed.nodes()).filter(nn => nn.name === '@angular/build' && nn.version === '22.0.0-rc.2')
+    expect(rebuilds.length).toBe(2)
   })
 })
 

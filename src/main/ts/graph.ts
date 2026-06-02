@@ -285,7 +285,7 @@ export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
 // Patch-token grammar предикаты owned by `recipe/patch.ts` per ADR-0014
 // §4.F2 + ADR-0011 §Decision. graph.ts consumes them — there is no local
 // regex shadow here so the token grammar stays single-source.
-import { isCanonicalHash, isSentinelPatch as recipeIsSentinelPatch } from './recipe/patch.ts'
+import { isCanonicalHash, isHashedPeerSetToken, isSentinelPatch as recipeIsSentinelPatch } from './recipe/patch.ts'
 
 export function validatePatchToken(patch: string): void {
   if (patch.length === 0) {
@@ -566,7 +566,17 @@ function validate(s: State): void {
       .filter(e => e.kind === 'peer')
       .map(e => stripPeerContextFromNodeId(e.dst))
       .sort()
-    const peerCtx = node.peerContext.map(stripPeerContextFromNodeId).sort()
+    // ADR-0030 — a pnpm-v9 HASHED PEER-SET token in the peerContext is a bare-
+    // hex identity discriminator that bears NO peer edge (the real peers are
+    // hidden inside the hash). Exempt it from the edge↔context coherence
+    // compare so it does not look like a peerContext entry with a missing edge.
+    // The derived-id check above is UNCHANGED — the token still participates in
+    // `serializeNodeId`, so id re-derivation stays exact. Only EDGE-BEARING
+    // peerContext entries are matched against the peer edges here.
+    const peerCtx = node.peerContext
+      .filter(p => !isHashedPeerSetToken(stripPeerContextFromNodeId(p)))
+      .map(stripPeerContextFromNodeId)
+      .sort()
     if (peerEdgeTargets.length !== peerCtx.length || peerEdgeTargets.some((t, i) => t !== peerCtx[i])) {
       throw new GraphError('INVARIANT_VIOLATION', `peer edges of ${id} disagree with peerContext`)
     }

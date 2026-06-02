@@ -277,13 +277,11 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
     }
   })
 
-  it('#8b-C dedup: two bare-hex (#69) keys collapsing on one NodeId wire a shared dep once', () => {
-    // The #69 bare-hex hashed-peer-set spelling is STILL dropped (deferred),
-    // so two `host@1.0.0(<hex>)` keys genuinely collapse to one bare
-    // `host@1.0.0` NodeId. Pass 4 walks both keys, so the shared `@scope/x`
-    // dep would be wired twice → seal `duplicate edge` without the
-    // `emittedEdges` dedup. (Distinct from #70, where the keys no longer
-    // collide — this is the genuine remaining collision path the dedup guards.)
+  it('#69: two bare-hex hashed-peer-set keys on one name@version stay DISTINCT (ADR-0030)', () => {
+    // Pre-ADR-0030 both `host@1.0.0(<hex>)` keys had their bare-hex dropped
+    // (mis-read as a patch) → collapsed onto one `host@1.0.0` NodeId. Now the
+    // hash is KEPT: the two keys are two DISTINCT nodes, each with its own hash
+    // token and its own `@scope/x` edge — no collapse, no shared-dep collision.
     const lock =
       `lockfileVersion: '9.0'\n\n` +
       `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
@@ -296,19 +294,86 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
       `  '@scope/x@3.0.0': {}\n` +
       `  host@1.0.0(deadbeef00112233):\n    dependencies:\n      '@scope/x': 3.0.0\n` +
       `  host@1.0.0(cafebabe44556677):\n    dependencies:\n      '@scope/x': 3.0.0\n`
+    const graph = parse(lock)
+
+    // Two DISTINCT nodes (hash kept); the bare collapsed node is gone.
+    expect(Array.from(graph.nodes()).filter(n => n.name === 'host').map(n => n.id).sort())
+      .toEqual(['host@1.0.0(cafebabe44556677)', 'host@1.0.0(deadbeef00112233)'])
+    expect(graph.getNode('host@1.0.0')).toBeUndefined()
+    // Each instance wires its OWN `@scope/x` dep exactly once.
+    for (const id of ['host@1.0.0(deadbeef00112233)', 'host@1.0.0(cafebabe44556677)']) {
+      expect(graph.out(id, 'dep').filter(e => e.dst === '@scope/x@3.0.0')).toHaveLength(1)
+    }
+  })
+
+  it('#8b-C dedup: a patched + bare key collapsing on one NodeId wire a shared dep once', () => {
+    // After #69 the bare-hex collapse path is gone; the `emittedEdges` dedup now
+    // guards the remaining collapse — a LABELLED `patch_hash=` key (stripped to
+    // its bare NodeId, ADR-0014) colliding with the bare key for the same
+    // name@version. Both walk `@scope/x`; without the dedup the second wire
+    // trips the seal's `duplicate edge`.
+    const hash = 'b'.repeat(64)
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .:\n    dependencies:\n` +
+      `      host:\n        specifier: 1.0.0\n        version: 1.0.0(patch_hash=${hash})\n\n` +
+      `packages:\n\n` +
+      `  '@scope/x@3.0.0':\n    resolution: {integrity: sha512-x}\n` +
+      `  host@1.0.0:\n    resolution: {integrity: sha512-h}\n\n` +
+      `snapshots:\n\n` +
+      `  '@scope/x@3.0.0': {}\n` +
+      `  host@1.0.0(patch_hash=${hash}):\n    dependencies:\n      '@scope/x': 3.0.0\n` +
+      `  host@1.0.0:\n    dependencies:\n      '@scope/x': 3.0.0\n`
     const graph = parse(lock) // throws `duplicate edge` on seal without the dedup
 
-    // Both bare-hex keys collapse to ONE node (the hash is dropped, #69).
+    // Both keys collapse to ONE bare `host@1.0.0` (labelled patch stripped).
     expect(Array.from(graph.nodes()).filter(n => n.name === 'host').map(n => n.id)).toEqual(['host@1.0.0'])
-    // The shared `@scope/x` dep is wired exactly once.
+    // The shared `@scope/x` dep is wired exactly once (dedup).
     expect(graph.out('host@1.0.0', 'dep').filter(e => e.dst === '@scope/x@3.0.0')).toHaveLength(1)
   })
 
-  it('#8b-C residue: a `patch_hash=` / bare-hex patch-hash segment is not mistaken for a peer', () => {
-    // `tool@1.0.0` is patched (bare-hex digest from `patchedDependencies`) and
-    // referenced as a peer by `plugin`. The patch-hash key must still parse so
-    // the patched node is registered and the peer resolves (else: seal
-    // `disagree with peerContext`).
+  it('#8b-C residue: a LABELLED `patch_hash=` segment is not mistaken for a peer (still dropped — ADR-0014)', () => {
+    // `tool@1.0.0` is patched via a `patchedDependencies:` patch (labelled
+    // `patch_hash=<64hex>`) and referenced as a peer by `plugin`. ADR-0030
+    // does NOT touch the labelled-patch path: the segment is still dropped so
+    // the patched node registers under its bare NodeId and the peer resolves
+    // (else: seal `disagree with peerContext`). Gate 4 NEGATIVE — a labelled
+    // patch_hash must NOT be reclassified as a hashed peer-set token.
+    const hash = 'a'.repeat(64)
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .:\n    dependencies:\n` +
+      `      plugin:\n        specifier: 1.0.0\n        version: 1.0.0(tool@1.0.0(patch_hash=${hash}))\n\n` +
+      `packages:\n\n` +
+      `  plugin@1.0.0:\n    resolution: {integrity: sha512-p}\n` +
+      `    peerDependencies:\n      tool: '*'\n` +
+      `  tool@1.0.0:\n    resolution: {integrity: sha512-t}\n\n` +
+      `snapshots:\n\n` +
+      `  plugin@1.0.0(tool@1.0.0(patch_hash=${hash})):\n    dependencies:\n      tool: 1.0.0(patch_hash=${hash})\n` +
+      `  tool@1.0.0(patch_hash=${hash}): {}\n`
+    const graph = parse(lock)
+
+    // Patched node registered under its bare NodeId (labelled patch dropped) —
+    // NOT under a `(patch_hash=…)` peer-set suffix.
+    expect(graph.getNode('tool@1.0.0')).toBeDefined()
+    expect(graph.getNode(`tool@1.0.0(patch_hash=${hash})`)).toBeUndefined()
+    const plugin = graph.getNode('plugin@1.0.0(tool@1.0.0)')
+    expect(plugin).toBeDefined()
+    expect(plugin!.peerContext).toEqual(['tool@1.0.0'])
+    // The peer edge resolved to the patched node, satisfying the seal bijection.
+    expect(graph.out('plugin@1.0.0(tool@1.0.0)', 'peer').map(e => e.dst)).toEqual(['tool@1.0.0'])
+  })
+
+  it('#69 (ADR-0030): a BARE-HEX hashed peer-set token is KEPT as an opaque, non-edge-bearing peerContext discriminator (no longer dropped as a patch)', () => {
+    // Same shape as the labelled case above, but with a BARE-HEX digest — the
+    // pnpm-v9 hashed peer-set abbreviation (#69). Pre-ADR-0030 this collapsed
+    // onto bare `tool@1.0.0` (mis-read as a patch hash). Now it is KEPT: the
+    // token rides in `tool`'s peerContext as an opaque discriminator, bearing
+    // NO peer edge, and the seal exempts it from the edge↔context coherence
+    // check. `plugin` peers on the base key `tool@1.0.0` and its peer edge
+    // base-projects onto the hash-discriminated node.
     const lock =
       `lockfileVersion: '9.0'\n\n` +
       `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
@@ -323,12 +388,79 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
       `  tool@1.0.0(deadbeef00112233): {}\n`
     const graph = parse(lock)
 
-    // Patched node registered under its bare NodeId (patch-hash skipped).
-    expect(graph.getNode('tool@1.0.0')).toBeDefined()
-    const plugin = graph.getNode('plugin@1.0.0(tool@1.0.0)')
+    // The hashed token is KEPT — the node carries it in peerContext, not the
+    // bare `tool@1.0.0`.
+    expect(graph.getNode('tool@1.0.0')).toBeUndefined()
+    const tool = graph.getNode('tool@1.0.0(deadbeef00112233)')
+    expect(tool).toBeDefined()
+    expect(tool!.peerContext).toEqual(['deadbeef00112233'])
+    // Non-edge-bearing: NO peer edge for the opaque token (seal must not have
+    // demanded one).
+    expect(graph.out('tool@1.0.0(deadbeef00112233)', 'peer')).toEqual([])
+
+    // `plugin` KEEPS tool's hash-discriminated instance in its OWN peerContext
+    // token (#70 nested-suffix carry) — contrast the labelled-patch case above,
+    // where the nested `patch_hash=` is dropped → `plugin@1.0.0(tool@1.0.0)`.
+    const plugin = graph.getNode('plugin@1.0.0(tool@1.0.0(deadbeef00112233))')
     expect(plugin).toBeDefined()
-    expect(plugin!.peerContext).toEqual(['tool@1.0.0'])
-    // The peer edge resolved to the patched node, satisfying the seal bijection.
-    expect(graph.out('plugin@1.0.0(tool@1.0.0)', 'peer').map(e => e.dst)).toEqual(['tool@1.0.0'])
+    expect(plugin!.peerContext).toEqual(['tool@1.0.0(deadbeef00112233)'])
+    expect(graph.out('plugin@1.0.0(tool@1.0.0(deadbeef00112233))', 'peer').map(e => e.dst)).toEqual(['tool@1.0.0(deadbeef00112233)'])
+
+    // The hashed key round-trips byte-for-byte.
+    const out = stringify(graph)
+    expect(out).toContain('tool@1.0.0(deadbeef00112233):')
+    expect(stringify(parse(out))).toBe(out)
   })
+
+  it('#69 (ADR-0030): two distinct bare-hex tokens on one `name@version` whose snapshot bodies diverge → 2 nodes, 0 violations, both keys round-trip', () => {
+    // The core #69 regression. `lib@1.0.0` appears under TWO distinct bare-hex
+    // tokens whose snapshot bodies fork on a transitive dep (`util@1.0.0` vs
+    // `util@2.0.0`). Pre-ADR-0030: both keys collapse onto one `lib@1.0.0`
+    // node, the two divergent `util` dep edges collide in one slot → ≥1
+    // LAYOUT_RESOLVE_VIOLATION. After: 2 distinct nodes, 0 violations, both
+    // hashed keys reproduced byte-stably.
+    const tokenA = 'aaaa0000bbbb1111'
+    const tokenB = 'cccc2222dddd3333'
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .:\n    dependencies:\n` +
+      `      app-a:\n        specifier: 1.0.0\n        version: 1.0.0\n` +
+      `      app-b:\n        specifier: 1.0.0\n        version: 1.0.0\n\n` +
+      `packages:\n\n` +
+      `  app-a@1.0.0:\n    resolution: {integrity: sha512-aa}\n` +
+      `  app-b@1.0.0:\n    resolution: {integrity: sha512-bb}\n` +
+      `  lib@1.0.0:\n    resolution: {integrity: sha512-l}\n` +
+      `  util@1.0.0:\n    resolution: {integrity: sha512-u1}\n` +
+      `  util@2.0.0:\n    resolution: {integrity: sha512-u2}\n\n` +
+      `snapshots:\n\n` +
+      `  app-a@1.0.0:\n    dependencies:\n      lib: 1.0.0(${tokenA})\n` +
+      `  app-b@1.0.0:\n    dependencies:\n      lib: 1.0.0(${tokenB})\n` +
+      `  lib@1.0.0(${tokenA}):\n    dependencies:\n      util: 1.0.0\n` +
+      `  lib@1.0.0(${tokenB}):\n    dependencies:\n      util: 2.0.0\n` +
+      `  util@1.0.0: {}\n` +
+      `  util@2.0.0: {}\n`
+    const graph = parse(lock)
+
+    // Two distinct nodes — NOT collapsed.
+    expect(graph.getNode(`lib@1.0.0(${tokenA})`)).toBeDefined()
+    expect(graph.getNode(`lib@1.0.0(${tokenB})`)).toBeDefined()
+    expect(graph.getNode('lib@1.0.0')).toBeUndefined()
+    // Each variant's divergent `util` edge points at its own target.
+    expect(graph.out(`lib@1.0.0(${tokenA})`, 'dep').map(e => e.dst)).toEqual(['util@1.0.0'])
+    expect(graph.out(`lib@1.0.0(${tokenB})`, 'dep').map(e => e.dst)).toEqual(['util@2.0.0'])
+    // app-a / app-b each resolve their `lib` dep to the correct variant.
+    expect(graph.out('app-a@1.0.0', 'dep').map(e => e.dst)).toEqual([`lib@1.0.0(${tokenA})`])
+    expect(graph.out('app-b@1.0.0', 'dep').map(e => e.dst)).toEqual([`lib@1.0.0(${tokenB})`])
+
+    // ZERO violations on emit — the verifier (ADR-0029) is the oracle.
+    const diags: Array<{ code: string }> = []
+    const out = stringify(graph, { onDiagnostic: d => diags.push(d) })
+    expect(diags.filter(d => d.code === 'LAYOUT_RESOLVE_VIOLATION')).toEqual([])
+    // Both hashed keys reproduced; byte-stable round-trip.
+    expect(out).toContain(`lib@1.0.0(${tokenA}):`)
+    expect(out).toContain(`lib@1.0.0(${tokenB}):`)
+    expect(stringify(parse(out))).toBe(out)
+  })
+
 })

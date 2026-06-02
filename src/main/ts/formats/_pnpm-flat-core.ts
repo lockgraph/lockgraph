@@ -66,6 +66,7 @@ import {
 } from '../recipe/resolution.ts'
 import {
   hashAndNormaliseBytes as patchHashAndNormaliseBytes,
+  isHashedPeerSetToken,
   sentinelHashOf as patchSentinelHashOf,
 } from '../recipe/patch.ts'
 import {
@@ -437,8 +438,8 @@ export function parseFamily(
         })
         continue
       }
-      const { name, version, peers } = parsed
-      const peerContext = buildPeerContext(peers, sidecar.importerByPath)
+      const { name, version, peers, opaquePeers } = parsed
+      const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
       const nodeId = serializeNodeId(name, version, peerContext)
       if (seenIds.has(nodeId)) continue
       seenIds.add(nodeId)
@@ -476,8 +477,8 @@ export function parseFamily(
         })
         continue
       }
-      const { name, version, peers } = parsed
-      const peerContext = buildPeerContext(peers, sidecar.importerByPath)
+      const { name, version, peers, opaquePeers } = parsed
+      const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
       const nodeId = serializeNodeId(name, version, peerContext)
       if (seenIds.has(nodeId)) continue
       seenIds.add(nodeId)
@@ -609,8 +610,8 @@ export function parseFamily(
     for (const snapshotKey of Object.keys(snapshotsMap)) {
       const parsed = parsePackagesOrSnapshotKey(snapshotKey)
       if (parsed === undefined) continue
-      const { name, version, peers } = parsed
-      const peerContext = buildPeerContext(peers, sidecar.importerByPath)
+      const { name, version, peers, opaquePeers } = parsed
+      const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
       const srcId = serializeNodeId(name, version, peerContext)
       if (!seenIds.has(srcId)) continue
       const snapEntry = snapshotsMap[snapshotKey]
@@ -1133,19 +1134,42 @@ interface ParsedPackagesOrSnapshotKey {
   name: string
   version: string
   peers: Array<{ name: string; version: string; nested: string }>
+  /**
+   * ADR-0030 — bare-hex HASHED PEER-SET tokens from the key's `(...)` suffix.
+   * pnpm-v9 abbreviates a long resolved peer-set into a single bare-hex digest
+   * segment (e.g. `(53b8fd9b7f33abb48dff18614cf85bde)`); the real peers are
+   * hidden inside the hash, so the token is OPAQUE and NON-EDGE-BEARING — it
+   * generates no peer edge but MUST ride through the NodeId as an identity
+   * discriminator, otherwise two virtual-store instances of the same
+   * `name@version` (forking on a transitive peer like `@types/node`) collapse
+   * to one NodeId and their divergent dep edges collide. Kept distinct from
+   * `peers` precisely because it produces no edge.
+   */
+  opaquePeers: string[]
 }
 
 /**
- * True when a depth-0 suffix segment is a pnpm PATCH-HASH marker rather than a
- * peer (#8b-C residue). pnpm v9 emits two spellings inside a key's `(...)`
- * suffix: the labelled `patch_hash=<sha256-hex>` and the bare hex digest from
- * `patchedDependencies` (e.g. `(359268677529d8dcdba6ee615fa4d73c)`). A real
- * peer always carries a `name@version` (a depth-0 `@`); a patch hash never
- * does — it is pure lowercase hex, optionally `patch_hash=`-prefixed.
+ * True when a depth-0 suffix segment is a pnpm LABELLED PATCH-HASH marker —
+ * exactly the `patch_hash=<sha256-hex>` spelling pnpm v9 injects when a
+ * `patchedDependencies:` patch applies (e.g.
+ * `@astrojs/starlight@…(patch_hash=…)`). A real peer always carries a
+ * `name@version` (a depth-0 `@`); a labelled patch never does.
+ *
+ * ADR-0030 — this is now the LABELLED half ONLY. The bare-hex spelling
+ * (`(53b8fd9b…)`) is NO LONGER read as a patch: it is the pnpm-v9 hashed
+ * PEER-SET token, classified by the inverse predicate `isHashedPeerSetToken`
+ * (single-sourced in `recipe/patch.ts` so the patch ∣ peer-set boundary cannot
+ * drift). The two predicates partition the bare-hex space disjointly: this one
+ * matches `patch_hash=`-prefixed, that one matches the bare-hex body — the
+ * caller dispatches on the labelled-vs-bare distinction. The labelled-vs-bare
+ * split is sufficient for the corpus (every real patch is `patch_hash=<64hex>`;
+ * bare-hex is always a peer-set). FUTURE GUARD: were pnpm ever to emit a BARE
+ * patch digest, a `patchedDependencies:`-block membership tie-breaker would
+ * disambiguate — not implemented here (no corpus need, and it is non-trivial
+ * block-parsing).
  */
 function isPatchHashSegment(segBase: string): boolean {
-  if (segBase.startsWith('patch_hash=')) return true
-  return segBase.length > 0 && !segBase.includes('@') && /^[0-9a-f]+$/.test(segBase)
+  return segBase.startsWith('patch_hash=')
 }
 
 /**
@@ -1181,29 +1205,33 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
   const version = base.slice(lastAt + 1)
   if (name.length === 0 || version.length === 0) return undefined
 
-  const peers = parsePeerSuffix(peerSuffix)
-  if (peers === undefined) return undefined
+  const parsed = parsePeerSuffix(peerSuffix)
+  if (parsed === undefined) return undefined
 
-  return { name, version, peers }
+  return { name, version, peers: parsed.peers, opaquePeers: parsed.opaquePeers }
 }
 
 /**
- * Parse a `(peer@v)(peer2@v2(sub@v))…` suffix into its depth-0 peer records.
- * Each record carries the peer's BASE `name@version` plus its OWN nested
- * suffix (`nested`, e.g. `(esbuild@0.26.0)` or '' for a leaf). Returns
- * `undefined` on a malformed suffix (caller treats as unparseable key).
+ * Parse a `(peer@v)(peer2@v2(sub@v))…` suffix into its depth-0 peer records
+ * plus the bare-hex HASHED PEER-SET tokens (`opaquePeers`, ADR-0030). Each peer
+ * record carries the peer's BASE `name@version` plus its OWN nested suffix
+ * (`nested`, e.g. `(esbuild@0.26.0)` or '' for a leaf). Returns `undefined` on
+ * a malformed suffix (caller treats as unparseable key).
  *
  * `nested` is CARRIED (not dropped) so it can flow into BOTH the consumer's
  * peerContext token (buildPeerContext) and the peer edge's full target NodeId
  * (#70): two virtual-store instances of one consumer that differ ONLY in a
  * transitive peer's resolution thus stay DISTINCT NodeIds — without it they
  * collapse to one NodeId carrying two edges to the same dep name
- * (unrepresentable → LAYOUT_RESOLVE_VIOLATION). The seal (graph.ts) reconciles
- * peerContext token vs edge target by BASE-KEY projection (ADR-0017), so the
- * carried suffix is invisible to the seal.
+ * (unrepresentable → LAYOUT_RESOLVE_VIOLATION). `opaquePeers` (#69) is carried
+ * for the same reason but is NON-EDGE-BEARING (the hash hides its peers). The
+ * seal (graph.ts) reconciles peerContext token vs edge target by BASE-KEY
+ * projection (ADR-0017), so a carried nested suffix is invisible to it, and an
+ * opaque hash token is exempted (isHashedPeerSetToken).
  */
-function parsePeerSuffix(peerSuffix: string): Array<{ name: string; version: string; nested: string }> | undefined {
+function parsePeerSuffix(peerSuffix: string): { peers: Array<{ name: string; version: string; nested: string }>; opaquePeers: string[] } | undefined {
   const peers: Array<{ name: string; version: string; nested: string }> = []
+  const opaquePeers: string[] = []
   let pos = 0
   while (pos < peerSuffix.length) {
     if (peerSuffix[pos] !== '(') return undefined
@@ -1232,18 +1260,33 @@ function parsePeerSuffix(peerSuffix: string): Array<{ name: string; version: str
       else if (c === ')') sd--
     }
     const segBase = segment.slice(0, segBaseEnd)
-    // pnpm v9 encodes a patched dependency by injecting a PATCH-HASH segment
-    // into the key suffix ALONGSIDE the real peers — two spellings:
-    //   `(patch_hash=<sha256-hex>)`  — labelled (e.g. `@astrojs/starlight@…`)
-    //   `(<hex>)`                    — bare digest from `patchedDependencies`
-    //                                  (e.g. `@nx/eslint@23.0.0-beta.18(3592…)`)
-    // Neither is a peer — there is no `name@version`. Skip it so the key still
-    // parses; aborting (the old `segAt <= 0` failure) would drop the patched
-    // node entirely, leaving any peer that targets it unresolvable → seal
-    // `disagree with peerContext`. Patch ATTRIBUTION flows through the
-    // `overrides:` block (resolvePatchForNode); the bare/patched NodeId
-    // duality is accepted by graph.ts `acceptedNodeIds`.
+    // A `(...)` suffix segment is one of THREE things — neither of the first
+    // two is a real `name@version` peer (ADR-0014 §F2 + ADR-0030):
+    //
+    //   1. LABELLED PATCH `(patch_hash=<sha256-hex>)` — pnpm injects it when a
+    //      `patchedDependencies:` patch applies (e.g. `@astrojs/starlight@…`).
+    //      Dropped: patch ATTRIBUTION flows through the `overrides:` block
+    //      (resolvePatchForNode), and the bare/patched NodeId duality is
+    //      accepted by graph.ts `acceptedNodeIds`. Dropping it (vs aborting via
+    //      the old `segAt <= 0` failure) keeps the key parseable so any peer
+    //      targeting the patched node still resolves.
+    //   2. HASHED PEER-SET TOKEN `(<bare-hex>)` — pnpm abbreviates a long
+    //      resolved peer-set into one bare-hex digest (ADR-0030; e.g.
+    //      `@angular/build@22.0.0-rc.2(53b8fd9b…)`). The real peers are hidden
+    //      in the hash, so it bears NO peer edge — but it MUST be KEPT as an
+    //      opaque identity discriminator, else two virtual-store instances of
+    //      the same `name@version` (forking on a transitive peer like
+    //      `@types/node`) collapse to one NodeId and their divergent dep edges
+    //      collide. It rides through `serializeNodeId` verbatim → emit
+    //      reproduces it byte-for-byte; it stays OUT of `peers` so the peer-edge
+    //      loop never wires an edge for it, and the seal exempts it from the
+    //      peerContext↔edge coherence check (graph.ts, `isHashedPeerSetToken`).
+    //   3. a real `name@version` peer — handled below.
     if (isPatchHashSegment(segBase)) continue
+    if (isHashedPeerSetToken(segBase)) {
+      opaquePeers.push(segBase)
+      continue
+    }
     let segAt = -1
     for (let i = 1; i < segBase.length; i++) {
       if (segBase[i] === '@') segAt = i
@@ -1254,7 +1297,7 @@ function parsePeerSuffix(peerSuffix: string): Array<{ name: string; version: str
     if (pName.length === 0 || pVer.length === 0) return undefined
     peers.push({ name: pName, version: pVer, nested: segment.slice(segBaseEnd) })
   }
-  return peers
+  return { peers, opaquePeers }
 }
 
 function stripPackagesKeyPrefix(key: string, packagesKeyShape: PnpmLayoutShape['packagesKeyShape']): string {
@@ -1458,11 +1501,13 @@ function resolveSnapshotTarget(
 ): string | undefined {
   const parsedTail = parsePackagesOrSnapshotKey(`${depName}@${rawValue}`)
   if (parsedTail === undefined) return undefined
-  // buildPeerContext drops workspace peers and embeds each surviving peer's
-  // recursively-normalised nested suffix (#70) — the exact form the target
-  // node id carries, so a dep value whose target carries a transitive peer
-  // resolves to the now-distinct node rather than collapsing onto a base id.
-  const peerContext = buildPeerContext(parsedTail.peers, importerByPath)
+  // buildPeerContext drops workspace peers, embeds each surviving peer's
+  // recursively-normalised nested suffix (#70), and appends the bare-hex
+  // HASHED PEER-SET token(s) (#69/ADR-0030) — the exact form the target node id
+  // carries, so a dep value whose target is hash- or transitive-peer-
+  // discriminated resolves to the now-distinct node rather than collapsing onto
+  // the bare key.
+  const peerContext = buildPeerContext(parsedTail.peers, importerByPath, parsedTail.opaquePeers)
   const candidateId = serializeNodeId(parsedTail.name, parsedTail.version, peerContext)
   if (seenIds.has(candidateId)) return candidateId
   const bareId = `${parsedTail.name}@${parsedTail.version}`
@@ -1488,8 +1533,9 @@ function resolveAliasedSnapshotTarget(
   if (!hasInteriorAt) return undefined
   const parsed = parsePackagesOrSnapshotKey(rawValue)
   if (parsed === undefined) return undefined
-  // buildPeerContext — drop workspace peers + embed normalised nested (#70).
-  const peerContext = buildPeerContext(parsed.peers, importerByPath)
+  // buildPeerContext — drop workspace peers, embed normalised nested (#70),
+  // append hashed peer-set token(s) (#69/ADR-0030). See resolveSnapshotTarget.
+  const peerContext = buildPeerContext(parsed.peers, importerByPath, parsed.opaquePeers)
   const candidateId = serializeNodeId(parsed.name, parsed.version, peerContext)
   if (seenIds.has(candidateId)) return candidateId
   const bareId = `${parsed.name}@${parsed.version}`
@@ -1599,7 +1645,7 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
   if (nested.length === 0) return ''
   const sub = parsePeerSuffix(nested)
   if (sub === undefined) return nested // unparseable — leave verbatim
-  const tokens = buildPeerContext(sub, importerByPath)
+  const tokens = buildPeerContext(sub.peers, importerByPath, sub.opaquePeers)
   return tokens.map(t => `(${t})`).join('')
 }
 
@@ -1613,7 +1659,15 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
  * distinct NodeIds. The seal (graph.ts) reconciles this token against the peer
  * edge target by BASE-KEY projection (ADR-0017), which strips the nested
  * suffix on both sides — so carrying it here does not break peer-edge ↔
- * peerContext coherence. Result is sorted (caller contract).
+ * peerContext coherence.
+ *
+ * ADR-0030 — bare-hex HASHED PEER-SET tokens (`opaquePeers`) are APPENDED to
+ * the context, then the whole list is sorted (caller contract). They are
+ * NON-EDGE-BEARING: the peer-edge loop iterates `peers` only, never these, so a
+ * hashed token contributes an identity discriminator without a peer edge. The
+ * seal exempts them from its peerContext↔edge coherence check via
+ * `isHashedPeerSetToken`. They ride through `serializeNodeId` verbatim, so emit
+ * reproduces the original bare-hex key.
  *
  * NB the workspace filter checks the BASE `version` only: `resolveWorkspacePeerId`
  * decodes a `+`-encoded importer dir, and a nested `(...)` suffix would break
@@ -1622,11 +1676,12 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
 function buildPeerContext(
   peers: Array<{ name: string; version: string; nested: string }>,
   importerByPath: Map<string, string>,
+  opaquePeers: readonly string[] = [],
 ): string[] {
-  return peers
+  const edgePeers = peers
     .filter(p => resolveWorkspacePeerId(p.version, importerByPath) === undefined)
     .map(p => `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`)
-    .sort()
+  return [...edgePeers, ...opaquePeers].sort()
 }
 
 function importerSpec(value: unknown): { specifier?: string; version: string } | undefined {

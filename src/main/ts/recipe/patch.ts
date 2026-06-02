@@ -24,6 +24,23 @@ import { Buffer } from 'node:buffer'
 const CANONICAL_HASH_RE = /^[0-9a-f]{128}$/
 const SENTINEL_RE       = /^unresolved-[0-9a-f]{64}$/
 
+// ADR-0030 — the pnpm-v9 "hashed peer-set token". When a resolved peer-set
+// grows long, pnpm abbreviates the whole `(peerA@v)(peerB@v)…` suffix into a
+// SINGLE bare-hex digest segment, e.g.
+// `@angular/build@22.0.0-rc.2(53b8fd9b7f33abb48dff18614cf85bde)`. This is the
+// inverse half of the patch-token grammar (above): a `(...)` key-suffix segment
+// whose BARE body is pure lowercase hex of length ≥ 16, carries no `@` (so it
+// is not a `name@version` peer), and is NOT the labelled `patch_hash=…` patch
+// marker. The min-length 16 floor keeps it clear of short version-ish bodies
+// while admitting pnpm's shortest observed digests (16 hex). The labelled-vs-
+// bare split is the single source of truth for the patch ∣ peer-set boundary —
+// `_pnpm-flat-core.isPatchHashSegment` defines a labelled patch as exactly the
+// `patch_hash=`-prefixed form, leaving every bare-hex body to this predicate
+// (a future `patchedDependencies:`-block cross-check could disambiguate the
+// theoretical bare-hex-patch collision, but no real corpus patch is bare —
+// every one is `patch_hash=<64hex>`).
+const HASHED_PEER_SET_RE = /^[0-9a-f]{16,}$/
+
 /**
  * True iff `s` is the canonical `<sha512-hex>` patch slot value (ADR-0014
  * §4.F2 / ADR-0011 §Decision) — exactly 128 lowercase hex chars.
@@ -40,6 +57,24 @@ export function isCanonicalHash(s: string): boolean {
  */
 export function isSentinelPatch(s: string): boolean {
   return SENTINEL_RE.test(s)
+}
+
+/**
+ * ADR-0030 — true iff `seg` is a pnpm-v9 HASHED PEER-SET TOKEN: a bare
+ * lowercase-hex body of length ≥ 16 with no `@` and no `patch_hash=` prefix.
+ *
+ * Single source for the patch ∣ peer-set boundary, imported by BOTH
+ * `_pnpm-flat-core.ts` (parse reclassification — keep the token as an opaque,
+ * non-edge-bearing peerContext discriminator instead of dropping it as a patch)
+ * and `graph.ts` (the seal exempts hashed tokens from the peer-edge ↔
+ * peerContext coherence check, since they bear no edge). The caller passes the
+ * segment's depth-0 BASE (its `(...)` body, with any nested suffix already
+ * split off). Rejects `patch_hash=…` explicitly so a labelled patch never
+ * reads as a peer-set even though its value past the `=` is bare hex.
+ */
+export function isHashedPeerSetToken(seg: string): boolean {
+  if (seg.startsWith('patch_hash=')) return false
+  return HASHED_PEER_SET_RE.test(seg)
 }
 
 /**

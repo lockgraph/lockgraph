@@ -191,6 +191,49 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
   })
 
+  // === ADR-0030 (#69): hashed peer-set token is non-edge-bearing ===
+
+  it('seals a node whose ONLY peerContext entry is a bare-hex hashed peer-set token, with NO peer edge', () => {
+    // ADR-0030 — pnpm-v9 abbreviates a long resolved peer-set into one bare-hex
+    // digest. The token is an opaque identity discriminator that bears NO peer
+    // edge (the real peers are hidden in the hash). The seal must NOT demand a
+    // peer edge for it. The derived-id check is unchanged — the token still
+    // participates in serializeNodeId, so the id must include it.
+    const id = serializeNodeId('lib', '1.0.0', ['deadbeef00112233'])
+    expect(id).toBe('lib@1.0.0(deadbeef00112233)')
+    const b = newBuilder()
+    b.addNode(n(id, 'lib', '1.0.0', ['deadbeef00112233']))
+    expect(() => b.seal()).not.toThrow()
+  })
+
+  it('seals a MIXED peerContext (real edge-bearing peer + hashed token): the real peer needs its edge, the hash does not', () => {
+    // The exemption is surgical: only the hashed token is dropped from the
+    // edge↔context compare; the real `react@18.0.0` peer still requires a peer
+    // edge.
+    const id = serializeNodeId('lib', '1.0.0', ['cafebabe99887766', 'react@18.0.0'])
+    const b = newBuilder()
+    b.addNode(n('react@18.0.0', 'react', '18.0.0'))
+    b.addNode(n(id, 'lib', '1.0.0', ['cafebabe99887766', 'react@18.0.0']))
+    b.addEdge(id, 'react@18.0.0', 'peer') // real peer edge; NO edge for the hash
+    expect(() => b.seal()).not.toThrow()
+  })
+
+  it('NEGATIVE: a real edge-bearing peer absent from peerContext STILL fails even when a hashed token is present (exemption not over-broad)', () => {
+    // Gate 3 — the opaque-token exemption must not gut the coherence check. A
+    // node carrying a hashed token AND a real peer edge whose base-key is NOT
+    // in peerContext must still throw.
+    const id = serializeNodeId('lib', '1.0.0', ['deadbeef00112233', 'react@18.0.0'])
+    const b = newBuilder()
+    b.addNode(n('react@18.0.0', 'react', '18.0.0'))
+    b.addNode(n('vue@3.0.0', 'vue', '3.0.0'))
+    b.addNode(n(id, 'lib', '1.0.0', ['deadbeef00112233', 'react@18.0.0']))
+    // Wire a peer edge to `vue` — whose base-key is NOT in peerContext (only
+    // `react` is, besides the exempt hash). The hash being present must not
+    // mask the real mismatch.
+    b.addEdge(id, 'vue@3.0.0', 'peer')
+    expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
+  })
+
   it('workspace nodes must have no incoming edges from non-workspace nodes', () => {
     const b = newBuilder()
     b.addNode(n('app@1.0.0', 'app', '1.0.0', [], { workspacePath: '' }))
