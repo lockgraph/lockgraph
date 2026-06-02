@@ -55,7 +55,7 @@ export type EdgeAttrs = {
   workspace?:      boolean
   // Local descriptor name when it differs from the target node's actual
   // name — i.e. npm-alias deps like
-  //   `"@babel/traverse--for-generate-function-map": "npm:@babel/traverse@…"`
+  //   `"@scope/pkg--variant": "npm:@scope/pkg@…"`
   //   `"react-is-18": "npm:react-is@^18"`,
   // and `dependencies.foo: "npm:bar@…"` in npm/pnpm/bun manifests. Unlike
   // the other attrs (which are opaque per-instance metadata), `alias`

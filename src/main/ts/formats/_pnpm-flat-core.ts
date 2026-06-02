@@ -606,7 +606,7 @@ export function parseFamily(
   //
   // #8b-C — peer-of-a-peer collapse dedup. After the depth-0 split (#8b-B),
   // several distinct snapshot keys that differ ONLY in NESTED peer-of-peer
-  // versions (e.g. `(vite@8.0.8(esbuild@0.26.0))` vs `(…(esbuild@0.27.3))`)
+  // versions (e.g. `(pkg-a@8.0.8(pkg-b@1.0.0))` vs `(…(pkg-b@2.0.0))`)
   // project to ONE depth-0 NodeId. Pass 1 keeps the first via `seenIds`, but
   // Pass 4 walks EVERY snapshot key, so a collapsed source would emit each of
   // its resolved-tree edges once PER colliding key → seal `duplicate edge`.
@@ -1257,10 +1257,10 @@ function parsePeerSuffix(peerSuffix: string): { peers: Array<{ name: string; ver
     const segment = peerSuffix.slice(pos + 1, close)
     pos = close + 1
     // The segment may itself carry nested `(...)` peers (a transitive peer-
-    // of-a-peer, pnpm v9 — e.g. `@astrojs/markdoc@0.15.1(yaml@2.9.0)
-    // (react@18.3.1)`). Split off the segment's OWN base at its first depth-0
+    // of-a-peer, pnpm v9 — e.g. `@scope/pkg@0.15.1(dep-a@2.9.0)
+    // (dep-b@18.3.1)`). Split off the segment's OWN base at its first depth-0
     // `(` before locating the name/version boundary; otherwise the last-`@`
-    // scan lands inside a nested peer (`react@18.3.1`) and yields a garbage
+    // scan lands inside a nested peer (`dep-b@18.3.1`) and yields a garbage
     // name/version.
     let segBaseEnd = segment.length
     let sd = 0
@@ -1275,7 +1275,7 @@ function parsePeerSuffix(peerSuffix: string): { peers: Array<{ name: string; ver
     // two is a real `name@version` peer (ADR-0014 §F2 + ADR-0030):
     //
     //   1. LABELLED PATCH `(patch_hash=<sha256-hex>)` — pnpm injects it when a
-    //      `patchedDependencies:` patch applies (e.g. `@astrojs/starlight@…`).
+    //      `patchedDependencies:` patch applies (e.g. `@scope/pkg@…`).
     //      Dropped: patch ATTRIBUTION flows through the `overrides:` block
     //      (resolvePatchForNode), and the bare/patched NodeId duality is
     //      accepted by graph.ts `acceptedNodeIds`. Dropping it (vs aborting via
@@ -1283,11 +1283,11 @@ function parsePeerSuffix(peerSuffix: string): { peers: Array<{ name: string; ver
     //      targeting the patched node still resolves.
     //   2. HASHED PEER-SET TOKEN `(<bare-hex>)` — pnpm abbreviates a long
     //      resolved peer-set into one bare-hex digest (ADR-0030; e.g.
-    //      `@angular/build@22.0.0-rc.2(53b8fd9b…)`). The real peers are hidden
+    //      `name@version(<bare-hex>)`). The real peers are hidden
     //      in the hash, so it bears NO peer edge — but it MUST be KEPT as an
     //      opaque identity discriminator, else two virtual-store instances of
-    //      the same `name@version` (forking on a transitive peer like
-    //      `@types/node`) collapse to one NodeId and their divergent dep edges
+    //      the same `name@version` (forking on a transitive peer such as a
+    //      typings package) collapse to one NodeId and their divergent dep edges
     //      collide. It rides through `serializeNodeId` verbatim → emit
     //      reproduces it byte-for-byte; it stays OUT of `peers` so the peer-edge
     //      loop never wires an edge for it, and the seal exempts it from the
@@ -1459,7 +1459,7 @@ function addResolvedTreeEdges(
   for (const peer of peers) {
     // The peer reference carries the nested peer-of-a-peer suffix (#70),
     // selecting the precise virtual-store instance of the peer target (e.g.
-    // `vite@8.0.8(@types/node@…)(esbuild@0.26.0)…` vs the `esbuild@0.27.3`
+    // `pkg-a@8.0.8(dep@…)(pkg-b@1.0.0)…` vs the `pkg-b@2.0.0`
     // sibling). Without it the edge would resolve to whichever instance
     // `resolvePeerTargetById`'s prefix scan hit first, collapsing two distinct
     // consumer instances onto one. The nested suffix is NORMALISED (workspace
@@ -1608,7 +1608,7 @@ export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, pe
   const bareId = `${peerName}@${bareVersion}`
   if (bareId !== fullId && seenIds.has(bareId)) return bareId
   // Last resort — a same-base peer-virt instance (partial peer-set references,
-  // e.g. supabase `next@…` omitting a peer the target carries). Any same-base
+  // e.g. a dep reference omitting a peer the target carries). Any same-base
   // instance satisfies the seal's base-key projection, but the pick MUST be
   // deterministic (ADR-0007): take the lexicographically smallest match, not
   // the first in `seenIds` insertion order (which flips on benign lock
@@ -1647,8 +1647,8 @@ export function resolveWorkspacePeerId(
   const exact = importerByPath.get(path)
   if (exact !== undefined) return exact
   // A workspace package may be published from a SUB-DIRECTORY of its importer —
-  // e.g. mui encodes `@mui/material` as `packages+mui-material+build`
-  // (`packages/mui-material/build`) while the importer is `packages/mui-material`.
+  // e.g. a package published from a sub-dir encodes `packages+<name>+build`
+  // (`packages/<name>/build`) while the importer is `packages/<name>`.
   // Walk up to the nearest ANCESTOR importer. Never match the root `.` (it
   // prefixes every path); a real semver `+build` tail simply finds no importer.
   while (path.includes('/')) {
@@ -1922,8 +1922,8 @@ function buildImporterEntry(
     const isAliased = edge.attrs?.alias !== undefined
     const range = edge.attrs?.range
     // The `importerEdges` sidecar is keyed by the (src,kind,dst) triple, which
-    // an aliased and a direct edge to the SAME node SHARE (vite's
-    // `@vitejs/test-optimized-cjs-…` alias alongside the direct dep). The
+    // an aliased and a direct edge to the SAME node SHARE (an npm-aliased
+    // `@scope/x-alias` slot alongside the direct dep). The
     // captured `resolvedVersion`/`specifier` can therefore belong to the
     // colliding sibling, so an aliased edge prefers its own per-edge
     // descriptor (`range`) and the computed canonical `slot.value` unless the

@@ -190,9 +190,9 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
     expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
   })
 
-  it('#8d (sister #7): a workspace peer published from a SUB-DIR (`lib@packages+lib+build`) resolves to the ancestor importer + drops from peerContext', () => {
-    // mui encodes `@mui/material` as `packages+mui-material+build`
-    // (`packages/mui-material/build`) while the importer is `packages/mui-material`.
+  it('#8d: a workspace peer published from a SUB-DIR (`lib@packages+lib+build`) resolves to the ancestor importer + drops from peerContext', () => {
+    // A workspace can encode a peer as `packages+<name>+build`
+    // (`packages/<name>/build`) while the importer is `packages/<name>`.
     // resolveWorkspacePeerId must walk up to the ancestor importer; otherwise the
     // peer stays in peerContext and the seal "disagrees".
     const lock =
@@ -210,7 +210,7 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
       `snapshots:\n\n` +
       `  consumer@1.0.0(lib@packages+lib+build):\n    dependencies:\n      lib: link:packages/lib\n` +
       `  left-pad@1.3.0: {}\n`
-    const graph = parse(lock) // throws on seal failure — the sister-#7 regression guard
+    const graph = parse(lock) // throws on seal failure — the regression guard
     const consumer = graph.getNode('consumer@1.0.0')
     expect(consumer).toBeDefined()
     expect(consumer!.peerContext).toEqual([])

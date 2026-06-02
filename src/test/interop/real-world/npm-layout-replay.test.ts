@@ -8,17 +8,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 const realWorld = (rel: string): string =>
   readFileSync(resolve(here, '../../resources/fixtures/real-world', rel), 'utf8')
 
-// ADR-0026 install-path replay — sister #8 / #10. An un-mutated same-PM npm
+// ADR-0026 install-path replay. An un-mutated same-PM npm
 // round-trip replays the parse-captured placement verbatim (skips the
 // re-hoisting BFS), so a real lock with deep nested-hoist:
-//   - re-stringifies WITHOUT IRREDUCIBLE_LOSS (vscode — the THROW manifestation),
-//   - preserves the install-path key-set (socket.io — the same-version-multipath
+//   - re-stringifies WITHOUT IRREDUCIBLE_LOSS (the THROW manifestation),
+//   - preserves the install-path key-set (the same-version-multipath
 //     COLLAPSE manifestation),
-// modulo `{optional:true}` uninstalled-optional placeholders (Bug #11 non-nodes),
+// modulo `{optional:true}` uninstalled-optional placeholders (non-nodes),
 // excluded from BOTH sides. Workspace symlinks (`{link:true}`) ARE now compared:
 // ADR-0027 §4 (WS-LINK) fixed the over-emit (previously a link per member) so the
-// emitted link-set matches npm's — link iff referenced; socket.io's unreferenced
-// `@socket.io/clustered-engine` correctly gets none.
+// emitted link-set matches npm's — link iff referenced; an unreferenced
+// workspace member correctly gets none.
 // The comparison is the RESOLVED-node + link install-path key-set.
 const installPathKeys = (pkgs: Record<string, unknown>): string[] =>
   Object.keys(pkgs)
@@ -29,7 +29,7 @@ const installPathKeys = (pkgs: Record<string, unknown>): string[] =>
     })
     .sort()
 
-describe('npm install-path replay (ADR-0026, #10/#8)', () => {
+describe('npm install-path replay (ADR-0026)', () => {
   for (const dir of [
     'microsoft-vscode-main-ddd12d5', // THROW: deep-nested brace-expansion collision
     'socketio-socket.io-main-190572d', // COLLAPSE: same-(name,version) at multiple paths

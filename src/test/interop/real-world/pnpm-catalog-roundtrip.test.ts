@@ -12,12 +12,12 @@ const realWorld = (rel: string): string =>
 // Before the fix the adapter dropped the top-level `catalogs:` block on emit
 // while re-emitting `specifier: 'catalog:'` importer refs, producing a
 // STRUCTURALLY INVALID pnpm lockfile (the catalog refs resolve to nothing).
-// directus carries the full feature: a top-level `catalogs:` block + hundreds
+// A real-world lock carries the full feature: a top-level `catalogs:` block + hundreds
 // of `catalog:` importer refs. The fix captures the block verbatim and replays
 // it (TOP_LEVEL_ORDER_V9: settings → catalogs → overrides).
 //
 // NOTE (out of scope here, tracked separately): a handful of `catalog:` importer
-// EDGE refs (dev-tooling: eslint*/prettier-config/postcss-html/globals) are not
+// EDGE refs (dev-tooling) are not
 // yet round-tripped — that is the importer-edge path, distinct from this
 // top-level-block fix; it is a fidelity follow-up, not the BLOCKER.
 
@@ -28,7 +28,7 @@ const catalogEntryNames = (s: string): string[] =>
   [...catalogBlock(s).matchAll(/^\s{4}(\S[^:]*):\n\s{6}specifier:/gm)].map(m => m[1]!).sort()
 
 describe('pnpm catalog: round-trip (#56)', () => {
-  it('directus preserves the top-level catalogs: block and re-parses (BLOCKER)', () => {
+  it('preserves the top-level catalogs: block and re-parses (BLOCKER)', () => {
     const lock = realWorld('directus-directus-main-4290f6e/pnpm-lock.yaml')
     const out = stringify('pnpm-v9', parse('pnpm-v9', lock))
 

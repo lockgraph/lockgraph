@@ -81,8 +81,8 @@ describe('SYML — synthetic', () => {
 
   // YAML 1.2 §8.1.3 explicit block-mapping key (`? <key>` / `:`). yarn's
   // writer falls back to this form for over-long composite descriptor keys
-  // (sister-session canary bug #5, highlight/highlight: ~15 patched-typescript
-  // descriptors in one ~2 KB key). The `:` value-indicator line previously
+  // (e.g. ~15 patched-typescript descriptors concatenated into one ~2 KB key).
+  // The `:` value-indicator line previously
   // tokenised as an empty unquoted key → spurious `duplicate key:` collision.
   it('explicit ? key with block value', () => {
     expect(parse('? "long@key:with:colons"\n:\n  version: 1.2.3\n')).toEqual({

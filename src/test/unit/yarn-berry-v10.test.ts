@@ -191,8 +191,8 @@ describe('yarn-berry-v10 — enrich / optimize delegate to family core', () => {
   })
 })
 
-describe('yarn-berry-v10 — link: locator disambiguation parity with v9 (sister-session bug #2)', () => {
-  it('does NOT trip IRREDUCIBLE_LOSS on backstage-style link: + workspace: collision', () => {
+describe('yarn-berry-v10 — link: locator disambiguation parity with v9', () => {
+  it('does NOT trip IRREDUCIBLE_LOSS on a link: + workspace: collision', () => {
     const input =
       '__metadata:\n  version: 10\n  cacheKey: 10c0\n\n' +
       '"example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend":\n' +

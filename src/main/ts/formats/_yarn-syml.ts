@@ -142,7 +142,7 @@ function tokenize(input: string): Token[] {
     // YAML 1.2 §8.1.3 explicit block-mapping key. yarn's writer falls back
     // to the `? <key>` / `:` form when a (composite) descriptor key exceeds
     // an internal line-width threshold — e.g. ~15 patched-`typescript`
-    // descriptors concatenated into one ~2 KB key (highlight/highlight).
+    // descriptors concatenated into one ~2 KB key.
     // Normalise it here into the same block-key token the canonical
     // `"<key>":` form produces, so the parse loop is unchanged:
     //

@@ -171,8 +171,8 @@ export function parseFamily(
 
   // npm's `packages[""]` (the project root, a workspace node per ADR-0017)
   // legitimately omits `name` and/or `version` for private / unpublished
-  // roots — the dominant shape for apps and monorepo roots (e.g.
-  // create-react-app omits both; socket.io carries name but no version).
+  // roots — the dominant shape for apps and monorepo roots (some omit both;
+  // some carry a name but no version).
   // Synthesize the missing pieces rather than refusing to parse: name falls
   // back to npm's own root key `.`; version to the unpublished sentinel
   // `0.0.0` (cf. yarn-berry's `0.0.0-use.local`, ADR-0017). A diagnostic
@@ -203,8 +203,8 @@ export function parseFamily(
   // `resolved: <member-path>`) through which the rest of the tree references
   // a workspace member. They are the authoritative source of a member's
   // package name when the member's own `packages/<path>` entry omits it
-  // (private workspaces routinely do — e.g. socket.io's `packages/engine.io`
-  // carries a version but no name). Unlike the path's last segment, the link
+  // (private workspaces routinely do — a member's `packages/<dir>` entry can
+  // carry a version but no name). Unlike the path's last segment, the link
   // name handles scoped packages (`@scope/pkg` linked from a `packages/pkg`
   // dir). Build the path → link-name map up front.
   const linkNameByPath = new Map<string, string>()
@@ -275,8 +275,8 @@ export function parseFamily(
 
     // An uninstalled optional dependency: npm records a bare `{optional: true}`
     // placeholder (no version / resolved / integrity) for a platform-specific
-    // optional native it did not install on this platform — e.g.
-    // `node_modules/ssh2/node_modules/cpu-features` in vscode's lock. There is
+    // optional native it did not install on this platform — e.g. a nested
+    // `node_modules/<pkg>/node_modules/<native-addon>` placeholder. There is
     // no resolved instance to model, so skip it; the consumer's
     // `optionalDependencies` edge simply finds no target, which is valid for
     // an optional dep (emits a benign unresolved-dep warning at most).
@@ -512,8 +512,8 @@ export function stringifyFamily(
     packages[node.workspacePath!] = buildWorkspaceMemberEntry(graph, node, sidecar, emitDiagnostic)
     // WS-LINK (ADR-0027 §4): emit the top-level node_modules/<name> symlink for a
     // workspace member UNLESS it is `extraneous` — npm omits the link for a member
-    // present on disk but absent from the install graph (e.g. socket.io's
-    // `@socket.io/clustered-engine`: would be 13 links emitted vs npm's 12). The
+    // present on disk but absent from the install graph (an extraneous member would
+    // otherwise emit one extra top-level link beyond npm's set). The
     // flag is captured layout attribution, replayed here. A cross-PM / post-mutate
     // graph carries no sidecar, so the default (no flag ⇒ linked) links every
     // member — matching the prior unconditional behaviour for the generate path.
@@ -1044,16 +1044,16 @@ function deriveInstallPathsForStringify(
   // pnpm, bun-text) carries no sidecar install paths; without this
   // ordering, the fallback assigned `node_modules/<name>` by node-ID sort
   // and any root-direct edge to a non-lexicographically-first version then
-  // collided at root (e.g. qiwi-uniconfig `lcov-parse@0.0.10` vs
-  // `lcov-parse@1.0.0`). Node-flat sources (npm-2 / npm-3) carry sidecar
+  // collided at root (e.g. a root-direct `pkg@0.0.10` vs a deeper
+  // `pkg@1.0.0`). Node-flat sources (npm-2 / npm-3) carry sidecar
   // install paths that have already filled every position above, so this
   // BFS is a no-op for them.
   // ADR-0026 replay vs generate. When every resolved node carries a
   // parse-captured install path (an un-mutated same-PM npm round-trip), the
   // seeded placement IS npm's own authoritative, valid, collision-free tree —
   // SKIP the re-hoisting BFS entirely. The BFS re-derives synthetic nested
-  // paths and can route two versions onto one (`IRREDUCIBLE_LOSS` / #10, e.g.
-  // microsoft-vscode's `…/minimatch/node_modules/brace-expansion`) even though
+  // paths and can route two versions onto one (`IRREDUCIBLE_LOSS`, e.g. two
+  // versions of a deep-nested `…/<pkg>/node_modules/<dep>`) even though
   // the captured tree is sound. Otherwise — cross-PM input or a post-`mutate`
   // graph (no sidecar, or partial capture) — GENERATE the placement via the BFS
   // + lexicographic fallback.

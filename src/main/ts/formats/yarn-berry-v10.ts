@@ -12,8 +12,7 @@ import {
 } from './_yarn-berry-core.ts'
 
 // `__metadata.version: 10` — yarn 5 dev-branch / yarnpkg-berry master.
-// Spotted in canary on yarnpkg/berry's own repo + prettier's; bumped in
-// `Project.ts` (LOCKFILE_VERSION constant) ahead of yarn 5 GA. Structural
+// Bumped in `Project.ts` (LOCKFILE_VERSION constant) ahead of yarn 5 GA. Structural
 // body is identical to v9 at the time of this adapter's introduction —
 // the bump is mechanical (`version: N` field only). Family config tracks
 // v9 verbatim: `quoted-protocol` range emit, `cachekey-prefixed` checksum,

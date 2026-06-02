@@ -130,14 +130,11 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
     }
   }
 
-  // Real-world v9 locks that round-trip with ZERO INV-RESOLVE violations.
-  // vuejs-core is the canonical clean large lock; vitejs-vite exercises
-  // npm-aliased `file:` deps (the alias-on-emit fix). directus + supabase carry
-  // nested-peer-suffix consumers (#70 — `@vitejs/plugin-vue`,
-  // `@react-router/fs-routes`); angular + nrwl-nx carry bare-hex hashed-peer-set
-  // consumers (#69/ADR-0030 — `@angular/build@22.0.0-rc.2(<hex>)`). Both
-  // truncated-peer-context-identity classes are now fixed, so every distinct
-  // virtual-store instance stays a distinct NodeId and all six are clean.
+  // Real-world v9 locks that round-trip with ZERO INV-RESOLVE violations. The
+  // corpus spans clean large locks, npm-aliased `file:` deps (the alias-on-emit
+  // fix), nested-peer-suffix consumers (#70), and bare-hex hashed-peer-set
+  // consumers (#69/ADR-0030). Both truncated-peer-context-identity classes are
+  // fixed, so every distinct virtual-store instance stays a distinct NodeId.
   for (const dir of [
     'vuejs-core-main-86ad076',
     'vitejs-vite-main-646dbed',
@@ -155,18 +152,18 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
 
   // #69/ADR-0030 — pnpm-v9 BARE-HEX "hashed peer-set token". When a resolved
   // peer-set grows long, pnpm abbreviates the whole `(peerA@v)…` suffix into one
-  // bare-hex digest (e.g. `@angular/build@22.0.0-rc.2(53b8fd9b…)`). Pre-fix the
-  // parser mis-read the bare hex as a patch hash and DROPPED it, collapsing two
+  // bare-hex digest (e.g. `name@version(<bare-hex>)`). Pre-fix the parser
+  // mis-read the bare hex as a patch hash and DROPPED it, collapsing two
   // virtual-store instances of one `name@version` (forking on a transitive peer
-  // like `@types/node`) onto one NodeId whose divergent dep edges then collided
-  // → LAYOUT_RESOLVE_VIOLATION. ADR-0030 keeps the token as an opaque,
+  // such as a typings package) onto one NodeId whose divergent dep edges then
+  // collided → LAYOUT_RESOLVE_VIOLATION. ADR-0030 keeps the token as an opaque,
   // non-edge-bearing peerContext discriminator so the instances stay distinct
-  // (angular is asserted fully clean in the zero-violation set above).
-  it('#69: angular `@angular/build` bare-hex instances stay distinct + round-trip (ADR-0030)', () => {
+  // (the lock under test is asserted fully clean in the zero-violation set).
+  it('#69: bare-hex hashed-peer-set instances stay distinct + round-trip (ADR-0030)', () => {
     const lock = readFileSync(resolve(realWorld, 'angular-angular-main-45e8fb5/pnpm-lock.yaml'), 'utf8')
     const graph = parse('pnpm-v9', lock)
-    // The two bare-hex `@angular/build@22.0.0-rc.2` snapshot keys are now two
-    // distinct nodes, each carrying its hash token in peerContext; the bare
+    // A package whose two bare-hex snapshot keys differ only by the hash is now
+    // two distinct nodes, each carrying its hash token in peerContext; the bare
     // collapsed node is gone.
     const builds = Array.from(graph.nodes()).filter(nn => nn.name === '@angular/build' && nn.version === '22.0.0-rc.2')
     expect(builds.length).toBe(2)
@@ -185,19 +182,18 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
 
 // #70 — nested-peer-suffix preservation. A consumer that pnpm peer-virtualises
 // against the SAME peer at two DIFFERENT transitive (peer-of-a-peer)
-// resolutions gets two distinct virtual-store keys differing only in the
-// peer's OWN nested `(...)` suffix (the directus `@vitejs/plugin-vue` shape:
-// `@vitejs/plugin-vue@6.0.1(vite@8.0.8(…esbuild@0.26.0…))` vs the
-// `esbuild@0.27.3` sibling). Pre-fix the parser FLATTENED the peer entry —
-// dropping the nested suffix — so both keys collapsed to one NodeId carrying
-// two dep edges to the same name (unrepresentable → LAYOUT_RESOLVE_VIOLATION,
-// and silent data loss on round-trip). The fix carries the nested suffix into
-// both the consumer's peerContext token and the peer edge target, keeping the
-// instances distinct.
+// resolutions gets two distinct virtual-store keys differing only in the peer's
+// OWN nested `(...)` suffix (shape:
+// `consumer@1.0.0(pkg-a@8.0.8(pkg-b@1.0.0))` vs the `pkg-b@2.0.0` sibling).
+// Pre-fix the parser FLATTENED the peer entry — dropping the nested suffix — so
+// both keys collapsed to one NodeId carrying two dep edges to the same name
+// (unrepresentable → LAYOUT_RESOLVE_VIOLATION, and silent data loss on
+// round-trip). The fix carries the nested suffix into both the consumer's
+// peerContext token and the peer edge target, keeping the instances distinct.
 describe('pnpm INV-RESOLVE — nested-peer-suffix preserved (#70)', () => {
-  // Minified synthetic v9, the directus `@vitejs/plugin-vue` shape: importer
-  // `.` pulls two virtual-store instances of `widget@1.0.0` that differ ONLY in
-  // the `esbuild` resolution nested under their shared `vite` peer.
+  // Minified synthetic v9 of the nested-peer-suffix shape: importer `.` pulls
+  // two virtual-store instances of `widget@1.0.0` that differ ONLY in a
+  // transitive peer's resolution nested under their shared direct peer.
   const sha = (c: string) => `sha512-${c.repeat(88)}`
   const NESTED_V9 = [
     `lockfileVersion: '9.0'`,

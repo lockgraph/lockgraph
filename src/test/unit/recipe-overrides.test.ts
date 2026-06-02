@@ -2,9 +2,10 @@
 //
 // Covers (a) each PM grammar rule in isolation (synthetic cases), (b) the
 // scoped-name + version-split edge, (c) RECIPE_OVERRIDE_NORMALISED emission,
-// and (d) real-manifest capture against the directus (pnpm, 22) / storybook
-// (yarn, 18) / vscode (npm, 5) fixture package.json files — asserting the
-// canonical entry count, representative entries, and verbatim `native.*`.
+// and (d) real-manifest capture against three real-world package.json blocks —
+// a pnpm `pnpm.overrides` (22), a yarn `resolutions` (18), and an npm
+// `overrides` (5) — asserting the canonical entry count, representative
+// entries, and verbatim `native.*`.
 
 import { describe, expect, it } from 'vitest'
 import {
@@ -17,11 +18,11 @@ import {
 import { recipeOverrideNormalised } from '../../main/ts/recipe/diagnostics.ts'
 import type { Diagnostic, OverrideConstraint } from '../../main/ts/graph.ts'
 
-// Real override blocks copied VERBATIM from the committed real-world fixture
+// Real override blocks copied VERBATIM from committed real-world fixture
 // package.json files (the load-bearing data those manifests carry):
-//   - directus/directus  main@4290f6e   `pnpm.overrides`     (22 entries)
-//   - storybookjs/storybook next@d6ce689 `resolutions`        (18 entries)
-//   - microsoft/vscode   main@ddd12d5   `overrides`          (5 entries)
+//   - a `pnpm.overrides` block   (22 entries)
+//   - a `resolutions` block      (18 entries)
+//   - an `overrides` block       (5 entries)
 // Inlined rather than file-read so this primitive's unit suite stays
 // self-contained and independent of the heavyweight real-world fixture
 // scan (which expects lockfiles, not bare package.json, in those dirs).
@@ -334,7 +335,7 @@ describe('recipe/overrides — degenerate inputs', () => {
 // === Real manifests =========================================================
 
 describe('recipe/overrides — real manifests', () => {
-  it('directus pnpm.overrides → 22 canonical entries + verbatim native', () => {
+  it('real-world pnpm.overrides → 22 canonical entries + verbatim native', () => {
     const block = DIRECTUS_PNPM_OVERRIDES
     const { canonical, native } = captureOverrides(block, 'pnpm')
 
@@ -366,7 +367,7 @@ describe('recipe/overrides — real manifests', () => {
     expect(native.pnpmOverrides).toEqual(block)
   })
 
-  it('storybook resolutions → 18 canonical entries + verbatim native', () => {
+  it('real-world resolutions → 18 canonical entries + verbatim native', () => {
     const block = STORYBOOK_RESOLUTIONS
     const { canonical, native } = captureOverrides(block, 'yarn')
 
@@ -400,7 +401,7 @@ describe('recipe/overrides — real manifests', () => {
     expect(native.yarnResolutions).toEqual(block)
   })
 
-  it('vscode overrides → 5 canonical entries + verbatim native', () => {
+  it('real-world overrides → 5 canonical entries + verbatim native', () => {
     const block = VSCODE_OVERRIDES
     const { canonical, native } = captureOverrides(block, 'npm')
 

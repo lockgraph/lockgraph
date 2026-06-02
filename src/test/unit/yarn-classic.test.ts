@@ -261,7 +261,7 @@ describe('yarn-classic — stringify', () => {
     expect(emitted).toContain('resolved "https://registry.yarnpkg.com/foo/-/foo-1.0.0.tgz"')
   })
 
-  // Real-world regression (commit 0775b26 / qiwi-mware blocker 2): yarn-berry
+  // Real-world regression: yarn-berry
   // collapses npm-aliased entries onto the dominant target name, so the entry-
   // key spec[0] name (e.g. `string-width-cjs`) disagrees with the `resolution:`
   // field's name (`string-width`). The pre-fix `peelYarnBerryLocator` rejected

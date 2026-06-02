@@ -63,7 +63,7 @@ function looksLikePatchLocator(raw: string | undefined): boolean {
 // qualifier disambiguates which workspace consumer "owns" the reference.
 // Two entries with identical name+version but different `::locator=...`
 // qualifiers are legitimately distinct (same physical directory referenced
-// from different consumers — backstage / babel / any multi-workspace
+// from different consumers in any multi-workspace
 // monorepo). Without disambiguation they collapse onto one NodeId and
 // trip IRREDUCIBLE_LOSS. We treat the locator+qualifier as a sentinel-
 // patch discriminator: the patch slot is the only NodeId-affecting carrier
@@ -188,8 +188,8 @@ export function parseFamily(
     // Authoritative name comes from the `resolution:` locator when present
     // (ADR-0014 §4.F3 — single canonical identity). Compound entry-keys can
     // sort an npm-alias spec ahead of the canonical spec lexically (e.g.
-    // `@babel/traverse--for-generate-function-map@npm:@babel/traverse@…,
-    //  @babel/traverse@npm:…`); keying off `first.name` mistakes the alias
+    // `@scope/pkg--variant@npm:@scope/pkg@…,
+    //  @scope/pkg@npm:…`); keying off `first.name` mistakes the alias
     // for the real package name. Falling back to `first.name` keeps legacy
     // single-spec / sentinel-version entries intact.
     const authoritativeName = resolution !== undefined
@@ -810,7 +810,7 @@ function parseSpec(raw: string): SpecPart {
   const colon = rest.indexOf(':')
   // Yarn 4 occasionally emits a bare `<name>@<version>` half in a compound
   // entry-key when a workspace package is also published to the npm registry
-  // (e.g. `"@qiwi/mware-context@1.14.1, @qiwi/mware-context@workspace:packages/context"`).
+  // (e.g. `"@scope/pkg@1.14.1, @scope/pkg@workspace:packages/pkg"`).
   // Per ADR-0016 §B `npm:` is the default protocol — synthesise it so the
   // grammar stays uniform downstream (matches `entryKeyRangeOf`).
   if (colon < 0) {
@@ -1525,8 +1525,8 @@ function addEdgesFromBlock(
       // The deps-block descriptor is bare (no qualifier), so reconstruct the
       // locator-qualified specIndex key from the source consumer's own
       // resolution. encodeURIComponent matches yarn's entry-key encoding
-      // (`@`->%40, `:`->%3A, `/`->%2F), e.g. `babel@workspace:.` ->
-      // `babel%40workspace%3A.`.
+      // (`@`->%40, `:`->%3A, `/`->%2F), e.g. `pkg@workspace:.` ->
+      // `pkg%40workspace%3A.`.
       const qualified = `${lookup}::locator=${encodeURIComponent(srcResolution)}`
       dstId = index.get(qualified)
     }
@@ -1545,8 +1545,8 @@ function addEdgesFromBlock(
     // node carries the target's name, and the alias lives only as the
     // descriptor key in the source manifest. Identity-aware so the seal
     // permits both the canonical and aliased edges from the same parent
-    // to the same dst (real-world: RN/Metro lockfiles declaring both
-    // `@babel/traverse` and `@babel/traverse--for-generate-function-map`
+    // to the same dst (e.g. a lockfile declaring both
+    // `@scope/pkg` and an npm-aliased `@scope/pkg--variant`
     // against the same target).
     const dstName = nameOf(dstId)
     const attrs: { range: string; alias?: string } = { range: normalizedRange }

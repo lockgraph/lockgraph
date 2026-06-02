@@ -51,7 +51,7 @@ describe('npm-3 — parse deltas', () => {
   it('skips an uninstalled optional-dependency placeholder ({optional:true}, no version) (#11)', () => {
     // npm records a bare `{optional:true}` entry for a platform-specific
     // optional native it did not install on this platform (real case:
-    // `node_modules/ssh2/node_modules/cpu-features` in vscode's lock). There
+    // a nested `node_modules/<pkg>/node_modules/<native-addon>` placeholder). There
     // is no resolved instance — parse must skip it, not throw "missing version".
     const input = JSON.stringify({
       name: 'x', version: '0.0.0', lockfileVersion: 3,

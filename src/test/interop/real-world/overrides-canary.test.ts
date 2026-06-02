@@ -5,16 +5,15 @@ import { fileURLToPath } from 'node:url'
 import { detect, overridesOf, parse, stringify } from '../../../main/ts/index.ts'
 import type { Manifest } from '../../../main/ts/graph.ts'
 
-// Real-world overrides canary (ADR-0025 A1/A2). Exercises overridesOf on the
-// actual published lockfiles + their package.json override blocks — the in-house
-// mirror of the sister yarn-audit-fix canary that surfaced bugs #1–#11.
+// Real-world overrides canary (ADR-0025 A1/A2). Exercises overridesOf on
+// actual published lockfiles + their package.json override blocks.
 //
 // Two findings this pinned: (1) real npm locks do NOT mirror root `overrides`
-// into `packages[""].overrides` (vscode/TS/socket.io carry them only in
+// into `packages[""].overrides` (real-world npm projects carry them only in
 // package.json), so A2 manifest-capture is the primary npm path — overridesOf is
 // fed the fixture's package.json via `manifests`. (2) re-stringifying some real
-// npm locks throws `IRREDUCIBLE_LOSS` from the install-path re-derive (Bug #10,
-// deferred to ADR-0026) — the round-trip below pins that as a known-deferred
+// npm locks throws `IRREDUCIBLE_LOSS` from the install-path re-derive (deferred
+// to ADR-0026) — the round-trip below pins that as a known-deferred
 // outcome rather than failing the overrides canary on an orthogonal bug.
 
 const here = dirname(fileURLToPath(import.meta.url))

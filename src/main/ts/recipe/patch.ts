@@ -27,7 +27,7 @@ const SENTINEL_RE       = /^unresolved-[0-9a-f]{64}$/
 // ADR-0030 — the pnpm-v9 "hashed peer-set token". When a resolved peer-set
 // grows long, pnpm abbreviates the whole `(peerA@v)(peerB@v)…` suffix into a
 // SINGLE bare-hex digest segment, e.g.
-// `@angular/build@22.0.0-rc.2(53b8fd9b7f33abb48dff18614cf85bde)`. This is the
+// `name@version(<bare-hex>)`. This is the
 // inverse half of the patch-token grammar (above): a `(...)` key-suffix segment
 // whose BARE body is pure lowercase hex of length ≥ 16, carries no `@` (so it
 // is not a `name@version` peer), and is NOT the labelled `patch_hash=…` patch

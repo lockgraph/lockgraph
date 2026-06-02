@@ -563,8 +563,8 @@ describe('yarn-berry-v9 — alias collision rejection (ADR-0010)', () => {
   })
 })
 
-describe('yarn-berry-v9 — link: / portal: locator disambiguation (sister-session canary bug #2)', () => {
-  // backstage / babel-style monorepo: workspace `example-app` is both
+describe('yarn-berry-v9 — link: / portal: locator disambiguation', () => {
+  // A monorepo where workspace `example-app` is both
   // defined as a workspace member AND referenced via `link:` from a
   // sibling workspace (`example-backend`). Yarn's `::locator=…` qualifier
   // disambiguates which consumer owns the link — without disambiguation
@@ -591,7 +591,7 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation (sister-sessi
     '  languageName: unknown\n' +
     '  linkType: soft\n'
 
-  it('does NOT trip IRREDUCIBLE_LOSS on backstage-style link: + workspace: collision', () => {
+  it('does NOT trip IRREDUCIBLE_LOSS on a link: + workspace: collision', () => {
     expect(() => parse(backstageInput)).not.toThrow()
   })
 
@@ -625,7 +625,7 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation (sister-sessi
     expect(linkNode.workspacePath).toBeUndefined()
   })
 
-  it('two distinct link: references to same workspace stay distinct (babel-style)', () => {
+  it('two distinct link: references to same workspace stay distinct', () => {
     // Multiple consumers (`pkg-a`, `pkg-b`) each carry their own `link:`
     // reference to the same physical workspace `shared`. The `::locator=…`
     // qualifier differs per consumer; both entries must survive parse.
@@ -679,8 +679,8 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation (sister-sessi
     // `::locator=<encoded consumer resolution>`. Edge resolution reconstructs
     // the qualified specIndex key from the consumer's own resolution
     // (encodeURIComponent), so the edge wires instead of dangling as an
-    // unresolved-dep warning (sister-session canary follow-up: babel/backstage
-    // link: edges previously emitted YARN_BERRY_UNRESOLVED_DEP).
+    // unresolved-dep warning (such link: edges previously emitted
+    // YARN_BERRY_UNRESOLVED_DEP).
     const input =
       '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
       '"example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend":\n' +

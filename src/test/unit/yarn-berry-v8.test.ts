@@ -116,7 +116,7 @@ describe('yarn-berry-v8 — parse fixtures', () => {
   })
 
   // Real-world regression: when a workspace package is also published to
-  // npm (e.g. qiwi/masker `@qiwi/masker-split` published as `1.6.8`),
+  // npm (e.g. `@scope/pkg` published as `1.6.8`),
   // yarn-berry may collapse the npm alias и workspace specs onto the same
   // entry. The compound entry-key lists `<n>@npm:<ver>` before
   // `<n>@workspace:<path>` lexically; the resolution stays
@@ -152,9 +152,8 @@ describe('yarn-berry-v8 — parse fixtures', () => {
     expect(graph.in('@scope/lib@0.0.0-use.local')).toHaveLength(1)
   })
 
-  // Real-world regression (sister-session canary, jest's yarn.lock — RN/Metro
-  // family). `metro-source-map` declares BOTH the canonical `@babel/traverse`
-  // dep AND an npm-aliased `@babel/traverse--for-generate-function-map`
+  // Real-world regression: a package declares BOTH a canonical dep AND an
+  // npm-aliased dep (a `--variant`-suffixed alias of the same package)
   // pointing at the SAME resolved target. Two edges from the same parent to
   // the same dst with the same kind used to trip the seal's
   // duplicate-`(src, dst, kind)` invariant; edge identity now includes
@@ -206,10 +205,10 @@ describe('yarn-berry-v8 — parse fixtures', () => {
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(graph))
   })
 
-  // Real-world regression (qiwi/mware fixture, commit 0775b26): yarn 4 emits
+  // Real-world regression: yarn 4 emits
   // a compound entry-key where one half is a bare `<name>@<version>` token
   // (no `<protocol>:` colon) when a workspace package is also published to
-  // the npm registry — `"@qiwi/mware-context@1.14.1, @qiwi/mware-context@workspace:packages/context"`.
+  // the npm registry — `"@scope/pkg@1.14.1, @scope/pkg@workspace:packages/pkg"`.
   // The shared `parseSpec` tokenizer previously threw `PARSE_FAILED` on the
   // bare half (`bad entry-spec, no protocol colon: <raw>`). The fix
   // synthesises `npm:` per ADR-0016 §B (matches `entryKeyRangeOf`'s default
