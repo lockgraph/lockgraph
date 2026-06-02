@@ -53,6 +53,10 @@
 "foo@^1.0.5", "foo@~1.0.5":
   version "1.0.7"
   ...
+
+"my-internal-rules@link:./scripts/eslint-rules":
+  version "0.0.0"
+  uid ""               # legacy/unknown scalar field — tolerated + round-tripped
 ```
 
 Keys = comma-separated dep specs that share the same resolved version.
@@ -100,6 +104,13 @@ collapse to `dep`.
   resolution happens by lookup elsewhere.
 - Yarn 1.10+ added `integrity`. Older lockfiles have only `resolved` with a
   `#sha1` fragment.
+- **Unknown scalar entry fields are tolerated and round-tripped verbatim.**
+  yarn 1 emits a legacy `uid ""` field on some `link:` / `file:` entries (e.g.
+  `facebook/react`). Rather than reject the lockfile, the parser captures any
+  unmodelled `  <field> <value>` entry line verbatim (sidecar, keyed by NodeId)
+  and re-emits it after the modelled fields, before `dependencies:`. One `info`
+  diagnostic `YARN_CLASSIC_UNKNOWN_FIELD` lists the field names encountered.
+  Forward-compatible with any future yarn-1 entry field.
 
 ## Degradation rules
 

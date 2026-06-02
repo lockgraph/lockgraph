@@ -560,10 +560,10 @@ function parseEntries(input: string): YarnClassicEntry[] {
     }
 
     // Unknown scalar entry field — e.g. yarn-1's legacy `uid ""` on link:/file:
-    // entries (real locks such as facebook/react carry it). A universal
-    // converter must not reject a valid lockfile over an unmodelled field:
-    // capture the line VERBATIM (sans the 2-space indent) for faithful
-    // round-trip. The parse surfaces one info diagnostic listing the names.
+    // entries. A universal converter must not reject a valid lockfile over an
+    // unmodelled field: capture the line VERBATIM (sans the 2-space indent) for
+    // faithful round-trip. The parse surfaces one info diagnostic listing the
+    // unmodelled field names.
     current.extras ??= []
     current.extras.push(line.slice(2))
     continue

@@ -87,6 +87,55 @@ Compared to v6:
   (package metadata vs peer-bound instance) — see
   [02-graph.md](../02-graph.md#node-identity).
 
+### Peer-virtualisation in snapshot keys (node identity)
+
+A peer-bound snapshot is keyed `name@version(peerA@v)(peerB@v)…`; the
+parenthesised peer-context is part of node identity. Two encodings of that
+suffix are load-bearing for faithful round-trip:
+
+- **Nested peer suffixes.** A peer in the suffix carries its OWN nested `(...)`
+  suffix, to the depth it was resolved at — e.g.
+  `@vitejs/plugin-vue@6.0.1(vite@8.0.8(esbuild@0.26.0))(vue@3.5.24)`. The nested
+  suffix is PRESERVED in the consumer's node id, so two consumer instances that
+  differ only in a transitive peer's resolution stay DISTINCT nodes. Dropping it
+  collapsed them onto one id and merged their divergent dep edges (unrepresentable
+  → see the verifier below). ADR-0030.
+- **Hashed peer-set tokens.** When the resolved peer set is long, pnpm
+  abbreviates the whole expanded list into a single bare-hex digest segment —
+  e.g. `@angular/build@22.0.0-rc.2(53b8fd9b7f33abb48dff18614cf85bde)`. This is
+  **not** a patch hash (patches use the labelled `(patch_hash=<sha256>)` form):
+  it is an OPAQUE, non-edge-bearing peer-context discriminator, kept verbatim in
+  node identity so distinct hashed instances stay distinct. The same
+  `name@version` may appear under several distinct hashes. ADR-0030.
+- Both collapse classes are guarded by an internal resolution verifier
+  (INV-RESOLVE, ADR-0029): every declared dep/dev/optional edge must resolve,
+  through the emitted adjacency, back to its target id — a miss surfaces as a
+  soft `LAYOUT_RESOLVE_VIOLATION` diagnostic (never a throw).
+
+### `catalog:` protocol (pnpm 9.5+)
+
+- A top-level `catalogs:` block (named catalogs of `name → { specifier }`) plus
+  `catalog:` / `catalog:<name>` importer specifiers. The `catalogs:` block is
+  preserved **verbatim** on round-trip — losing it orphans every `catalog:` ref
+  and yields a structurally-invalid lockfile. A handful of importer-EDGE
+  `catalog:` refs (dev-tooling) are a known partial round-trip gap (tracked).
+
+### Round-tripped package / snapshot fields
+
+Captured + re-emitted verbatim (each was previously dropped): `libc` and
+`deprecated` (`packages`); `transitivePeerDependencies` (`snapshots`);
+`peerDependenciesMeta` (`{ <peer>: { optional: true } }` — also mirrored onto the
+model's peer-edge `optional` attribute for bound peers, with a verbatim sidecar
+carrier for optional peers pnpm never resolved into an edge). `os` / `cpu` /
+`engines` / `hasBin` / `resolution.integrity` were already preserved.
+
+### npm aliases
+
+- A dependency installed under an alias (`react-is-cjs: "npm:react-is@^17"`) is
+  keyed in the importer / snapshot dependency block by its **alias**, valued with
+  the canonical `<real-name>@<version>(<peers>)`. Round-trips via the edge's
+  `alias` attribute.
+
 ## Degradation rules
 
 Same as [pnpm-v6](./pnpm-v6.md#degradation-rules).
