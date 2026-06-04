@@ -26,12 +26,9 @@ import {
   type SymlValue,
 } from './_yarn-syml.ts'
 import {
-  emitTranslation,
-  fromCanonical as integrityFromCanonical,
-  isCanonical as integrityIsCanonical,
-  toCanonical as integrityToCanonical,
-  tryDetectEncoding as integrityTryDetectEncoding,
-  type IntegrityEncoding,
+  parseBerryChecksum,
+  emitBerryChecksum,
+  isEmptyIntegrity,
 } from '../recipe/integrity.ts'
 import {
   parse as parseResolutionRecipe,
@@ -42,7 +39,7 @@ import {
   hashAndNormaliseBytes as patchHashAndNormaliseBytes,
   sentinelHashOfLocator,
 } from '../recipe/patch.ts'
-import { emitDropped, patchNormalisedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
 
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
 // (`parseSpec` throws PARSE_FAILED otherwise). Cross-family inputs
@@ -277,31 +274,21 @@ export function parseFamily(
     const payload: TarballPayload = {}
     const checksum = asString(value['checksum'])
     if (checksum !== undefined) {
-      // Berry parse reads external lockfile bytes; checksum must be sha512
-      // hex (pre-v8) or sha512 cacheKey-prefixed hex (v8/v9). Anything else
-      // — sha1, sha256, malformed — is rejected with a diagnostic and the
-      // integrity slot is left undefined per ADR-0014 §4.F1 (canonical =
-      // sha512-only). Mutated-graph stringify-side bypass lives downstream
-      // in `checksumOfPayload` and never crosses this path.
-      const source: IntegrityEncoding = config.checksumPrefix ? 'cachekey-prefixed' : 'hex'
-      if (integrityTryDetectEncoding(checksum) === source) {
-        const canonical = integrityToCanonical(checksum, source)
-        payload.integrity = canonical
-        if (canonical !== checksum) {
-          diagnostics.push({
-            code:     'RECIPE_INTEGRITY_TRANSLATED',
-            severity: 'info',
-            subject:  id,
-            message:  `integrity translated ${source} → sri`,
-          })
-        }
-      } else {
+      // Berry `checksum` is a digest of yarn's zip-cache — NOT the tarball:
+      // bare sha512 hex (pre-v8) or `<cacheKey>/<sha512-hex>` (v8/v9). It is
+      // parsed as a `berry-zip`-origin sha512 so it is never re-encoded into a
+      // tarball SRI on emit. sha1/sha256/malformed bodies yield no hash and are
+      // rejected with a diagnostic, leaving the integrity slot undefined.
+      const { integrity } = parseBerryChecksum(checksum)
+      if (isEmptyIntegrity(integrity)) {
         diagnostics.push({
           code:     `${config.codePrefix}_INVALID_INTEGRITY`,
           severity: 'warning',
           subject:  id,
-          message:  `checksum ${JSON.stringify(checksum)} is not a canonical sha512 ${source}; dropping integrity`,
+          message:  `checksum ${JSON.stringify(checksum)} is not a sha512 berry checksum; dropping integrity`,
         })
+      } else {
+        payload.integrity = integrity
       }
     }
     const binMap = asMap(value['bin'])
@@ -1167,16 +1154,22 @@ function checksumOfPayload(
   const integrity = payload?.integrity
   if (integrity === undefined) return undefined
 
-  const target: IntegrityEncoding = config.checksumPrefix ? 'cachekey-prefixed' : 'hex'
-  // Non-canonical Graph integrity (sentinel placeholders from mutated graphs)
-  // bypasses recipe translation and emits verbatim — recipe layer is strict.
-  if (!integrityIsCanonical(integrity)) return integrity
-  const effectiveCacheKey = target === 'cachekey-prefixed'
-    ? (cacheKey ?? DEFAULT_CACHEKEY_V8_V9)
-    : undefined
-  const out = integrityFromCanonical(integrity, target, { cacheKey: effectiveCacheKey })
-  if (out !== integrity) emitTranslation(nodeId, 'sri', target, emitDiagnostic)
-  return out
+  // Berry `checksum` is a digest of yarn's zip-cache. ONLY a `berry-zip`-origin
+  // sha512 may fill it; a tarball sha512 (npm/pnpm/bun/yarn-classic) is a
+  // different artefact and MUST NOT be re-encoded here (yarn rejects it on
+  // install). With no berry-zip digest the checksum line is OMITTED and
+  // RECIPE_INTEGRITY_INCOMPLETE is emitted; yarn recomputes the digest on install.
+  const hex = emitBerryChecksum(integrity)
+  if (hex === undefined) {
+    emitIntegrityIncomplete(
+      nodeId,
+      config.codePrefix,
+      'source carries no yarn zip-cache (berry-zip) digest',
+      emitDiagnostic,
+    )
+    return undefined
+  }
+  return config.checksumPrefix ? `${cacheKey ?? DEFAULT_CACHEKEY_V8_V9}/${hex}` : hex
 }
 
 function extraBlockOfNode(node: Node, field: string): SymlMap | undefined {

@@ -11,6 +11,7 @@ import {
   type Graph,
   type NodeId,
 } from '../../main/ts/graph.ts'
+import { mkIntegrity } from '../_integrity-fixtures.ts'
 
 export function graphOf(build: (builder: Builder) => void): Graph {
   const builder = newBuilder()
@@ -62,7 +63,7 @@ export function addPackage(builder: Builder, opts: AddPackageOpts): NodeId {
     builder.setTarball(
       { name: opts.name, version: opts.version, patch: opts.patch },
       {
-        integrity:           opts.integrity,
+        integrity:           opts.integrity === undefined ? undefined : mkIntegrity(opts.integrity),
         engines:             opts.engines,
         os:                  opts.os,
         cpu:                 opts.cpu,

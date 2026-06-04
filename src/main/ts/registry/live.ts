@@ -19,6 +19,7 @@
 // `fetch` override is supplied AND the consumer triggers a method.
 
 import semver from 'semver'
+import { parseSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 
 export interface LiveRegistryOptions {
@@ -113,7 +114,10 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
     name:    typeof raw?.name === 'string' ? raw.name : name,
     version: typeof raw?.version === 'string' ? raw.version : version,
   }
-  if (typeof dist.integrity === 'string') out.integrity = dist.integrity
+  if (typeof dist.integrity === 'string') {
+    const integrity = parseSri(dist.integrity, 'registry')
+    if (!isEmptyIntegrity(integrity)) out.integrity = integrity
+  }
   if (typeof dist.tarball   === 'string') out.tarball   = dist.tarball
   if (isStringMap(raw?.dependencies))         out.dependencies         = { ...raw.dependencies }
   if (isStringMap(raw?.devDependencies))      out.devDependencies      = { ...raw.devDependencies }

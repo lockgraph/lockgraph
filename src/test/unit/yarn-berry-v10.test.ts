@@ -14,6 +14,7 @@ import {
 import { check as checkV9, parse as parseV9, stringify as stringifyV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
 import { check as checkV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { detect } from '../../main/ts/index.ts'
+import { mkIntegrity } from '../_integrity-fixtures.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -182,7 +183,7 @@ describe('yarn-berry-v10 — enrich / optimize delegate to family core', () => {
         resolution: 'orphan@npm:9.9.9',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'orphan' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('orphan') })
     }).graph
 
     const result = optimizeV10(withOrphan)
@@ -213,16 +214,15 @@ describe('yarn-berry-v10 — link: locator disambiguation parity with v9', () =>
 })
 
 describe('yarn-berry-v10 — stringify emits onDiagnostic callback contract', () => {
-  it('relays onDiagnostic to the supplied callback (same shape as v9)', () => {
+  it('relays onDiagnostic to the supplied callback (clean berry round-trip is silent)', () => {
     const graph = parseV10(synthesiseFromV9('simple'))
     const diagnostics: Diagnostic[] = []
-    stringifyV10(graph, { onDiagnostic: d => diagnostics.push(d) })
-    // The simple fixture emits RECIPE_INTEGRITY_TRANSLATED (sri → cachekey-
-    // prefixed) per the standard v8/v9/v10 checksum-prefix recipe — verify
-    // the callback delivers each diagnostic produced by the family core.
-    // Codes are family-shared (recipe-layer), not codePrefix-scoped.
-    expect(diagnostics.length).toBeGreaterThan(0)
-    expect(diagnostics.every(d => d.code === 'RECIPE_INTEGRITY_TRANSLATED')).toBe(true)
+    // ADR-0031 removed the sri→cachekey "integrity translated" emit: a berry
+    // checksum is a `berry-zip` digest carried verbatim across berry versions,
+    // so a clean berry→berry round-trip produces NO integrity diagnostic. Verify
+    // the callback is wired (no throw) and that the dead code never fires.
+    expect(() => stringifyV10(graph, { onDiagnostic: d => diagnostics.push(d) })).not.toThrow()
+    expect(diagnostics.some(d => d.code === 'RECIPE_INTEGRITY_TRANSLATED')).toBe(false)
   })
 
   it('parity check: v9 and v10 emit equivalent stringify diagnostics on the same content', () => {

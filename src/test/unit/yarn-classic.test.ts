@@ -16,6 +16,8 @@ import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-b
 import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseResolution } from '../../main/ts/recipe/resolution.ts'
 import { toTarballKey } from '../../main/ts/graph.ts'
+import { mkIntegrity, sri } from '../_integrity-fixtures.ts'
+import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -230,7 +232,7 @@ describe('yarn-classic — stringify', () => {
       peerContext: [],
     })
     b.setTarball({ name: 'foo', version: '1.0.0' }, {
-      integrity: 'sha512-deadbeef',
+      integrity: sri(sriOf('deadbeef')),
       resolution: { type: 'unknown', raw: 'foo@patch:foo@npm%3A1.0.0#./.yarn/patches/foo.patch::version=1.0.0' },
     })
     const graph = b.seal()
@@ -239,7 +241,7 @@ describe('yarn-classic — stringify', () => {
 
     expect(emitted).not.toContain('resolved "foo@patch:')
     expect(emitted).toContain('foo@1.0.0:')
-    expect(emitted).toContain('integrity sha512-deadbeef')
+    expect(emitted).toContain(`integrity ${sriOf('deadbeef')}`)
   })
 
   it('emits `resolved "<url>"` when canonical is tarball URL', () => {
@@ -251,7 +253,7 @@ describe('yarn-classic — stringify', () => {
       peerContext: [],
     })
     b.setTarball({ name: 'foo', version: '1.0.0' }, {
-      integrity: 'sha512-deadbeef',
+      integrity: sri(sriOf('deadbeef')),
       resolution: { type: 'tarball', url: 'https://registry.yarnpkg.com/foo/-/foo-1.0.0.tgz' },
     })
     const graph = b.seal()
@@ -376,13 +378,13 @@ describe('yarn-classic — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: sri(MODIFIED_SRI) })
     })
     const reparsed = parse(stringify(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
-    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
+    expect(canonicalDigest(reparsed.tarballOf('ms@2.1.3')!.integrity!)).toBe(MODIFIED_SRI)
     expect(result.applied).toEqual([
       { kind: 'tarball-set', subject: 'ms@2.1.3' },
     ])
@@ -469,11 +471,11 @@ describe('yarn-classic — modify', () => {
         ...current!,
         patch,
       })
-      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: sri(sriOf('patched-ms-integrity')) })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
     })
     const flattened = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: 'sha512-patched-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: sri(sriOf('patched-ms-integrity')) })
     }).graph
     const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
     const reparsed = parse(lockfile)
@@ -513,7 +515,7 @@ describe('yarn-classic — modify', () => {
         peerContext: [],
         resolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000',
       })
-      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: 'sha512-bare' })
+      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: sri(sriOf('typescript-bare')) })
       m.addNode({
         id: patchedId,
         name: 'typescript',
@@ -522,7 +524,7 @@ describe('yarn-classic — modify', () => {
         patch,
         resolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000',
       })
-      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: 'sha512-patched' })
+      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: sri(sriOf('typescript-patched')) })
     })
 
     const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
@@ -648,7 +650,7 @@ describe('yarn-classic — optimize', () => {
         resolution: 'https://registry.yarnpkg.com/orphan/-/orphan-9.9.9.tgz#0000000000000000000000000000000000000000',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'sha512-orphan' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('sha512-orphan') })
     }).graph
   }
 
@@ -671,8 +673,8 @@ describe('yarn-classic — optimize', () => {
       })
       m.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: '1.0.0' })
       m.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: '1.0.0' })
-      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: 'sha512-cycle-a' })
-      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: 'sha512-cycle-b' })
+      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-a') })
+      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-b') })
     }).graph
   }
 

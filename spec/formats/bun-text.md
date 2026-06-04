@@ -91,6 +91,9 @@ Each `packages[name]` entry is a positional array — bun-specific encoding.
 - The empty-string workspace key (`""`) is the root project.
 - `trustedDependencies` controls postinstall execution — load-bearing for
   reproduces, even though it's not strictly resolution data.
+- Integrity (positional slot 2) is preserved as a multi-hash multiset — `sha1`,
+  `sha256`, `sha384`, `sha512`, and every member of a space-joined SRI — not
+  collapsed to sha512-only.
 
 ## Degradation rules
 

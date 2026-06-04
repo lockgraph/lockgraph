@@ -10,15 +10,15 @@
 import type { Diagnostic, EdgeTriple, Graph, NodeId } from '../graph.ts'
 
 /**
- * F1 SRI parse-side diagnostic factory — emitted when external integrity
- * input fails canonical sha512 SRI validation per ADR-0014 §4.F1. The
- * `prefix` becomes `<prefix>_INVALID_INTEGRITY` (per-adapter code retained
- * for debugging; subjects vary по nodeId shape across adapters так
- * `subject` is the bare string). Shape fixed: single canonical message
- * across npm-2/3, pnpm-v5/v6/v9 (v5 via _pnpm-flat-core.tarballPayloadOf
- * shared helper), bun-text, yarn-classic. yarn-berry threads
- * the source encoding token (`sri` / `legacy-base64-sha1` / …) in its
- * message instead and keeps its bespoke emit at parse time.
+ * F1 integrity parse-side diagnostic factory — emitted when present integrity
+ * input yields NO parseable hash (ADR-0031). Every recognised algorithm is now
+ * preserved verbatim (sha1, sha256, sha384, sha512, and each member of a
+ * multi-hash SRI), so this fires only for genuinely malformed input: a body
+ * that is not an SRI member of a known shape, nor a valid yarn-berry checksum.
+ * The `prefix` becomes `<prefix>_INVALID_INTEGRITY` (per-adapter code retained
+ * for debugging; `subject` is the bare nodeId string). Shape fixed across
+ * npm-2/3, pnpm-v5/v6/v9, bun-text, yarn-classic; yarn-berry keeps its bespoke
+ * emit at parse time.
  */
 export function invalidIntegrityDiagnostic(
   prefix:        string,
@@ -29,8 +29,40 @@ export function invalidIntegrityDiagnostic(
     code:     `${prefix}_INVALID_INTEGRITY`,
     severity: 'warning',
     subject,
-    message:  `integrity ${JSON.stringify(rawIntegrity)} is not a canonical sha512 SRI; dropping`,
+    message:  `integrity ${JSON.stringify(rawIntegrity)} has no parseable hash; dropping`,
   }
+}
+
+/**
+ * Emit `RECIPE_INTEGRITY_INCOMPLETE` (warning, ADR-0031 §Decision.3) — fired on
+ * emit when the source carries integrity but the target format cannot represent
+ * any of its origin classes, so the field is OMITTED rather than fabricated.
+ * The canonical case crosses the tarball/zip boundary: npm/pnpm/bun/yarn-classic
+ * → yarn-berry (a tarball sha512 is not a berry zip-cache checksum) or
+ * yarn-berry → an SRI field (a `berry-zip` digest is not an SRI). The target PM
+ * re-computes the digest on install; the deferred Phase-2 fetch fills it offline.
+ */
+export function recipeIntegrityIncomplete(
+  nodeId: NodeId,
+  target: string,
+  reason: string,
+): Diagnostic {
+  return {
+    code:     'RECIPE_INTEGRITY_INCOMPLETE',
+    severity: 'warning',
+    subject:  nodeId,
+    message:  `integrity omitted on ${target} emit: ${reason}`,
+  }
+}
+
+export function emitIntegrityIncomplete(
+  nodeId:        NodeId,
+  target:        string,
+  reason:        string,
+  onDiagnostic?: (d: Diagnostic) => void,
+): void {
+  if (onDiagnostic === undefined) return
+  onDiagnostic(recipeIntegrityIncomplete(nodeId, target, reason))
 }
 
 /**

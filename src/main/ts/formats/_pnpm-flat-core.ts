@@ -59,7 +59,7 @@ import {
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
-import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   parse as parseResolutionRecipe,
   stringifyForPnpm,
@@ -1752,11 +1752,11 @@ export function tarballPayloadOf(
   const payload: TarballPayload = {}
   const resolution = entry.resolution
   if (isPlainObject(resolution) && typeof resolution.integrity === 'string') {
-    const canonical = integrityValidateCanonical(resolution.integrity)
-    if (canonical === undefined) {
+    const integrity = parseSri(resolution.integrity, 'sri')
+    if (isEmptyIntegrity(integrity)) {
       diagnostics.push(invalidIntegrityDiagnostic('PNPM', subject, resolution.integrity))
     } else {
-      payload.integrity = canonical
+      payload.integrity = integrity
     }
   }
   // ADR-0014 §4.F3 — canonical resolution from pnpm `resolution:` block.
@@ -2005,7 +2005,10 @@ function buildPackageEntry(
     && isNpmRegistryDefault(tarball.resolution.url, representative.name, representative.version)
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
-    if (tarball.integrity !== undefined) resolution.integrity = tarball.integrity
+    if (tarball.integrity !== undefined) {
+      const sri = emitSri(tarball.integrity)
+      if (sri !== undefined) resolution.integrity = sri
+    }
     if (nativeIsPnpmUrl) resolution.tarball = representative.resolution!
     else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory

@@ -138,7 +138,12 @@ carrier for optional peers pnpm never resolved into an edge). `os` / `cpu` /
 
 ## Degradation rules
 
-Same as [pnpm-v6](./pnpm-v6.md#degradation-rules).
+Same as [pnpm-v6](./pnpm-v6.md#degradation-rules). Multi-hash SRIs round-trip
+verbatim within the SRI family. Note: pnpm identifies a registry tarball by its
+**integrity** (the default registry URL is implicit and omitted), so converting
+from a yarn-berry source — which carries only a zip-cache `checksum`, not a
+tarball SRI — omits integrity (`RECIPE_INTEGRITY_INCOMPLETE`) and leaves such
+entries without a resolution anchor until a registry fetch restores it.
 
 ## Fixtures
 

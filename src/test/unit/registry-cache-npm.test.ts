@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { npmCache } from '../../main/ts/index.ts'
+import { parseSri } from '../../main/ts/recipe/integrity.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -112,7 +113,7 @@ describe('registry/cache-npm — npmCache packument()', () => {
     expect(packument!.versions['4.17.21']).toEqual({
       name:      'lodash',
       version:   '4.17.21',
-      integrity: sri,
+      integrity: parseSri(sri, 'registry'),
     })
     expect(packument!.distTags).toEqual({})
   })
@@ -219,7 +220,7 @@ describe('registry/cache-npm — npmCache packument()', () => {
     const cache = npmCache({ cacheDir })
 
     const packument = await cache.packument('lodash')
-    expect(packument!.versions['4.17.21']!.integrity).toBe(fakeSri('lodash@4.17.21-new'))
+    expect(packument!.versions['4.17.21']!.integrity).toEqual(parseSri(fakeSri('lodash@4.17.21-new'), 'registry'))
   })
 
   it('does not bleed across packages with overlapping name prefixes', async () => {

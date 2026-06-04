@@ -9,6 +9,8 @@ import { LockfileError } from '../../main/ts/errors.ts'
 import { parse, stringify, check, enrich, optimize } from '../../main/ts/formats/yarn-berry-v9.ts'
 import { parse as parsePnpmV9 } from '../../main/ts/formats/pnpm-v9.ts'
 import { sentinelHashOfLocator } from '../../main/ts/recipe/patch.ts'
+import { mkIntegrity } from '../_integrity-fixtures.ts'
+import { parseBerryChecksum, pickAlgorithm } from '../../main/ts/recipe/integrity.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -139,8 +141,8 @@ describe('yarn-berry-v9 — simple fixture', () => {
 
   it('tarball entries carry canonical SRI integrity (ADR-0014 §4.F1)', () => {
     const lodash = g.tarball({ name: 'lodash', version: '4.17.21' })
-    expect(lodash?.integrity).toMatch(/^sha512-/)
-    expect(g.tarball({ name: 'ms', version: '2.1.3' })?.integrity).toMatch(/^sha512-/)
+    expect(pickAlgorithm(lodash!.integrity!, 'sha512')).toBeDefined()
+    expect(pickAlgorithm(g.tarball({ name: 'ms', version: '2.1.3' })!.integrity!, 'sha512')).toBeDefined()
   })
 
   it('workspace nodes have no tarball entry (no artifact)', () => {
@@ -253,8 +255,8 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const nodeId = patchedNodeId('lodash', '4.17.21', expectedPatch)
 
     expect(g.getNode(nodeId)?.patch).toBe(expectedPatch)
-    expect(g.tarballOf(nodeId)?.integrity).toMatch(/^sha512-/)
-    expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: expectedPatch })?.integrity).toMatch(/^sha512-/)
+    expect(pickAlgorithm(g.tarballOf(nodeId)!.integrity!, 'sha512')).toBeDefined()
+    expect(pickAlgorithm(g.tarball({ name: 'lodash', version: '4.17.21', patch: expectedPatch })!.integrity!, 'sha512')).toBeDefined()
     expect(g.tarball({ name: 'lodash', version: '4.17.21' })).toBeUndefined()
     expect([...g.tarballs()].map(([key]) => key)).toContain(`lodash@4.17.21+patch=${expectedPatch}`)
   })
@@ -278,8 +280,8 @@ describe('yarn-berry-v9 — patch extraction', () => {
       expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
         expect.objectContaining({ severity: 'warning', subject: nodeId }),
       ])
-      expect(g.tarballOf(nodeId)?.integrity).toMatch(/^sha512-/)
-      expect(g.tarball({ name: 'lodash', version: '4.17.21', patch: sentinel })?.integrity).toMatch(/^sha512-/)
+      expect(pickAlgorithm(g.tarballOf(nodeId)!.integrity!, 'sha512')).toBeDefined()
+      expect(pickAlgorithm(g.tarball({ name: 'lodash', version: '4.17.21', patch: sentinel })!.integrity!, 'sha512')).toBeDefined()
     } finally {
       rmSync(tempParent, { recursive: true, force: true })
     }
@@ -1437,9 +1439,10 @@ describe('yarn-berry-v9 — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
-    const MODIFIED_SRI = 'sha512-' + createHash('sha512').update('modified-ms-integrity').digest('base64')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
+      // yarn-berry `checksum` is a zip-cache (berry-zip) digest — ADR-0031
+      // only fills it from a berry-zip-origin hash, so set one here.
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: parseBerryChecksum(MODIFIED_HEX).integrity })
     })
     const emitted = stringify(result.graph)
     const reparsed = parse(emitted)
@@ -1447,7 +1450,7 @@ describe('yarn-berry-v9 — modify', () => {
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(emitted).toContain(`checksum: 10c0/${MODIFIED_HEX}`)
     // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
-    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toEqual(parseBerryChecksum(MODIFIED_HEX).integrity)
     expect(result.applied).toEqual([
       { kind: 'tarball-set', subject: 'ms@2.1.3' },
     ])
@@ -1807,7 +1810,7 @@ describe('yarn-berry-v9 — optimize', () => {
         resolution: 'orphan@npm:9.9.9',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: '10c0/orphan' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('10c0/orphan') })
     }).graph
   }
 

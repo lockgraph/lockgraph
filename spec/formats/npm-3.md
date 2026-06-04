@@ -69,6 +69,10 @@ Same as [npm-2](./npm-2.md#conversion-inputs).
 - npm 7 and 8 **cannot install** from a v3 lockfile; they ignore the lock and
   re-resolve. The converter must warn when emitting v3 if backward-install is
   important.
+- **Integrity is preserved as a multi-hash multiset.** Every algorithm and every
+  member of a space-joined SRI (`sha1-… sha512-…`) is kept verbatim — `sha1`,
+  `sha256`, `sha384`, `sha512` — not collapsed to sha512-only. The strongest
+  tarball digest is used for cross-format comparison.
 - Otherwise inherits all npm-2 quirks.
 
 ## Degradation rules

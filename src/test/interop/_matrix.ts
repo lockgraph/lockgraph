@@ -2942,7 +2942,7 @@ const CROSS_FAMILY_CLASSIC_OLDER_NPM_CONTRACTS: ConversionContract[] = OLDER_NPM
 // current core preserves unknown __metadata extras across the whole berry
 // family. The interop contracts therefore pin observed passthrough behavior
 // instead of the dispatch brief's v8/v9-only assumption.
-export const CONTRACTS: ConversionContract[] = [
+const RAW_CONTRACTS: ConversionContract[] = [
   ...BERRY_BERRY_CONTRACTS,
   ...BERRY_FORMATS.map(buildClassicToBerry),
   ...BERRY_FORMATS.map(buildBerryToClassic),
@@ -2971,3 +2971,23 @@ export const CONTRACTS: ConversionContract[] = [
   ...CROSS_FAMILY_BUN_OLDER_NPM_CONTRACTS,
   ...CROSS_FAMILY_CLASSIC_OLDER_NPM_CONTRACTS,
 ]
+
+// ADR-0031 — integrity is origin-scoped: a tarball SRI (npm / pnpm / bun /
+// yarn-classic) and a yarn-berry zip-cache `checksum` are digests of DIFFERENT
+// artefacts. A conversion that crosses the berry ↔ non-berry boundary cannot
+// carry the source's integrity offline — it is omitted + a
+// `RECIPE_INTEGRITY_INCOMPLETE` diagnostic, never fabricated — so `integrity` is
+// not a preserved feature on those cells. `tarballs` STAYS preserved: the
+// graphSubset payload deep-equal excludes integrity (`stripVolatile`), so it
+// keeps verifying engines/os/cpu/license/bin/bundledDeps fidelity across the
+// boundary. Within an origin class (berry ↔ berry, or among the SRI family)
+// integrity round-trips and stays preserved. Idempotent for cells that already
+// dropped integrity for another reason.
+const isBerryFormat = (f: FormatId): boolean => f.startsWith('yarn-berry')
+const crossesOriginClass = (a: FormatId, b: FormatId): boolean => isBerryFormat(a) !== isBerryFormat(b)
+
+export const CONTRACTS: ConversionContract[] = RAW_CONTRACTS.map(contract =>
+  crossesOriginClass(contract.from, contract.to)
+    ? { ...contract, preserved: contract.preserved.filter(f => f !== 'integrity') }
+    : contract,
+)

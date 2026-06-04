@@ -1,167 +1,224 @@
-// ADR-0014 §4.F1 — integrity canonical recipe.
+// ADR-0031 — integrity as a multi-hash carrier with origin tags
+// (amends ADR-0014 §4.F1).
 //
-// Canonical form on Graph: `sha512-<base64>` SRI (RFC 6920 / RFC 4648 §4),
-// exactly 64 bytes of digest. Per-PM encodings (yarn-berry hex / cacheKey-
-// prefixed hex) are translated at the adapter parse/stringify boundary; the
-// `cacheKey` prefix is yarn-berry sidecar attribution and never participates
-// in the canonical SRI. The primitive is canonical-strict: non-sha512 SRIs,
-// non-128-char hex, sentinel placeholders, and pad-bit-aliased base64 fail
-// validation. `isCanonical` enforces byte-exact base64 round-trip — two
-// shape-valid SRIs that decode to the same 64 bytes but disagree on pad-bit
-// trailing chars cannot both be canonical, so only the re-encoded form is.
-// Adapter call sites probe with `tryDetectEncoding` / `validateCanonical`
-// and pass non-canonical inputs verbatim (stringify side: mutated graphs)
-// or reject with adapter-specific diagnostic (parse side: external bytes).
+// Graph-canonical integrity is `Integrity { hashes: Hash[] }`: every algorithm
+// present on disk and every member of a space-joined SRI is preserved verbatim,
+// each digest tagged with its ORIGIN. `origin` distinguishes a TARBALL digest
+// (re-encodable into an SRI — `sri`/`registry`/`recomputed`/`url-fragment`) from
+// a `berry-zip` digest: Yarn Berry's `checksum` is a digest of its post-processed
+// zip-cache, NOT the tarball, so it is re-encodable only within the yarn family.
+//
+// Emit is origin-aware: a tarball digest is never written into a berry `checksum`,
+// and a `berry-zip` digest is never written into an SRI field. When no
+// compatible-origin digest exists the field is OMITTED (the adapter emits a soft
+// `RECIPE_INTEGRITY_INCOMPLETE`), never fabricated — a tarball sha512 re-encoded
+// into a berry `checksum` is a value real yarn rejects on install.
+//
+// Digests are stored as lowercase hex of the raw digest bytes; SRI base64 ↔ hex
+// translation happens only at the parse/emit boundary so every algorithm and
+// origin compares uniformly. Integrity is NOT part of NodeId / TarballKey
+// (ADR-0010/0011) — this carrier is `TarballPayload` data only.
 
-import { LockfileError } from '../errors.ts'
-import type { Diagnostic, NodeId } from '../graph.ts'
+export type HashOrigin =
+  | 'sri'          // member of an SRI field (npm / pnpm / bun / yarn-classic integrity). Tarball digest.
+  | 'berry-zip'    // Yarn Berry `checksum` — digest of the zip-cache, NOT the tarball.
+  | 'url-fragment' // yarn-classic `resolved#<sha1>` tarball sha1 (reserved; unwired in Phase 1).
+  | 'registry'     // fetched from registry metadata (`dist.integrity` / `dist.shasum`). Tarball digest.
+  | 'recomputed'   // recomputed from tarball bytes (Phase 2). Tarball digest.
 
-export type IntegrityEncoding =
-  | 'sri'                  // sha512-<base64>, canonical
-  | 'hex'                  // yarn-berry v4/v5/v6 raw 128-hex (sha512)
-  | 'cachekey-prefixed'    // yarn-berry v8/v9 `<cacheKey>/<128-hex>` (sha512)
-
-// 64-byte sha512 digest → base64 with `==` padding → 86 chars + 2 padding = 88.
-const CANONICAL_RE        = /^sha512-[A-Za-z0-9+/]{86}==$/
-const HEX_RE              = /^[0-9a-f]{128}$/
-const CACHEKEY_RE         = /^[^/\s]+\/[0-9a-f]{128}$/
-
-/**
- * True iff `s` is the canonical `sha512-<base64>` SRI form (ADR-0014 §4.F1).
- * Enforces byte-exact base64 round-trip: rejects pad-bit-aliased strings
- * (multiple shape-valid base64 encodings decode to the same 64 bytes;
- * only the strict re-encoding is canonical).
- */
-export function isCanonical(s: string): boolean {
-  if (!CANONICAL_RE.test(s)) return false
-  const b64 = s.slice('sha512-'.length)
-  const buf = Buffer.from(b64, 'base64')
-  if (buf.length !== 64) return false
-  return buf.toString('base64') === b64
+export interface Hash {
+  algorithm: string      // 'sha1' | 'sha256' | 'sha384' | 'sha512' | forward-compatible others
+  digest:    string      // lowercase hex of the raw digest bytes
+  origin:    HashOrigin
 }
 
-/**
- * Adapter-side validator: returns `raw` iff it is already canonical (per
- * `isCanonical`), `undefined` otherwise. Avoids exception-as-control-flow
- * at SRI-source adapter parse sites (npm / pnpm / bun / yarn-classic) —
- * caller emits an adapter-specific `*_INVALID_INTEGRITY` diagnostic on
- * `undefined` and leaves `TarballPayload.integrity` unset.
- */
-export function validateCanonical(raw: string): string | undefined {
-  return isCanonical(raw) ? raw : undefined
+export interface Integrity {
+  hashes: Hash[]         // verbatim multiset, source order preserved
 }
 
-/**
- * Strict shape probe. Returns the source encoding for canonical-translation-
- * eligible inputs; returns `undefined` for legacy sha1/sha256/sha384 SRIs,
- * non-128-char hex, sentinel placeholders, and any other shape the recipe
- * cannot canonicalise. Adapters bypass translation for `undefined` results.
- */
-export function tryDetectEncoding(raw: string): IntegrityEncoding | undefined {
-  if (isCanonical(raw))       return 'sri'
-  if (HEX_RE.test(raw))       return 'hex'
-  if (CACHEKEY_RE.test(raw))  return 'cachekey-prefixed'
-  return undefined
-}
-
-/** Strict variant of `tryDetectEncoding` — throws `INVALID_INPUT` on unrecognised shapes. */
-export function detectEncoding(raw: string): IntegrityEncoding {
-  const enc = tryDetectEncoding(raw)
-  if (enc !== undefined) return enc
-  throw new LockfileError({
-    code: 'INVALID_INPUT',
-    message: `integrity: unrecognised encoding for ${JSON.stringify(raw)}`,
-  })
-}
-
-/**
- * Translate a source-format encoding to the canonical `sha512-<base64>` SRI.
- * Throws `INVALID_INPUT` if `raw` does not strictly match the declared (or
- * auto-detected) `source` shape.
- */
-export function toCanonical(raw: string, source?: IntegrityEncoding): string {
-  const enc = source ?? detectEncoding(raw)
-  switch (enc) {
-    case 'sri':
-      if (!isCanonical(raw)) {
-        throw new LockfileError({
-          code:    'INVALID_INPUT',
-          message: `integrity: 'sri' source must be canonical sha512 SRI (got ${JSON.stringify(raw)})`,
-        })
-      }
-      return raw
-    case 'hex':
-      if (!HEX_RE.test(raw)) {
-        throw new LockfileError({
-          code:    'INVALID_INPUT',
-          message: `integrity: 'hex' source must be exactly 128 lowercase hex chars (got ${JSON.stringify(raw)})`,
-        })
-      }
-      return `sha512-${hexToBase64(raw)}`
-    case 'cachekey-prefixed':
-      if (!CACHEKEY_RE.test(raw)) {
-        throw new LockfileError({
-          code:    'INVALID_INPUT',
-          message: `integrity: 'cachekey-prefixed' source must match <cacheKey>/<128-hex> (got ${JSON.stringify(raw)})`,
-        })
-      }
-      return `sha512-${hexToBase64(raw.slice(raw.indexOf('/') + 1))}`
-  }
-}
-
-/**
- * Translate the canonical `sha512-<base64>` SRI to a target encoding.
- * `cacheKey` required for `target='cachekey-prefixed'`. Throws
- * `INVALID_INPUT` if `canonical` is not strict sha512 SRI.
- */
-export function fromCanonical(
-  canonical: string,
-  target: IntegrityEncoding,
-  options: { cacheKey?: string } = {},
-): string {
-  if (!isCanonical(canonical)) {
-    throw new LockfileError({
-      code:    'INVALID_INPUT',
-      message: `integrity: canonical must be sha512 SRI (got ${JSON.stringify(canonical)})`,
-    })
-  }
-  const b64 = canonical.slice('sha512-'.length)
-  switch (target) {
-    case 'sri':
-      return canonical
-    case 'hex':
-      return base64ToHex(b64)
-    case 'cachekey-prefixed':
-      if (options.cacheKey === undefined || options.cacheKey === '') {
-        throw new LockfileError({
-          code:    'INVALID_INPUT',
-          message: `integrity: target 'cachekey-prefixed' requires options.cacheKey`,
-        })
-      }
-      return `${options.cacheKey}/${base64ToHex(b64)}`
-  }
-}
-
-/** Emit RECIPE_INTEGRITY_TRANSLATED (info) per ADR-0014 §5 when `from !== to`. */
-export function emitTranslation(
-  nodeId: NodeId,
-  from: IntegrityEncoding,
-  to: IntegrityEncoding,
-  onDiagnostic?: (d: Diagnostic) => void,
-): void {
-  if (onDiagnostic === undefined || from === to) return
-  onDiagnostic({
-    code:     'RECIPE_INTEGRITY_TRANSLATED',
-    severity: 'info',
-    subject:  nodeId,
-    message:  `integrity translated ${from} → ${to}`,
-  })
-}
+// Known SRI algorithm → raw digest byte length. Unknown algorithms are accepted
+// verbatim (forward-compatible) and skip the length check.
+const SRI_ALGO_BYTES: Record<string, number> = { sha1: 20, sha256: 32, sha384: 48, sha512: 64 }
+// Strongest-first ordering for `canonicalDigest`. Unknown algorithms rank 0.
+const ALGO_STRENGTH:  Record<string, number> = { sha512: 4, sha384: 3, sha256: 2, sha1: 1 }
+// One `<algorithm>-<base64>` SRI member, with an optional `?<options>` suffix
+// (W3C SRI) stripped. Algorithm is lowercase-alnum; base64 is standard +/= .
+const SRI_MEMBER_RE = /^([a-z][a-z0-9]*)-([A-Za-z0-9+/]+={0,2})(?:\?.*)?$/
+const HEX128_RE     = /^[0-9a-f]{128}$/
 
 function hexToBase64(hex: string): string {
   return Buffer.from(hex, 'hex').toString('base64')
 }
 
-function base64ToHex(b64: string): string {
-  return Buffer.from(b64, 'base64').toString('hex')
+/** An empty carrier — no hashes known. */
+export function emptyIntegrity(): Integrity {
+  return { hashes: [] }
+}
+
+/** True iff the carrier holds no hashes. */
+export function isEmptyIntegrity(i: Integrity): boolean {
+  return i.hashes.length === 0
+}
+
+/**
+ * True iff `origin` denotes a TARBALL digest (re-encodable into an SRI). Every
+ * origin except `berry-zip` is tarball-scoped; `berry-zip` is the zip-cache
+ * digest and is re-encodable only within the yarn family.
+ */
+export function isTarballOrigin(origin: HashOrigin): boolean {
+  return origin !== 'berry-zip'
+}
+
+/** The subset of hashes whose origin is tarball-scoped (SRI-emittable). */
+export function tarballHashes(i: Integrity): Hash[] {
+  return i.hashes.filter(h => isTarballOrigin(h.origin))
+}
+
+/** First hash for `algorithm` (any origin), or `undefined`. */
+export function pickAlgorithm(i: Integrity, algorithm: string): Hash | undefined {
+  return i.hashes.find(h => h.algorithm === algorithm)
+}
+
+/** First tarball-origin sha512, or `undefined` — the preferred cross-family digest. */
+export function pickTarballSha512(i: Integrity): Hash | undefined {
+  return i.hashes.find(h => h.algorithm === 'sha512' && isTarballOrigin(h.origin))
+}
+
+/**
+ * Parse an SRI field — a single `<algo>-<base64>` or a space-joined multi-hash
+ * SRI — into an `Integrity`, preserving member order. `origin` defaults to
+ * `'sri'`; registry ingestion passes `'registry'`. Members whose base64 decodes
+ * to the wrong byte length for a KNOWN algorithm are skipped (malformed); an
+ * unknown algorithm is kept forward-compatibly only above a 16-byte plausibility
+ * floor, so a typo'd token (`foo-AAAA` → 3 bytes) does not survive as a bogus
+ * hash. An unparseable input yields an empty carrier — the caller decides
+ * whether to diagnose.
+ */
+export function parseSri(raw: string, origin: HashOrigin = 'sri'): Integrity {
+  const hashes: Hash[] = []
+  for (const member of raw.trim().split(/\s+/)) {
+    if (member === '') continue
+    const m = SRI_MEMBER_RE.exec(member)
+    if (!m) continue
+    const algorithm = m[1]!
+    const bytes     = Buffer.from(m[2]!, 'base64')
+    const expected  = SRI_ALGO_BYTES[algorithm]
+    if (expected !== undefined) {
+      if (bytes.length !== expected) continue   // known algorithm, wrong length → malformed
+    } else if (bytes.length < 16) {
+      continue                                  // unknown algorithm, implausibly short → typo'd garbage
+    }
+    hashes.push({ algorithm, digest: bytes.toString('hex'), origin })
+  }
+  return { hashes }
+}
+
+/**
+ * Emit an SRI field from the TARBALL-origin hashes, space-joined in source
+ * order. `berry-zip` hashes are excluded — a zip-cache digest is not a valid
+ * SRI. Returns `undefined` when no tarball-origin hash exists, signalling the
+ * adapter to OMIT the integrity field (never fabricate).
+ */
+export function emitSri(i: Integrity): string | undefined {
+  const members = tarballHashes(i).map(h => `${h.algorithm}-${hexToBase64(h.digest)}`)
+  return members.length > 0 ? members.join(' ') : undefined
+}
+
+/**
+ * Parse a Yarn Berry `checksum` value — `<cacheKey>/<128-hex>` (v8+) or a bare
+ * `<128-hex>` (v4–v6) — into `{ integrity, cacheKey }`. The digest is tagged
+ * `origin:'berry-zip'`. The `cacheKey` prefix is sidecar attribution returned
+ * separately (the adapter records it; it never enters an SRI). A non-128-hex
+ * body yields an empty carrier.
+ */
+export function parseBerryChecksum(raw: string): { integrity: Integrity; cacheKey?: string } {
+  const slash    = raw.indexOf('/')
+  const cacheKey = slash === -1 ? undefined : raw.slice(0, slash)
+  const hex      = slash === -1 ? raw       : raw.slice(slash + 1)
+  if (!HEX128_RE.test(hex)) return { integrity: { hashes: [] }, cacheKey }
+  return { integrity: { hashes: [{ algorithm: 'sha512', digest: hex, origin: 'berry-zip' }] }, cacheKey }
+}
+
+/**
+ * Emit a Yarn Berry `checksum` body (bare lowercase hex; the adapter prefixes
+ * any `cacheKey`) from the `berry-zip` sha512. Returns `undefined` when no
+ * `berry-zip` digest exists — e.g. converting from npm/pnpm, whose tarball
+ * sha512 is NOT a berry checksum — signalling the adapter to OMIT the checksum
+ * line (yarn re-computes it on install) rather than fabricate one yarn rejects.
+ */
+export function emitBerryChecksum(i: Integrity): string | undefined {
+  return i.hashes.find(h => h.algorithm === 'sha512' && h.origin === 'berry-zip')?.digest
+}
+
+/**
+ * Union of two carriers, de-duplicated by `(algorithm, origin, digest)`,
+ * preserving `a`-then-`b` source order. Used to fold registry-fetched hashes
+ * into a lock-parsed carrier without inventing or reordering digests.
+ */
+export function mergeIntegrity(a: Integrity, b: Integrity): Integrity {
+  const seen   = new Set<string>()
+  const hashes: Hash[] = []
+  for (const h of [...a.hashes, ...b.hashes]) {
+    const key = `${h.algorithm} ${h.origin} ${h.digest}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    hashes.push(h)
+  }
+  return { hashes }
+}
+
+/**
+ * The single best TARBALL digest as a canonical SRI string, for call sites that
+ * still want one integrity string (back-compat bridge and graph-level
+ * comparison). Prefers the strongest algorithm. Returns `undefined` when no
+ * tarball-origin digest exists (e.g. a yarn-berry node carrying only a
+ * `berry-zip` checksum) — that absence is the "needs fetch for a tarball
+ * digest" signal, not an error.
+ */
+export function canonicalDigest(i: Integrity): string | undefined {
+  const tb = tarballHashes(i)
+  if (tb.length === 0) return undefined
+  const best = tb.reduce((x, y) =>
+    (ALGO_STRENGTH[y.algorithm] ?? 0) > (ALGO_STRENGTH[x.algorithm] ?? 0) ? y : x)
+  return `${best.algorithm}-${hexToBase64(best.digest)}`
+}
+
+/**
+ * Strict integrity equivalence for the interop matrix. Two carriers are
+ * equivalent iff, within EACH origin class (tarball-scoped vs `berry-zip`),
+ * the per-algorithm digest multisets are IDENTICAL — same algorithms present,
+ * same digests. Strictness is deliberate: a lenient "agree on shared
+ * algorithms" check would read "B dropped every hash" as equivalent, masking
+ * exactly the loss this model exists to catch. Origin *provenance* within a
+ * class is ignored (a `sri` and a `registry` sha512 of the same tarball are
+ * equivalent); only the tarball-vs-zip split is load-bearing, so a fabricated
+ * berry checksum (a tarball sha512 mislabelled `berry-zip`) is NOT equivalent
+ * to the genuine tarball digest. Cross-family cells where the target cannot
+ * carry the source's origin class (e.g. npm→berry) are expected to be
+ * non-equivalent and are asserted via `RECIPE_INTEGRITY_INCOMPLETE`, not here.
+ */
+export function integrityEquivalent(a: Integrity, b: Integrity): boolean {
+  const project = (i: Integrity, keep: (h: Hash) => boolean): Map<string, Set<string>> => {
+    const m = new Map<string, Set<string>>()
+    for (const h of i.hashes) {
+      if (!keep(h)) continue
+      let set = m.get(h.algorithm)
+      if (set === undefined) { set = new Set(); m.set(h.algorithm, set) }
+      set.add(h.digest)
+    }
+    return m
+  }
+  const equalMaps = (x: Map<string, Set<string>>, y: Map<string, Set<string>>): boolean => {
+    if (x.size !== y.size) return false
+    for (const [algo, xs] of x) {
+      const ys = y.get(algo)
+      if (ys === undefined || xs.size !== ys.size) return false
+      for (const d of xs) if (!ys.has(d)) return false
+    }
+    return true
+  }
+  return (
+    equalMaps(project(a, h => isTarballOrigin(h.origin)), project(b, h => isTarballOrigin(h.origin))) &&
+    equalMaps(project(a, h => h.origin === 'berry-zip'),  project(b, h => h.origin === 'berry-zip'))
+  )
 }

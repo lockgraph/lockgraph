@@ -2,6 +2,7 @@
 // Public surface follows spec/bindings/ts.md#graph-types.
 
 import { LockfileError } from './errors.ts'
+import type { Integrity } from './recipe/integrity.ts'
 import type { ResolutionCanonical } from './recipe/resolution.ts'
 import type { WorkspaceRange } from './recipe/workspace.ts'
 
@@ -30,7 +31,12 @@ export interface Node {
 
 /** Cross-format artefact metadata, shared across peer-virt siblings. Per ADR-0010 + 11-enrich.md. */
 export interface TarballPayload {
-  integrity?:           string
+  // ADR-0031 — multi-hash carrier tagged by origin. `undefined` iff no hash is
+  // known (kept undefined-when-empty so presence checks stay a plain
+  // `!== undefined`). A tarball digest (`origin !== 'berry-zip'`) and a
+  // yarn-berry zip-cache digest (`origin === 'berry-zip'`) are NOT
+  // interchangeable; emit is origin-aware (see recipe/integrity.ts).
+  integrity?:           Integrity
   engines?:             Record<string, string>
   funding?:             unknown
   license?:             string

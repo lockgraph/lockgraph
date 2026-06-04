@@ -89,10 +89,18 @@ Inherits v8.
   evidence (yarn 4 → 6 introduced cacheKey, yarn 4 → 8 added
   `compressionLevel`) suggests v9 is likely paired with at least one
   structural change that needs probing.
+- **`checksum` is a digest of yarn's post-processed zip-cache, NOT the tarball
+  sha512.** Modelled internally as a `berry-zip`-origin hash, it is
+  interchangeable only within the yarn family (raw hex pre-v8, `<cacheKey>/<hex>`
+  v8+). A tarball SRI is never re-encoded into it, nor it into an SRI — they are
+  digests of different byte streams.
 
 ## Degradation rules
 
-Inherits v8.
+Inherits v8. Additionally: **converting from a non-yarn source** (npm / pnpm /
+bun / yarn-classic) cannot fill `checksum` offline — a tarball sha512 is not a
+zip-cache digest — so the line is **omitted** (never fabricated) and
+`RECIPE_INTEGRITY_INCOMPLETE` is emitted; yarn recomputes the digest on install.
 
 ## Fixtures
 

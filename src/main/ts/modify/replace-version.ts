@@ -23,6 +23,7 @@ import {
   type NodeId,
   type TarballPayload,
 } from '../graph.ts'
+import type { Integrity } from '../recipe/integrity.ts'
 import { isSentinelPatch } from '../recipe/patch.ts'
 import type { ModifyContext } from './context.ts'
 import {
@@ -215,7 +216,7 @@ function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind, alias?:
 }
 
 function makeTarballPayload(pv: {
-  integrity?:           string
+  integrity?:           Integrity
   engines?:             Record<string, string>
   os?:                  string[]
   cpu?:                 string[]

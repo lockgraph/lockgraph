@@ -10,6 +10,7 @@ import {
   type NodeId,
 } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
+import { mkIntegrity } from '../_integrity-fixtures.ts'
 
 const n = (id: NodeId, name: string, version: string, peers: NodeId[] = [], extra: Partial<Node> = {}): Node => ({
   id,
@@ -101,10 +102,10 @@ describe('Builder + seal', () => {
   it('builder setTarball populates Graph.tarballs', () => {
     const b = newBuilder()
     b.addNode(n('foo@1.0.0', 'foo', '1.0.0'))
-    b.setTarball({ name: 'foo', version: '1.0.0' }, { integrity: 'sha512-x', license: 'MIT' })
+    b.setTarball({ name: 'foo', version: '1.0.0' }, { integrity: mkIntegrity('sha512-x'), license: 'MIT' })
     const g = b.seal()
     expect(g.tarball({ name: 'foo', version: '1.0.0' })?.license).toBe('MIT')
-    expect(g.tarballOf('foo@1.0.0')?.integrity).toBe('sha512-x')
+    expect(g.tarballOf('foo@1.0.0')?.integrity).toEqual(mkIntegrity('sha512-x'))
     // virt-instances of same name@version share the tarball
     expect(g.tarballOf('foo@1.0.0')).toBe(g.tarball({ name: 'foo', version: '1.0.0' }))
   })
@@ -123,9 +124,9 @@ describe('Builder + seal', () => {
     const patch = 'a'.repeat(128)
     const b = newBuilder()
     b.addNode(n('foo@1.0.0', 'foo', '1.0.0', [], { patch }))
-    b.setTarball({ name: 'foo', version: '1.0.0', patch }, { integrity: 'sha512-x' })
+    b.setTarball({ name: 'foo', version: '1.0.0', patch }, { integrity: mkIntegrity('sha512-x') })
     const g = b.seal()
-    expect(g.tarballOf('foo@1.0.0')?.integrity).toBe('sha512-x')
+    expect(g.tarballOf('foo@1.0.0')?.integrity).toEqual(mkIntegrity('sha512-x'))
     expect(g.tarball({ name: 'foo', version: '1.0.0' })).toBeUndefined()
   })
 
@@ -571,10 +572,10 @@ describe('mutate', () => {
   it('setTarball / removeTarball update shared payload', () => {
     const g = seed()
     const { graph: g2 } = g.mutate(m => {
-      m.setTarball({ name: 'a', version: '1.0.0' }, { license: 'MIT', integrity: 'sha512-abc' })
+      m.setTarball({ name: 'a', version: '1.0.0' }, { license: 'MIT', integrity: mkIntegrity('sha512-abc') })
     })
     expect(g2.tarball({ name: 'a', version: '1.0.0' })?.license).toBe('MIT')
-    expect(g2.tarballOf('a@1.0.0')?.integrity).toBe('sha512-abc')
+    expect(g2.tarballOf('a@1.0.0')?.integrity).toEqual(mkIntegrity('sha512-abc'))
 
     const { graph: g3 } = g2.mutate(m => {
       m.removeTarball({ name: 'a', version: '1.0.0' })

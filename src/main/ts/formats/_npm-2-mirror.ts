@@ -31,6 +31,7 @@
 // block, so the two are consistent by construction.
 
 import { type Graph, type Node, type Diagnostic } from '../graph.ts'
+import { emitSri } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import {
   stringifyForNpm,
@@ -338,7 +339,8 @@ function buildLegacyNodeEntry(
   }
 
   if (tarball?.integrity !== undefined && entry.from === undefined) {
-    entry.integrity = tarball.integrity
+    const sri = emitSri(tarball.integrity)
+    if (sri !== undefined) entry.integrity = sri
   }
 
   const nodeSide = ctx.sidecar?.nodes.get(node.id)

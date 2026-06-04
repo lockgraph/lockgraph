@@ -1,11 +1,13 @@
 // Registry/cache adapter contracts for graph modification + tree completion.
 // Registry is a pure-read facade over packument facts; cache sits beneath it.
 
+import type { Integrity } from '../recipe/integrity.ts'
+
 export interface PackumentVersion {
   name:                 string
   version:              string
-  /** Canonical sha512 SRI per ADR-0014 §4.F1. Undefined for legacy entries. */
-  integrity?:           string
+  /** Multi-hash integrity carrier (ADR-0031). Undefined when no hash is known. */
+  integrity?:           Integrity
   /** Tarball URL at the registry origin when the source graph carried it. */
   tarball?:             string
   dependencies?:        Record<string, string>

@@ -50,6 +50,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
+import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -209,7 +210,10 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
         if (resolved !== undefined) node.resolution = resolved
         builder.addNode(node)
         const payload: TarballPayload = {}
-        if (entry.integrity !== undefined) payload.integrity = entry.integrity
+        if (entry.integrity !== undefined) {
+          const integrity = parseSri(entry.integrity, 'sri')
+          if (!isEmptyIntegrity(integrity)) payload.integrity = integrity
+        }
         // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL.
         if (resolved !== undefined) {
           const canonical = parseResolutionRecipe(resolved, { sourceKind: 'npm-resolved' })
@@ -858,7 +862,8 @@ function buildEntry(
     }
   }
   if (tarball?.integrity !== undefined && !/^(git[+:]|github:)/.test(entry.version ?? '')) {
-    entry.integrity = tarball.integrity
+    const sri = emitSri(tarball.integrity)
+    if (sri !== undefined) entry.integrity = sri
   }
   if (nodeSide?.dev === true) entry.dev = true
   if (nodeSide?.optional === true) entry.optional = true

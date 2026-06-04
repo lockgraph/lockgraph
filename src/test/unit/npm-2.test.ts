@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { LockfileError } from '../../main/ts/errors.ts'
+import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
 
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const PACKAGES_SRI = sriOf('PACKAGES_WINS')
@@ -184,7 +185,7 @@ describe('npm-2 — NPM_V2_DUAL_MODE_DRIFT diagnostics', () => {
     expect(graph.getNode('ms@2.1.3')).toBeDefined()
     expect(graph.getNode('ms@2.1.2')).toBeUndefined()
     const ms = graph.tarballOf('ms@2.1.3')
-    expect(ms?.integrity).toBe(PACKAGES_SRI)
+    expect(canonicalDigest(ms!.integrity!)).toBe(PACKAGES_SRI)
   })
 
   it('emits NPM_V2_DUAL_MODE_DRIFT for resolved / integrity disagreement', () => {

@@ -29,6 +29,9 @@ import {
   stringifyWithDiagnostics as sharedStringifyWithDiagnostics,
 } from '../helpers/lockfile-test-utils.ts'
 
+import { mkIntegrity, sri } from '../_integrity-fixtures.ts'
+import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
+
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const MODIFIED_SRI = sriOf('modified-ms-integrity')
 const BUMPED_SRI = sriOf('bumped-ms-integrity')
@@ -110,7 +113,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
           peerContext: [],
         })
         m.setTarball({ name: 'debug', version: '4.4.1' }, {
-          integrity: 'sha512-fakedebugintegrity',
+          integrity: mkIntegrity('sha512-fakedebugintegrity'),
         })
         m.addEdge('.@0.0.0', 'debug@4.4.1', 'dep', { range: '4.4.1' })
       })
@@ -149,14 +152,14 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
     it('roundtrips setTarball (integrity update)', () => {
       const original = parseFixtureGraph(spec, 'simple')
       const result = original.mutate(m => {
-        m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
+        m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: sri(MODIFIED_SRI) })
       })
       const reparsed = spec.adapter.parse(spec.adapter.stringify(result.graph))
       expectEmptyGraphDiff(result.graph.diff(reparsed))
       // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution
       // from the on-disk `resolution:` block (or by convention from
       // name@version when only `integrity:` is emitted).
-      expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
+      expect(canonicalDigest(reparsed.tarballOf('ms@2.1.3')!.integrity!)).toBe(MODIFIED_SRI)
     })
 
     it('roundtrips replaceNode (version bump)', () => {
@@ -165,7 +168,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
       const result = original.mutate(m => {
         m.removeEdge('.@0.0.0', 'ms@2.1.3', 'dep')
         m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
+        m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: sri(BUMPED_SRI) })
         m.removeTarball({ name: 'ms', version: '2.1.3' })
         m.addEdge('.@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
       })
@@ -193,7 +196,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
       const current = original.getNode('ms@2.1.3')!
       const result = original.mutate(m => {
         m.replaceNode('ms@2.1.3', { ...current, patch })
-        m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
+        m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: mkIntegrity('sha512-patched-ms-integrity') })
         m.removeTarball({ name: 'ms', version: '2.1.3' })
       })
       const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
@@ -206,7 +209,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
       const reactDom = original.getNode('react-dom@18.2.0(react@18.2.0)')!
       const result = original.mutate(m => {
         m.replaceNode('react-dom@18.2.0(react@18.2.0)', { ...reactDom, patch })
-        m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: 'sha512-y' })
+        m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: mkIntegrity('sha512-y') })
         m.removeTarball({ name: 'react-dom', version: '18.2.0' })
       })
       const { diagnostics } = stringifyWithDiagnostics(spec, result.graph)
@@ -276,7 +279,7 @@ export function describeOptimizeCommon(spec: PnpmCoreSuiteSpec): void {
           version: '1.0.0',
           peerContext: [],
         })
-        m.setTarball({ name: 'orphan', version: '1.0.0' }, { integrity: 'sha512-orphan' })
+        m.setTarball({ name: 'orphan', version: '1.0.0' }, { integrity: mkIntegrity('sha512-orphan') })
         m.addEdge('orphan@1.0.0', 'orphan@1.0.0', 'dep', { range: '1.0.0' })
       })
       expect(withOrphan.graph.getNode('orphan@1.0.0')).toBeDefined()
@@ -316,7 +319,7 @@ export function describeOptimizeCommon(spec: PnpmCoreSuiteSpec): void {
           version: '1.0.0',
           peerContext: [],
         })
-        m.setTarball({ name: 'orphan', version: '1.0.0' }, { integrity: 'sha512-orphan' })
+        m.setTarball({ name: 'orphan', version: '1.0.0' }, { integrity: mkIntegrity('sha512-orphan') })
         m.addEdge('orphan@1.0.0', 'orphan@1.0.0', 'dep', { range: '1.0.0' })
       })
       const optimized = spec.adapter.optimize(withOrphan.graph)
@@ -407,7 +410,7 @@ export function describeParseFixturesCommon(spec: PnpmCoreSuiteSpec): void {
     it('parses tarball payload integrity from packages map', () => {
       const graph = parseFixtureGraph(spec, 'simple')
       const ms = graph.tarballOf('ms@2.1.3')
-      expect(ms?.integrity).toBe('sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==')
+      expect(canonicalDigest(ms!.integrity!)).toBe('sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==')
     })
 
     it('parses scoped names with quoted keys verbatim', () => {

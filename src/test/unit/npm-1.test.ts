@@ -14,6 +14,8 @@ import { parse as parseV2 } from '../../main/ts/formats/npm-2.ts'
 import { parse as parseV3 } from '../../main/ts/formats/npm-3.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
+import { mkIntegrity, sri } from '../_integrity-fixtures.ts'
+import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -168,7 +170,7 @@ describe('npm-1 — parse fixtures', () => {
     expect(ms).toBeDefined()
     expect(ms?.peerContext).toEqual([])
     const tarball = graph.tarballOf('ms@2.1.3')
-    expect(tarball?.integrity).toBe('sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==')
+    expect(canonicalDigest(tarball!.integrity!)).toBe('sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==')
   })
 
   it('parses `requires` blocks into dep edges between leaves', () => {
@@ -289,7 +291,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
         peerContext: [],
       })
       m.setTarball({ name: 'debug', version: '4.4.1' }, {
-        integrity: 'sha512-fakedebugintegrity',
+        integrity: mkIntegrity('sha512-fakedebugintegrity'),
       })
       m.addEdge('case-simple@0.0.0', 'debug@4.4.1', 'dep', { range: '4.4.1' })
     })
@@ -361,11 +363,11 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
   it('roundtrips setTarball (integrity update)', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: sri(MODIFIED_SRI) })
     })
     const reparsed = parse(stringify(result.graph))
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
+    expect(canonicalDigest(reparsed.tarballOf('ms@2.1.3')!.integrity!)).toBe(MODIFIED_SRI)
   })
 
   it('roundtrips replaceNode (version bump)', () => {
@@ -374,7 +376,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     const result = original.mutate(m => {
       m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
       m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
+      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: sri(BUMPED_SRI) })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
       m.addEdge('case-simple@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
     })
@@ -410,7 +412,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     const current = original.getNode('ms@2.1.3')!
     const result = original.mutate(m => {
       m.replaceNode('ms@2.1.3', { ...current, patch })
-      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: mkIntegrity('sha512-patched-ms-integrity') })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
     })
     const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
@@ -451,7 +453,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
     const reactDom = original.getNode('react-dom@18.2.0')!
     const result = original.mutate(m => {
       m.replaceNode('react-dom@18.2.0', { ...reactDom, patch })
-      m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: 'sha512-x' })
+      m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: mkIntegrity('sha512-x') })
       m.removeTarball({ name: 'react-dom', version: '18.2.0' })
       // replacePeerContext rebinds incoming edges to the virt-id form, so
       // adding a peer edge AFTER is a no-op (the edge already exists from
@@ -557,7 +559,7 @@ describe('npm-1 — optimize (§D, ADR-0021 §D.npm-1 — prune unreachable)', (
         peerContext: [],
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'sha512-orphan' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('sha512-orphan') })
     }).graph
   }
 
@@ -568,8 +570,8 @@ describe('npm-1 — optimize (§D, ADR-0021 §D.npm-1 — prune unreachable)', (
       m.addNode({ id: 'cycle-b@1.0.0', name: 'cycle-b', version: '1.0.0', peerContext: [] })
       m.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: '1.0.0' })
       m.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: '1.0.0' })
-      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: 'sha512-cycle-a' })
-      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: 'sha512-cycle-b' })
+      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-a') })
+      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-b') })
     }).graph
   }
 

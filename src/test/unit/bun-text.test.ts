@@ -25,6 +25,8 @@ import {
   expectEmptyGraphDiff,
   stringifyWithDiagnostics,
 } from '../helpers/lockfile-test-utils.ts'
+import { mkIntegrity, sri } from '../_integrity-fixtures.ts'
+import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
 
 // === Fixture matrix =========================================================
 
@@ -147,7 +149,7 @@ describe('bun-text — parse fixtures (7-fixture matrix)', () => {
     expect(ms).toBeDefined()
     expect(ms?.peerContext).toEqual([])
     const tarball = graph.tarballOf('ms@2.1.3')
-    expect(tarball?.integrity).toBe('sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==')
+    expect(canonicalDigest(tarball!.integrity!)).toBe('sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==')
   })
 
   it('parses inner-block `dependencies` into dep edges between packages', () => {
@@ -269,7 +271,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
         version: '4.4.1',
         peerContext: [],
       })
-      m.setTarball({ name: 'debug', version: '4.4.1' }, { integrity: 'sha512-fakedebugintegrity' })
+      m.setTarball({ name: 'debug', version: '4.4.1' }, { integrity: mkIntegrity('sha512-fakedebugintegrity') })
       m.addEdge('case-simple@0.0.0', 'debug@4.4.1', 'dep', { range: '4.4.1' })
     })
     const reparsed = parse(stringify(result.graph))
@@ -307,11 +309,11 @@ describe('bun-text — modify (§B Mutator surface)', () => {
   it('roundtrips setTarball (integrity update)', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: sri(MODIFIED_SRI) })
     })
     const reparsed = parse(stringify(result.graph))
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: MODIFIED_SRI })
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: sri(MODIFIED_SRI) })
   })
 
   it('roundtrips replaceNode (version bump)', () => {
@@ -320,7 +322,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     const result = original.mutate(m => {
       m.removeEdge('case-simple@0.0.0', 'ms@2.1.3', 'dep')
       m.replaceNode('ms@2.1.3', { ...current, id: 'ms@2.1.4', version: '2.1.4' })
-      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: BUMPED_SRI })
+      m.setTarball({ name: 'ms', version: '2.1.4' }, { integrity: sri(BUMPED_SRI) })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
       m.addEdge('case-simple@0.0.0', 'ms@2.1.4', 'dep', { range: '2.1.4' })
     })
@@ -336,7 +338,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     const current = original.getNode('ms@2.1.3')!
     const result = original.mutate(m => {
       m.replaceNode('ms@2.1.3', { ...current, patch })
-      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: 'sha512-patched-ms-integrity' })
+      m.setTarball({ name: 'ms', version: '2.1.3', patch }, { integrity: mkIntegrity('sha512-patched-ms-integrity') })
       m.removeTarball({ name: 'ms', version: '2.1.3' })
     })
     const { lockfile, diagnostics } = stringifyWithDiagnostics({ stringify }, result.graph)
@@ -378,7 +380,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     const reactDom = original.getNode('react-dom@18.2.0')!
     const result = original.mutate(m => {
       m.replaceNode('react-dom@18.2.0', { ...reactDom, patch })
-      m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: 'sha512-x' })
+      m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: mkIntegrity('sha512-x') })
       m.removeTarball({ name: 'react-dom', version: '18.2.0' })
       m.addNode({
         id: 'peer-virt@1.0.0(react@18.2.0)',
@@ -412,7 +414,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
         version: '5.4.5',
         peerContext: [],
       })
-      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: sriOf('typescript-bare') })
+      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: sri(sriOf('typescript-bare')) })
       m.addNode({
         id: patchedId,
         name: 'typescript',
@@ -420,7 +422,7 @@ describe('bun-text — modify (§B Mutator surface)', () => {
         peerContext: [],
         patch,
       })
-      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: sriOf('typescript-patched') })
+      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: sri(sriOf('typescript-patched')) })
     })
 
     const { lockfile, diagnostics } = stringifyWithDiagnostics({ stringify }, result.graph)
@@ -513,7 +515,7 @@ describe('bun-text — optimize (§D prune unreachable + idempotence)', () => {
     return base.mutate(m => {
       m.addNode({ id: 'orphan@9.9.9', name: 'orphan', version: '9.9.9', peerContext: [] })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'sha512-orphan' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('sha512-orphan') })
     }).graph
   }
 
@@ -524,8 +526,8 @@ describe('bun-text — optimize (§D prune unreachable + idempotence)', () => {
       m.addNode({ id: 'cycle-b@1.0.0', name: 'cycle-b', version: '1.0.0', peerContext: [] })
       m.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: '1.0.0' })
       m.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: '1.0.0' })
-      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: 'sha512-cycle-a' })
-      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: 'sha512-cycle-b' })
+      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-a') })
+      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-b') })
     }).graph
   }
 

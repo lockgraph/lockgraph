@@ -35,7 +35,7 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   emitDropped as patchEmitDropped,
   emitDropped as recipeEmitDropped,
@@ -292,11 +292,11 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
         peerContext: [],
       })
       if (integrity !== undefined) {
-        const canonical = integrityValidateCanonical(integrity)
-        if (canonical === undefined) {
+        const parsed = parseSri(integrity, 'sri')
+        if (isEmptyIntegrity(parsed)) {
           diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
         } else {
-          builder.setTarball({ name, version }, { integrity: canonical })
+          builder.setTarball({ name, version }, { integrity: parsed })
         }
       }
     }
@@ -450,7 +450,7 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
 
     const inner = buildInnerBlock(graph, node, sidecar)
     const integritySrc = graph.tarballOf(node.id)?.integrity
-    const integrity = integritySrc ?? ''
+    const integrity = (integritySrc && emitSri(integritySrc)) ?? ''
     const key = chooseNodeEmitKey(node, sidecar, packagesBlock)
     packagesBlock[key] = [`${node.name}@${node.version}`, '', inner, integrity]
   }

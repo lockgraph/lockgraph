@@ -74,6 +74,7 @@ import {
   type Node,
   type TarballKeyInputs,
 } from '../graph.ts'
+import { emitSri } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
@@ -1142,7 +1143,10 @@ function buildPackageEntry(
     && tarball.resolution.url === `https://registry.npmjs.org/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
-    if (tarball.integrity !== undefined) resolution.integrity = tarball.integrity
+    if (tarball.integrity !== undefined) {
+      const integ = emitSri(tarball.integrity)
+      if (integ !== undefined) resolution.integrity = integ
+    }
     if (nativeIsPnpmUrl) resolution.tarball = representative.resolution!
     else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory

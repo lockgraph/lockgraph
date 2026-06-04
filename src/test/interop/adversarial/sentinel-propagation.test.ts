@@ -3,6 +3,13 @@ import { newBuilder, toTarballKey } from '../../../main/ts/graph.ts'
 import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { CONTRACTS } from '../_matrix.ts'
 import { observeInteropDiagnostics } from '../_observe.ts'
+import { sri } from '../../_integrity-fixtures.ts'
+
+// A real sha512 SRI so the value survives yarn-classic emit→reparse byte-exact
+// (a sentinel marker would not round-trip and would spuriously diverge the
+// tarball payload). Integrity is incidental here — these tests assert patch /
+// sentinel-collapse interop diagnostics, not the digest.
+const PKG_SRI = sri('sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==')
 
 // Synthetic in-memory graph: sentinel patches and out-of-band tarball payloads
 // can't be expressed by parsing a real berry lockfile, so this test exercises
@@ -31,7 +38,7 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
         version: '1.0.0',
         patch,
       },
-      { integrity: 'sha512-pkg' },
+      { integrity: PKG_SRI },
     )
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-classic', sourceGraph)
@@ -69,7 +76,7 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
         version: '1.0.0',
         patch,
       },
-      { integrity: 'sha512-pkg' },
+      { integrity: PKG_SRI },
     )
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-classic', sourceGraph)

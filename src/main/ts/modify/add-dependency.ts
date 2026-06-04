@@ -16,6 +16,7 @@ import {
   type NodeId,
   type TarballPayload,
 } from '../graph.ts'
+import type { Integrity } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import { resolveFindUp } from '../complete/find-up.ts'
 import type { ModifyContext } from './context.ts'
@@ -171,7 +172,7 @@ function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind): boolea
 }
 
 function makeTarballPayload(pv: {
-  integrity?:           string
+  integrity?:           Integrity
   engines?:             Record<string, string>
   os?:                  string[]
   cpu?:                 string[]

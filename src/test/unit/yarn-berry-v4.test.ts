@@ -18,6 +18,8 @@ import {
 import { check as checkV5, parse as parseV5 } from '../../main/ts/formats/yarn-berry-v5.ts'
 import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
 import { check as checkV8, parse as parseV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
+import { mkIntegrity } from '../_integrity-fixtures.ts'
+import { parseBerryChecksum } from '../../main/ts/recipe/integrity.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -270,7 +272,9 @@ describe('yarn-berry-v4 — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: MODIFIED_SRI })
+      // yarn-berry `checksum` is a zip-cache (berry-zip) digest — ADR-0031
+      // only fills it from a berry-zip-origin hash, so set one here.
+      m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: parseBerryChecksum(MODIFIED_HEX).integrity })
     })
     const emitted = stringifyV4(result.graph)
     const reparsed = parseV4(emitted)
@@ -281,7 +285,7 @@ describe('yarn-berry-v4 — modify', () => {
     // ADR-0014 §4.F3 — the round-trip parse re-derives canonical resolution
     // from the on-disk `resolution:` line; the set-via-mutator integrity is
     // what we assert here, not the full payload shape.
-    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBe(MODIFIED_SRI)
+    expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toEqual(parseBerryChecksum(MODIFIED_HEX).integrity)
   })
 
   it('roundtrips removeTarball', () => {
@@ -395,7 +399,7 @@ describe('yarn-berry-v4 — optimize', () => {
         resolution: 'orphan@npm:9.9.9',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: 'orphan' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('orphan') })
     }).graph
   }
 

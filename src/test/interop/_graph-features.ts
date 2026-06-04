@@ -1,12 +1,17 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Graph, TarballPayload } from '../../main/ts/graph.ts'
 import { rawConditionsBlockOfNode } from '../../main/ts/formats/_yarn-berry-core.ts'
+import { integrityEquivalent } from '../../main/ts/recipe/integrity.ts'
 import type { PreservedFeature } from './_matrix.ts'
 
-function stripResolution(payload: TarballPayload | undefined): TarballPayload | undefined {
+function stripVolatile(payload: TarballPayload | undefined): TarballPayload | undefined {
   if (payload === undefined) return undefined
-  if (payload.resolution === undefined) return payload
-  const { resolution: _resolution, ...rest } = payload
+  // ADR-0014 §4.F3 resolution is host-attribution (diverges by adapter), and
+  // ADR-0031 integrity is origin-scoped (compared by the dedicated origin-aware
+  // `integrity` feature). Exclude BOTH from the structural payload deep-equal so
+  // `tarballs` keeps verifying engines/os/cpu/license/bin/bundledDeps fidelity
+  // even across a cross-origin-class conversion that legitimately drops integrity.
+  const { resolution: _resolution, integrity: _integrity, ...rest } = payload
   return rest
 }
 
@@ -109,9 +114,17 @@ export function graphSubset(
         }
         break
       case 'integrity':
+        // ADR-0031 — origin-aware multiset comparison. Within an origin class
+        // (tarball-scoped vs berry-zip) the digests must match exactly; a
+        // fabricated berry checksum (a tarball sha512 mislabelled berry-zip) is
+        // NOT equivalent. Cross-origin-class conversions (SRI-family ↔ berry)
+        // legitimately cannot carry the source's digest and are excluded from
+        // the `integrity` feature by the matrix, not silently accepted here.
         for (const node of needle.nodes()) {
           const actual = needle.tarballOf(node.id)?.integrity
-          if (actual !== undefined && haystack.tarballOf(node.id)?.integrity !== actual) return false
+          if (actual === undefined) continue
+          const found = haystack.tarballOf(node.id)?.integrity
+          if (found === undefined || !integrityEquivalent(actual, found)) return false
         }
         break
       case 'resolved-url':
@@ -143,7 +156,7 @@ export function graphSubset(
           // URLs by convention (e.g. yarn-berry uses npmjs default, yarn-
           // classic emits yarnpkg.com); excluding `resolution` from the
           // tarball-preservation comparator avoids that attribution divergence.
-          if (!isDeepStrictEqual(stripResolution(haystackTarballs.get(key)), stripResolution(payload))) return false
+          if (!isDeepStrictEqual(stripVolatile(haystackTarballs.get(key)), stripVolatile(payload))) return false
         }
         break
       case 'workspace-membership':

@@ -11,6 +11,8 @@ import {
   type PackumentVersion,
   type RegistryAdapter,
 } from '../../main/ts/index.ts'
+import type { Integrity } from '../../main/ts/recipe/integrity.ts'
+import { sri } from '../_integrity-fixtures.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (scenario: string, file: string): string =>
@@ -43,7 +45,7 @@ function addPackage(
     version: string
     peerContext?: string[]
     workspacePath?: string
-    integrity?: string
+    integrity?: Integrity
     tarball?: string
     engines?: Record<string, string>
     os?: string[]
@@ -133,7 +135,7 @@ describe('registry/frozen', () => {
         name: 'react-dom',
         version: '18.2.0',
         peerContext: [reactId],
-        integrity: 'sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==',
+        integrity: sri('sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g=='),
         tarball: 'https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz',
         engines: { node: '>=0.10.0' },
         os: ['darwin', 'linux'],
@@ -158,7 +160,7 @@ describe('registry/frozen', () => {
         '18.2.0': {
           name: 'react-dom',
           version: '18.2.0',
-          integrity: 'sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==',
+          integrity: sri('sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g=='),
           tarball: 'https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz',
           dependencies: { scheduler: '^0.23.0' },
           devDependencies: { debug: '^4.4.0' },

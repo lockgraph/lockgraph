@@ -7,6 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { liveRegistry, type LiveRegistryOptions } from '../../main/ts/index.ts'
+import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
 
 const LODASH_BODY = {
   name: 'lodash',
@@ -33,7 +34,7 @@ const LODASH_BODY = {
       version:      '4.17.21',
       dist:         {
         tarball:   'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
-        integrity: 'sha512-ccc==',
+        integrity: 'sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==',
       },
       dependencies: { 'pretend-dep': '^1.0.0' },
       engines:      { node: '>=4' },
@@ -76,7 +77,7 @@ describe('registry/live — packument()', () => {
     // dist.tarball / dist.integrity lifted to flat PackumentVersion fields
     const v = packument!.versions['4.17.21']!
     expect(v.tarball).toBe('https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz')
-    expect(v.integrity).toBe('sha512-ccc==')
+    expect(canonicalDigest(v.integrity!)).toBe('sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==')
     expect(v.dependencies).toEqual({ 'pretend-dep': '^1.0.0' })
     expect(v.engines).toEqual({ node: '>=4' })
   })

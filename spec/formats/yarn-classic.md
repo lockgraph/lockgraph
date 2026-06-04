@@ -111,6 +111,9 @@ collapse to `dep`.
   and re-emits it after the modelled fields, before `dependencies:`. One `info`
   diagnostic `YARN_CLASSIC_UNKNOWN_FIELD` lists the field names encountered.
   Forward-compatible with any future yarn-1 entry field.
+- Integrity is preserved as a multi-hash multiset (`sha1` and every member of a
+  multi-hash SRI are kept, not dropped to sha512-only). The legacy `resolved#sha1`
+  fragment continues to round-trip via the resolution sidecar.
 
 ## Degradation rules
 

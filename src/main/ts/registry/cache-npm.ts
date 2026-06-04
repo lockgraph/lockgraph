@@ -34,6 +34,7 @@
 // given package.
 
 import { readFile, readdir } from 'node:fs/promises'
+import { parseSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import path from 'node:path'
 import type { CacheAdapter, Packument, PackumentVersion } from './types.ts'
 
@@ -83,7 +84,10 @@ export function npmCache(opts: NpmCacheOptions = {}): CacheAdapter {
           name:    entry.name,
           version: entry.version,
         }
-        if (entry.integrity !== undefined) out.integrity = entry.integrity
+        if (entry.integrity !== undefined) {
+          const integrity = parseSri(entry.integrity, 'registry')
+          if (!isEmptyIntegrity(integrity)) out.integrity = integrity
+        }
         versions[version] = out
       }
       if (Object.keys(versions).length === 0) return undefined

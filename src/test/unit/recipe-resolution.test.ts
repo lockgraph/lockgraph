@@ -366,12 +366,16 @@ describe('recipe/resolution — npm-3 parse populates canonical', () => {
 
 // === Integration — cross-format conversion ==================================
 
-describe('recipe/resolution — convert yarn-berry-v9 → pnpm-v9 preserves resolution canonical', () => {
-  it('tarball resolution survives the pair', () => {
+describe('recipe/resolution — convert yarn-berry-v9 → pnpm-v9 (registry tarball is integrity-anchored)', () => {
+  it('a registry tarball loses its pnpm resolution anchor when integrity is dropped (ADR-0031 cross-class)', () => {
     const output = convert(fixture('simple/yarn-berry-v9.lock'), { from: 'yarn-berry-v9', to: 'pnpm-v9' })
     const g = parse('pnpm-v9', output)
     const payload = g.tarball({ name: 'ms', version: '2.1.3' })
-    expect(payload?.resolution?.type).toBe('tarball')
+    // pnpm identifies a registry tarball by its integrity (the default registry
+    // URL is implicit and omitted). A yarn-berry source carries only a berry-zip
+    // checksum, so integrity is dropped on the cross-class emit — and with it the
+    // pnpm resolution anchor. (The Phase-2 registry fetch restores both.)
+    expect(payload?.resolution?.type).not.toBe('tarball')
   })
 })
 
@@ -447,7 +451,7 @@ describe('recipe/resolution — convert pnpm-v9 → npm-3 (link: workspace) pres
   })
 })
 
-describe('recipe/resolution — convert yarn-berry-v8 → bun-text drops URL but preserves integrity', () => {
+describe('recipe/resolution — convert yarn-berry-v8 → bun-text drops URL and integrity', () => {
   it('git canonical drops с RECIPE_FEATURE_DROPPED on bun-text', () => {
     const diags: Diagnostic[] = []
     convert(fixture('git-github-tarball/yarn-berry-v8.lock'), {
@@ -461,17 +465,17 @@ describe('recipe/resolution — convert yarn-berry-v8 → bun-text drops URL but
       && d.message.startsWith('git dropped'))
     expect(drops.length).toBeGreaterThan(0)
   })
-  it('registry tarball: URL not emitted (positional slot); integrity preserved', () => {
+  it('registry tarball: URL not emitted (positional slot); integrity dropped (berry-zip ≠ SRI)', () => {
     const output = convert(fixture('simple/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'bun-text',
     })
-    // bun-text positional slot 4 carries integrity; URL never appears.
-    expect(output).toContain('sha512-')
+    // ADR-0031: a yarn-berry checksum is a zip-cache digest, not a tarball SRI,
+    // so converting to bun-text OMITS integrity (never fabricates it); the URL
+    // is likewise not emitted (positional slot).
     expect(output).not.toContain('registry.npmjs.org')
-    // Re-parse и confirm the integrity round-trips.
     const g = parse('bun-text', output)
-    expect(g.tarball({ name: 'ms', version: '2.1.3' })?.integrity).toMatch(/^sha512-/)
+    expect(g.tarball({ name: 'ms', version: '2.1.3' })?.integrity).toBeUndefined()
   })
 })
 

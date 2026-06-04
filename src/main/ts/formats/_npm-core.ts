@@ -47,7 +47,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   emitDropped as patchEmitDropped,
   emitWorkspaceResolved,
@@ -815,11 +815,11 @@ function hasTarballPayload(entry: NpmEntry): boolean {
 function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnostic[]): TarballPayload {
   const payload: TarballPayload = {}
   if (entry.integrity !== undefined) {
-    const canonical = integrityValidateCanonical(entry.integrity)
-    if (canonical === undefined) {
+    const integrity = parseSri(entry.integrity, 'sri')
+    if (isEmptyIntegrity(integrity)) {
       diagnostics.push(invalidIntegrityDiagnostic('NPM', subject, entry.integrity))
     } else {
-      payload.integrity = canonical
+      payload.integrity = integrity
     }
   }
   if (entry.engines !== undefined) payload.engines = { ...entry.engines }
@@ -1192,7 +1192,10 @@ function buildNodeModulesEntry(
     ?? config.hooks?.recoverResolvedForNode?.(graph, node)
     ?? deriveResolvedFromCanonical(tarball?.resolution)
   if (resolved !== undefined) body.resolved = resolved
-  if (tarball?.integrity !== undefined) body.integrity = tarball.integrity
+  if (tarball?.integrity !== undefined) {
+    const sri = emitSri(tarball.integrity)
+    if (sri !== undefined) body.integrity = sri
+  }
   if (nodeSide?.dev === true) body.dev = true
   if (nodeSide?.optional === true) body.optional = true
   if (nodeSide?.peer === true) body.peer = true

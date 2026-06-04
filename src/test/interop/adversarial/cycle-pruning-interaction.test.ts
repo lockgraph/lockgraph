@@ -4,8 +4,13 @@ import { newBuilder } from '../../../main/ts/graph.ts'
 import { optimize as optimizeV9 } from '../../../main/ts/formats/yarn-berry-v9.ts'
 import { parseFormat, stringifyFormat } from '../_dispatch.ts'
 import { graphSnapshot } from '../_snapshot.ts'
+import { parseBerryChecksum, type Integrity } from '../../../main/ts/recipe/integrity.ts'
 
-const sri = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
+// This graph converts TO yarn-berry-v9, whose integrity field is the zip-cache
+// `checksum` — a berry-zip-origin digest (ADR-0031). Build one from the content
+// hex so it survives the berry emit→reparse round-trip used below.
+const berryChecksum = (s: string): Integrity =>
+  parseBerryChecksum(createHash('sha512').update(s).digest('hex')).integrity
 
 describe('interop adversarial §8.6 — cycle pruning interaction', () => {
   it('classic-compatible graph -> berry-v9 keeps optimize idempotent after conversion', () => {
@@ -33,9 +38,9 @@ describe('interop adversarial §8.6 — cycle pruning interaction', () => {
     })
     builder.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: 'npm:1.0.0' })
     builder.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: 'npm:1.0.0' })
-    builder.setTarball({ name: 'root', version: '1.0.0' }, { integrity: sri('root') })
-    builder.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: sri('cycle-a') })
-    builder.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: sri('cycle-b') })
+    builder.setTarball({ name: 'root', version: '1.0.0' }, { integrity: berryChecksum('root') })
+    builder.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: berryChecksum('cycle-a') })
+    builder.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: berryChecksum('cycle-b') })
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-berry-v9', sourceGraph)
     const destinationGraph = parseFormat('yarn-berry-v9', emitted.lockfile)

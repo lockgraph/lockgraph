@@ -9,7 +9,7 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { validateCanonical as integrityValidateCanonical } from '../recipe/integrity.ts'
+import { parseSri, emitSri, isEmptyIntegrity, type Integrity } from '../recipe/integrity.ts'
 import {
   emitDropped as patchEmitDropped,
   emitWorkspaceResolved,
@@ -165,11 +165,11 @@ export function parse(input: string): Graph {
       }
 
       if (entry.integrity !== undefined) {
-        const canonical = integrityValidateCanonical(entry.integrity)
-        if (canonical === undefined) {
+        const integrity = parseSri(entry.integrity, 'sri')
+        if (isEmptyIntegrity(integrity)) {
           diagnostics.push(invalidIntegrityDiagnostic('YARN_CLASSIC', id, entry.integrity))
         } else {
-          const payload: { integrity: string; resolution?: typeof canonicalResolution } = { integrity: canonical }
+          const payload: { integrity: Integrity; resolution?: typeof canonicalResolution } = { integrity }
           if (canonicalResolution !== undefined) payload.resolution = canonicalResolution
           builder.setTarball({ name, version: entry.version }, payload)
         }
@@ -276,8 +276,8 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       lines.push(`  resolved "${escapeQuoted(resolved)}"`)
     }
 
-    const integrity = payload?.integrity
-    if (integrity !== undefined) {
+    const integrity = payload?.integrity && emitSri(payload.integrity)
+    if (integrity !== undefined && integrity !== '') {
       lines.push(`  integrity ${integrity}`)
     }
 
