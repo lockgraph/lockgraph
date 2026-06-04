@@ -114,6 +114,14 @@ collapse to `dep`.
 - Integrity is preserved as a multi-hash multiset (`sha1` and every member of a
   multi-hash SRI are kept, not dropped to sha512-only). The legacy `resolved#sha1`
   fragment continues to round-trip via the resolution sidecar.
+- git-protocol `resolved` URLs — `git+ssh://`, `git+https://`, `git://`, and the
+  scp-like `git@host:owner/repo.git#<sha>` — are accepted and modelled as a git
+  resolution (`type: 'git'` when a `#<40-hex>` commit is present). A single git
+  dependency does not abort the whole-file parse.
+- Two SEPARATE entry blocks resolving to the same `name@version` with identical
+  `resolved` + `integrity` merge their descriptor keys onto one node (the
+  comma-joined `a@^1, a@^2:` form already does this). Only a genuine conflict —
+  differing `resolved` / `integrity` — is an irreducible loss.
 
 ## Degradation rules
 

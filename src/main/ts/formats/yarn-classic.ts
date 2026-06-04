@@ -113,7 +113,7 @@ export function parse(input: string): Graph {
   const entryExtras = new Map<string, string[]>()
   const unknownFields = new Set<string>()
   const entryNodes: Array<{ node: Node; entry: YarnClassicEntry }> = []
-  const seenIds = new Set<string>()
+  const seenEntries = new Map<string, { resolved?: string; integrity?: string }>()
 
   for (const entry of entries) {
     const specs = splitEntryKey(entry.key)
@@ -135,13 +135,29 @@ export function parse(input: string): Graph {
     for (const [name, rawRanges] of specsByName) {
       const ranges = Array.from(new Set(rawRanges)).sort(cmpUtf16)
       const id = `${name}@${entry.version}`
-      if (seenIds.has(id)) {
-        throw new LockfileError({
-          code: 'IRREDUCIBLE_LOSS',
-          message: `two entries collapse onto NodeId ${id}`,
-        })
+      const prior = seenEntries.get(id)
+      if (prior !== undefined) {
+        // Two separate entry blocks resolve to the same name@version. Merge
+        // their descriptor ranges onto the one node when the resolution +
+        // integrity agree (the comma-joined `a@^1, a@^2:` form already merges
+        // this way); only a genuine conflict — differing `resolved` or
+        // `integrity` — is an irreducible loss.
+        if (prior.resolved !== entry.resolved || prior.integrity !== entry.integrity) {
+          throw new LockfileError({
+            code: 'IRREDUCIBLE_LOSS',
+            message: `two entries collapse onto NodeId ${id} with differing resolution`,
+          })
+        }
+        const merged = sidecar.get(id) ?? []
+        for (const range of ranges) {
+          const spec = `${name}@${range}`
+          if (!merged.includes(spec)) merged.push(spec)
+          specIndex.set(spec, id)
+        }
+        sidecar.set(id, merged)
+        continue
       }
-      seenIds.add(id)
+      seenEntries.set(id, { resolved: entry.resolved, integrity: entry.integrity })
 
       const node: Node = {
         id,
@@ -1102,12 +1118,12 @@ function warnPatchDrop(
 // the resolution as an opaque string; these helpers keep yarn-classic-specific
 // URL shapes validated at the adapter boundary.
 function parseResolution(input: string): string {
-  if (
-    input.startsWith('https://codeload.github.com/')
-    || input.startsWith('git+https://')
-    || input.startsWith('http://')
-    || input.startsWith('https://')
-  ) {
+  // Accept any scheme-based URL (https / http / git+ssh / git+https / git / ssh
+  // / file …) and the scp-like `git@host:owner/repo` shorthand. git deps are
+  // first-class in yarn-classic; a single git entry must not abort the parse.
+  // The opaque string is stored on Node.resolution; the canonical git/tarball
+  // resolution is derived separately via recipe/resolution.ts (`type: 'git'`).
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input) || input.startsWith('git@')) {
     return input
   }
   throw parseFailed(`unsupported resolved URL ${JSON.stringify(input)}`)
