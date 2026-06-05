@@ -17,7 +17,7 @@ import {
 } from '../../main/ts/formats/yarn-berry-v4.ts'
 import { check as checkV5, parse as parseV5 } from '../../main/ts/formats/yarn-berry-v5.ts'
 import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'
-import { check as checkV8, parse as parseV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
+import { check as checkV8, parse as parseV8, stringify as stringifyV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { mkIntegrity } from '../_integrity-fixtures.ts'
 import { parseBerryChecksum } from '../../main/ts/recipe/integrity.ts'
 import { check as checkV9, parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
@@ -183,6 +183,67 @@ describe('yarn-berry-v4 — stringify', () => {
       }),
     ]))
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
+  })
+})
+
+// F1 (snapshot.50 round-trip sweep): a yarn-2.0 (berry v4) checksum carries a
+// `<cacheKey>/<hex>` prefix (`2/d9b84e…`) just like v8/v9's `10c0/…`. Emit must
+// PRESERVE the parsed prefix for every berry generation (round-trip whatever was
+// parsed), not drop it for v4/v5/v6 — dropping it produces a lockfile yarn
+// rejects, and is an internal inconsistency given v8's `10c0/` is already kept.
+// The parsed cacheKey is threaded per-node via `TarballPayload.berryChecksumCacheKey`.
+describe('yarn-berry-v4 — checksum cacheKey prefix round-trip (F1)', () => {
+  const HEX = 'd9b84e0418596352f8122bf647f630e45a31e5078b663609a69ae2af7035c44a25d63aa11475fd5944360a86d28e4c4d7c538fd807a8b20fd41c1dec3e38f530'
+
+  const v4WithChecksum = (checksum: string): string =>
+    '__metadata:\n' +
+    '  version: 4\n\n' +
+    '"@babel/code-frame@npm:^7.0.0, @babel/code-frame@npm:^7.5.5":\n' +
+    '  version: 7.5.5\n' +
+    '  resolution: "@babel/code-frame@npm:7.5.5"\n' +
+    `  checksum: ${checksum}\n` +
+    '  languageName: node\n' +
+    '  linkType: hard\n'
+
+  it('keeps the v4 `2/` cacheKey prefix on emit (real yarn-2.0 shape)', () => {
+    const out = stringifyV4(parseV4(v4WithChecksum(`2/${HEX}`)))
+    expect(out).toContain(`checksum: 2/${HEX}`)
+    // the bare-hex form must NOT be emitted — the prefix is preserved, not dropped
+    expect(out).not.toContain(`checksum: ${HEX}\n`)
+    // re-parse keeps the per-node cacheKey on the payload
+    expect(parseV4(out).tarballOf('@babel/code-frame@7.5.5')?.berryChecksumCacheKey).toBe('2')
+  })
+
+  it('keeps a bare v4 checksum bare on emit (the repo\'s own bare-v4 fixture shape)', () => {
+    const out = stringifyV4(parseV4(v4WithChecksum(HEX)))
+    expect(out).toContain(`checksum: ${HEX}`)
+    expect(out).not.toContain(`checksum: 2/${HEX}`)
+    expect(out).not.toMatch(/checksum: \d+\//)
+    expect(parseV4(out).tarballOf('@babel/code-frame@7.5.5')?.berryChecksumCacheKey).toBeUndefined()
+  })
+
+  it('the v4 prefix survives a parse → emit → parse round-trip (Graph stable)', () => {
+    const g1 = parseV4(v4WithChecksum(`2/${HEX}`))
+    const g2 = parseV4(stringifyV4(g1))
+    expect(g2.tarballOf('@babel/code-frame@7.5.5')?.integrity)
+      .toEqual(g1.tarballOf('@babel/code-frame@7.5.5')?.integrity)
+    expect(g2.tarballOf('@babel/code-frame@7.5.5')?.berryChecksumCacheKey).toBe('2')
+  })
+
+  it('does NOT regress v8 `10c0/` (still prefixed byte-faithfully)', () => {
+    const v8 =
+      '__metadata:\n' +
+      '  version: 8\n' +
+      '  cacheKey: 10c0\n\n' +
+      '"@babel/code-frame@npm:7.5.5":\n' +
+      '  version: 7.5.5\n' +
+      '  resolution: "@babel/code-frame@npm:7.5.5"\n' +
+      `  checksum: 10c0/${HEX}\n` +
+      '  languageName: node\n' +
+      '  linkType: hard\n'
+    const out = stringifyV8(parseV8(v8))
+    expect(out).toContain(`checksum: 10c0/${HEX}`)
+    expect(parseV8(out).tarballOf('@babel/code-frame@7.5.5')?.berryChecksumCacheKey).toBe('10c0')
   })
 })
 

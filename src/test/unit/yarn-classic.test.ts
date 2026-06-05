@@ -770,16 +770,16 @@ describe('yarn-classic — optimize', () => {
   })
 })
 
-// Real-world regression edge-case coverage (commit 0775b26): the URL-shape
-// filter inside `deriveResolvedFromCanonical` accepts exactly four prefix
-// shapes — `https://`, `http://`, `https://codeload.github.com/`, and
-// `git+https://`. Other URL-ish shapes (the SCP-form `git@host:owner/repo`
-// и `git+ssh://`) get dropped from the `resolved` field; downstream
-// `warnPatchDrop` / RECIPE_FEATURE_DROPPED attribute any feature loss. The
-// other inline tests already pin the npm-locator + patch-leak cases; this
-// block pins the URL-shape gate explicitly across every accepted prefix and
-// the rejected git protocols.
-describe('yarn-classic — deriveResolvedFromCanonical URL-shape exhaustive coverage', () => {
+// Real-world regression edge-case coverage. The `resolved` URL-shape filter
+// (shared by `formatResolution` and `deriveResolvedFromCanonical` via
+// `isYarnClassicResolvableUrl`) must round-trip EVERY shape `parseResolution`
+// accepts off disk — any scheme-based URL (`https://`, `http://`, `git+https://`,
+// `git+ssh://`, `git://`, `ssh://`, …) AND the SCP-form `git@host:owner/repo`
+// shorthand. yarn-classic git deps are first-class: snapshot.50 made them parse,
+// so dropping the `resolved` line on emit produced a lockfile `yarn install
+// --immutable` rejects (F2). This block pins symmetric parse/emit acceptance
+// across the URL prefixes plus the git protocols that were previously dropped.
+describe('yarn-classic — resolved URL-shape exhaustive coverage', () => {
   function emitFor(can: import('../../main/ts/recipe/resolution.ts').ResolutionCanonical): string {
     const builder = newBuilder()
     builder.addNode({
@@ -792,7 +792,7 @@ describe('yarn-classic — deriveResolvedFromCanonical URL-shape exhaustive cove
     return stringify(builder.seal())
   }
 
-  it('keeps each of the four accepted URL prefixes (https, http, codeload, git+https)', () => {
+  it('keeps each of the accepted URL prefixes (https, http, codeload, git+https)', () => {
     for (const url of [
       'https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz',
       'http://registry.example.com/foo/-/foo-1.0.0.tgz',
@@ -804,13 +804,15 @@ describe('yarn-classic — deriveResolvedFromCanonical URL-shape exhaustive cove
     }
   })
 
-  it('drops non-URL git protocols (git@host:path SCP form, git+ssh://)', () => {
+  it('keeps the git protocols parse accepts (git+ssh://, git://, ssh://, SCP-form git@host:path) — F2', () => {
     for (const raw of [
       'git+ssh://git@github.com/owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
+      'git://github.com/owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
+      'ssh://git@github.com/owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
       'git@github.com:owner/repo.git#abcdef1234567890abcdef1234567890abcdef12',
     ]) {
       const emitted = emitFor({ type: 'unknown', raw })
-      expect(emitted).not.toContain(`resolved "${raw}"`)
+      expect(emitted).toContain(`resolved "${raw}"`)
     }
   })
 })

@@ -86,8 +86,11 @@ conditionsAllowed: true }`:
   emits as а bare numeric literal — pre-v8 form, no string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the quoted
   protocol-bearing form (`dep: "npm:2.0.0"`) — borrowed from v8/v9.
-- `checksum` values are raw sha512 hex (no `<cacheKey>/` prefix) —
-  shared with v4/v5/v6.
+- `checksum` values round-trip whatever was parsed (ADR-0031): the
+  current fixtures carry a bare sha512 hex (no `<cacheKey>/` prefix,
+  shared with v4/v5/v6) and stay bare, but a parsed `<cacheKey>/<hex>`
+  prefix is preserved per-node (`TarballPayload.berryChecksumCacheKey`) —
+  same uniform rule as v4 (F1).
 - `conditions` are supported and roundtrip via sidecar preservation.
 - `compressionLevel`, where present, is preserved as pass-through
   `__metadata` sidecar data via the same mechanism as v8.

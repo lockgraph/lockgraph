@@ -117,7 +117,15 @@ collapse to `dep`.
 - git-protocol `resolved` URLs — `git+ssh://`, `git+https://`, `git://`, and the
   scp-like `git@host:owner/repo.git#<sha>` — are accepted and modelled as a git
   resolution (`type: 'git'` when a `#<40-hex>` commit is present). A single git
-  dependency does not abort the whole-file parse.
+  dependency does not abort the whole-file parse. On EMIT the git `resolved`
+  line ROUND-TRIPS (F2): `stringify` re-emits every URL shape `parse` accepts —
+  the verbatim `Node.resolution` via a single shared acceptance predicate
+  (`isYarnClassicResolvableUrl`, any `<scheme>://` URL or scp-like `git@…`), so
+  parse and emit stay symmetric. Earlier snapshots silently dropped the
+  `git+ssh://` / scp `resolved` line on emit, producing a lockfile
+  `yarn install --immutable` rejects. The canonical-derived fallback (used for
+  cross-format conversions when no PM-native sidecar exists) shares the same
+  predicate, so a git resolution survives those conversions too.
 - Two SEPARATE entry blocks resolving to the same `name@version` with identical
   `resolved` + `integrity` merge their descriptor keys onto one node (the
   comma-joined `a@^1, a@^2:` form already does this). Only a genuine conflict —

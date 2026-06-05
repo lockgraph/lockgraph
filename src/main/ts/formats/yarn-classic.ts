@@ -1121,34 +1121,36 @@ function warnPatchDrop(
 // Mined from legacy/main/ts/formats/yarn-classic.ts:188-212. The graph stores
 // the resolution as an opaque string; these helpers keep yarn-classic-specific
 // URL shapes validated at the adapter boundary.
+
+// The acceptance predicate for a yarn-classic `resolved` URL: any scheme-based
+// URL (https / http / git+ssh / git+https / git / ssh / file …) or the scp-like
+// `git@host:owner/repo` shorthand. SHARED by parse and emit so the two stay
+// symmetric — anything `parseResolution` accepts off disk must round-trip back
+// out via `formatResolution` (else a git+ssh `resolved` line silently vanishes
+// on emit, producing a lockfile `yarn install --immutable` rejects).
+function isYarnClassicResolvableUrl(input: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(input) || input.startsWith('git@')
+}
+
 function parseResolution(input: string): string {
-  // Accept any scheme-based URL (https / http / git+ssh / git+https / git / ssh
-  // / file …) and the scp-like `git@host:owner/repo` shorthand. git deps are
-  // first-class in yarn-classic; a single git entry must not abort the parse.
-  // The opaque string is stored on Node.resolution; the canonical git/tarball
-  // resolution is derived separately via recipe/resolution.ts (`type: 'git'`).
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input) || input.startsWith('git@')) {
+  // git deps are first-class in yarn-classic; a single git entry must not abort
+  // the parse. The opaque string is stored on Node.resolution; the canonical
+  // git/tarball resolution is derived separately via recipe/resolution.ts.
+  if (isYarnClassicResolvableUrl(input)) {
     return input
   }
   throw parseFailed(`unsupported resolved URL ${JSON.stringify(input)}`)
 }
 
-// ADR-0014 §4.F3: yarn-classic stringify accepts only URL-shaped resolutions
-// from the PM-native sidecar. PM-native strings from foreign sources
-// (yarn-berry locators, pnpm `link:` etc.) are NOT URL-shaped — return
-// undefined to delegate to the canonical-derived fallback instead of
-// throwing.
+// ADR-0014 §4.F3: yarn-classic stringify round-trips any URL-shaped PM-native
+// resolution — the same shapes `parseResolution` accepts (incl. git+ssh / git:
+// / ssh: / scp-like `git@…`), so a git `resolved` line survives same-format
+// round-trip verbatim. PM-native strings from foreign sources (yarn-berry
+// locators, pnpm `link:` etc.) are NOT URL-shaped — return undefined to
+// delegate to the canonical-derived fallback instead of throwing.
 function formatResolution(input: string | undefined): string | undefined {
   if (input === undefined) return undefined
-  if (
-    input.startsWith('https://codeload.github.com/')
-    || input.startsWith('git+https://')
-    || input.startsWith('http://')
-    || input.startsWith('https://')
-  ) {
-    return input
-  }
-  return undefined
+  return isYarnClassicResolvableUrl(input) ? input : undefined
 }
 
 // ADR-0014 §4.F3 cross-format fallback: project canonical → yarn-classic
@@ -1165,17 +1167,10 @@ function deriveResolvedFromCanonical(
   // yarn-classic parse rejects on reparse. Filter the emit to URL-shaped
   // resolutions only; the underlying loss is already attributed by
   // `warnPatchDrop` / `RECIPE_FEATURE_DROPPED` upstream when relevant.
-  if (candidate !== undefined && !isYarnClassicResolvedUrl(candidate)) {
+  if (candidate !== undefined && !isYarnClassicResolvableUrl(candidate)) {
     return undefined
   }
   return candidate
-}
-
-function isYarnClassicResolvedUrl(raw: string): boolean {
-  return raw.startsWith('https://codeload.github.com/')
-    || raw.startsWith('git+https://')
-    || raw.startsWith('http://')
-    || raw.startsWith('https://')
 }
 
 function parseFailed(message: string): LockfileError {

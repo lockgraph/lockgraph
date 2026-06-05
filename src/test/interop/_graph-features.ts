@@ -11,7 +11,11 @@ function stripVolatile(payload: TarballPayload | undefined): TarballPayload | un
   // `integrity` feature). Exclude BOTH from the structural payload deep-equal so
   // `tarballs` keeps verifying engines/os/cpu/license/bin/bundledDeps fidelity
   // even across a cross-origin-class conversion that legitimately drops integrity.
-  const { resolution: _resolution, integrity: _integrity, ...rest } = payload
+  // `berryChecksumCacheKey` is the yarn-berry `checksum:` cacheKey prefix — a
+  // format-scoped companion of the berry-zip integrity, so it legitimately
+  // diverges (v4 `2` ↔ v8 `10c0`) or vanishes (berry → npm) across conversions;
+  // exclude it for the same reason as integrity.
+  const { resolution: _resolution, integrity: _integrity, berryChecksumCacheKey: _ck, ...rest } = payload
   return rest
 }
 

@@ -49,8 +49,9 @@ version-invariant sections it inherits from ADR-0016.
 ## Schema sketch
 
 Same shape as the later pre-v8 family, but without `conditions`, with
-bare inner-block dependency ranges, and with raw sha512-hex
-`checksum` values (no `<cacheKey>/` prefix).
+bare inner-block dependency ranges, and with `checksum` values that may
+be EITHER a bare sha512 hex OR a `<cacheKey>/<sha512-hex>` prefixed form
+— both occur in the wild (see Quirks → checksum cacheKey prefix).
 
 ## Capabilities
 
@@ -175,7 +176,17 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   value differs from v5/v6's `8`) — pre-v8 form, no string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the bare form
   (for example `lodash: 4.17.21`), not v8/v9's quoted protocol.
-- `checksum` values are raw sha512 hex (no `<cacheKey>/` prefix).
+- `checksum` values ROUND-TRIP whatever was parsed (ADR-0031): if the
+  source carried a `<cacheKey>/<hex>` prefix (yarn-2.0 writes `2/<hex>`)
+  the same prefix is re-emitted; a bare source stays bare. The cacheKey
+  is captured per-node on parse (`TarballPayload.berryChecksumCacheKey`)
+  rather than from `__metadata.cacheKey`, since yarn-2.0 v4 omits the
+  `__metadata.cacheKey` line yet still prefixes each checksum. This is
+  intentionally NOT version-gated: dropping the prefix for v4 while
+  keeping v8's `10c0/` would be an internal inconsistency that yields a
+  lockfile `yarn install --immutable` rejects. (`config.checksumPrefix`
+  is `false` for v4 and now only governs the cross-family-convert default,
+  not same-format round-trip.)
 - `conditions` are NOT supported on emit (v4 predates the field;
   v5 introduced it). If a parsed/synthetic graph carries a conditions
   sidecar, the v4 emitter drops it with diagnostic
@@ -187,7 +198,13 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
 - `__metadata.cacheKey` is empirically `7` across the current v4 fixtures.
 - Inner `dependencies` / `optionalDependencies` emit bare ranges
   (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form.
-- `checksum` values are raw sha512 hex, not `cacheKey/hash`.
+- `checksum` cacheKey prefix: BOTH shapes occur in the wild. yarn-2.0
+  (the earliest v4 producer) writes `checksum: 2/<sha512-hex>` — the same
+  `<cacheKey>/<hex>` shape v8/v9 use (`10c0/…`) — with NO
+  `__metadata.cacheKey` line. Later v4 producers (and the synthetic
+  fixtures generated under `src/test/resources/fixtures/lockfiles/`) write
+  a bare sha512 hex. The library preserves whichever was parsed, per-node;
+  see Emit.
 - `conditions` are absent in the current v4 fixtures and unsupported on
   emit; if a parsed/synthetic graph carries a conditions sidecar, the
   v4 emitter drops it with `YARN_BERRY_V4_CONDITIONS_DROPPED`.
@@ -214,5 +231,8 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
 
 > None at preview. Fixture verification matched ADR-0018 §A.v4 on all
 > observed deltas: handshake `4`, cacheKey `7`, bare inner dep ranges,
-> raw checksum form, no `conditions`, and no `compressionLevel` in the
-> current fixture corpus.
+> no `conditions`, and no `compressionLevel` in the current fixture
+> corpus. NOTE (F1, snapshot.50 round-trip sweep): the synthetic fixtures
+> use a bare checksum, but real yarn-2.0 v4 locks write the prefixed
+> `checksum: 2/<hex>` form; the library round-trips either per-node
+> (`TarballPayload.berryChecksumCacheKey`). See Emit / Quirks.

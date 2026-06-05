@@ -310,7 +310,7 @@ export function parseFamily(
       // parsed as a `berry-zip`-origin sha512 so it is never re-encoded into a
       // tarball SRI on emit. sha1/sha256/malformed bodies yield no hash and are
       // rejected with a diagnostic, leaving the integrity slot undefined.
-      const { integrity } = parseBerryChecksum(checksum)
+      const { integrity, cacheKey: checksumCacheKey } = parseBerryChecksum(checksum)
       if (isEmptyIntegrity(integrity)) {
         diagnostics.push({
           code:     `${config.codePrefix}_INVALID_INTEGRITY`,
@@ -320,6 +320,11 @@ export function parseFamily(
         })
       } else {
         payload.integrity = integrity
+        // Round-trip the `<cacheKey>/` prefix verbatim (ADR-0031): preserve it
+        // IFF the source carried one, for EVERY berry generation (yarn-2.0 `2/`
+        // through v8/v9 `10c0/`). A bare source leaves this undefined → bare
+        // emit, so the bare-v4/v7 shape stays bare.
+        if (checksumCacheKey !== undefined) payload.berryChecksumCacheKey = checksumCacheKey
       }
     }
     const binMap = asMap(value['bin'])
@@ -1201,6 +1206,18 @@ function checksumOfPayload(
     )
     return undefined
   }
+  // Precedence (ADR-0031 round-trip):
+  //   1. A per-node cacheKey captured at parse (`payload.berryChecksumCacheKey`)
+  //      is reproduced verbatim for EVERY generation — this is what keeps a
+  //      yarn-2.0 v4 `2/<hex>` round-tripping (v4 has checksumPrefix=false yet
+  //      a parsed prefix must survive) AND v8/v9 `10c0/<hex>` byte-faithful.
+  //   2. With no captured key but a prefix-era config (v8/v9/v10), fall back to
+  //      the global cacheKey (`__metadata.cacheKey` / options / default) — the
+  //      cross-family-convert and post-`mutate()` paths where the per-node
+  //      sidecar was never set.
+  //   3. Otherwise (bare-era v4/v5/v6/v7, no captured key) emit bare hex.
+  const perNodeCacheKey = payload?.berryChecksumCacheKey
+  if (perNodeCacheKey !== undefined) return `${perNodeCacheKey}/${hex}`
   return config.checksumPrefix ? `${cacheKey ?? DEFAULT_CACHEKEY_V8_V9}/${hex}` : hex
 }
 

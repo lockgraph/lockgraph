@@ -37,6 +37,13 @@ export interface TarballPayload {
   // yarn-berry zip-cache digest (`origin === 'berry-zip'`) are NOT
   // interchangeable; emit is origin-aware (see recipe/integrity.ts).
   integrity?:           Integrity
+  // ADR-0031 round-trip sidecar — the `<cacheKey>` prefix of a yarn-berry
+  // `checksum: <cacheKey>/<hex>` captured verbatim at parse, so emit can
+  // reproduce it byte-for-byte for EVERY berry generation (yarn-2.0 v4 `2/`,
+  // v8/v9 `10c0/`). Per-node because a single lock may legitimately mix
+  // prefixed and bare entries; absence means the source checksum was bare
+  // (the cacheKey lives only inside the digest, never in an SRI).
+  berryChecksumCacheKey?: string
   engines?:             Record<string, string>
   funding?:             unknown
   license?:             string

@@ -67,7 +67,10 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the bare form
   (for example `lodash: 4.17.21`), not v8/v9's quoted protocol.
-- `checksum` values are raw sha512 hex (no `<cacheKey>/` prefix).
+- `checksum` values round-trip whatever was parsed (ADR-0031): the
+  current fixtures carry a bare sha512 hex (no `<cacheKey>/` prefix) and
+  stay bare, but a parsed `<cacheKey>/<hex>` prefix is preserved per-node
+  (`TarballPayload.berryChecksumCacheKey`) — same uniform rule as v4 (F1).
 - `conditions` are supported and roundtrip via sidecar preservation —
   v5 is the FIRST version with this field (v4 lacks it).
 - `compressionLevel` is not present in the v5 corpus.
