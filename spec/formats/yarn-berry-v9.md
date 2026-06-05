@@ -100,6 +100,25 @@ Inherits v8.
   edges to a workspace from workspace and local-directory sources; only a
   *published* (registry / tarball / git) source depending on a workspace is
   rejected (ADR-0017).
+- **Local-artefact locator at the same `name@version` as a registry entry —
+  disambiguated via the `+patch=unresolved-…` sentinel slot.** A `file:`
+  local-tarball alias, a `link:`, or a `portal:` reference can resolve to the
+  same `name@version` as a sibling `npm:` entry yet be a *genuinely different
+  artefact* (own checksum, own dependency ranges, distinct canonical resolution
+  — e.g. `tarball`/`directory` vs registry). Yarn keeps them apart in the
+  lockfile via a consumer-ownership qualifier (`::locator=<encoded-consumer>` on
+  the entry key; the same `locator=` rides the resolution's `::`-param block,
+  e.g. `…tgz#…::hash=17d4d9&locator=…`). Because the NodeId only carries
+  name + version + peer-context + patch, the patch slot is the sole free
+  discriminator: such an entry takes a sentinel patch
+  `+patch=unresolved-<sha256 of its verbatim locator>` (per ADR-0011), so the
+  two stay **distinct nodes** with **distinct TarballKeys** (their differing
+  checksums / deps no longer collide) instead of throwing `IRREDUCIBLE_LOSS`.
+  The sentinel is gated on the consumer qualifier: a `link:`/`portal:` protocol
+  reference always qualifies; a `file:` reference qualifies only when it bears
+  a `locator=` qualifier — a plain `file:../dir` directory link (already a
+  unique node) is left unpatched. `Node.resolution` carries the verbatim
+  locator for byte-faithful round-trip.
 
 ## Degradation rules
 
