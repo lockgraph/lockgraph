@@ -21,6 +21,7 @@ const CLASSIC = [
   'scvodigital-http-c54c08a',               // duplicate descriptors
   'wasya-co-piousbox-drupal-theme-0a9b3e1', // duplicate descriptors
   'dougyshy-mern-skeleton-f510b7a',         // duplicate descriptors
+  'lodash-lodash-5a3ff73',                  // entry immediately after header (no blank line)
 ] as const
 
 describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {

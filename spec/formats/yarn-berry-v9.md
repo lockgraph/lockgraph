@@ -94,6 +94,12 @@ Inherits v8.
   interchangeable only within the yarn family (raw hex pre-v8, `<cacheKey>/<hex>`
   v8+). A tarball SRI is never re-encoded into it, nor it into an SRI — they are
   digests of different byte streams.
+- A LOCAL node (`portal:` / `link:`, canonical resolution `type: 'directory'`)
+  may depend on a workspace — e.g. a `portal:` package declaring
+  `"<root>": "workspace:^"` in its own monorepo. The graph seal permits incoming
+  edges to a workspace from workspace and local-directory sources; only a
+  *published* (registry / tarball / git) source depending on a workspace is
+  rejected (ADR-0017).
 
 ## Degradation rules
 

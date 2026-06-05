@@ -3,6 +3,8 @@
 > Status: proposed
 > Date: 2026-05-06
 > Amended: 2026-05-29 — §Published-self-linked workspaces (Bug #4 carve-out)
+> Amended: 2026-06-04 — §Local-directory sources (yarn-audit-fix #4); **reverses**
+> the §Negative-cases deferral on `portal:`/`link:` sources (real fixture now in hand)
 
 > **Status note (2026-05-29).** The header previously read `accepted`,
 > contradicting the [decisions index](./README.md) which has always
@@ -355,6 +357,15 @@ should not raise alarm; it is surfaced for traceability only.
 
 #### Negative cases
 
+> **Superseded in part — 2026-06-04.** The bullets below key on the EDGE
+> descriptor protocol. The [§Local-directory sources](#local-directory-sources)
+> amendment re-scopes the rule to the SOURCE node's locality: a source whose
+> canonical `resolution.type === 'directory'` (local `file:` / `portal:` /
+> `link:`, incl. local `.tgz`) is now PERMITTED regardless of the edge protocol.
+> The bullets below therefore hold only for **published** (non-local) sources —
+> e.g. a `link:` *edge range* from a source that carries no local-directory
+> resolution.
+
 The prohibition is **unchanged** for every non-registry source
 descriptor. The following MUST still throw
 `INVARIANT_VIOLATION "workspace node has incoming edges: <id>"`:
@@ -398,6 +409,80 @@ published-self-linked workspace is therefore always live regardless of
 its incoming edges; the new published→workspace edge merely makes the
 published parent reachable *to* the workspace (additive). Optimize
 neither sweeps the workspace nor mis-classifies it. **No conflict.**
+
+### Local-directory sources (portal: / link:)
+
+> **Amendment — 2026-06-04 (yarn-audit-fix sweep, finding #4).** Motivated by
+> `yarnpkg/berry`'s own `yarn.lock`. **Reverses** the [§Negative cases](#negative-cases)
+> deferral on `link:`/`portal:` sources — that section explicitly deferred them
+> "until a real fixture motivates it"; berry's lock is that fixture. ADR-0017
+> stays `proposed`.
+
+#### Context — berry's own monorepo
+
+Parsing `yarnpkg/berry`'s `yarn.lock` (v6 @ `aedfbea3`, v7 @ `a66e5285`) fails:
+
+```
+seal failed: workspace node has incoming edges: @yarnpkg/monorepo@0.0.0-use.local
+```
+
+The offending edge's source is a `portal:` node —
+`gatsby-plugin-yarn-introspection@portal:./…::locator=@yarnpkg/gatsby@workspace:packages/gatsby`
+(version `0.0.0-use.local`, canonical `TarballPayload.resolution.type ===
+'directory'`) — which declares `"@yarnpkg/monorepo": "workspace:^"`. A `portal:`
+/ `link:` package is a LOCAL directory link: part of the project graph, not a
+published artefact. It legitimately depends on a workspace.
+
+#### Normative rule (the carve-out)
+
+A workspace node `n` MAY have an incoming edge from a non-workspace source iff
+that source is a **local node** — its canonical `TarballPayload.resolution.type`
+is `'directory'`. In this codebase `'directory'` is the canonical type for ALL
+local `file:`-family resolutions: yarn `portal:`/`link:`, npm/pnpm `file:`
+directory links, **and local `.tgz` tarballs** (`file:.lib/foo.tgz` — the recipe
+does not special-case a tarball suffix, `recipe/resolution.ts:87,104,106`). This
+is intentional: all are LOCAL artefacts under project control, so permitting them
+to depend on a workspace is bus-factor-safe. The concern ADR-0017 guards — a
+**published** (registry/git) source depending on a workspace — is unaffected:
+registry resolves to `'tarball'` and git to `'git'`, never `'directory'`
+(verified — no `resolution.ts` path assigns `'directory'` to a remote source, and
+the yarn-berry/npm parsers give workspace nodes no canonical resolution at all).
+
+**The discriminator is SOURCE LOCALITY, not the edge range.** This is more
+faithful than the [§Negative cases](#negative-cases) edge-range proxy: the
+motivating edge's range is `workspace:^` (which the prior text called
+"malformed"), yet the shape is legitimate *because the source is local*. Keying
+on the source node's canonical resolution (`directory`) captures the true
+property — locality — independent of the descriptor protocol on the edge. The
+berry sentinel version `0.0.0-use.local` is deliberately NOT used (PM-specific).
+
+Bus-factor intent preserved: a **published** source (canonical resolution
+`tarball` / `git`, or no tarball entry) depending on a workspace still fails;
+only `workspace` and `directory` (local) sources — plus the registry-range
+published self-link — are permitted.
+
+#### Seal-rule shape (amended)
+
+For each incoming edge `e` to a workspace node `n` whose source is non-workspace:
+1. source's canonical `resolution.type === 'directory'` (local) → **permit**;
+2. else `e` is a published self-link (registry range, §Published-self-linked) →
+   **permit** + `SEAL_PUBLISHED_SELF_LINK`;
+3. else → seal failure (message unchanged).
+
+#### Negative-cases refinement
+
+[§Negative cases](#negative-cases) is amended: a non-workspace source pointing at
+a workspace is now **permitted when the source is a local-directory node**
+(`resolution.type === 'directory'`), regardless of the edge's descriptor protocol
+(`workspace:`, `link:`, `file:`, or a registry range). A **published**
+(non-local) source pointing at a workspace remains a seal failure unless it
+qualifies as a published self-link. The earlier list keyed on the *edge*
+descriptor; the faithful key is the *source* node's locality.
+
+Implemented at the `graph.ts` seal loop (the `directory`-source short-circuit,
+before the published-self-link test). Test:
+`src/test/interop/real-world/berry-workspace-seal.test.ts` (berry v7's own lock,
+2622 nodes) + full suite green (3163).
 
 ### Multi-level peer projection (pnpm v9 transitive peers)
 

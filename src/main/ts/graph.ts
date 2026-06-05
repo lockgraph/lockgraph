@@ -539,6 +539,14 @@ function validate(s: State): void {
       // info diagnostic each), reject everything else with the verbatim message.
       for (const edge of inc) {
         if (s.nodes.get(edge.src)?.workspacePath !== undefined) continue // ws→ws: permitted
+        // ADR-0017 amendment — a LOCAL node (canonical resolution type
+        // 'directory': yarn `portal:` / `link:`, npm/pnpm `file:` directory
+        // link) is part of the project graph, not a published package, so it
+        // may depend on a workspace — e.g. a berry `portal:` package that
+        // declares `"<root>": "workspace:^"` inside its own monorepo. The
+        // bus-factor concern is a *published* (registry/tarball/git) package
+        // depending on a workspace; those still reject below.
+        if (s.tarballs.get(stripPeerContextFromNodeId(edge.src))?.resolution?.type === 'directory') continue
         if (isPublishedSelfLink(edge)) {
           s.diagnostics.push({
             code:     'SEAL_PUBLISHED_SELF_LINK',

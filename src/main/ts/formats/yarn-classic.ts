@@ -513,7 +513,11 @@ function parseEntries(input: string): YarnClassicEntry[] {
   let current: YarnClassicEntry | undefined
   let block: 'dependencies' | 'optionalDependencies' | undefined
 
-  for (let i = 4; i < lines.length; i++) {
+  // Start at 0 and let the loop's own `#`-comment and blank-line skipping
+  // consume the header block. Old yarn (e.g. lodash's lock) omits the blank
+  // line(s) between `# yarn lockfile v1` and the first entry, so a fixed
+  // header-length offset would mis-align and orphan the first entry's body.
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? ''
     if (line.length === 0) {
       block = undefined

@@ -122,6 +122,9 @@ collapse to `dep`.
   `resolved` + `integrity` merge their descriptor keys onto one node (the
   comma-joined `a@^1, a@^2:` form already does this). Only a genuine conflict —
   differing `resolved` / `integrity` — is an irreducible loss.
+- The first entry may follow the `# yarn lockfile v1` header **immediately**, with
+  no blank separator line (old yarn, e.g. lodash's own lock). The header block is
+  consumed by skipping leading comment + blank lines, not a fixed offset.
 
 ## Degradation rules
 

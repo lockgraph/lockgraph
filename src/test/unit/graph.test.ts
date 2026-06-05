@@ -338,6 +338,37 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
   })
 
+  // ADR-0017 §Local-directory sources (2026-06-04) — the discriminator is the
+  // SOURCE node's canonical resolution locality, not the edge range. These pin
+  // the carve-out AND the bus-factor guarantee it must preserve. (The negatives
+  // above carry NO tarball on the source, so they never reach this branch.)
+  it('PERMITS a local-directory source → workspace (portal:/link:/file: local link)', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('local@0.0.0-use.local', 'local', '0.0.0-use.local'))
+    b.setTarball({ name: 'local', version: '0.0.0-use.local' }, { resolution: { type: 'directory', path: './local' } })
+    b.addEdge('local@0.0.0-use.local', 'ws@0.0.0-use.local', 'dep', { range: 'workspace:^' })
+    expect(() => b.seal()).not.toThrow()
+  })
+
+  it('STILL THROWS for a published TARBALL source → workspace (bus-factor preserved)', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('pub@1.0.0', 'pub', '1.0.0'))
+    b.setTarball({ name: 'pub', version: '1.0.0' }, { resolution: { type: 'tarball', url: 'https://registry.npmjs.org/pub/-/pub-1.0.0.tgz' } })
+    b.addEdge('pub@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: 'workspace:^' })
+    expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+  })
+
+  it('STILL THROWS for a git source → workspace (bus-factor preserved)', () => {
+    const b = newBuilder()
+    b.addNode(n('ws@0.0.0-use.local', 'ws', '0.0.0-use.local', [], { workspacePath: 'packages/ws' }))
+    b.addNode(n('gitpkg@1.0.0', 'gitpkg', '1.0.0'))
+    b.setTarball({ name: 'gitpkg', version: '1.0.0' }, { resolution: { type: 'git', url: 'https://github.com/x/gitpkg.git', sha: '0123456789abcdef0123456789abcdef01234567' } })
+    b.addEdge('gitpkg@1.0.0', 'ws@0.0.0-use.local', 'dep', { range: 'workspace:^' })
+    expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
+  })
+
   it('rejects error-severity diagnostics at seal', () => {
     const b = newBuilder()
     b.addNode(n('a@1.0.0', 'a', '1.0.0'))
