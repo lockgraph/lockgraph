@@ -49,7 +49,11 @@ export function minimalBerryLockfile(
     ? `${cacheKey}/deadbeef`
     : 'deadbeef'
   const compressionLine = options.compressionLevel ? '  compressionLevel: 0\n' : ''
-  const conditionsBlock = options.conditions ? '  conditions:\n    os: linux\n' : ''
+  // `conditions:` is a SCALAR token in yarn-berry (e.g. `os=linux`), captured
+  // and emitted verbatim (corrected model — ADR-0018 §A.v5; task #89). The prior
+  // map form (`conditions:\n    os: linux`) was a fiction that the parser now
+  // correctly ignores, so this synth must emit the real scalar shape.
+  const conditionsBlock = options.conditions ? '  conditions: os=linux\n' : ''
 
   return (
     '__metadata:\n' +

@@ -69,8 +69,8 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   current fixtures carry a bare sha512 hex (no `<cacheKey>/` prefix) and
   stay bare, but a parsed `<cacheKey>/<hex>` prefix is preserved per-node
   (`TarballPayload.berryChecksumCacheKey`) — same uniform rule as v4 (F1).
-- `conditions` are supported and roundtrip via sidecar preservation
-  (introduced at v5).
+- `conditions` are supported and round-trip as a **scalar** token via
+  sidecar preservation, emitted bare (introduced at v5).
 - `compressionLevel` is not present in the v6 corpus.
 
 ## Quirks

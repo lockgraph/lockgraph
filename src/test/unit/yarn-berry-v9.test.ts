@@ -913,7 +913,9 @@ describe('yarn-berry-v9 — stringify', () => {
       peerDependencies: { react: '^18.2.0' },
       peerDependenciesMeta: { react: { optional: true } },
       dependenciesMeta: { lodash: { unplugged: true } },
-      conditions: { os: 'linux' },
+      // `conditions` is a SCALAR token in yarn-berry (corrected model, ADR-0018
+      // §A.v5) — supplied as a string, emitted bare (NOT a structured block).
+      conditions: 'os=linux & cpu=arm64',
     }
     builder.addNode(hintedNode)
     const graph = builder.seal()
@@ -923,7 +925,11 @@ describe('yarn-berry-v9 — stringify', () => {
     expect(emitted).toContain('  peerDependencies:\n    react: ^18.2.0\n')
     expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: "true"\n')
     expect(emitted).toContain('  dependenciesMeta:\n    lodash:\n      unplugged: "true"\n')
-    expect(emitted).toContain('  conditions:\n    os: linux\n')
+    // Bare scalar (not quoted) despite the spaces / `&`.
+    expect(emitted).toContain('  conditions: os=linux & cpu=arm64\n')
+    expect(emitted).not.toContain('conditions: "os=linux')
+    // Canonical yarn schedule: dependenciesMeta precedes peerDependenciesMeta.
+    expect(emitted.indexOf('dependenciesMeta:')).toBeLessThan(emitted.indexOf('peerDependenciesMeta:'))
   })
 
   it('emits peerDependenciesMeta from an optional-flagged peer edge (task #86 emit-from-edge)', () => {

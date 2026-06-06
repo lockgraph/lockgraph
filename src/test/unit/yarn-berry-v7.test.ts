@@ -157,8 +157,7 @@ describe('yarn-berry-v7 — stringify', () => {
       '  resolution: "pkg@npm:1.0.0"\n' +
       '  dependencies:\n' +
       '    dep: "npm:2.0.0"\n' +
-      '  conditions:\n' +
-      '    os: linux\n' +
+      '  conditions: os=linux\n' +
       `  checksum: ${PKG_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n\n' +
@@ -175,7 +174,7 @@ describe('yarn-berry-v7 — stringify', () => {
 
     expect(emitted).toContain('__metadata:\n  version: 7\n  cacheKey: 10\n')
     expect(emitted).toContain('    dep: "npm:2.0.0"\n')
-    expect(emitted).toContain('  conditions:\n    os: linux\n')
+    expect(emitted).toContain('  conditions: os=linux\n')
     expect(emitted).toContain(`  checksum: ${PKG_HEX}\n`)
     // v7 keeps the v4/v5/v6-era RAW hex shape — no `<cacheKey>/<hash>` prefix.
     expect(emitted).not.toContain(`checksum: 10/${PKG_HEX}`)

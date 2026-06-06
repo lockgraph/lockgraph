@@ -91,7 +91,8 @@ conditionsAllowed: true }`:
   shared with v4/v5/v6) and stay bare, but a parsed `<cacheKey>/<hex>`
   prefix is preserved per-node (`TarballPayload.berryChecksumCacheKey`) —
   same uniform rule as v4 (F1).
-- `conditions` are supported and roundtrip via sidecar preservation.
+- `conditions` are supported and round-trip as a **scalar** token via
+  sidecar preservation, emitted bare.
 - `compressionLevel`, where present, is preserved as pass-through
   `__metadata` sidecar data via the same mechanism as v8.
 

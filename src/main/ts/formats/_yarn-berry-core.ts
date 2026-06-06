@@ -147,7 +147,18 @@ export interface YarnBerryFamilyConfig {
 
 export interface YarnBerryFamilySidecar {
   peerDependencies?: Map<string, Record<string, string>>
-  conditions?: Map<string, SymlMap>
+  // `conditions:` is a SCALAR token in yarn-berry (e.g. `os=darwin & cpu=arm64`),
+  // NOT a structured map — captured verbatim per node so it round-trips byte-
+  // faithfully (corrects ADR-0018 §A.v5, which mis-modelled it as a SymlMap).
+  conditions?: Map<string, string>
+  // `dependenciesMeta:` ({ pkg: { optional|built|… } }) captured as a verbatim
+  // per-node block. Round-trip-fidelity only — deep EdgeAttrs modelling for
+  // cross-format translation is intentionally out of scope (task #89).
+  dependenciesMeta?: Map<string, SymlMap>
+  // `peerDependenciesMeta:` ({ peer: { optional: true } }) captured verbatim per
+  // node and fed to `peerDependenciesMetaOfNode` as its rung-0 hint, so emit goes
+  // through the SAME machinery as the #86 edge-`optional` path (no parallel emit).
+  peerDependenciesMeta?: Map<string, SymlMap>
   metadata?: SymlMap
 }
 
@@ -193,7 +204,9 @@ export function parseFamily(
   const builder = newBuilder()
   const diagnostics: Diagnostic[] = []
   const rawPeerDependencies = new Map<string, Record<string, string>>()
-  const rawConditions = new Map<string, SymlMap>()
+  const rawConditions = new Map<string, string>()
+  const rawDependenciesMeta = new Map<string, SymlMap>()
+  const rawPeerDependenciesMeta = new Map<string, SymlMap>()
 
   const entries: Array<{ key: string; value: SymlMap; specs: SpecPart[] }> = []
   for (const [key, value] of Object.entries(ast)) {
@@ -328,9 +341,29 @@ export function parseFamily(
       rawPeerDependencies.set(id, peerDependencies)
     }
 
-    const conditions = coerceSymlMap(value['conditions'])
+    // `conditions:` is a SCALAR (`os=darwin & cpu=arm64`), captured verbatim.
+    // The prior `coerceSymlMap` coercion silently dropped it (a scalar is not
+    // an object → undefined), losing the platform gate on @esbuild/@swc/sharp
+    // optional binaries (task #89 / closes #85).
+    const conditions = asString(value['conditions'])
     if (conditions !== undefined) {
       rawConditions.set(id, conditions)
+    }
+
+    // `dependenciesMeta:` ({ pkg: { optional|built|… } }) — verbatim per-node
+    // round-trip sidecar (task #89). No EdgeAttrs translation (out of scope).
+    const dependenciesMeta = coerceSymlMap(value['dependenciesMeta'])
+    if (dependenciesMeta !== undefined) {
+      rawDependenciesMeta.set(id, dependenciesMeta)
+    }
+
+    // `peerDependenciesMeta:` ({ peer: { optional: true } }) — captured verbatim
+    // and re-emitted through `peerDependenciesMetaOfNode` (the #86 machinery) as
+    // its rung-0 hint; `enrich` additionally folds `optional` onto the derived
+    // peer edge so berry→berry and pnpm→berry share one emit path.
+    const peerDependenciesMeta = coerceSymlMap(value['peerDependenciesMeta'])
+    if (peerDependenciesMeta !== undefined) {
+      rawPeerDependenciesMeta.set(id, peerDependenciesMeta)
     }
 
     const payload: TarballPayload = {}
@@ -442,6 +475,8 @@ export function parseFamily(
     const sidecar: YarnBerryFamilySidecar = {}
     if (rawPeerDependencies.size > 0) sidecar.peerDependencies = rawPeerDependencies
     if (rawConditions.size > 0) sidecar.conditions = rawConditions
+    if (rawDependenciesMeta.size > 0) sidecar.dependenciesMeta = rawDependenciesMeta
+    if (rawPeerDependenciesMeta.size > 0) sidecar.peerDependenciesMeta = rawPeerDependenciesMeta
     if (metadata !== undefined) sidecar.metadata = metadata
     rememberSidecar(graph, sidecar)
     // Wrap so that any subsequent graph.mutate() call propagates the sidecar
@@ -519,6 +554,12 @@ export function stringifyFamily(
   if (typeof compressionLevel === 'string' && /^-?(0|[1-9][0-9]*)$/.test(compressionLevel)) {
     output = unquoteMetadataScalar(output, 'compressionLevel', compressionLevel)
   }
+  // `conditions:` is emitted bare by yarn even though its value carries spaces /
+  // `&` / `( | )` (which the syml writer would quote). Strip the quotes off every
+  // `conditions:` scalar so the round-trip matches yarn byte-for-byte. Safe: yarn
+  // condition tokens never contain `"`, `\`, or newlines, so an unquote only ever
+  // recovers the original literal (and we bail on any line that does).
+  output = unquoteConditionsScalars(output)
   if (options.lineEnding === 'crlf') {
     output = output.replace(/\n/g, '\r\n')
   }
@@ -619,6 +660,11 @@ export function enrichFamily(
   }
   // Derived peer edges (yarn-berry raw-sidecar source) do not exist on the
   // graph yet — run the same ladder so they emit the flag on first pass too.
+  // Rung-0 first: a real berry lock already records `peerDependenciesMeta[peer]
+  // .optional` verbatim (task #89), which is authoritative — consult it before
+  // the external fill ladder so a berry→berry enrich stamps `optional` onto the
+  // derived edge without any node_modules/resolver lookup (and emits no
+  // RECIPE_PEER_META_INCOMPLETE for a peer the lock already answered).
   let derivedPeerOptionalChanged = false
   for (const [srcId, derivedPeers] of derivedPeersByNodeId) {
     const node = graph.getNode(srcId)
@@ -626,6 +672,11 @@ export function enrichFamily(
     for (const peer of derivedPeers) {
       const dst = graph.getNode(peer.dstOldId)
       const peerName = dst?.name ?? peer.name
+      if (berryMetaPeerOptional(graph, srcId, peerName)) {
+        peer.optional = true
+        derivedPeerOptionalChanged = true
+        continue
+      }
       if (resolvePeerOptional(graph, peerMetaCtx, node, peerName, pendingDiagnostics) === true) {
         peer.optional = true
         derivedPeerOptionalChanged = true
@@ -870,9 +921,18 @@ export function rawPeerDependenciesBlockOfNode(graph: Graph, nodeId: string): Sy
   return peerDependencies === undefined ? undefined : coerceSymlMap(peerDependencies)
 }
 
-export function rawConditionsBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
-  const conditions = sidecarByGraph.get(graph)?.conditions?.get(nodeId)
-  return conditions === undefined ? undefined : coerceSymlMap(conditions)
+export function rawConditionsScalarOfNode(graph: Graph, nodeId: string): string | undefined {
+  return sidecarByGraph.get(graph)?.conditions?.get(nodeId)
+}
+
+export function rawDependenciesMetaBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
+  const block = sidecarByGraph.get(graph)?.dependenciesMeta?.get(nodeId)
+  return block === undefined ? undefined : coerceSymlMap(block)
+}
+
+export function rawPeerDependenciesMetaBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
+  const block = sidecarByGraph.get(graph)?.peerDependenciesMeta?.get(nodeId)
+  return block === undefined ? undefined : coerceSymlMap(block)
 }
 
 /**
@@ -1098,11 +1158,16 @@ function entryOfNode(
     ?? edgeBlockOfKinds(graph, node, ['peer'], config, { skipMissingRange: true })
   if (peerDependencies !== undefined) entry['peerDependencies'] = peerDependencies
 
+  // Canonical yarn schedule places `dependenciesMeta` BEFORE `peerDependenciesMeta`
+  // (verified against real berry locks, e.g. @angular-devkit/build-angular). Both
+  // round-trip from the per-node raw sidecar captured at parse, with the legacy
+  // node-field hint kept as a fallback for hand-built nodes.
+  const dependenciesMeta = rawDependenciesMetaBlockOfNode(graph, node.id)
+    ?? extraBlockOfNode(node, 'dependenciesMeta')
+  if (dependenciesMeta !== undefined) entry['dependenciesMeta'] = dependenciesMeta
+
   const peerDependenciesMeta = peerDependenciesMetaOfNode(graph, node)
   if (peerDependenciesMeta !== undefined) entry['peerDependenciesMeta'] = peerDependenciesMeta
-
-  const dependenciesMeta = extraBlockOfNode(node, 'dependenciesMeta')
-  if (dependenciesMeta !== undefined) entry['dependenciesMeta'] = dependenciesMeta
 
   const bin = binBlockOfNode(node, payload)
   if (bin !== undefined) entry['bin'] = bin
@@ -1110,7 +1175,12 @@ function entryOfNode(
   entry['linkType'] = node.workspacePath !== undefined ? 'soft' : 'hard'
   entry['languageName'] = node.workspacePath !== undefined ? 'unknown' : 'node'
 
-  const conditions = rawConditionsBlockOfNode(graph, node.id) ?? extraBlockOfNode(node, 'conditions')
+  // `conditions:` is a SCALAR token (`os=darwin & cpu=arm64`, possibly with
+  // `( | )` groups) — emitted verbatim, NOT as a structured block. The captured
+  // scalar wins; a string node-field hint is the hand-built fallback. The syml
+  // writer would quote it (spaces/`&`), so `stringifyFamily` post-unquotes the
+  // `conditions:` lines to match yarn's bare emit (corrects ADR-0018 §A.v5).
+  const conditions = rawConditionsScalarOfNode(graph, node.id) ?? scalarConditionsHintOfNode(node)
   if (conditions !== undefined) {
     if (config.conditionsAllowed) {
       entry['conditions'] = conditions
@@ -1119,7 +1189,7 @@ function entryOfNode(
         code: `${config.codePrefix}_CONDITIONS_DROPPED`,
         subject: node.id,
         severity: 'warning',
-        message: `conditions block is unsupported in yarn-berry-v${config.lockfileVersion}; dropping on emit`,
+        message: `conditions is unsupported in yarn-berry-v${config.lockfileVersion}; dropping on emit`,
       })
     }
   }
@@ -1315,17 +1385,33 @@ function extraBlockOfNode(node: Node, field: string): SymlMap | undefined {
   return coerceSymlMap((node as unknown as Record<string, unknown>)[field])
 }
 
+// Scalar `conditions` node-field hint (hand-built test nodes / cross-format
+// stamping). `conditions:` is a SCALAR in yarn-berry, so only a string value is
+// honoured; an object value is ignored (the corrected model — ADR-0018 §A.v5).
+function scalarConditionsHintOfNode(node: Node): string | undefined {
+  const raw = (node as unknown as Record<string, unknown>)['conditions']
+  return typeof raw === 'string' ? raw : undefined
+}
+
 /**
- * Re-derive the `peerDependenciesMeta` block (task #86). Mirrors the pnpm
- * reference emitter (`_pnpm-flat-core.ts` `entryOfNode`): scan out-`peer`-edges
- * for `attrs.optional === true` and emit `<peer>: { optional: true }`, UNIONED
- * with the verbatim `extraBlockOfNode` hint (the only path before this change;
- * still honoured for same-format round-trip and hand-built test nodes).
+ * Re-derive the `peerDependenciesMeta` block (task #86, extended by #89). Mirrors
+ * the pnpm reference emitter (`_pnpm-flat-core.ts` `entryOfNode`): scan
+ * out-`peer`-edges for `attrs.optional === true` and emit `<peer>: { optional:
+ * true }`, UNIONED with the verbatim hint. The hint has two sources, both routed
+ * through THIS single emit site (so there is no parallel emit path):
+ *   - the per-node raw SIDECAR captured at parse from a real berry lock
+ *     (`rawPeerDependenciesMetaBlockOfNode`) — task #89 berry→berry round-trip;
+ *   - the `extraBlockOfNode` node field — same-format hand-built test nodes and
+ *     cross-format manifests that stamp the block directly onto the Node.
  *
  * The edge signal alone is incomplete — an optional peer the source PM never
  * resolved has no peer-virt instance and hence no edge — so the hint carries
- * what the edge set cannot. Peer-block keys are alias-aware (the edge `alias`,
- * else `dst.name`) so the meta key matches the emitted `peerDependencies` key.
+ * what the edge set cannot. Conversely the sidecar alone misses peer-optionals
+ * that only an edge (post-enrich / cross-format) knows; unioning both keeps
+ * berry→berry and pnpm→berry on one path. Peer-block keys are alias-aware (the
+ * edge `alias`, else `dst.name`) so the meta key matches the emitted
+ * `peerDependencies` key. A `Set` of names dedupes, so a peer that is optional
+ * in BOTH the edge and the hint is emitted exactly once (no double-emit).
  */
 function peerDependenciesMetaOfNode(graph: Graph, node: Node): SymlMap | undefined {
   const optionalPeers = new Set<string>()
@@ -1336,7 +1422,12 @@ function peerDependenciesMetaOfNode(graph: Graph, node: Node): SymlMap | undefin
     optionalPeers.add(edge.attrs.alias ?? dst.name)
   }
 
-  const hint = extraBlockOfNode(node, 'peerDependenciesMeta')
+  // Verbatim hint: sidecar (real-lock round-trip) preferred over the node field.
+  // Carried through to emit so any NON-`optional` key yarn might write (today it
+  // only writes `optional`) survives unmodelled, per task #89's preserve-via-
+  // sidecar requirement.
+  const hint = rawPeerDependenciesMetaBlockOfNode(graph, node.id)
+    ?? extraBlockOfNode(node, 'peerDependenciesMeta')
   if (hint !== undefined) {
     for (const [peerName, m] of Object.entries(hint)) {
       if (isOptionalMetaEntry(m)) optionalPeers.add(peerName)
@@ -1344,11 +1435,17 @@ function peerDependenciesMetaOfNode(graph: Graph, node: Node): SymlMap | undefin
   }
 
   if (optionalPeers.size === 0) return hint
-  const block: SymlMap = {}
+  // Start from the verbatim hint (preserving any extra keys), then ensure every
+  // edge/hint-derived optional peer carries `optional: true`.
+  const block: SymlMap = hint !== undefined ? { ...coerceSymlMap(hint) } : {}
   for (const peerName of Array.from(optionalPeers).sort(cmpStr)) {
-    block[peerName] = { optional: 'true' }
+    const existing = coerceSymlMap(block[peerName]) ?? {}
+    block[peerName] = { ...existing, optional: 'true' }
   }
-  return block
+  // Re-sort keys so emit order is deterministic regardless of hint key order.
+  const sorted: SymlMap = {}
+  for (const peerName of Object.keys(block).sort(cmpStr)) sorted[peerName] = block[peerName]!
+  return sorted
 }
 
 function isOptionalMetaEntry(value: SymlValue): boolean {
@@ -1668,6 +1765,16 @@ function peerEdgeKey(src: string, dst: string): string {
   return `${src} ${dst}`
 }
 
+// Rung-0 (task #89): is `peerName` marked optional in the node's VERBATIM
+// `peerDependenciesMeta` sidecar captured from a real berry lock? Authoritative
+// on-lock signal — no external lookup. Keys are the peer's descriptor name
+// (alias-aware on emit), matched here against the resolved peer name.
+function berryMetaPeerOptional(graph: Graph, nodeId: string, peerName: string): boolean {
+  const block = sidecarByGraph.get(graph)?.peerDependenciesMeta?.get(nodeId)
+  const entry = block?.[peerName]
+  return entry !== undefined && isOptionalMetaEntry(entry)
+}
+
 function createPeerMetaContext(options: YarnBerryFamilyEnrichOptions): PeerMetaContext {
   return {
     workspaceRoot:   options.workspaceRoot,
@@ -1955,14 +2062,32 @@ function remapSidecar(
   }
 
   if (sidecar.conditions !== undefined) {
-    const nextConditions = new Map<string, SymlMap>()
-    for (const [oldId, block] of sidecar.conditions) {
+    const nextConditions = new Map<string, string>()
+    for (const [oldId, scalar] of sidecar.conditions) {
       const nextId = nextNodes.get(oldId)?.id ?? oldId
       if (nextGraph.getNode(nextId) !== undefined) {
-        nextConditions.set(nextId, block)
+        nextConditions.set(nextId, scalar)
       }
     }
     if (nextConditions.size > 0) remapped.conditions = nextConditions
+  }
+
+  if (sidecar.dependenciesMeta !== undefined) {
+    const next = new Map<string, SymlMap>()
+    for (const [oldId, block] of sidecar.dependenciesMeta) {
+      const nextId = nextNodes.get(oldId)?.id ?? oldId
+      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, block)
+    }
+    if (next.size > 0) remapped.dependenciesMeta = next
+  }
+
+  if (sidecar.peerDependenciesMeta !== undefined) {
+    const next = new Map<string, SymlMap>()
+    for (const [oldId, block] of sidecar.peerDependenciesMeta) {
+      const nextId = nextNodes.get(oldId)?.id ?? oldId
+      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, block)
+    }
+    if (next.size > 0) remapped.peerDependenciesMeta = next
   }
 
   if (sidecar.metadata !== undefined) {
@@ -1986,13 +2111,29 @@ function pruneSidecar(sidecar: YarnBerryFamilySidecar, nextGraph: Graph): YarnBe
   }
 
   if (sidecar.conditions !== undefined) {
-    const nextConditions = new Map<string, SymlMap>()
-    for (const [nodeId, block] of sidecar.conditions) {
+    const nextConditions = new Map<string, string>()
+    for (const [nodeId, scalar] of sidecar.conditions) {
       if (nextGraph.getNode(nodeId) !== undefined) {
-        nextConditions.set(nodeId, block)
+        nextConditions.set(nodeId, scalar)
       }
     }
     if (nextConditions.size > 0) pruned.conditions = nextConditions
+  }
+
+  if (sidecar.dependenciesMeta !== undefined) {
+    const next = new Map<string, SymlMap>()
+    for (const [nodeId, block] of sidecar.dependenciesMeta) {
+      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, block)
+    }
+    if (next.size > 0) pruned.dependenciesMeta = next
+  }
+
+  if (sidecar.peerDependenciesMeta !== undefined) {
+    const next = new Map<string, SymlMap>()
+    for (const [nodeId, block] of sidecar.peerDependenciesMeta) {
+      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, block)
+    }
+    if (next.size > 0) pruned.peerDependenciesMeta = next
   }
 
   if (sidecar.metadata !== undefined) {
@@ -2005,6 +2146,8 @@ function pruneSidecar(sidecar: YarnBerryFamilySidecar, nextGraph: Graph): YarnBe
 function isEmptySidecar(sidecar: YarnBerryFamilySidecar): boolean {
   return sidecar.peerDependencies === undefined
     && sidecar.conditions === undefined
+    && sidecar.dependenciesMeta === undefined
+    && sidecar.peerDependenciesMeta === undefined
     && sidecar.metadata === undefined
 }
 
@@ -2012,4 +2155,17 @@ function unquoteMetadataScalar(output: string, key: string, value: string): stri
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return output.replace(new RegExp(`^(  ${escapedKey}): "${escapedValue}"$`, 'm'), `$1: ${value}`)
+}
+
+// Strip the surrounding quotes the syml writer adds to a `conditions:` scalar so
+// emit matches yarn's bare form (`conditions: os=darwin & cpu=arm64`). Only acts
+// on an entry-level (2-space indent) `conditions: "..."` line whose quoted body
+// contains no `\` escape — i.e. no embedded `"`, `\n`, `\t`, `\r`, or non-ASCII —
+// which holds for every real yarn condition token. Any line with an escape is
+// left quoted (lossless) rather than risk corrupting it.
+function unquoteConditionsScalars(output: string): string {
+  return output.replace(
+    /^(  conditions): "([^"\\]*)"$/gm,
+    (_m, key: string, body: string) => `${key}: ${body}`,
+  )
 }

@@ -263,8 +263,7 @@ describe('yarn-berry-v8 — stringify', () => {
       '"pkg@npm:1.0.0":\n' +
       '  version: 1.0.0\n' +
       '  resolution: "pkg@npm:1.0.0"\n' +
-      '  conditions:\n' +
-      '    os: linux\n' +
+      '  conditions: os=linux\n' +
       `  checksum: 10c0/${PKG_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n'
@@ -274,7 +273,7 @@ describe('yarn-berry-v8 — stringify', () => {
     const reparsed = parseV8(emitted)
 
     expect(emitted).toContain('__metadata:\n  version: 8\n  cacheKey: 10c0\n  compressionLevel: 0\n')
-    expect(emitted).toContain('  conditions:\n    os: linux\n')
+    expect(emitted).toContain('  conditions: os=linux\n')
     expect(emitted).not.toContain('compressionLevel: "0"')
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))
   })

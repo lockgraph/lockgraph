@@ -149,8 +149,7 @@ describe('yarn-berry-v6 — stringify', () => {
       '  resolution: "pkg@npm:1.0.0"\n' +
       '  dependencies:\n' +
       '    dep: 2.0.0\n' +
-      '  conditions:\n' +
-      '    os: linux\n' +
+      '  conditions: os=linux\n' +
       `  checksum: ${PKG_HEX}\n` +
       '  languageName: node\n' +
       '  linkType: hard\n\n' +
@@ -167,7 +166,7 @@ describe('yarn-berry-v6 — stringify', () => {
 
     expect(emitted).toContain('__metadata:\n  version: 6\n  cacheKey: 8\n')
     expect(emitted).toContain('  dep: 2.0.0\n')
-    expect(emitted).toContain('  conditions:\n    os: linux\n')
+    expect(emitted).toContain('  conditions: os=linux\n')
     expect(emitted).toContain(`  checksum: ${PKG_HEX}\n`)
     expect(emitted).not.toContain(`checksum: 8/${PKG_HEX}`)
     expect(graphSnapshot(reparsed)).toEqual(graphSnapshot(original))

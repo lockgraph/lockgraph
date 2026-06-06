@@ -158,6 +158,27 @@ definitively, even when that answer is 'required'):
   a `locator=` qualifier — a plain `file:../dir` directory link (already a
   unique node) is left unpatched. `Node.resolution` carries the verbatim
   locator for byte-faithful round-trip.
+- **Three structured fields round-trip (`conditions`, `dependenciesMeta`,
+  `peerDependenciesMeta`).** Inherited from v8 (see the
+  [v8 schema sketch](./yarn-berry-v8.md#schema-sketch) for the entry shape):
+  - `conditions` is a **scalar** platform-gate token (`os=darwin & cpu=arm64`,
+    or a grouped `(os=darwin | os=linux | …)`) — NOT a structured map. It is
+    captured verbatim and emitted **bare** (the SYML writer would otherwise quote
+    it because of the spaces / `&`). It never participates in NodeId / TarballKey
+    identity.
+  - `dependenciesMeta` (`{ <pkg>: { optional|built|… } }`) round-trips as a
+    verbatim per-node sidecar block (install-hint fidelity only).
+  - `peerDependenciesMeta` (`{ <peer>: { optional: true } }`) round-trips through
+    the **same** emitter as the cross-format reconstruction above — the captured
+    block is the rung-0 hint, unioned with any `optional` peer edge and deduped
+    by peer name, so berry → berry and pnpm → berry share one emit path with no
+    double-emit. On enrich, the on-lock `peerDependenciesMeta.optional` is the
+    authoritative rung-0 signal that stamps `EdgeAttrs.optional` on the derived
+    peer edge (no `node_modules` lookup required for a berry source).
+  - Emit order matches yarn for `dependenciesMeta` (immediately before
+    `peerDependenciesMeta`); `conditions`/`checksum`/`languageName`/`linkType`
+    sit in this adapter's intra-emitter schedule, which differs from yarn's
+    native order but is lossless and idempotent.
 
 ## Degradation rules
 

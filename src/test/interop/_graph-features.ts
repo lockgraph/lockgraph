@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Graph, TarballPayload } from '../../main/ts/graph.ts'
-import { rawConditionsBlockOfNode } from '../../main/ts/formats/_yarn-berry-core.ts'
+import { rawConditionsScalarOfNode } from '../../main/ts/formats/_yarn-berry-core.ts'
 import { integrityEquivalent } from '../../main/ts/recipe/integrity.ts'
 import type { PreservedFeature } from './_matrix.ts'
 
@@ -53,7 +53,7 @@ export function featurePresence(graph: Graph, feature: GraphFeature): boolean {
     case 'peer-virt':
       return Array.from(graph.nodes()).some(node => node.peerContext.length > 0)
     case 'conditions':
-      return Array.from(graph.nodes()).some(node => rawConditionsBlockOfNode(graph, node.id) !== undefined)
+      return Array.from(graph.nodes()).some(node => rawConditionsScalarOfNode(graph, node.id) !== undefined)
     case 'virtual':
       return Array.from(graph.nodes()).some(node => node.id.includes('('))
     case 'workspace-metadata':
@@ -184,8 +184,8 @@ export function graphSubset(
         break
       case 'conditions':
         for (const node of needle.nodes()) {
-          const actual = rawConditionsBlockOfNode(needle, node.id)
-          if (actual !== undefined && !isDeepStrictEqual(rawConditionsBlockOfNode(haystack, node.id), actual)) {
+          const actual = rawConditionsScalarOfNode(needle, node.id)
+          if (actual !== undefined && !isDeepStrictEqual(rawConditionsScalarOfNode(haystack, node.id), actual)) {
             return false
           }
         }

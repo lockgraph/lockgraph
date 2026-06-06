@@ -42,11 +42,42 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#file). yarn 4 also writes a
 
 ## Schema sketch
 
-Same shape as v6 with the same structured `conditions` support, but
+Same shape as v6 with the same scalar `conditions` support, but
 with `__metadata.version: 8`, quoted protocol-bearing inner-block
 dependency ranges (`lodash: "npm:4.17.21"`), cacheKey-prefixed
 checksums (`<cacheKey>/<hex>`), and `compressionLevel` carried in
 `__metadata`.
+
+A real v8 entry may carry three structured fields beyond the basic
+descriptor — all three round-trip:
+
+```
+"some-pkg@npm:1.0.0":
+  version: 1.0.0
+  resolution: "some-pkg@npm:1.0.0"
+  dependencies:
+    fsevents: "npm:2.3.3"
+  dependenciesMeta:           # { pkg: { optional | built | … } }
+    fsevents:
+      optional: true
+  peerDependencies:
+    react: "*"
+  peerDependenciesMeta:       # { peer: { optional: true } }
+    react:
+      optional: true
+  checksum: 10c0/…
+  conditions: os=darwin & cpu=arm64   # SCALAR platform gate
+  languageName: node
+  linkType: hard
+```
+
+- `conditions` — a **scalar** platform-condition token (NOT a nested
+  map): `os=darwin & cpu=arm64`, `os=linux`, or a grouped form like
+  `(os=darwin | os=linux | os=win32 | os=freebsd)`. Gates
+  platform-specific optional binaries (`@esbuild/*`, `@swc/*`,
+  `@cloudflare/workerd-*`, `sharp`, `fsevents`). Carried verbatim.
+- `dependenciesMeta` — `{ <pkg>: { optional|built|… } }` install hints.
+- `peerDependenciesMeta` — `{ <peer>: { optional: true } }`.
 
 ## Capabilities
 
@@ -69,7 +100,17 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   threaded through into the `checksum` prefix form `<cacheKey>/<hex>`.
 - Inner `dependencies` / `optionalDependencies` emit the quoted
   protocol-bearing form (for example `dep: "npm:2.0.0"`).
-- `conditions` are supported and roundtrip via sidecar preservation.
+- `conditions` are supported and round-trip as a **scalar** token via
+  sidecar preservation. The value is emitted **bare** (unquoted), even
+  when it contains spaces / `&` / `( | )`, to match yarn's output
+  byte-for-byte.
+- `dependenciesMeta` round-trips verbatim per node (a raw sidecar
+  block; install-hint fidelity only — no cross-format EdgeAttrs
+  modelling).
+- `peerDependenciesMeta` round-trips through the **same emitter** as
+  the pnpm→berry `peerDependenciesMeta` reconstruction (task #86): the
+  captured block is the rung-0 hint, unioned with any `optional` peer
+  edge, deduped by peer name (no double-emit).
 - `compressionLevel` is preserved as pass-through `__metadata`
   sidecar data; the current fixture corpus carries `0`.
 
@@ -79,7 +120,14 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
 - Inner `dependencies` / `optionalDependencies` emit quoted
   protocol-bearing ranges, unlike v4/v5/v6's bare form.
 - `checksum` values are `cacheKey/hash`, not raw sha512 hex.
-- `conditions` are present and supported, matching the v5/v6 sidecar shape.
+- `conditions` is a **scalar** token (e.g. `os=darwin & cpu=arm64`),
+  NOT a structured map — it is emitted bare and round-trips verbatim,
+  matching the v5/v6 scalar sidecar shape. (A field-level round-trip
+  sweep — task #89 — caught that the old SymlMap coercion silently
+  dropped it on 100% of real locks; a value-only sweep had missed it.)
+- `dependenciesMeta` and `peerDependenciesMeta` are present on most
+  real-world v8 locks and round-trip; `dependenciesMeta` is emitted
+  immediately before `peerDependenciesMeta`, matching yarn.
 - `compressionLevel` first appears in the current family corpus at v8
   and is preserved through `sidecar.metadata`.
 

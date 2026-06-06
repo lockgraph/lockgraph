@@ -71,8 +71,9 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   current fixtures carry a bare sha512 hex (no `<cacheKey>/` prefix) and
   stay bare, but a parsed `<cacheKey>/<hex>` prefix is preserved per-node
   (`TarballPayload.berryChecksumCacheKey`) — same uniform rule as v4 (F1).
-- `conditions` are supported and roundtrip via sidecar preservation —
-  v5 is the FIRST version with this field (v4 lacks it).
+- `conditions` are supported and round-trip as a **scalar** token via
+  sidecar preservation (emitted bare) — v5 is the FIRST version with
+  this field (v4 lacks it).
 - `compressionLevel` is not present in the v5 corpus.
 
 ## Quirks
@@ -81,9 +82,12 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
 - Inner `dependencies` / `optionalDependencies` emit bare ranges
   (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form.
 - `checksum` values are raw sha512 hex, not `cacheKey/hash`.
-- `conditions` first appears in v5; the current shipped fixture set does
-  not exercise it, but parse/stringify coverage preserves the nested
-  block shape in the adapter contract.
+- `conditions` first appears in v5; it is a **scalar** token (e.g.
+  `os=linux`), NOT a nested block. The current shipped fixture set does
+  not exercise it, but parse/stringify coverage preserves the scalar
+  verbatim (emitted bare) in the adapter contract. (The earlier spec
+  text claimed a nested-block shape; corrected per ADR-0018 §A.v5 /
+  task #89.)
 
 ## Degradation rules
 
