@@ -4,9 +4,14 @@
 > Provenance: **Source-only** (reverse-engineered from yarnpkg/berry dev branch).
 
 The completeness contract — stringify, modify, enrich, optimize —
-inherits from yarn-berry-v9 (per [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md)).
-This spec records read-side capabilities and points to ADR-0016 for
-the normative emit / mutate / enrich / prune rules.
+inherits from [yarn-berry-v9](./yarn-berry-v9.md): the shared,
+version-invariant yarn-berry emit contract lives in
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant),
+and the completion phases (modify / enrich / optimize) reference
+published [ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modify / enrich) and [ADR-0024](../decisions/0024-optimize-phase.md)
+(optimize). This spec records only the read-side capabilities and the
+single on-disk delta from v9 (`__metadata.version: 10`).
 
 ## Compatibility
 
@@ -49,9 +54,11 @@ also applies uniformly across v4–v10.
 
 ## Emit
 
-Emit (`stringify(graph, options?)`) inherits ADR-0016 §A semantics
-verbatim — see [yarn-berry-v9](./yarn-berry-v9.md#emit). The only
-on-disk delta from v9 is the `__metadata.version: 10` field.
+Emit (`stringify(graph, options?)`) inherits v9's emit contract
+verbatim — the shared, version-invariant yarn-berry emit contract in
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant);
+see [yarn-berry-v9](./yarn-berry-v9.md#emit). The only on-disk delta
+from v9 is the `__metadata.version: 10` field.
 
 ## Schema sketch
 
@@ -82,17 +89,18 @@ Inherits v9.
 
 ## Fixtures
 
-> **TBD:** unproducible from current matrix; gated on
-> [ADR-0005](../decisions/0005-pm-delivery-off-npm.md). When unblocked,
-> canonical writer is yarn 5+. Synthetic fixtures derived from v9 by
-> bumping the `version: 10` marker (per [yarn-berry-v7](./yarn-berry-v7.md)
-> precedent) are admissible for round-trip regression coverage until
-> a producer is wired up.
+> **TBD:** unproducible from the current matrix; gated on off-npm
+> delivery of a yarn 5+ producer into the fixture toolchain. When
+> unblocked, the canonical writer is yarn 5+. Synthetic fixtures derived
+> from v9 by bumping the `version: 10` marker (per
+> [yarn-berry-v7](./yarn-berry-v7.md) precedent) are admissible for
+> round-trip regression coverage until a producer is wired up.
 
 ## Open questions
 
 > **Deferred to yarn 5 GA.** What fields beyond `__metadata.version`
 > actually change в the v9 → v10 transition? Diff yarn 5 release
-> `Project.ts` against 4.14.x once a GA tag exists. The ADR-0016 §A
-> canonical form is *our* canonical form; byte-identity to yarn 5
-> output is a bonus, not a contract.
+> `Project.ts` against 4.14.x once a GA tag exists. The shared canonical
+> form in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+> is *our* canonical form; byte-identity to yarn 5 output is a bonus, not
+> a contract.

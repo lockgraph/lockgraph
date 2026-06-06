@@ -86,6 +86,10 @@ Mostly self-contained: the lockfile encodes the full hoisted tree.
 
 ## Quirks
 
+> Model terms used below — *graph*, *node*, *edge*, *peer virtualization*,
+> *workspace* — are defined in
+> [`_common.md` §4](./_common.md#4-reserved-vocabulary).
+
 - Tree shape is **layout, not graph**: nesting in `dependencies` reflects the
   hoisted `node_modules` shape, not parent-child semantic edges.
 - A package can appear multiple times at different paths; entries differ.

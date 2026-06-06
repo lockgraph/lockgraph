@@ -3,11 +3,17 @@
 > Status: preview.
 > Provenance: **Source-only**.
 
-The completeness contract — stringify, modify, enrich, optimize —
-is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
-This spec records compatibility and fixture provenance; the normative
-emit / mutate / enrich / prune rules live in ADR-0018 §A.v4 and the
-version-invariant sections it inherits from ADR-0016.
+The version-invariant emit contract — the *Graph-level roundtrip*
+property, canonical form, field schedule, SYML quoting, line endings,
+and `__metadata.cacheKey` threading — is shared across the yarn-berry
+family and lives in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant);
+this spec is the family **anchor** and records the v4-specific deltas
+(no `conditions`, bare inner-block dependency ranges, the v4-only
+`cacheKey: 7`, the `<cacheKey>/<hex>` checksum-prefix round-trip) plus
+the patch-slot recipe detail inline. Modify, enrich, and optimize
+reference published [ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modify / enrich) and [ADR-0024](../decisions/0024-optimize-phase.md)
+(optimize) for their normative rules.
 
 ## Compatibility
 
@@ -74,18 +80,19 @@ omission falls through to Row 3.
 ### Patch slot
 
 For every node whose resolution is a `patch:` locator the adapter
-populates `Node.patch` per
-[ADR-0011](../decisions/0011-tarball-key-disambiguation.md).
+populates `Node.patch` — the per-node carrier for the shared
+`+patch=` [`TarballKey`](./_common.md#43-tarballkey) slot
+([`_common.md` §2](./_common.md#2-patch-slot--tarballkey-sentinel)).
 The adapter computes the fingerprint itself; yarn's `hash=` parameter
 is **never** the canonical value — it is recorded as PM-native
-attribution per
-[ADR-0013 (accepted)](../decisions/0013-multi-pm-scalability-invariant.md)
+attribution per the canonical-vs-PM-native attribution principle
+([`_common.md` §2.3](./_common.md#23-canonical-vs-pm-native-attribution-principle))
 and surfaced through the format-layer carrier, not on `Node`.
 
 | Locator shape | Canonical input | Hash |
 |---|---|---|
 | File-backed, e.g. `patch:lodash@npm%3A4.17.21#./patch.diff::version=4.17.21&hash=…` | patch source bytes (the `.patch` file referenced by the `#./<path>` fragment) | sha512, lower-case hex, no prefix |
-| `~builtin<compat/…>`, e.g. `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::…` | UTF-8 bytes of `<yarn-major>:<locator>` where `<locator>` is the bare `~builtin<…>` slice (strip `patch:<spec>#` prefix and `::<params>` suffix), e.g. `4:~builtin<compat/typescript>`. yarn-major sourcing per [ADR-0015 (proposed)](../decisions/0015-ambient-state-inputs-to-canonical-recipes.md) when sourceable; un-sourceable at parse time falls through to Row 3 | sha512, lower-case hex, no prefix |
+| `~builtin<compat/…>`, e.g. `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::…` | UTF-8 bytes of `<yarn-major>:<locator>` where `<locator>` is the bare `~builtin<…>` slice (strip `patch:<spec>#` prefix and `::<params>` suffix), e.g. `4:~builtin<compat/typescript>`. yarn-major is an ambient-state input sourced from the install context when present; un-sourceable at parse time falls through to Row 3 | sha512, lower-case hex, no prefix |
 | Patch input unreachable at parse time (CI artefact stripped of `.yarn/patches/`, omitted `workspaceRoot`, slim source tarball, hand-edited entry, or `~builtin<…>` with un-sourceable yarn-major) | UTF-8 bytes of the locator string **as recorded in the lockfile** — `::<params>` (`::version=…`, `::hash=…`, …) included | sentinel `unresolved-<sha256-hex>`; emit `warning` diagnostic |
 
 **Routing.**
@@ -100,8 +107,8 @@ or (c) violation: fall through to Row 3 — the input is well-formed
 but the canonical recipe cannot run.
 
 *Row 2* fires when (a) the locator is `~builtin<…>` and (b)
-yarn-major is sourceable per ADR-0015. On (b) violation: fall
-through to Row 3 — recipe input absent.
+yarn-major is sourceable from the ambient install context. On (b)
+violation: fall through to Row 3 — recipe input absent.
 
 *Row 3* covers the residual. Sentinel covers "recipe input absent";
 INVALID_INPUT covers "caller provided malformed input".
@@ -113,25 +120,28 @@ INVALID_INPUT covers "caller provided malformed input".
   example: lockfile entry
   `patch:typescript@npm%3A5.4.5#~builtin<compat/typescript>::version=5.4.5&hash=abc123`
   → extracted slice `~builtin<compat/typescript>` → fingerprint
-  input `4:~builtin<compat/typescript>` (per ADR-0011 lines
-  135-137). *Why bare slice:* yarn-berry ships one compat bundle
+  input `4:~builtin<compat/typescript>` (the shared built-in recipe,
+  [`_common.md` §2.1](./_common.md#21-the-patch-slot)). *Why bare
+  slice:* yarn-berry ships one compat bundle
   per (yarn-major, `~builtin<…>` token) regardless of the patched
   package's version embedded in the envelope; the slice
   disambiguates compat bundles, the envelope adds spurious version
   dependence that would over-fragment the dedup space.
 - *Row 3 ("verbatim").* The locator string **as recorded in the
   lockfile**, `::<params>` included. *Reject* the surface read that
-  `::<params>` should be stripped as PM-native attribution under
-  ADR-0013: ADR-0013's attribution-vs-key principle governs the
-  *canonical* namespace where input divergence breaks dedup; the
-  sentinel namespace is by design PM-native and explicitly degraded
-  per ADR-0011 lines 170-172 — two adapters reading the same
-  artefact with different input encodings produce different
-  sentinels intentionally, and sentinels do NOT participate in
-  cross-PM identity.
+  `::<params>` should be stripped as PM-native attribution under the
+  attribution-vs-key principle
+  ([`_common.md` §2.3](./_common.md#23-canonical-vs-pm-native-attribution-principle)):
+  that principle governs the *canonical* namespace where input
+  divergence breaks dedup; the sentinel namespace is by design
+  PM-native and explicitly degraded
+  ([`_common.md` §2.2](./_common.md#22-the-unresolved-sha256-sentinel))
+  — two adapters reading the same artefact with different input
+  encodings produce different sentinels intentionally, and sentinels
+  do NOT participate in cross-PM identity.
 
 Sentinel-keyed entries are read-only at the mutator layer per
-[02-graph.md#mutator-coherence](../02-graph.md#mutator-coherence).
+[`_common.md` §4.5](./_common.md#45-mutator-coherence).
 
 ### Path confinement
 
@@ -211,9 +221,15 @@ guessing.
 
 ## Emit
 
-Emit (`stringify(graph, options?)`) is governed by
-[ADR-0018 §A.v4 *yarn-berry-v4 stringify deltas*](../decisions/0018-yarn-berry-pre-v9-family-completeness.md#av4--yarn-berry-v4-stringify-deltas)
-plus the version-invariant sections ADR-0018 inherits from ADR-0016:
+Emit (`stringify(graph, options?)`) is governed by the shared,
+version-invariant yarn-berry emit contract
+([`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+— *Graph-level roundtrip* property, canonical preamble, block ordering,
+entry-internal field schedule, SYML quoting predicate, indent, line
+endings, `__metadata.cacheKey` threading, non-goals), evaluated against
+the v4 fixture set via the acceptance gate
+([`_common.md` §1.9](./_common.md#19-acceptance-gate)). The v4-specific
+emit deltas layered on top of that contract:
 
 - `__metadata.version` emits the literal `4`.
 - `__metadata.cacheKey` defaults to absent; when present (caller-supplied
@@ -222,9 +238,15 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   value differs from v5/v6's `8`) — pre-v8 form, no string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the bare form
   (for example `lodash: 4.17.21`), not v8/v9's quoted protocol.
-- `checksum` values ROUND-TRIP whatever was parsed (ADR-0031): if the
-  source carried a `<cacheKey>/<hex>` prefix (yarn-2.0 writes `2/<hex>`)
-  the same prefix is re-emitted; a bare source stays bare. The cacheKey
+- `checksum` values ROUND-TRIP whatever was parsed (a `berry-zip`-origin
+  hash under the shared integrity model,
+  [`_common.md` §3](./_common.md#3-integrity-model); berry↔berry is a pure
+  hex re-encode of the same zip-cache digest per the berry-zip ≠
+  tarball-SRI boundary,
+  [`_common.md` §3.3](./_common.md#33-the-berry-zip--tarball-sri-boundary)):
+  if the source carried a `<cacheKey>/<hex>` prefix (yarn-2.0 writes
+  `2/<hex>`) the same prefix is re-emitted; a bare source stays bare. The
+  cacheKey
   is captured per-node on parse (`TarballPayload.berryChecksumCacheKey`)
   rather than from `__metadata.cacheKey`, since yarn-2.0 v4 omits the
   `__metadata.cacheKey` line yet still prefixes each checksum. This is
@@ -260,8 +282,10 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   `YARN_BERRY_V4_CONDITIONS_DROPPED`.
 - `linkType: hard` vs `soft` distinguishes hard-linkable vs symlink-only deps.
 - Virtual instances appear with `virtual:<random>#<base-resolution>` keys.
-  These are PEER-RESOLVED forks of one underlying package — handle in graph
-  layer per [02-graph.md](../02-graph.md#node-identity).
+  These are PEER-RESOLVED forks of one underlying package — modelled in the
+  graph layer as distinct peer-context NodeIds
+  ([`_common.md` §4.1](./_common.md#41-nodeid), the readable grammar that
+  replaces yarn-berry's opaque `virtual:<hash>#…` form).
 - Multi-spec keys (`"foo@npm:^1, foo@npm:^1.2":`) common — single value per
   entry.
 
@@ -279,10 +303,10 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
 
 ## Open questions
 
-> None at preview. Fixture verification matched ADR-0018 §A.v4 on all
-> observed deltas: handshake `4`, cacheKey `7`, bare inner dep ranges,
-> no `conditions`, and no `compressionLevel` in the current fixture
-> corpus. NOTE (F1, snapshot.50 round-trip sweep): the synthetic fixtures
+> None at preview. Fixture verification matched the documented v4
+> deltas on every observed field: handshake `4`, cacheKey `7`, bare
+> inner dep ranges, no `conditions`, and no `compressionLevel` in the
+> current fixture corpus. NOTE (F1, snapshot.50 round-trip sweep): the synthetic fixtures
 > use a bare checksum, but real yarn-2.0 v4 locks write the prefixed
 > `checksum: 2/<hex>` form; the library round-trips either per-node
 > (`TarballPayload.berryChecksumCacheKey`). See Emit / Quirks.

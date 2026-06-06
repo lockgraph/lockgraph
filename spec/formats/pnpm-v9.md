@@ -84,13 +84,19 @@ Compared to v6:
   `'9.0'`; what differs between them is engine behaviour, not the
   written lockfile schema.
 - The `packages` / `snapshots` split mirrors our internal model
-  (package metadata vs peer-bound instance) — see
-  [02-graph.md](../02-graph.md#node-identity).
+  (package metadata vs peer-bound instance) — `packages` carries the
+  identity-neutral tarball surface (`TarballKey` → `TarballPayload`),
+  `snapshots` carries the peer-bound node instances (`NodeId`); see
+  [_common.md §4.1](./_common.md#41-nodeid) and
+  [§4.3](./_common.md#43-tarballkey).
 
 ### Peer-virtualisation in snapshot keys (node identity)
 
 A peer-bound snapshot is keyed `name@version(peerA@v)(peerB@v)…`; the
-parenthesised peer-context is part of node identity. Two encodings of that
+parenthesised peer-context is part of node identity. This is exactly the
+shared [NodeId](./_common.md#41-nodeid) grammar — pnpm's own
+`lockfileVersion 6+` package-id form, from which the model's `NodeId` /
+`peerContext` vocabulary is borrowed verbatim. Two encodings of that
 suffix are load-bearing for faithful round-trip:
 
 - **Nested peer suffixes.** A peer in the suffix carries its OWN nested `(...)`
@@ -99,18 +105,20 @@ suffix are load-bearing for faithful round-trip:
   suffix is PRESERVED in the consumer's node id, so two consumer instances that
   differ only in a transitive peer's resolution stay DISTINCT nodes. Dropping it
   collapsed them onto one id and merged their divergent dep edges (unrepresentable
-  → see the verifier below). ADR-0030.
+  → see the verifier below). This is the sub-peer nesting rule of
+  [§4.1](./_common.md#41-nodeid).
 - **Hashed peer-set tokens.** When the resolved peer set is long, pnpm
   abbreviates the whole expanded list into a single bare-hex digest segment —
   e.g. `@angular/build@22.0.0-rc.2(53b8fd9b7f33abb48dff18614cf85bde)`. This is
   **not** a patch hash (patches use the labelled `(patch_hash=<sha256>)` form):
   it is an OPAQUE, non-edge-bearing peer-context discriminator, kept verbatim in
   node identity so distinct hashed instances stay distinct. The same
-  `name@version` may appear under several distinct hashes. ADR-0030.
-- Both collapse classes are guarded by an internal resolution verifier
-  (INV-RESOLVE, ADR-0029): every declared dep/dev/optional edge must resolve,
-  through the emitted adjacency, back to its target id — a miss surfaces as a
-  soft `LAYOUT_RESOLVE_VIOLATION` diagnostic (never a throw).
+  `name@version` may appear under several distinct hashes.
+- Both collapse classes are guarded by a pnpm-specific resolution verifier:
+  every declared dep/dev/optional edge must resolve, through the emitted
+  adjacency, back to its target id — a miss surfaces as a soft, pnpm-specific
+  `LAYOUT_RESOLVE_VIOLATION` [Diagnostic](./_common.md#4-reserved-vocabulary)
+  (`warning` severity, never a throw).
 
 ### `catalog:` protocol (pnpm 9.5+)
 
@@ -139,11 +147,15 @@ carrier for optional peers pnpm never resolved into an edge). `os` / `cpu` /
 ## Degradation rules
 
 Same as [pnpm-v6](./pnpm-v6.md#degradation-rules). Multi-hash SRIs round-trip
-verbatim within the SRI family. Note: pnpm identifies a registry tarball by its
-**integrity** (the default registry URL is implicit and omitted), so converting
-from a yarn-berry source — which carries only a zip-cache `checksum`, not a
-tarball SRI — omits integrity (`RECIPE_INTEGRITY_INCOMPLETE`) and leaves such
-entries without a resolution anchor until a registry fetch restores it.
+verbatim within the SRI family — pnpm is an SRI format and emits every member of
+the [integrity](./_common.md#3-integrity-model) multiset. Note: pnpm identifies a
+registry tarball by its **integrity** (the default registry URL is implicit and
+omitted), so converting from a yarn-berry source — which carries only a
+`berry-zip` `checksum`, not a tarball SRI ([the berry-zip ≠ tarball-SRI
+boundary](./_common.md#33-the-berry-zip--tarball-sri-boundary)) — omits integrity
+under the [omit-never-fabricate](./_common.md#34-omit-never-fabricate) posture
+(`RECIPE_INTEGRITY_INCOMPLETE`) and leaves such entries without a resolution
+anchor until a registry fetch restores it.
 
 ## Fixtures
 

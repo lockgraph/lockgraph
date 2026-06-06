@@ -72,7 +72,7 @@ Keys = comma-separated dep specs that share the same resolved version.
 | `git` / `github` protocols                | ✓ | resolved URL stored |
 | `file` / `link` / `portal`                | ✓ | relative specifier stored verbatim in `resolved`; canonicalised to a `directory` resolution |
 | `patch:` protocol                         | ✗ | |
-| Integrity hashes                          | ✓ | sha512; older lockfiles use sha1 |
+| Integrity hashes                          | ✓ | sha512; older lockfiles use sha1. Carried under the shared [integrity model](./_common.md#3-integrity-model) as a verbatim multi-hash multiset (every algorithm preserved, [`_common.md` §3.1](./_common.md#31-preserve-every-algorithm-verbatim)) |
 | `dev` / `optional` / `peer` separation    | ~ | `optional` recoverable from lockfile (`optionalDependencies:` sibling block); `dev` / `peer` require `manifests` and otherwise collapse to `dep` |
 | Bundled deps                              | ✗ | |
 | Overrides / resolutions                   | ~ | yarn applies them at resolve time |
@@ -89,9 +89,45 @@ collapse to `dep`.
 
 | Operation | Option                           | Required?              | Effect when omitted |
 |-----------|----------------------------------|:----------------------:|---------------------|
-| Parse     | `manifests['']`                  | required for monorepos | source of truth for the `workspaces` field. Without it, the synthesised root cannot distinguish workspace-member entries (which would normally carry `attrs.workspace = true` on their root-edges) from external `0.0.0-use.local` lookalikes — both end up as ordinary `dep` edges from the synthesised root. Member entries themselves remain present as graph nodes; they just lose the workspace-edge marker (per ADR-0019 §C 473-481) |
-| Parse     | `manifests[<workspacePath>]`     | recommended            | recovers full `dep` / `dev` / `optional` / `peer` classification; without it, only `dep` and `optional` are recoverable from the lockfile (yarn 1 emits `optionalDependencies:` as a sibling inner-block), while `dev` and `peer` collapse to `dep` (per ADR-0019 §C 4-row table) |
+| Parse     | `manifests['']`                  | required for monorepos | source of truth for the `workspaces` field. Without it, the synthesised root cannot distinguish workspace-member entries (which would normally carry `attrs.workspace = true` on their root-edges) from external `0.0.0-use.local` lookalikes — both end up as ordinary `dep` edges from the synthesised root. Member entries themselves remain present as graph nodes; they just lose the workspace-edge marker (the classic-specific workspace-edge rule, stated inline under [Workspace-edge marker](#workspace-edge-marker-classic-specific)) |
+| Parse     | `manifests[<workspacePath>]`     | recommended            | recovers full `dep` / `dev` / `optional` / `peer` classification; without it, only `dep` and `optional` are recoverable from the lockfile (yarn 1 emits `optionalDependencies:` as a sibling inner-block), while `dev` and `peer` collapse to `dep` (the classic-specific dep/dev/optional/peer classification, stated inline under [Dependency classification](#dependency-classification-classic-specific)) |
 | Stringify | `manifests`                      | optional               | re-emit reads only the graph; manifests inform the header comment (currently none) |
+
+The two classic-specific parse rules the table above leans on — the
+workspace-edge marker and the dep/dev/optional/peer classification — are
+stated normatively here (they are specific to yarn-classic's
+manifest-blind lockfile shape, not shared model rules).
+
+### Workspace-edge marker (classic-specific)
+
+A yarn-classic lockfile encodes only resolved descriptors, never workspace
+boundaries, so workspace membership is reconstructed from `manifests['']`
+(the root `package.json#workspaces` field). When `manifests['']` is
+supplied, each member entry's root-edge carries `attrs.workspace = true`,
+marking it a workspace edge rather than an external dependency. When it is
+omitted, the synthesised root cannot tell a workspace-member entry from an
+external `0.0.0-use.local` lookalike: both project to ordinary `dep`
+root-edges. The member entries are still present as graph nodes — only the
+workspace-edge marker is lost. This is the sole graph-level effect of a
+missing root manifest; node identity and resolution are unaffected.
+
+### Dependency classification (classic-specific)
+
+Per-edge classification splits along a **lockfile-derivable /
+manifest-required** axis:
+
+| Edge kind | Recoverable from the lockfile alone? | Source |
+|-----------|:------------------------------------:|--------|
+| `dep`      | ✓ | the `dependencies:` inner-block |
+| `optional` | ✓ | yarn 1 emits a separate `optionalDependencies:` inner-block sibling of `dependencies:` |
+| `dev`      | ✗ | declared only in `package.json#devDependencies` — absent from the lockfile |
+| `peer`     | ✗ | declared only in `package.json#peerDependencies` — absent from the lockfile |
+
+With `manifests[<workspacePath>]` supplied, full `dep` / `dev` /
+`optional` / `peer` classification is recovered from each manifest. Without
+it, only `dep` and `optional` are derivable from the lockfile; `dev` and
+`peer` edges collapse to `dep`. No heuristic re-derives `dev` / `peer`
+from observed nesting — the information is simply not in the lockfile.
 
 ## Quirks
 
@@ -107,13 +143,16 @@ collapse to `dep`.
 - **Unknown scalar entry fields are tolerated and round-tripped verbatim.**
   yarn 1 emits a legacy `uid ""` field on some `link:` / `file:` entries (e.g.
   `facebook/react`). Rather than reject the lockfile, the parser captures any
-  unmodelled `  <field> <value>` entry line verbatim (sidecar, keyed by NodeId)
-  and re-emits it after the modelled fields, before `dependencies:`. One `info`
+  unmodelled `  <field> <value>` entry line verbatim (sidecar, keyed by
+  [NodeId](./_common.md#41-nodeid)) and re-emits it after the modelled fields,
+  before `dependencies:`. One `info`
   diagnostic `YARN_CLASSIC_UNKNOWN_FIELD` lists the field names encountered.
   Forward-compatible with any future yarn-1 entry field.
 - Integrity is preserved as a multi-hash multiset (`sha1` and every member of a
-  multi-hash SRI are kept, not dropped to sha512-only). The legacy `resolved#sha1`
-  fragment continues to round-trip via the resolution sidecar.
+  multi-hash SRI are kept, not dropped to sha512-only) — the shared
+  [§3.1 preserve-every-algorithm rule](./_common.md#31-preserve-every-algorithm-verbatim).
+  The legacy `resolved#sha1` fragment continues to round-trip via the resolution
+  sidecar.
 - git-protocol `resolved` URLs — `git+ssh://`, `git+https://`, `git://`, and the
   scp-like `git@host:owner/repo.git#<sha>` — are accepted and modelled as a git
   resolution (`type: 'git'` when a `#<40-hex>` commit is present). A single git
@@ -151,8 +190,9 @@ collapse to `dep`.
 - Garbage-rejection boundary (not-a-lockfile inputs reject cleanly, no crash):
   - A bare package-name entry key (`foo:` with no `@<range>`) is *malformed* —
     yarn 1's writer always keys entries by `<name>@<range>` descriptors and never
-    emits a bare name. It is rejected with a typed `PARSE_FAILED` `LockfileError`
-    that names the missing `@<range>`, rather than swallowed.
+    emits a bare name. It is rejected with a typed `PARSE_FAILED`
+    [`LockfileError`](./_common.md#4-reserved-vocabulary) (the shared Diagnostic
+    `code` discriminant) that names the missing `@<range>`, rather than swallowed.
   - Quoted field-keys (`  "version" "…"`, `  "resolved" "…"`) signal a
     non-lockfile: yarn 1 quotes string *values* but never field *names*
     (`version` / `resolved` / `integrity` are emitted bare). A quoted key at
@@ -189,7 +229,8 @@ collapse to `dep`.
 ## Open questions
 
 > **Open:** without `manifests`, can we *infer* `dev` / `peer` from observed
-> nesting + ranges? (`optional` is already recoverable from
-> `optionalDependencies:` inner-block; per ADR-0019 §C only `dev` / `peer`
-> are unrecoverable.) Probably not reliably. Mark unclassified deps as
+> nesting + ranges? (`optional` is already recoverable from the
+> `optionalDependencies:` inner-block; only `dev` / `peer` are unrecoverable
+> — see [Dependency classification](#dependency-classification-classic-specific).)
+> Probably not reliably. Mark unclassified deps as
 > `dep` with a `confidence: low` annotation, or refuse?

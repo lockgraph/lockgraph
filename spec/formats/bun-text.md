@@ -93,7 +93,10 @@ Each `packages[name]` entry is a positional array — bun-specific encoding.
   reproduces, even though it's not strictly resolution data.
 - Integrity (positional slot 2) is preserved as a multi-hash multiset — `sha1`,
   `sha256`, `sha384`, `sha512`, and every member of a space-joined SRI — not
-  collapsed to sha512-only.
+  collapsed to sha512-only. The shared integrity model (verbatim multiset,
+  per-hash origin tags, omit-never-fabricate emit) is in
+  [`_common.md` §3](./_common.md#3-integrity-model); bun-text reads and
+  emits SRI-origin hashes from this single positional slot.
 
 ## Degradation rules
 

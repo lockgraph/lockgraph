@@ -3,11 +3,16 @@
 > Status: preview.
 > Provenance: **Source-only**.
 
-The completeness contract — stringify, modify, enrich, optimize —
-is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
-This spec records compatibility and fixture provenance; the normative
-emit / mutate / enrich / prune rules live in ADR-0018 §A.v6 and the
-version-invariant sections it inherits from ADR-0016.
+The version-invariant emit contract — the *Graph-level roundtrip*
+property, canonical form, field schedule, SYML quoting, line endings,
+and `__metadata.cacheKey` threading — is shared across the yarn-berry
+family and lives in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant);
+this spec inherits it and records only the v6-specific deltas inline.
+The completion phases (modify / enrich / optimize) are read-side-only
+in this preview (Source-only provenance — no producer yet); their
+normative rules reference published [ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modify / enrich) and [ADR-0024](../decisions/0024-optimize-phase.md)
+(optimize).
 
 ## Compatibility
 
@@ -54,9 +59,15 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
 ## Emit
 
-Emit (`stringify(graph, options?)`) is governed by
-[ADR-0018 §A.v6 *yarn-berry-v6 stringify deltas*](../decisions/0018-yarn-berry-pre-v9-family-completeness.md#av6--yarn-berry-v6-stringify-deltas)
-plus the version-invariant sections ADR-0018 inherits from ADR-0016:
+Emit (`stringify(graph, options?)`) is governed by the shared,
+version-invariant yarn-berry emit contract in
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+(canonical form, block ordering, field schedule, the SYML quoting
+predicate at [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate),
+line endings, and `__metadata.cacheKey` threading) — evaluated against
+the v6 fixture set per the acceptance gate at
+[`_common.md` §1.9](./_common.md#19-acceptance-gate). The v6-specific
+deltas on top of that shared contract are:
 
 - `__metadata.version` emits the literal `6`.
 - `__metadata.cacheKey` defaults to absent; when present (caller-supplied
@@ -65,9 +76,10 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the bare form
   (for example `lodash: 4.17.21`), not v8/v9's quoted protocol.
-- `checksum` values round-trip whatever was parsed (ADR-0031): the
-  current fixtures carry a bare sha512 hex (no `<cacheKey>/` prefix) and
-  stay bare, but a parsed `<cacheKey>/<hex>` prefix is preserved per-node
+- `checksum` values round-trip whatever was parsed (the integrity model,
+  [`_common.md` §3](./_common.md#3-integrity-model)): the current fixtures
+  carry a bare sha512 hex (no `<cacheKey>/` prefix) and stay bare, but a
+  parsed `<cacheKey>/<hex>` prefix is preserved per-node
   (`TarballPayload.berryChecksumCacheKey`) — same uniform rule as v4 (F1).
 - `conditions` are supported and round-trip as a **scalar** token via
   sidecar preservation, emitted bare (introduced at v5).
@@ -90,6 +102,6 @@ Inherits v5.
 
 ## Open questions
 
-> None at preview. The current fixture set matches ADR-0018 §A.v6:
-> same shape as v5, version handshake `6`, cacheKey `8`, bare inner
-> dep ranges, raw checksum form.
+> None at preview. The current fixture set matches the documented
+> deltas: same shape as v5, version handshake `6`, cacheKey `8`, bare
+> inner dep ranges, raw checksum form.

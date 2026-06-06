@@ -3,11 +3,18 @@
 > Status: preview.
 > Provenance: **Source-only**.
 
-The completeness contract — stringify, modify, enrich, optimize —
-is owned by [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md).
-This spec records read-side capabilities and points to ADR-0016 for
-the normative emit / mutate / enrich / prune rules; nothing in this
-file overrides ADR-0016.
+The version-invariant emit contract — the *Graph-level roundtrip*
+property, canonical form, field schedule, SYML quoting, line endings,
+and `__metadata.cacheKey` threading — is shared across the yarn-berry
+family and lives in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant);
+this spec inherits it and records only the v9-specific deltas
+(cacheKey `10c0`, the three structured-fields round-trip, the
+`::locator=` descriptor nuance, the v9 schema-version handshake)
+inline. Modify, enrich, and optimize are read-side-only in this
+preview (Source-only provenance — no producer yet); the completion
+phases reference published [ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modify / enrich) and [ADR-0024](../decisions/0024-optimize-phase.md)
+(optimize) for their normative rules.
 
 ## Compatibility
 
@@ -46,34 +53,45 @@ sentinel input shape, path-confinement rule, and
 [`patch:`-descriptor edge resolution](./yarn-berry-v4.md#patch-descriptor-edges)
 (form a / form b, multi-consumer `&locator=` disambiguation) carry over
 verbatim — v9 inherits v4's `## Patch slot`, `## Path confinement`, and
-`## Patch-descriptor edges` sub-sections without re-statement.
-[ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md)
-§A is the normative source for the **emit-side** companion (canonical
-form rules, field schedule, quoting, line endings, `__metadata.cacheKey`
-threading) — see [#emit](#emit) below.
+`## Patch-descriptor edges` sub-sections without re-statement. The
+underlying `+patch=` slot grammar and `unresolved-<sha256>` sentinel
+that those sub-sections build on are the shared
+[`_common.md` §2](./_common.md#2-patch-slot--tarballkey-sentinel) model.
+The **emit-side** companion (canonical form rules, field schedule,
+quoting, line endings, `__metadata.cacheKey` threading) is the shared
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+contract — see [#emit](#emit) below.
 
 ## Emit
 
-Emit (`stringify(graph, options?)`) is governed by
-[ADR-0016 §A *Stringify*](../decisions/0016-yarn-berry-v9-completeness-contract.md#a-stringify)
+Emit (`stringify(graph, options?)`) is governed by the shared,
+version-invariant yarn-berry emit contract in
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
 — normative source for:
 
 - the *Graph-level roundtrip* property
   (`parse(stringify(parse(x))) ≡ parse(x)`),
 - canonical preamble, block ordering, entry-internal field schedule,
-  SYML quoting predicate (the five-condition rule), indent, line
-  endings (`lf` default, `crlf` opt-in), trailing newline,
+  SYML quoting predicate (the five-condition rule;
+  [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate)),
+  indent, line endings (`lf` default, `crlf` opt-in), trailing newline,
   `__metadata.cacheKey` threading,
 - non-goals (no byte-lossless roundtrip, no CST-grade fidelity, no
-  unmodelled `__metadata` resurrection),
-- acceptance gate against the
-  `src/test/resources/fixtures/lockfiles/*/yarn-berry-v9.lock`
-  fixture set.
+  unmodelled `__metadata` resurrection).
 
-Subsequent phases — modify (§B), enrich (§C), optimize (§D) — are
-similarly normative-in-ADR-0016. Any conflict between this spec and
-ADR-0016 is resolved in ADR-0016's favour until the ADR flips
-`accepted` and this section is updated to reflect the final shape.
+The acceptance gate ([`_common.md` §1.9](./_common.md#19-acceptance-gate))
+is evaluated against the v9 fixture set
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v9.lock`. The
+v9-specific emit deltas inherited on top of the shared contract are the
+cacheKey `10c0` form (`<cacheKey>/<hex>` checksums, see [Quirks](#quirks)),
+the three structured-fields round-trip, and the `::locator=` descriptor
+nuance — all detailed under [Quirks](#quirks) below.
+
+Subsequent phases — modify, enrich, optimize — are read-side-only in
+this preview. Their normative rules live in published
+[ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modification / tree completion / enrich) and
+[ADR-0024](../decisions/0024-optimize-phase.md) (optimize: orphan GC).
 
 ## Schema sketch
 
@@ -99,7 +117,8 @@ flag survives conversions that the source format modelled it on:
   pnpm → yarn-berry optional peer with no enrich step and no workspace context.
 - **Enrich fills the gap for formats that drop the flag.** npm, bun, and
   yarn-classic discard `peerDependenciesMeta` on parse, so their edges reach
-  yarn-berry without an `optional` attribute. The enrich pass (ADR-0016 §C)
+  yarn-berry without an `optional` attribute. The enrich pass (published
+  [ADR-0023](../decisions/0023-graph-modification-and-completion.md))
   walks each such peer edge and consults a **fill ladder**, setting
   `EdgeAttrs.optional = true` only when an authoritative source proves the peer
   optional. The pass is **monotone-additive** (it unions the flag, never clears
@@ -129,10 +148,13 @@ definitively, even when that answer is 'required'):
   `compressionLevel`) suggests v9 is likely paired with at least one
   structural change that needs probing.
 - **`checksum` is a digest of yarn's post-processed zip-cache, NOT the tarball
-  sha512.** Modelled internally as a `berry-zip`-origin hash, it is
+  sha512.** Modelled internally as a `berry-zip`-origin hash under the shared
+  integrity model ([`_common.md` §3](./_common.md#3-integrity-model)), it is
   interchangeable only within the yarn family (raw hex pre-v8, `<cacheKey>/<hex>`
-  v8+). A tarball SRI is never re-encoded into it, nor it into an SRI — they are
-  digests of different byte streams.
+  v8+, with v9 carrying the `10c0/<hex>` form). A tarball SRI is never re-encoded
+  into it, nor it into an SRI — they are digests of different byte streams (the
+  berry-zip ≠ tarball-SRI boundary,
+  [`_common.md` §3.3](./_common.md#33-the-berry-zip--tarball-sri-boundary)).
 - A LOCAL node (`portal:` / `link:`, canonical resolution `type: 'directory'`)
   may depend on a workspace — e.g. a `portal:` package declaring
   `"<root>": "workspace:^"` in its own monorepo. The graph seal permits incoming
@@ -150,7 +172,9 @@ definitively, even when that answer is 'required'):
   e.g. `…tgz#…::hash=17d4d9&locator=…`). Because the NodeId only carries
   name + version + peer-context + patch, the patch slot is the sole free
   discriminator: such an entry takes a sentinel patch
-  `+patch=unresolved-<sha256 of its verbatim locator>` (per ADR-0011), so the
+  `+patch=unresolved-<sha256 of its verbatim locator>` (the shared
+  `unresolved-<sha256>` sentinel,
+  [`_common.md` §2.2](./_common.md#22-the-unresolved-sha256-sentinel)), so the
   two stay **distinct nodes** with **distinct TarballKeys** (their differing
   checksums / deps no longer collide) instead of throwing `IRREDUCIBLE_LOSS`.
   The sentinel is gated on the consumer qualifier: a `link:`/`portal:` protocol
@@ -236,17 +260,21 @@ supply-chain surface into a format conversion.
 
 ## Fixtures
 
-> **TBD:** unproducible from current matrix; gated on
-> [ADR-0005](../decisions/0005-pm-delivery-off-npm.md). When unblocked,
-> canonical writer is yarn 4.14+.
+> **TBD:** no v9 fixtures yet — they are unproducible from the current
+> producer matrix and are blocked pending off-npm delivery of a yarn
+> 4.14+ producer into the fixture toolchain. Once that producer is
+> available, the canonical writer is yarn 4.14+.
 
 ## Open questions
 
-> **Deferred to producer wiring (out of ADR-0016 scope).** What
-> fields beyond `__metadata.version` actually changed in the v8 → v9
-> transition? Read yarn 4.14.0 changelog and diff its `Project.ts`
-> against 4.13.0 once a producer is wired up. The §A canonical form
-> in ADR-0016 is *our* canonical form — byte-identity to yarn 4.14+
-> output is a bonus, not a contract (see ADR-0016 *Risks: yarn 4 → 9
-> emit divergence*), so this question gates fixture provenance and
-> capability-table refinement, not the §A acceptance gate.
+> **Deferred to producer wiring.** What fields beyond
+> `__metadata.version` actually changed in the v8 → v9 transition? Read
+> the yarn 4.14.0 changelog and diff its `Project.ts` against 4.13.0
+> once a producer is wired up. The shared canonical form in
+> [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+> is *our* canonical form — byte-identity to yarn 4.14+ output is a
+> bonus, not a contract (an emit divergence between our canonical form
+> and a future yarn 4 → 9 writer is absorbed by the yarn-berry adapter,
+> not by moving the contract), so this question gates fixture
+> provenance and capability-table refinement, not the
+> [`_common.md` §1.9](./_common.md#19-acceptance-gate) acceptance gate.

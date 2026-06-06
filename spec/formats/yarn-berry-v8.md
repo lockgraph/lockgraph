@@ -3,11 +3,18 @@
 > Status: preview.
 > Provenance: **Source-only**.
 
-The completeness contract — stringify, modify, enrich, optimize —
-is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
-This spec records compatibility and fixture provenance; the normative
-emit / mutate / enrich / prune rules live in ADR-0018 §A.v8 and the
-version-invariant sections it inherits from ADR-0016.
+The version-invariant emit contract — the *Graph-level roundtrip*
+property, canonical form, field schedule, SYML quoting, line endings,
+and `__metadata.cacheKey` threading — is shared across the yarn-berry
+family and lives in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant);
+this spec inherits it and records only the v8-specific deltas
+(cacheKey `10c0`, quoted protocol-bearing inner-block ranges, the
+`<cacheKey>/<hex>` checksum form, `compressionLevel`, the three
+structured-fields round-trip, and the `::locator=` descriptor nuance)
+inline. Modify, enrich, and optimize reference published
+[ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modify / enrich) and [ADR-0024](../decisions/0024-optimize-phase.md)
+(optimize) for their normative rules.
 
 ## Compatibility
 
@@ -91,9 +98,22 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
 ## Emit
 
-Emit (`stringify(graph, options?)`) is governed by
-[ADR-0018 §A.v8 *yarn-berry-v8 stringify deltas*](../decisions/0018-yarn-berry-pre-v9-family-completeness.md#av8--yarn-berry-v8-stringify-deltas)
-plus the version-invariant sections ADR-0018 inherits from ADR-0016:
+Emit (`stringify(graph, options?)`) is governed by the shared,
+version-invariant yarn-berry emit contract in
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+— normative source for the *Graph-level roundtrip* property
+(`parse(stringify(parse(x))) ≡ parse(x)`), the canonical preamble,
+block ordering, entry-internal field schedule, the SYML quoting
+predicate (the five-condition rule;
+[`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate)),
+indent, line endings (`lf` default, `crlf` opt-in), trailing newline,
+`__metadata.cacheKey` threading, and the non-goals (no byte-lossless
+roundtrip, no CST-grade fidelity, no unmodelled `__metadata`
+resurrection). The acceptance gate
+([`_common.md` §1.9](./_common.md#19-acceptance-gate)) is evaluated
+against the v8 fixture set
+`src/test/resources/fixtures/lockfiles/*/yarn-berry-v8.lock`. The
+v8-specific deltas inherited on top of the shared contract are:
 
 - `__metadata.version` emits the literal `8`.
 - `__metadata.cacheKey` defaults to absent, but when present it is
@@ -153,7 +173,7 @@ Inherits v6.
 
 ## Open questions
 
-> None at preview. Fixture verification matched ADR-0018 §A.v8 on the
-> observed deltas: handshake `8`, cacheKey `10c0`, quoted inner dep
-> ranges, `cacheKey/hash` checksum form, `conditions`, and
-> `compressionLevel`.
+> None at preview. Fixture verification matched the documented v8
+> deltas on every observed field: handshake `8`, cacheKey `10c0`,
+> quoted inner dep ranges, `cacheKey/hash` checksum form, `conditions`,
+> and `compressionLevel`.

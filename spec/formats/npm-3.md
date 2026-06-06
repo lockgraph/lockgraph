@@ -72,7 +72,9 @@ Same as [npm-2](./npm-2.md#conversion-inputs).
 - **Integrity is preserved as a multi-hash multiset.** Every algorithm and every
   member of a space-joined SRI (`sha1-… sha512-…`) is kept verbatim — `sha1`,
   `sha256`, `sha384`, `sha512` — not collapsed to sha512-only. The strongest
-  tarball digest is used for cross-format comparison.
+  tarball digest is used for cross-format comparison. This is the shared model
+  defined in [`_common.md` §3](./_common.md#3-integrity-model); npm-3 emits
+  every member of the multiset into the `integrity` SRI field.
 - Otherwise inherits all npm-2 quirks.
 
 ## Degradation rules

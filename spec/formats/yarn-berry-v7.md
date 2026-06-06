@@ -3,13 +3,18 @@
 > Status: preview.
 > Provenance: **Source-only**.
 
-The completeness contract — stringify, modify, enrich, optimize —
-is owned by [ADR-0018](../decisions/0018-yarn-berry-pre-v9-family-completeness.md).
-This spec records compatibility and fixture provenance; the normative
-emit / mutate / enrich / prune rules live in the version-invariant
-sections ADR-0018 inherits from ADR-0016. ADR-0018 does not currently
-carry а dedicated §A.v7 — v7 reuses §A.v6 (raw-hex checksum) overlaid
-with v8's quoted-protocol inner ranges; see §Schema sketch below.
+The version-invariant emit contract — the *Graph-level roundtrip*
+property, canonical form, field schedule, SYML quoting, line endings,
+and `__metadata.cacheKey` threading — is shared across the yarn-berry
+family and lives in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant);
+this spec inherits it and records only the v7-specific deltas inline.
+v7 is a hybrid: it carries v6's raw-hex checksum encoding overlaid with
+v8's quoted-protocol inner ranges (see §Schema sketch below). The
+completion phases (modify / enrich / optimize) are read-side-only in
+this preview (Source-only provenance — no producer yet); their
+normative rules reference published [ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+(modify / enrich) and [ADR-0024](../decisions/0024-optimize-phase.md)
+(optimize).
 
 ## Compatibility
 
@@ -74,11 +79,17 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
 ## Emit
 
-Emit (`stringify(graph, options?)`) is governed by the
-version-invariant sections ADR-0018 inherits from ADR-0016, with the
-v7-specific config tuple `{ lockfileVersion: 7, codePrefix:
-'YARN_BERRY_V7', rangeEmit: 'quoted-protocol', checksumPrefix: false,
-conditionsAllowed: true }`:
+Emit (`stringify(graph, options?)`) is governed by the shared,
+version-invariant yarn-berry emit contract in
+[`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
+(canonical form, block ordering, field schedule, the SYML quoting
+predicate at [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate),
+line endings, and `__metadata.cacheKey` threading) — evaluated against
+the v7 fixture set per the acceptance gate at
+[`_common.md` §1.9](./_common.md#19-acceptance-gate). The v7-specific
+config tuple is `{ lockfileVersion: 7, codePrefix: 'YARN_BERRY_V7',
+rangeEmit: 'quoted-protocol', checksumPrefix: false, conditionsAllowed:
+true }`, yielding these deltas on top of that shared contract:
 
 - `__metadata.version` emits the literal `7`.
 - `__metadata.cacheKey` defaults to absent; when present (caller-
@@ -86,11 +97,12 @@ conditionsAllowed: true }`:
   emits as а bare numeric literal — pre-v8 form, no string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the quoted
   protocol-bearing form (`dep: "npm:2.0.0"`) — borrowed from v8/v9.
-- `checksum` values round-trip whatever was parsed (ADR-0031): the
-  current fixtures carry a bare sha512 hex (no `<cacheKey>/` prefix,
-  shared with v4/v5/v6) and stay bare, but a parsed `<cacheKey>/<hex>`
-  prefix is preserved per-node (`TarballPayload.berryChecksumCacheKey`) —
-  same uniform rule as v4 (F1).
+- `checksum` values round-trip whatever was parsed (the integrity model,
+  [`_common.md` §3](./_common.md#3-integrity-model)): the current fixtures
+  carry a bare sha512 hex (no `<cacheKey>/` prefix, shared with v4/v5/v6)
+  and stay bare, but a parsed `<cacheKey>/<hex>` prefix is preserved
+  per-node (`TarballPayload.berryChecksumCacheKey`) — same uniform rule
+  as v4 (F1).
 - `conditions` are supported and round-trip as a **scalar** token via
   sidecar preservation, emitted bare.
 - `compressionLevel`, where present, is preserved as pass-through
@@ -123,5 +135,5 @@ range side). No v7-specific degradation rules.
 
 > None at preview. The current fixture set matches the hybrid schema
 > sketch above; cross-family conversion coverage gates the v7 contract
-> through the same ADR-0020 interop matrix as the other yarn-berry
+> through the same cross-format interop matrix as the other yarn-berry
 > versions.

@@ -5,9 +5,10 @@
 
 > **Permanent non-goal** — read body. `deferred` here means
 > *acknowledged-and-not-pursued*, with no expectation of revisit.
-> A new taxon (`non-goal`) would be more truthful but requires an
-> ADR to extend [`CONVENTIONS.md`](../CONVENTIONS.md#status-taxonomy);
-> the bare `deferred` value keeps the lint passing today.
+> A dedicated `non-goal` status value would be more truthful, but the
+> spec status vocabulary admits only `stub` / `draft` / `stable` /
+> `deferred` today, so the bare `deferred` value is used and its
+> permanence is stated in prose here.
 
 `@antongolub/lockfile` does **not** parse `bun.lockb` and never will.
 The format is undocumented, version-fragile, and obsoleted by bun's
@@ -17,10 +18,11 @@ only as a **detection-and-diagnostic** stub: when a `bun.lockb` is
 passed to `parse()`, we identify it by magic bytes and emit a clear
 error directing the user to migrate first.
 
-The binary anatomy is documented in
-[`bun-binary-layout.md`](../../collab/research/bun-binary-layout.md)
-(54-byte header, FormatVersion enum, tagged sections). That research
-is sufficient for detection; we do not extend it to a parser.
+The binary anatomy — a 54-byte header carrying the shebang + version
+string, a `FormatVersion` enum, and tagged sections after the header —
+is understood well enough for detection (see the byte-offset evidence
+under [Detection](#detection), which cites bun's own source). We do not
+extend that understanding to a parser.
 
 ## Compatibility
 
@@ -55,9 +57,8 @@ detection-and-throw path is the entire contract.
   `lockb → text` migration path is
   `bun install --save-text-lockfile --frozen-lockfile --lockfile-only`,
   which has install side-effects and writes a *new* text lockfile to
-  disk, not a parseable dump. See
-  [bun-pm-cat-strategy.md](../../collab/research/bun-pm-cat-strategy.md)
-  for full verdict.
+  disk, not a parseable dump. That is the full verdict: no read-only
+  binary-to-text dump exists, so migration is the sole path.
 
 ## Detection
 

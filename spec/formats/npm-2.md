@@ -76,6 +76,10 @@
 
 ## Quirks
 
+> Model terms used below — *graph*, *layout*, *peer virtualization*,
+> *workspace* — are defined in
+> [`_common.md` §4](./_common.md#4-reserved-vocabulary).
+
 - Two parallel sections: `packages` (path-keyed, layout) and `dependencies`
   (legacy v1 shape). They must stay consistent or older tooling breaks. We
   parse `packages`; we may emit both.

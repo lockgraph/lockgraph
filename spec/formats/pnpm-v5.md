@@ -90,8 +90,9 @@ packages:
 
 - Package id grammar: `/<name>/<version>` for plain, `/<name>/<version>_<peerHash>`
   for peer-virtualised, `/<name>/<version>_<peerHash><sub>` for chained.
-  This is **the** reference for "how pnpm encodes peerContext" — see
-  [02-graph.md](../02-graph.md#node-identity).
+  This is **the** reference for "how pnpm encodes peerContext" — the model's
+  [NodeId](./_common.md#41-nodeid) / `peerContext` vocabulary is borrowed
+  verbatim from this pnpm package-id form.
 - `specifiers` block in each importer mirrors the manifest's range section —
   used for upgrade detection.
 - `lockfileVersion` is a **string**, not a number (`'5.4'`).
