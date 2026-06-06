@@ -42,9 +42,11 @@ Same as [yarn-berry-v4](./yarn-berry-v4.md#file).
 
 Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs). The
 patch-slot fingerprint recipe (file-backed and `~builtin<…>`),
-sentinel input shape, and path-confinement rule carry over verbatim
-— v9 inherits v4's `## Patch slot` and `## Path confinement`
-sub-sections without re-statement.
+sentinel input shape, path-confinement rule, and
+[`patch:`-descriptor edge resolution](./yarn-berry-v4.md#patch-descriptor-edges)
+(form a / form b, multi-consumer `&locator=` disambiguation) carry over
+verbatim — v9 inherits v4's `## Patch slot`, `## Path confinement`, and
+`## Patch-descriptor edges` sub-sections without re-statement.
 [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md)
 §A is the normative source for the **emit-side** companion (canonical
 form rules, field schedule, quoting, line endings, `__metadata.cacheKey`

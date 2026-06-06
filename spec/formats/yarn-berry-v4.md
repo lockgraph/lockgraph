@@ -163,6 +163,52 @@ offending locator in the diagnostic message.
   the descriptor before returning the fingerprint — no FD outlives
   the patch-extraction call.
 
+### Patch-descriptor edges
+
+A dependency may reference its target **directly through a `patch:`
+descriptor** — `"<dep>": "patch:<inner>#<patchPath>"` in a consumer's
+`dependencies` / `optionalDependencies` block — rather than through a
+plain `npm:` range. The consumer edge MUST resolve to the **patch
+node** (the `+patch=unresolved-…` sentinel node carrying that locator),
+not to the plain `npm:` base node, and not be dropped.
+
+Two consumer forms occur in the wild; **both** resolve to the patch
+node:
+
+- **Form a — plain `npm:` range, patch on the entry's resolution.** The
+  consumer declares `"<dep>": "npm:<ver>"` and the bound entry keeps the
+  key `<dep>@npm:<ver>` while recording the patch only on its
+  `resolution:` (e.g. resolution
+  `lodash@patch:lodash@npm%3A4.17.21#./.yarn/patches/…::version=…&hash=…&locator=…`).
+  Here the entry key IS the consumer's descriptor, so the ordinary
+  spec-index lookup already lands on the patch node — no special handling.
+- **Form b — `patch:` descriptor.** The consumer declares
+  `"<dep>": "patch:<inner>#<patchPath>"`. Yarn binds an extra
+  `::version=…&hash=…[&locator=…]` parameter block onto the patch
+  **entry key** (`<dep>@patch:<inner>#<patchPath>::version=…&hash=…`)
+  that the consumer's descriptor omits, so the bare descriptor never
+  matches the entry key verbatim. The adapter resolves it by **stripping
+  that trailing `::`-param block** from each patch entry's spec — taking
+  everything up to the first `::` that follows the first `#` (yarn percent-encodes any
+  inner locator's `#` as `%23`, so the first literal `#` is the outer
+  patch-path separator) — and
+  binding the consumer descriptor to the entry that strips to the same
+  key. The descriptor's percent-encoded inner spec (`npm%3A…` decodes to
+  `npm:…`, i.e. `lodash@npm:4.17.15`) is the identity that makes
+  descriptor and locator share that stripped prefix.
+
+**Multi-consumer disambiguation.** The same patch file applied from
+different workspaces produces several distinct patch entries that strip
+to one descriptor, told apart only by their `&locator=<encoded-consumer>`
+qualifier (the same qualifier the `link:` / `portal:` reconstruction
+uses). When more than one patch entry shares a stripped descriptor, the
+consumer edge binds to the entry whose `&locator=` equals
+`encodeURIComponent(<the consumer's own resolution>)`, mirroring the
+`link:` / `portal:` per-consumer reconstruction. A single candidate binds
+unconditionally; an ambiguous descriptor with no matching `&locator=`
+stays unresolved and emits `YARN_BERRY_UNRESOLVED_DEP` rather than
+guessing.
+
 ## Emit
 
 Emit (`stringify(graph, options?)`) is governed by

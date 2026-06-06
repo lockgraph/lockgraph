@@ -212,6 +212,18 @@ export function parseFamily(
   }
 
   const specIndex = new Map<string, string>()
+  // A `patch:` consumer descriptor (`patch:<inner>#<patchPath>`) is the patch
+  // ENTRY's locator with its trailing `::version=…&hash=…[&locator=…]` param
+  // block stripped — yarn appends those params only on the bound entry, never
+  // on the consumer's descriptor (Bug #88, form b). So the bare descriptor can
+  // never hit `specIndex` directly. Index every patch entry under its
+  // param-stripped descriptor so a `patch:`-descriptor dep resolves to the
+  // patch NODE (the `+patch=…` node), not the plain `npm:` node. Multiple patch
+  // entries can strip to the same descriptor (same patch applied from different
+  // workspaces → distinct `&locator=` qualifiers → distinct sentinel nodes), so
+  // each candidate carries its `locator=` for consumer disambiguation, mirroring
+  // the `link:`/`portal:` path.
+  const patchDescriptorIndex = new Map<string, PatchDescriptorCandidate[]>()
   const seenIds = new Set<string>()
   const entryIds = new Map<string, string>()
 
@@ -377,6 +389,19 @@ export function parseFamily(
       if (!specIndex.has(lookup)) {
         specIndex.set(lookup, id)
       }
+      // Bug #88 (form b): also index a `patch:` entry-spec under its
+      // param-stripped descriptor so a consumer that references the dep
+      // DIRECTLY via the `patch:` locator (no `::version/hash` block) links to
+      // this patch node. Source order is deterministic, so candidates within a
+      // descriptor stay stably ordered for disambiguation/ambiguity reporting.
+      if (spec.protocol === 'patch') {
+        const stripped = strippedPatchDescriptor(lookup)
+        if (stripped !== undefined) {
+          const candidates = patchDescriptorIndex.get(stripped) ?? []
+          candidates.push({ id, locatorQualifier: locatorQualifierOfPatchSpec(spec.spec) })
+          patchDescriptorIndex.set(stripped, candidates)
+        }
+      }
     }
   }
 
@@ -389,8 +414,8 @@ export function parseFamily(
     // The source entry's own resolution doubles as its locator for resolving
     // any `link:` / `portal:` deps it declares (see addEdgesFromBlock).
     const srcResolution = asString(value['resolution'])
-    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, diagnostics, srcResolution)
-    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, diagnostics, srcResolution)
+    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, patchDescriptorIndex, diagnostics, srcResolution)
+    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, srcResolution)
   }
 
   // Sort diagnostics by subject + code to keep graph.diagnostics() order
@@ -1750,6 +1775,7 @@ function addEdgesFromBlock(
   block: SymlMap | undefined,
   kind: EdgeKind,
   index: Map<string, string>,
+  patchDescriptorIndex: Map<string, PatchDescriptorCandidate[]>,
   diagnostics: Diagnostic[],
   srcResolution?: string,
 ): void {
@@ -1758,7 +1784,24 @@ function addEdgesFromBlock(
     if (typeof depRange !== 'string') continue
     const normalizedRange = normalizedEdgeRange(kind, depRange)
     const lookup = `${depName}@${normalizedRange}`
-    let dstId = index.get(lookup)
+    // `null` ⇒ resolution was attempted and deliberately abandoned (ambiguous
+    // patch descriptor, diagnostic already emitted) — distinct from `undefined`
+    // (not yet resolved), so the generic UNRESOLVED_DEP fallback is skipped.
+    let dstId: string | undefined | null = index.get(lookup)
+    if (dstId === undefined && isPatchRange(normalizedRange)) {
+      // Bug #88 (form b) — the dep is referenced DIRECTLY via a `patch:`
+      // descriptor (`<name>@patch:<inner>#<patchPath>`). The bound patch entry
+      // carries an extra `::version=…&hash=…[&locator=…]` block its consumers
+      // omit, so the bare descriptor never hit `specIndex` above. Strip the
+      // param block off the descriptor and resolve to the patch NODE keyed
+      // under it. The inner descriptor (`npm%3A…` → `npm:…`) is the identity
+      // that makes descriptor and locator share this stripped prefix.
+      const stripped = strippedPatchDescriptor(lookup)
+      if (stripped !== undefined) {
+        dstId = resolvePatchDescriptor(patchDescriptorIndex.get(stripped), srcResolution, srcId, lookup, diagnostics)
+        if (dstId === null) continue // ambiguous → diagnostic already pushed
+      }
+    }
     if (dstId === undefined && srcResolution !== undefined && isLinkOrPortalRange(normalizedRange)) {
       // `link:` / `portal:` deps are recorded per consumer: yarn appends a
       // `::locator=<encoded-consumer-locator>` qualifier to the entry key so
@@ -1811,6 +1854,89 @@ function hasExplicitProtocol(range: string): boolean {
 
 function isLinkOrPortalRange(range: string): boolean {
   return range.startsWith('link:') || range.startsWith('portal:')
+}
+
+// Is this dependency range a `patch:` locator (`patch:<inner>#<patchPath>`)?
+// True for a descriptor that references its dep DIRECTLY through a patch
+// (Bug #88, form b). Form a — a plain `npm:`/`workspace:` range whose ENTRY
+// merely happens to carry a `patch:` resolution — is NOT a patch range and
+// resolves through the ordinary `specIndex` path (the entry key is the bare
+// `npm:` descriptor), so it is unaffected here.
+function isPatchRange(range: string): boolean {
+  return range.startsWith('patch:')
+}
+
+// A patch ENTRY's locator (`<name>@patch:<inner>#<patchPath>::version=…&hash=…
+// [&locator=…]`) and a consumer's `patch:` DESCRIPTOR (`<name>@patch:<inner>#
+// <patchPath>`) differ only by the trailing `::`-param block yarn binds onto
+// the entry. Strip that block — everything from the first `::` after the first
+// `#` (the patch-path separator) — so both collapse to one bindable key. The
+// descriptor (no params) is returned unchanged; the entry loses its
+// `::version/hash/locator` suffix. Nested patch-of-patch locators stay safe:
+// yarn percent-encodes the INNER locator's own `#`/`::` (`%23`/`%3A%3A`), so the
+// first literal `#`/`::` always belong to the OUTER patch. Returns undefined for
+// a non-patch input so callers can bail cheaply.
+function strippedPatchDescriptor(lookup: string): string | undefined {
+  const patchIdx = lookup.indexOf('@patch:')
+  if (patchIdx < 0) return undefined
+  const hashIdx = lookup.indexOf('#', patchIdx)
+  // No `#` ⇒ degenerate patch locator with no source fragment; the param block
+  // (if any) still rides a `::` — strip from the first `::` anywhere after the
+  // protocol so a malformed entry/descriptor pair still collapses identically.
+  const paramsAnchor = hashIdx >= 0 ? hashIdx : patchIdx
+  const paramsIdx = lookup.indexOf('::', paramsAnchor + 1)
+  return paramsIdx < 0 ? lookup : lookup.slice(0, paramsIdx)
+}
+
+// Extract the `locator=<encoded-consumer>` qualifier from a patch entry-spec's
+// `::`-param block, when present. Yarn writes it for a patch bound to a
+// specific consumer (`…::version=…&hash=…&locator=root%40workspace%3A.`); it
+// disambiguates the same patch applied from different workspaces. `spec` is the
+// post-`patch:` body (`<inner>#<patchPath>::params`).
+function locatorQualifierOfPatchSpec(spec: string): string | undefined {
+  const hashIdx = spec.indexOf('#')
+  const paramsIdx = spec.indexOf('::', hashIdx >= 0 ? hashIdx + 1 : 0)
+  if (paramsIdx < 0) return undefined
+  for (const param of spec.slice(paramsIdx + 2).split('&')) {
+    if (param.startsWith('locator=')) return param.slice('locator='.length)
+  }
+  return undefined
+}
+
+interface PatchDescriptorCandidate {
+  id: string
+  locatorQualifier?: string
+}
+
+// Resolve a consumer's bare `patch:` descriptor to its patch node. Single
+// candidate → that node. Multiple candidates (same patch from different
+// workspaces) → disambiguate by matching the `&locator=` qualifier against the
+// source consumer's own resolution, exactly as the `link:`/`portal:` path does;
+// no match → UNRESOLVED_DEP (ambiguous, return null so the generic fallback is
+// suppressed). Empty/undefined candidate list → undefined (fall through).
+function resolvePatchDescriptor(
+  candidates: PatchDescriptorCandidate[] | undefined,
+  srcResolution: string | undefined,
+  srcId: string,
+  lookup: string,
+  diagnostics: Diagnostic[],
+): string | undefined | null {
+  if (candidates === undefined || candidates.length === 0) return undefined
+  if (candidates.length === 1) return candidates[0]!.id
+
+  if (srcResolution !== undefined) {
+    const encoded = encodeURIComponent(srcResolution)
+    const match = candidates.find(c => c.locatorQualifier === encoded)
+    if (match !== undefined) return match.id
+  }
+
+  diagnostics.push({
+    code: 'YARN_BERRY_UNRESOLVED_DEP',
+    subject: srcId,
+    severity: 'warning',
+    message: `patch descriptor ${lookup} from ${srcId} is ambiguous across ${candidates.length} patch entries (no matching consumer locator)`,
+  })
+  return null
 }
 
 function remapSidecar(
