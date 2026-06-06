@@ -39,7 +39,8 @@ import {
   hashAndNormaliseBytes as patchHashAndNormaliseBytes,
   sentinelHashOfLocator,
 } from '../recipe/patch.ts'
-import { emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, recipePeerMetaIncomplete, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { readInstalledManifest, type InstalledManifestMeta } from '../complete/local-manifest.ts'
 
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
 // (`parseSpec` throws PARSE_FAILED otherwise). Cross-family inputs
@@ -118,7 +119,22 @@ export interface YarnBerryFamilyStringifyOptions {
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
-export interface YarnBerryFamilyEnrichOptions {}
+export interface YarnBerryFamilyEnrichOptions {
+  // Rung-2 fill source for peer-optional reconstruction (task #86). When set,
+  // the enrich pass consults `<workspaceRoot>/node_modules/<parent>/
+  // package.json` to recover `peerDependenciesMeta[peer].optional` that a
+  // non-yarn source PM (npm / bun / yarn-classic) dropped on parse. Stays
+  // offline + sync + deterministic; absent → rung-1 (graph) only.
+  workspaceRoot?: string
+  // Opt-in rung-3/4 hook (cache / registry). The DEFAULT path never opens a
+  // socket — a caller that wants registry-backed peer-optional facts supplies
+  // a SYNCHRONOUS resolver here (e.g. closing over a pre-fetched packument or
+  // cache snapshot). Returns the parent's declared `peerDependenciesMeta[peer]
+  // .optional`, or `undefined` when the resolver cannot answer. This keeps
+  // `enrich` synchronous and the convert contract offline-by-default
+  // (Anton's Option-1 posture); no async network entry ships in this scope.
+  peerMetaResolver?: (parentName: string, parentVersion: string, peerName: string) => boolean | undefined
+}
 export interface YarnBerryFamilyOptimizeOptions {}
 
 export interface YarnBerryFamilyConfig {
@@ -145,6 +161,9 @@ interface DerivedPeer {
   name: string
   range: string
   dstOldId: string
+  // Set true when the fill ladder (task #86) determined this peer is optional
+  // in the parent's manifest; threaded onto the new peer edge's attrs.
+  optional?: boolean
 }
 
 interface PendingDiagnostic extends Omit<Diagnostic, 'subject'> {
@@ -485,7 +504,7 @@ export function stringifyFamily(
 export function enrichFamily(
   graph: Graph,
   config: YarnBerryFamilyConfig,
-  _options: YarnBerryFamilyEnrichOptions = {},
+  options: YarnBerryFamilyEnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph) ?? EMPTY_SIDECAR
   const rawPeerDependencies = sidecar.peerDependencies ?? new Map<string, Record<string, string>>()
@@ -550,8 +569,47 @@ export function enrichFamily(
     }
   }
 
+  // === peerDependenciesMeta reconstruction (task #86) =======================
+  // For every `peer` edge lacking an `optional` signal, run the fill ladder
+  // (rung-1 graph already on the edge → rung-2 local node_modules manifest →
+  // opt-in rung-3/4 resolver) against the PARENT package's
+  // peerDependenciesMeta[peer].optional. When optional → mark the edge; when
+  // unreconstructable → RECIPE_PEER_META_INCOMPLETE (warning, omit not guess).
+  // Monotone-additive (union, never clear) and idempotent: a second pass sees
+  // the flag already set on rung-1 and makes no change / no new diagnostic.
+  const peerMetaCtx = createPeerMetaContext(options)
+  const peerOptionalOverrides = new Map<string, boolean>()
+  let peerMetaChanged = false
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id, 'peer')) {
+      if (edge.attrs?.optional === true) continue // rung-1: already optional.
+      const dst = graph.getNode(edge.dst)
+      if (dst === undefined) continue
+      const optional = resolvePeerOptional(graph, peerMetaCtx, node, dst.name, pendingDiagnostics)
+      if (optional === true) {
+        peerOptionalOverrides.set(peerEdgeKey(edge.src, edge.dst), true)
+        peerMetaChanged = true
+      }
+    }
+  }
+  // Derived peer edges (yarn-berry raw-sidecar source) do not exist on the
+  // graph yet — run the same ladder so they emit the flag on first pass too.
+  let derivedPeerOptionalChanged = false
+  for (const [srcId, derivedPeers] of derivedPeersByNodeId) {
+    const node = graph.getNode(srcId)
+    if (node === undefined) continue
+    for (const peer of derivedPeers) {
+      const dst = graph.getNode(peer.dstOldId)
+      const peerName = dst?.name ?? peer.name
+      if (resolvePeerOptional(graph, peerMetaCtx, node, peerName, pendingDiagnostics) === true) {
+        peer.optional = true
+        derivedPeerOptionalChanged = true
+      }
+    }
+  }
+
   const workspaceChanged = graphNeedsWorkspaceAttribution(graph)
-  if (!peerChanged && !workspaceChanged) {
+  if (!peerChanged && !workspaceChanged && !peerMetaChanged && !derivedPeerOptionalChanged) {
     return {
       graph,
       diagnostics: pendingDiagnostics.map(diagnostic => finalizePendingDiagnostic(diagnostic, new Map())),
@@ -597,6 +655,11 @@ export function enrichFamily(
         }
       }
 
+      // task #86 — union the reconstructed peer-optional flag (never clear).
+      if (edge.kind === 'peer' && peerOptionalOverrides.has(peerEdgeKey(edge.src, edge.dst))) {
+        nextAttrs = { ...(nextAttrs ?? {}), optional: true }
+      }
+
       builder.addEdge(nextSrc, nextDst, edge.kind, nextAttrs)
     }
   }
@@ -605,7 +668,9 @@ export function enrichFamily(
     const srcNewId = nextNodes.get(srcOldId)?.id ?? srcOldId
     for (const peer of derivedPeers) {
       const dstNewId = nextNodes.get(peer.dstOldId)?.id ?? peer.dstOldId
-      builder.addEdge(srcNewId, dstNewId, 'peer', { range: peer.range })
+      const peerAttrs: EdgeAttrs = { range: peer.range }
+      if (peer.optional === true) peerAttrs.optional = true // task #86
+      builder.addEdge(srcNewId, dstNewId, 'peer', peerAttrs)
     }
   }
 
@@ -1008,7 +1073,7 @@ function entryOfNode(
     ?? edgeBlockOfKinds(graph, node, ['peer'], config, { skipMissingRange: true })
   if (peerDependencies !== undefined) entry['peerDependencies'] = peerDependencies
 
-  const peerDependenciesMeta = extraBlockOfNode(node, 'peerDependenciesMeta')
+  const peerDependenciesMeta = peerDependenciesMetaOfNode(graph, node)
   if (peerDependenciesMeta !== undefined) entry['peerDependenciesMeta'] = peerDependenciesMeta
 
   const dependenciesMeta = extraBlockOfNode(node, 'dependenciesMeta')
@@ -1223,6 +1288,49 @@ function checksumOfPayload(
 
 function extraBlockOfNode(node: Node, field: string): SymlMap | undefined {
   return coerceSymlMap((node as unknown as Record<string, unknown>)[field])
+}
+
+/**
+ * Re-derive the `peerDependenciesMeta` block (task #86). Mirrors the pnpm
+ * reference emitter (`_pnpm-flat-core.ts` `entryOfNode`): scan out-`peer`-edges
+ * for `attrs.optional === true` and emit `<peer>: { optional: true }`, UNIONED
+ * with the verbatim `extraBlockOfNode` hint (the only path before this change;
+ * still honoured for same-format round-trip and hand-built test nodes).
+ *
+ * The edge signal alone is incomplete — an optional peer the source PM never
+ * resolved has no peer-virt instance and hence no edge — so the hint carries
+ * what the edge set cannot. Peer-block keys are alias-aware (the edge `alias`,
+ * else `dst.name`) so the meta key matches the emitted `peerDependencies` key.
+ */
+function peerDependenciesMetaOfNode(graph: Graph, node: Node): SymlMap | undefined {
+  const optionalPeers = new Set<string>()
+  for (const edge of graph.out(node.id, 'peer')) {
+    if (edge.attrs?.optional !== true) continue
+    const dst = graph.getNode(edge.dst)
+    if (dst === undefined) continue
+    optionalPeers.add(edge.attrs.alias ?? dst.name)
+  }
+
+  const hint = extraBlockOfNode(node, 'peerDependenciesMeta')
+  if (hint !== undefined) {
+    for (const [peerName, m] of Object.entries(hint)) {
+      if (isOptionalMetaEntry(m)) optionalPeers.add(peerName)
+    }
+  }
+
+  if (optionalPeers.size === 0) return hint
+  const block: SymlMap = {}
+  for (const peerName of Array.from(optionalPeers).sort(cmpStr)) {
+    block[peerName] = { optional: 'true' }
+  }
+  return block
+}
+
+function isOptionalMetaEntry(value: SymlValue): boolean {
+  if (!value || typeof value !== 'object') return false
+  // `coerceSymlMap` already stringifies a manifest's boolean `true` to `'true'`,
+  // so the hint's `optional` flag is always a string by the time it reaches us.
+  return (value as Record<string, SymlValue>)['optional'] === 'true'
 }
 
 function coerceSymlMap(value: unknown): SymlMap | undefined {
@@ -1511,6 +1619,98 @@ function markWorkspaceEdgesAtParse(graph: Graph): Graph {
 
 function ambiguousPeerMessage(peerName: string, candidates: readonly string[]): string {
   return `peer "${peerName}" matches multiple installed versions: [${candidates.join(', ')}]`
+}
+
+// === peerDependenciesMeta fill ladder (task #86) ============================
+
+interface PeerMetaContext {
+  workspaceRoot?: string
+  resolver?: (parentName: string, parentVersion: string, peerName: string) => boolean | undefined
+  // True when at least one EXTERNAL rung (rung-2 local manifest or rung-3/4
+  // resolver) is configured. Drives whether an unresolved peer is reported:
+  // in pure rung-1 mode the graph is the sole authority, "no optional flag"
+  // means "not optional", and we stay silent (no fabrication, no warning
+  // noise for every genuinely-required peer). RECIPE_PEER_META_INCOMPLETE
+  // fires only when an external lookup was requested yet could not answer.
+  hasExternalRung: boolean
+  // Memoise installed-manifest reads per parent `name version` so a
+  // package referenced by many consumers triggers one fs read; `null` =
+  // looked up, not on disk (distinct from "not yet looked up").
+  manifestCache: Map<string, InstalledManifestMeta | null>
+}
+
+function peerEdgeKey(src: string, dst: string): string {
+  return `${src} ${dst}`
+}
+
+function createPeerMetaContext(options: YarnBerryFamilyEnrichOptions): PeerMetaContext {
+  return {
+    workspaceRoot:   options.workspaceRoot,
+    resolver:        options.peerMetaResolver,
+    hasExternalRung: options.workspaceRoot !== undefined || options.peerMetaResolver !== undefined,
+    manifestCache:   new Map(),
+  }
+}
+
+/**
+ * Resolve whether `peerName` is an OPTIONAL peer of `parent`, walking the fill
+ * ladder. Returns `true` when an authoritative source marks it optional,
+ * `false` when an authoritative source proves it required, and `undefined`
+ * when no rung can answer (the caller then leaves the edge untouched). On an
+ * unanswerable lookup with an external rung configured, pushes
+ * RECIPE_PEER_META_INCOMPLETE onto `diagnostics`.
+ */
+function resolvePeerOptional(
+  graph: Graph,
+  ctx: PeerMetaContext,
+  parent: Node,
+  peerName: string,
+  diagnostics: PendingDiagnostic[],
+): boolean | undefined {
+  // Rung-2 — installed parent manifest under `<workspaceRoot>/node_modules`.
+  if (ctx.workspaceRoot !== undefined) {
+    const manifest = readParentManifest(ctx, parent)
+    if (manifest !== null) {
+      // The manifest is authoritative: peerDependenciesMeta lists ONLY the
+      // optional peers, so a present+optional entry → true, and any other
+      // outcome (entry absent, or present without `optional:true`) → required.
+      return manifest.peerDependenciesMeta?.[peerName]?.optional === true
+    }
+  }
+
+  // Rung-3/4 — opt-in caller resolver (cache / pre-fetched registry). Sync by
+  // contract so `enrich` never opens a socket itself.
+  if (ctx.resolver !== undefined) {
+    const fromResolver = ctx.resolver(parent.name, parent.version, peerName)
+    if (fromResolver !== undefined) return fromResolver
+  }
+
+  if (ctx.hasExternalRung) {
+    diagnostics.push({
+      ...recipePeerMetaIncomplete(
+        parent.id,
+        peerName,
+        ctx.workspaceRoot !== undefined
+          ? 'parent manifest not found in node_modules and no resolver answered'
+          : 'no resolver answered',
+      ),
+      subject: parent.id,
+    })
+  }
+  // Pure rung-1 mode (no external rung) returns undefined silently.
+  void graph
+  return undefined
+}
+
+function readParentManifest(ctx: PeerMetaContext, parent: Node): InstalledManifestMeta | null {
+  const key = `${parent.name} ${parent.version}`
+  const cached = ctx.manifestCache.get(key)
+  if (cached !== undefined) return cached
+  const manifest = ctx.workspaceRoot === undefined
+    ? null
+    : readInstalledManifest(ctx.workspaceRoot, parent.name, parent.id) ?? null
+  ctx.manifestCache.set(key, manifest)
+  return manifest
 }
 
 function finalizePendingDiagnostic(diagnostic: PendingDiagnostic, nextNodes: Map<string, Node>): Diagnostic {

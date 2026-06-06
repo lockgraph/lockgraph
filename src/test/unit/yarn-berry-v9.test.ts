@@ -926,6 +926,76 @@ describe('yarn-berry-v9 — stringify', () => {
     expect(emitted).toContain('  conditions:\n    os: linux\n')
   })
 
+  it('emits peerDependenciesMeta from an optional-flagged peer edge (task #86 emit-from-edge)', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@18.2.0',
+      name: 'react',
+      version: '18.2.0',
+      peerContext: [],
+      resolution: 'react@npm:18.2.0',
+    })
+    builder.addNode({
+      id: 'react-dom@18.2.0(react@18.2.0)',
+      name: 'react-dom',
+      version: '18.2.0',
+      peerContext: ['react@18.2.0'],
+      resolution: 'react-dom@npm:18.2.0',
+    })
+    // EdgeAttrs.optional is the model carrier; no raw entry hint present.
+    builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0', optional: true })
+    const graph = builder.seal()
+
+    const emitted = stringify(graph)
+
+    expect(emitted).toContain('  peerDependencies:\n    react: ^18.2.0\n')
+    expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: "true"\n')
+  })
+
+  it('does not emit peerDependenciesMeta when the peer edge is not optional', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@18.2.0',
+      name: 'react',
+      version: '18.2.0',
+      peerContext: [],
+      resolution: 'react@npm:18.2.0',
+    })
+    builder.addNode({
+      id: 'react-dom@18.2.0(react@18.2.0)',
+      name: 'react-dom',
+      version: '18.2.0',
+      peerContext: ['react@18.2.0'],
+      resolution: 'react-dom@npm:18.2.0',
+    })
+    builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0' })
+    const graph = builder.seal()
+
+    expect(stringify(graph)).not.toContain('peerDependenciesMeta')
+  })
+
+  it('unions an aliased optional peer edge under its alias key (task #86)', () => {
+    const builder = newBuilder()
+    builder.addNode({
+      id: 'react@18.2.0',
+      name: 'react',
+      version: '18.2.0',
+      peerContext: [],
+      resolution: 'react@npm:18.2.0',
+    })
+    builder.addNode({
+      id: 'consumer@1.0.0(react@18.2.0)',
+      name: 'consumer',
+      version: '1.0.0',
+      peerContext: ['react@18.2.0'],
+      resolution: 'consumer@npm:1.0.0',
+    })
+    builder.addEdge('consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: 'npm:react@^18', optional: true, alias: 'react-aliased' })
+    const graph = builder.seal()
+
+    expect(stringify(graph)).toContain('  peerDependenciesMeta:\n    react-aliased:\n      optional: "true"\n')
+  })
+
   it('synthesizes peerDependencies blocks from graph peer edges', () => {
     const builder = newBuilder()
     builder.addNode({

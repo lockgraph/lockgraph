@@ -66,6 +66,44 @@ export function emitIntegrityIncomplete(
 }
 
 /**
+ * Emit `RECIPE_PEER_META_INCOMPLETE` (warning, task #86) — fired during the
+ * yarn-berry enrich pass when a `peer` edge carries no `optional` signal and
+ * the fill ladder (graph → local node_modules manifest → opt-in cache/registry)
+ * cannot determine whether the parent declared that peer as optional. The
+ * `peerDependenciesMeta.<peer>.optional` marker is therefore OMITTED rather than
+ * fabricated. This shares `RECIPE_INTEGRITY_INCOMPLETE`'s omit-not-guess
+ * posture but differs in firing condition: integrity warns whenever a held
+ * fact cannot be represented, whereas this fires ONLY when an external rung
+ * was requested yet could not answer (pure rung-1 mode stays silent — the
+ * graph is the sole authority).
+ * yarn re-derives `peerDependenciesMeta` from each package's own manifest at
+ * install, so omission is a safe degrade. `subject` is the bare consumer
+ * (parent) node id whose peer-optional status could not be reconstructed.
+ */
+export function recipePeerMetaIncomplete(
+  nodeId: NodeId,
+  peerName: string,
+  reason: string,
+): Diagnostic {
+  return {
+    code:     'RECIPE_PEER_META_INCOMPLETE',
+    severity: 'warning',
+    subject:  nodeId,
+    message:  `peerDependenciesMeta.optional for peer ${JSON.stringify(peerName)} unreconstructable: ${reason}`,
+  }
+}
+
+export function emitPeerMetaIncomplete(
+  nodeId:        NodeId,
+  peerName:      string,
+  reason:        string,
+  onDiagnostic?: (d: Diagnostic) => void,
+): void {
+  if (onDiagnostic === undefined) return
+  onDiagnostic(recipePeerMetaIncomplete(nodeId, peerName, reason))
+}
+
+/**
  * Emit `RECIPE_FEATURE_DROPPED` (warning) per ADR-0014 §5 — the canonical
  * loss diagnostic when a target adapter cannot represent a recipe-owned
  * feature on emit. Feature tag follows ADR-0014 §4 table: `patch` (F2);

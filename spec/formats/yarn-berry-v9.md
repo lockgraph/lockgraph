@@ -79,7 +79,44 @@ Same shape as v8 with — TBD — field-level diffs once we have a producer.
 
 ## Capabilities
 
-Inherits v8.
+Inherits v8. Additionally:
+
+### `peerDependenciesMeta` reconstruction (cross-format)
+
+When converting **into** yarn-berry from any source, the per-peer
+`peerDependenciesMeta: { <peer>: { optional: true } }` block is reconstructed
+from the canonical model rather than a yarn-native sidecar, so the optional-peer
+flag survives conversions that the source format modelled it on:
+
+- **Emit from the edge (offline, no configuration).** Every out-`peer` edge
+  carrying the canonical `optional` attribute (`EdgeAttrs.optional`, the model's
+  home for peer-optionality — set by the pnpm reader, among others) emits a
+  `<peer>: { optional: true }` entry, UNIONED with any verbatim same-format
+  hint. The block key follows the emitted `peerDependencies` key (the edge
+  alias when aliased, else the target's name). This alone round-trips a
+  pnpm → yarn-berry optional peer with no enrich step and no workspace context.
+- **Enrich fills the gap for formats that drop the flag.** npm, bun, and
+  yarn-classic discard `peerDependenciesMeta` on parse, so their edges reach
+  yarn-berry without an `optional` attribute. The enrich pass (ADR-0016 §C)
+  walks each such peer edge and consults a **fill ladder**, setting
+  `EdgeAttrs.optional = true` only when an authoritative source proves the peer
+  optional. The pass is **monotone-additive** (it unions the flag, never clears
+  one) and **idempotent** (a second pass finds the flag already on the edge and
+  changes nothing).
+
+The fill ladder, first authoritative *answer* wins (a found manifest answers
+definitively, even when that answer is 'required'):
+
+1. **Graph (rung 1).** The flag already on the edge — free, always consulted.
+2. **Local installed manifest (rung 2).** `<workspaceRoot>/node_modules/
+   <parent>/package.json` → the parent's own `peerDependenciesMeta`. The parent
+   manifest is the authoritative origin of the value, so a manifest that is
+   present but does NOT list the peer is a definitive *required* answer (no
+   diagnostic), distinct from a manifest that is absent (an unanswerable
+   lookup). Consulted only when the caller supplies `workspaceRoot`. Offline,
+   synchronous, deterministic.
+3. **Cache / registry (rungs 3–4).** Strictly opt-in — see the posture note
+   under [Degradation rules](#degradation-rules).
 
 ## Quirks
 
@@ -126,6 +163,33 @@ Inherits v8. Additionally: **converting from a non-yarn source** (npm / pnpm /
 bun / yarn-classic) cannot fill `checksum` offline — a tarball sha512 is not a
 zip-cache digest — so the line is **omitted** (never fabricated) and
 `RECIPE_INTEGRITY_INCOMPLETE` is emitted; yarn recomputes the digest on install.
+
+**`peerDependenciesMeta.optional` that cannot be reconstructed is omitted, not
+guessed.** When the enrich fill ladder (see
+[Capabilities](#peerdependenciesmeta-reconstruction-cross-format)) is asked to
+recover an optional flag — i.e. an external rung was configured — but no rung
+can answer (e.g. `workspaceRoot` was supplied yet the parent is not installed in
+`node_modules`, and no opt-in resolver answered), the marker is **omitted** and
+`RECIPE_PEER_META_INCOMPLETE` (warning, `subject` = the consumer node) is
+emitted. yarn re-derives `peerDependenciesMeta` from each package's own manifest
+at install, so omission is a safe degrade. This shares the omit-not-fabricate
+posture of `RECIPE_INTEGRITY_INCOMPLETE`, but differs in *when* it fires: unlike
+integrity (which warns whenever a held fact cannot be represented), this fires
+only when an external rung was requested — in pure rung-1 mode the graph is the
+authority and the pass is silent.
+
+**Offline-by-default posture (network is strictly opt-in).** A bare conversion
+into yarn-berry is **synchronous, offline, and deterministic**: it never opens a
+socket. Peer-optional reconstruction consults rung 1 (the graph) always, and
+rung 2 (local `node_modules`) only when the caller passes `workspaceRoot`. With
+neither an installed-manifest path nor a resolver configured — *pure rung-1
+mode* — the graph is the sole authority: a peer edge without an `optional`
+attribute is treated as required and produces **no** `RECIPE_PEER_META_INCOMPLETE`
+noise (the diagnostic fires only when an external lookup was requested and
+failed). Rungs 3–4 (cache / registry) are reached only through a
+caller-supplied resolver; the default pipeline never fabricates one. This keeps
+the converter pure and CI-stable rather than introducing non-determinism or a
+supply-chain surface into a format conversion.
 
 ## Fixtures
 
