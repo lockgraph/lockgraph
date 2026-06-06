@@ -1084,12 +1084,43 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
       // alias lookup correctly. Canonical (non-aliased) edges keep the
       // node's actual name.
       const specName = edge.attrs.alias ?? node.name
-      specs.add(`${specName}@${entryKeyRangeOf(edge.attrs.range)}`)
+      const secondary = `${specName}@${entryKeyRangeOf(edge.attrs.range)}`
+      // Bug #90 — a `link:`/`portal:`/`file:` consumer records the dep BARE
+      // (`link:packages/x`) in its dependencies block while yarn keys the
+      // resolved entry with a `::locator=<consumer>` qualifier
+      // (`link:packages/x::locator=…`). Reparse re-qualifies the bare consumer
+      // edge from the consumer's own resolution (addEdgesFromBlock), so the
+      // bare incoming-edge range survives on `attrs.range`. Re-emitting it as a
+      // secondary descriptor would APPEND a spurious bare
+      // `<name>@link:packages/x` to the entry key (descriptor count 2→3) — a
+      // shape yarn never writes (the entry key is the single qualified spec).
+      // Suppress the bare secondary IFF it is exactly the unqualified prefix of
+      // the node's `::locator=`-qualified primary; the qualified primary already
+      // covers this consumer (and reparse re-derives the qualifier).
+      if (!isLocatorQualifiedPrefix(primary, secondary)) {
+        specs.add(secondary)
+      }
     }
   }
 
   const rest = Array.from(specs).filter(spec => spec !== primary).sort(cmpStr)
   return [primary, ...rest].join(', ')
+}
+
+// Bug #90 — is `secondary` exactly the unqualified prefix of a
+// `::locator=`-qualified `primary` (`<…>@link:packages/x` vs
+// `<…>@link:packages/x::locator=<consumer>`)? Such a `secondary` is the BARE
+// descriptor a consumer records for a `link:`/`portal:`/`file:` dep whose
+// resolved entry yarn keyed with the `::locator=` ownership qualifier. The
+// qualified primary already represents this consumer (and reparse re-derives
+// the qualifier from the consumer's resolution), so the bare secondary is a
+// spurious duplicate and must not join the entry key. Matched structurally
+// (prefix + literal `::locator=`) so it ONLY fires for the locator-qualified
+// local-protocol case — a plain `npm:`/`workspace:` secondary, or a bare-link
+// node whose primary is itself unqualified (secondary === primary, already
+// filtered), is unaffected.
+function isLocatorQualifiedPrefix(primary: string, secondary: string): boolean {
+  return primary.startsWith(`${secondary}::locator=`)
 }
 
 function primarySpecOfNode(node: Node): string {
@@ -1769,6 +1800,16 @@ function peerEdgeKey(src: string, dst: string): string {
 // `peerDependenciesMeta` sidecar captured from a real berry lock? Authoritative
 // on-lock signal — no external lookup. Keys are the peer's descriptor name
 // (alias-aware on emit), matched here against the resolved peer name.
+//
+// Key-name nuance: the enrich call site passes the RESOLVED peer's `dst.name`,
+// whereas yarn keys `peerDependenciesMeta` by the parent manifest's DESCRIPTOR
+// name. These diverge only for an npm-ALIASED peer (descriptor key != resolved
+// package name). That case is unreachable via the berry PARSE path — a berry
+// peer edge carries no `alias` (peer ranges are bare, never `npm:<target>@…`),
+// so `dst.name` always equals the descriptor key here — and even if it ever
+// could, the verbatim sidecar preserves the whole `peerDependenciesMeta` block
+// byte-faithfully on emit regardless of this lookup. Revisit if peer-aliasing is
+// ever modelled (the lookup would then need the descriptor key, not `dst.name`).
 function berryMetaPeerOptional(graph: Graph, nodeId: string, peerName: string): boolean {
   const block = sidecarByGraph.get(graph)?.peerDependenciesMeta?.get(nodeId)
   const entry = block?.[peerName]

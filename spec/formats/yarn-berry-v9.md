@@ -158,6 +158,26 @@ definitively, even when that answer is 'required'):
   a `locator=` qualifier — a plain `file:../dir` directory link (already a
   unique node) is left unpatched. `Node.resolution` carries the verbatim
   locator for byte-faithful round-trip.
+- **The `::locator=` entry-key descriptor round-trips with its qualifier; no
+  bare duplicate is appended.** A consumer records a `link:`/`portal:` dependency
+  **bare** in its `dependencies:` block (`<dep>: "link:packages/x"`), while yarn
+  keys the resolved entry with the single `::locator=`-qualified descriptor
+  (`"<name>@link:packages/x::locator=<encoded-consumer>":`). On parse the bare
+  consumer edge is re-qualified from the consumer's own resolution, so the bare
+  range is what survives on the edge. On emit, the entry key is the **single
+  qualified** descriptor — the bare incoming-edge range is **not** re-added as a
+  second descriptor (it is the exact locator-less prefix of the qualified
+  primary, which already represents that consumer). The consumer's `dependencies:`
+  value stays bare. Net: the entry-key descriptor set is byte-stable across
+  parse → stringify → parse (it does **not** grow a spurious
+  `<name>@link:packages/x` sibling). The same holds for a `file:` alias whose
+  resolution carries `…&locator=…`. Multiple workspaces linking the same on-disk
+  path produce one sentinel node **per** `::locator=`, each emitting its own
+  single qualified key. Conversely, a consumer that records the bare
+  `link:`/`portal:` dependency but whose own `::locator=` entry is **absent**
+  (a malformed or hand-edited lock) does not borrow a sibling's sentinel via the
+  entry-key descriptor — it reports `YARN_BERRY_UNRESOLVED_DEP` rather than
+  silently collapsing onto another consumer's node.
 - **Three structured fields round-trip (`conditions`, `dependenciesMeta`,
   `peerDependenciesMeta`).** Inherited from v8 (see the
   [v8 schema sketch](./yarn-berry-v8.md#schema-sketch) for the entry shape):

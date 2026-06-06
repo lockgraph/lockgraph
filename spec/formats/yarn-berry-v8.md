@@ -130,6 +130,17 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   immediately before `peerDependenciesMeta`, matching yarn.
 - `compressionLevel` first appears in the current family corpus at v8
   and is preserved through `sidecar.metadata`.
+- A `link:`/`portal:` (or locator-qualified `file:`) entry keyed with a
+  `::locator=<encoded-consumer>` qualifier round-trips as the **single
+  qualified** entry-key descriptor. A consumer records the dependency BARE
+  in its `dependencies:` block (`<dep>: "link:packages/x"`); on emit the
+  entry key is NOT padded with a spurious locator-less
+  `<name>@link:packages/x` sibling (the bare form is the prefix of the
+  qualified primary, which already represents that consumer, and reparse
+  re-derives the qualifier). The descriptor set is byte-stable across
+  parse → stringify → parse. See the
+  [v9 locator-disambiguation note](./yarn-berry-v9.md) for the full
+  sentinel-slot rationale (shared across v8+).
 
 ## Degradation rules
 

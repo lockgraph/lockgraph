@@ -234,8 +234,10 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   is `false` for v4 and now only governs the cross-family-convert default,
   not same-format round-trip.)
 - `conditions` are NOT supported on emit (v4 predates the field;
-  v5 introduced it). If a parsed/synthetic graph carries a conditions
-  sidecar, the v4 emitter drops it with diagnostic
+  v5 introduced it). `conditions` is a verbatim SCALAR token (e.g.
+  `os=darwin & cpu=arm64`) captured per-node as a `Map<string,string>` of
+  nodeId → scalar — NOT a structured block. If a parsed/synthetic graph
+  carries such a captured scalar, the v4 emitter drops it with diagnostic
   `YARN_BERRY_V4_CONDITIONS_DROPPED`.
 - `compressionLevel` is not present in the v4 corpus.
 
@@ -252,8 +254,10 @@ plus the version-invariant sections ADR-0018 inherits from ADR-0016:
   a bare sha512 hex. The library preserves whichever was parsed, per-node;
   see Emit.
 - `conditions` are absent in the current v4 fixtures and unsupported on
-  emit; if a parsed/synthetic graph carries a conditions sidecar, the
-  v4 emitter drops it with `YARN_BERRY_V4_CONDITIONS_DROPPED`.
+  emit; the field is a verbatim SCALAR capture (a `Map<string,string>` of
+  nodeId → scalar token), not a structured block. If a parsed/synthetic
+  graph carries such a captured scalar, the v4 emitter drops it with
+  `YARN_BERRY_V4_CONDITIONS_DROPPED`.
 - `linkType: hard` vs `soft` distinguishes hard-linkable vs symlink-only deps.
 - Virtual instances appear with `virtual:<random>#<base-resolution>` keys.
   These are PEER-RESOLVED forks of one underlying package — handle in graph
