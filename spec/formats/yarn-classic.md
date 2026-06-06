@@ -70,7 +70,7 @@ Keys = comma-separated dep specs that share the same resolved version.
 | Peer-dep virtualization                   | ✗ | flat |
 | `npm:` alias                              | ✓ | as `name@npm:other@^1` key |
 | `git` / `github` protocols                | ✓ | resolved URL stored |
-| `file` / `link` / `portal`                | ~ | `file:` only |
+| `file` / `link` / `portal`                | ✓ | relative specifier stored verbatim in `resolved`; canonicalised to a `directory` resolution |
 | `patch:` protocol                         | ✗ | |
 | Integrity hashes                          | ✓ | sha512; older lockfiles use sha1 |
 | `dev` / `optional` / `peer` separation    | ~ | `optional` recoverable from lockfile (`optionalDependencies:` sibling block); `dev` / `peer` require `manifests` and otherwise collapse to `dep` |
@@ -126,6 +126,45 @@ collapse to `dep`.
   `yarn install --immutable` rejects. The canonical-derived fallback (used for
   cross-format conversions when no PM-native sidecar exists) shares the same
   predicate, so a git resolution survives those conversions too.
+- Relative `file:` / `link:` / `portal:` `resolved` values are accepted. For a
+  local (`file:`) or symlinked (`link:`) dependency, yarn 1 writes the bare
+  specifier into `resolved` verbatim (`resolved: remote.resolved`), e.g.
+  `resolved "file:../my-lib"` or `resolved "link:packages/peregrine"` (`portal:`
+  appears on locks migrated from yarn-berry). These specifiers have no `://`
+  authority, so the scheme-based URL rule alone rejected them and aborted the
+  whole-file parse. They are now:
+  - stored VERBATIM on `Node.resolution` and re-emitted byte-for-byte, so the
+    `file:` / `link:` / `portal:` distinction survives a yarn-classic →
+    yarn-classic round-trip (a `directory` canonical alone would flatten all
+    three to `file:`);
+  - canonicalised to a `directory` resolution (`path` = the body after the
+    protocol, leading `./` / `../` preserved) — NOT a registry tarball — so
+    cross-format emit projects to each target's local-path shape. No
+    `RECIPE_RESOLUTION_UNKNOWN` is raised for the recognised local specifiers.
+  The body must be non-empty: a degenerate `file:` / `link:` with nothing after
+  the colon is not a usable specifier and is still rejected. Note: yarn-classic's
+  bare `link:` is canonicalised in the adapter, not the shared resolution
+  recipe — the recipe deliberately routes a bare `link:` to `unknown` because
+  in pnpm `link:` is a *workspace* shape, a different meaning. (`file:` and
+  `portal:` already map to `directory` in the recipe; the adapter routes all
+  three uniformly for simplicity.)
+- Garbage-rejection boundary (not-a-lockfile inputs reject cleanly, no crash):
+  - A bare package-name entry key (`foo:` with no `@<range>`) is *malformed* —
+    yarn 1's writer always keys entries by `<name>@<range>` descriptors and never
+    emits a bare name. It is rejected with a typed `PARSE_FAILED` `LockfileError`
+    that names the missing `@<range>`, rather than swallowed.
+  - Quoted field-keys (`  "version" "…"`, `  "resolved" "…"`) signal a
+    non-lockfile: yarn 1 quotes string *values* but never field *names*
+    (`version` / `resolved` / `integrity` are emitted bare). A quoted key at
+    field position is the fingerprint of a `yarn-error.log` **`Lockfile:`** dump
+    (yarn's error reporter re-indents the lockfile under that heading) or an
+    otherwise mangled file. The parser rejects it with a clear `PARSE_FAILED`
+    diagnostic naming the likely source; the parser is **not** bent to accept
+    quoted keys.
+  - A whole `yarn-error.log` does not start with the `# yarn lockfile v1` header
+    (it begins with `Arguments:` / `PATH:` / `Yarn version:` …), so `detect()`
+    returns `undefined` and `parse()` rejects it as `FORMAT_MISMATCH` before any
+    entry parsing.
 - Two SEPARATE entry blocks resolving to the same `name@version` with identical
   `resolved` + `integrity` merge their descriptor keys onto one node (the
   comma-joined `a@^1, a@^2:` form already does this). Only a genuine conflict —

@@ -174,7 +174,7 @@ export function parse(input: string): Graph {
       // Workspace canonical (yarn-classic sentinel-version entries) lives on
       // Node.workspacePath via enrich; not on TarballPayload.
       const canonicalResolution = entry.resolved !== undefined
-        ? parseResolutionRecipe(entry.resolved, { sourceKind: 'yarn-classic-resolved' })
+        ? canonicalResolutionOfResolved(entry.resolved)
         : undefined
       if (canonicalResolution !== undefined && canonicalResolution.type === 'unknown') {
         diagnostics.push(unknownResolutionDiagnostic(id, entry.resolved!))
@@ -566,6 +566,23 @@ function parseEntries(input: string): YarnClassicEntry[] {
     }
 
     block = undefined
+    // A QUOTED field-key (`  "version" "1.0.0"`, `  "resolved" "…"`) is not a
+    // shape yarn 1 emits — its lockfile writer quotes string VALUES but never
+    // field KEYS (`version` / `resolved` / `integrity` begin with a letter and
+    // are emitted bare). A quoted key at field position is the signature of a
+    // yarn-error.log "Lockfile:" dump (yarn's reporter re-indents the lockfile
+    // under that heading) or an otherwise mangled, non-lockfile input. Reject
+    // cleanly with a diagnostic that names the likely source, rather than
+    // silently capturing it as an unknown-field extra and later throwing a
+    // misleading "missing version" (#83 finding 3 — garbage → clean reject; do
+    // NOT bend the parser to accept non-lockfiles).
+    if (line.startsWith('  "')) {
+      throw parseFailed(
+        `quoted field-key ${JSON.stringify(line.trimStart())} is not valid yarn-classic `
+          + `(yarn 1 never quotes entry field names); input looks like a yarn-error.log dump `
+          + `or a mangled lockfile, not a yarn.lock`,
+      )
+    }
     if (line.startsWith('  version ')) {
       current.version = parseQuotedToken(line.slice('  version '.length))
       continue
@@ -707,7 +724,18 @@ function splitEntryKey(key: string): string[] {
 
 function parseSpec(spec: string): { name: string; spec: string } {
   const idx = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
-  if (idx <= 0 || idx === spec.length - 1) {
+  // A bare package-name entry key (`foo:` with no `@<range>`) is NOT a shape
+  // yarn 1 emits — its lockfile writer always keys entries by `<name>@<range>`
+  // descriptors (#83 finding 2: malformed, not genuine). Reject with a clear,
+  // typed diagnostic that names the missing `@<range>`, rather than the generic
+  // "bad entry-spec" message, so the failure is actionable.
+  if (idx < 0) {
+    throw parseFailed(
+      `entry key ${JSON.stringify(spec)} is a bare package name with no '@<range>' descriptor; `
+        + `yarn-classic keys must be '<name>@<range>'`,
+    )
+  }
+  if (idx === 0 || idx === spec.length - 1) {
     throw parseFailed(`bad entry-spec ${JSON.stringify(spec)}`)
   }
   return {
@@ -1120,7 +1148,18 @@ function warnPatchDrop(
 
 // Mined from legacy/main/ts/formats/yarn-classic.ts:188-212. The graph stores
 // the resolution as an opaque string; these helpers keep yarn-classic-specific
-// URL shapes validated at the adapter boundary.
+// `resolved` shapes validated at the adapter boundary.
+//
+// Two accepted shape families:
+//  (1) scheme-based URLs + the scp-like `git@host:owner/repo` shorthand
+//      (`isYarnClassicResolvableUrl`); and
+//  (2) relative LOCAL specifiers `file:` / `link:` / `portal:` with no `//`
+//      authority (`isYarnClassicLocalSpec`) — yarn 1 writes these as the
+//      `resolved` value for `file:` / `link:` deps (and `portal:` on locks
+//      migrated from yarn-berry): the writer emits `resolved: remote.resolved`
+//      verbatim for copy/link references, so the `resolved` of a local dep IS
+//      the bare specifier, not an http(s) URL. It must not abort the
+//      whole-file parse (#83 finding 1).
 
 // The acceptance predicate for a yarn-classic `resolved` URL: any scheme-based
 // URL (https / http / git+ssh / git+https / git / ssh / file …) or the scp-like
@@ -1132,11 +1171,56 @@ function isYarnClassicResolvableUrl(input: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(input) || input.startsWith('git@')
 }
 
+// A relative LOCAL specifier `file:` / `link:` / `portal:` whose body is NOT a
+// `//`-authority URL (those are handled by `isYarnClassicResolvableUrl`). The
+// body must be non-empty — `file:` / `link:` with nothing after the colon is
+// not a usable specifier and falls through to the unsupported-shape throw.
+const YARN_CLASSIC_LOCAL_SPEC_RE = /^(?:file|link|portal):(?!\/\/)\S/
+
+function isYarnClassicLocalSpec(input: string): boolean {
+  return YARN_CLASSIC_LOCAL_SPEC_RE.test(input)
+}
+
+// `<file|link|portal>:<path>` → { protocol, path }. Returns undefined for
+// non-local shapes (URLs). `path` keeps the body verbatim (leading `./` / `../`
+// preserved) so the directory canonical mirrors the on-disk specifier.
+function parseLocalSpec(
+  resolved: string,
+): { protocol: 'file' | 'link' | 'portal'; path: string } | undefined {
+  if (!isYarnClassicLocalSpec(resolved)) return undefined
+  const colon = resolved.indexOf(':')
+  return {
+    protocol: resolved.slice(0, colon) as 'file' | 'link' | 'portal',
+    path: resolved.slice(colon + 1),
+  }
+}
+
+// Canonical resolution for a yarn-classic `resolved` value. Local specifiers
+// (`file:` / `link:` / `portal:`) canonicalise to a `directory` resolution
+// adapter-side: the shared recipe deliberately routes bare `link:` to `unknown`
+// (recipe/resolution.ts) because in pnpm `link:` is a WORKSPACE shape — a
+// different meaning — so yarn-classic must NOT lean on the recipe for `link:` /
+// `portal:` or it would raise a spurious RECIPE_RESOLUTION_UNKNOWN. `file:`
+// already maps to `directory` in the recipe, but is handled here too for a
+// single code path. Everything else delegates to the recipe (git / tarball /
+// codeload / …).
+function canonicalResolutionOfResolved(
+  resolved: string,
+): import('../recipe/resolution.ts').ResolutionCanonical {
+  const local = parseLocalSpec(resolved)
+  if (local !== undefined) {
+    return { type: 'directory', path: local.path }
+  }
+  return parseResolutionRecipe(resolved, { sourceKind: 'yarn-classic-resolved' })
+}
+
 function parseResolution(input: string): string {
   // git deps are first-class in yarn-classic; a single git entry must not abort
-  // the parse. The opaque string is stored on Node.resolution; the canonical
-  // git/tarball resolution is derived separately via recipe/resolution.ts.
-  if (isYarnClassicResolvableUrl(input)) {
+  // the parse. Relative `file:` / `link:` / `portal:` local specifiers are
+  // equally genuine (#83 finding 1). The opaque string is stored VERBATIM on
+  // Node.resolution and re-emitted byte-for-byte by `formatResolution`; the
+  // canonical resolution is derived separately via `canonicalResolutionOfResolved`.
+  if (isYarnClassicResolvableUrl(input) || isYarnClassicLocalSpec(input)) {
     return input
   }
   throw parseFailed(`unsupported resolved URL ${JSON.stringify(input)}`)
@@ -1144,13 +1228,16 @@ function parseResolution(input: string): string {
 
 // ADR-0014 §4.F3: yarn-classic stringify round-trips any URL-shaped PM-native
 // resolution — the same shapes `parseResolution` accepts (incl. git+ssh / git:
-// / ssh: / scp-like `git@…`), so a git `resolved` line survives same-format
-// round-trip verbatim. PM-native strings from foreign sources (yarn-berry
-// locators, pnpm `link:` etc.) are NOT URL-shaped — return undefined to
-// delegate to the canonical-derived fallback instead of throwing.
+// / ssh: / scp-like `git@…`) — PLUS the relative `file:` / `link:` / `portal:`
+// local specifiers (#83 finding 1). Re-emitting the local specifier VERBATIM
+// preserves the file/link/portal distinction that a `directory` canonical would
+// otherwise flatten to a single `file:` shape. PM-native strings from foreign
+// sources (yarn-berry locators, pnpm workspace `link:` etc.) are neither shape
+// → return undefined to delegate to the canonical-derived fallback instead of
+// throwing.
 function formatResolution(input: string | undefined): string | undefined {
   if (input === undefined) return undefined
-  return isYarnClassicResolvableUrl(input) ? input : undefined
+  return isYarnClassicResolvableUrl(input) || isYarnClassicLocalSpec(input) ? input : undefined
 }
 
 // ADR-0014 §4.F3 cross-format fallback: project canonical → yarn-classic
@@ -1163,11 +1250,17 @@ function deriveResolvedFromCanonical(
   if (canonical === undefined) return undefined
   const candidate = stringifyForYarnClassic(canonical)
   // `unknown` canonical returns its raw verbatim — for yarn-berry locators
-  // (`<n>@patch:...`, `<n>@npm:<ver>`, etc.) this is NOT a valid URL and the
-  // yarn-classic parse rejects on reparse. Filter the emit to URL-shaped
-  // resolutions only; the underlying loss is already attributed by
-  // `warnPatchDrop` / `RECIPE_FEATURE_DROPPED` upstream when relevant.
-  if (candidate !== undefined && !isYarnClassicResolvableUrl(candidate)) {
+  // (`<n>@patch:...`, `<n>@npm:<ver>`, etc.) this is NOT a re-parseable
+  // yarn-classic `resolved` shape and the parse rejects on reparse. Filter the
+  // emit to re-parseable shapes only: URLs PLUS the `file:` / `link:` /
+  // `portal:` local specifiers (a `directory` canonical projects to
+  // `file:./<path>`, #83 finding 1). The underlying loss is already attributed
+  // by `warnPatchDrop` / `RECIPE_FEATURE_DROPPED` upstream when relevant.
+  if (
+    candidate !== undefined
+    && !isYarnClassicResolvableUrl(candidate)
+    && !isYarnClassicLocalSpec(candidate)
+  ) {
     return undefined
   }
   return candidate

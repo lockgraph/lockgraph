@@ -6,9 +6,19 @@ import { detect, parse, stringify } from '../../../main/ts/index.ts'
 
 // Real yarn.lock files from the yarn-audit-fix real-world sweep that reproduced
 // parser-robustness gaps on snapshot.49 (git-protocol resolved URLs aborting the
-// parse; duplicate descriptors throwing instead of merging). Each fixture dir is
-// pinned `<owner>-<repo>-<sha7>`. With the snapshot.49 fixes they must now parse
-// and round-trip.
+// parse; duplicate descriptors throwing instead of merging). Most fixture dirs
+// are pinned `<owner>-<repo>-<sha7>`. With the snapshot.49 fixes they must now
+// parse and round-trip.
+//
+// The `*-localdep` fixtures (#83 finding 1) carry the yarn-1 local-dependency
+// `resolved` shape — `resolved "file:…"` / `"link:…"` / `"portal:…"` — that
+// magento/pwa-studio and hahazexia/scan2findimgs exhibited at sweep time. Their
+// current default branches have since DROPPED these local deps, so the dirs
+// carry the honest `-localdep` provenance suffix (NOT a fabricated `<sha7>`):
+// they reproduce the exact on-disk shape rather than pin a now-absent blob.
+// yarn 1 writes `resolved: remote.resolved` verbatim for copy/link references
+// (src/lockfile/index.js), so the bare specifier — not an http(s) URL — is the
+// genuine value; it previously aborted the whole-file parse.
 const here = dirname(fileURLToPath(import.meta.url))
 const lock = (name: string): string =>
   readFileSync(resolve(here, '../../resources/fixtures/real-world', name, 'yarn.lock'), 'utf8')
@@ -22,6 +32,8 @@ const CLASSIC = [
   'wasya-co-piousbox-drupal-theme-0a9b3e1', // duplicate descriptors
   'dougyshy-mern-skeleton-f510b7a',         // duplicate descriptors
   'lodash-lodash-5a3ff73',                  // entry immediately after header (no blank line)
+  'magento-pwa-studio-localdep',            // link:/file:/portal: resolved (workspace monorepo)
+  'hahazexia-scan2findimgs-localdep',       // file:/link: resolved + legacy uid (single-app)
 ] as const
 
 describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
@@ -34,6 +46,37 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
       expect(() => stringify('yarn-classic', g)).not.toThrow()
     })
   }
+
+  it('magento-pwa-studio-localdep round-trips the link:/file:/portal: resolved values verbatim', () => {
+    const content = lock('magento-pwa-studio-localdep')
+    const g = parse('yarn-classic', content)
+    // The three local-dep nodes carry their bare specifier on Node.resolution
+    // and canonicalise to a `directory` resolution (NOT a registry tarball).
+    expect(g.getNode('@magento/peregrine@0.0.0')?.resolution).toBe('link:packages/peregrine')
+    expect(g.getNode('@magento/pwa-buildpack@0.0.0')?.resolution).toBe('file:packages/pwa-buildpack')
+    expect(g.getNode('@magento/venia-ui@0.0.0')?.resolution).toBe('portal:packages/venia-ui')
+    expect(g.tarballOf('@magento/peregrine@0.0.0')?.resolution?.type).toBe('directory')
+    // No spurious RECIPE_RESOLUTION_UNKNOWN for the recognised local specifiers.
+    expect(g.diagnostics().some(d => d.code === 'RECIPE_RESOLUTION_UNKNOWN')).toBe(false)
+    const out = stringify('yarn-classic', g)
+    expect(out).toContain('resolved "link:packages/peregrine"')
+    expect(out).toContain('resolved "file:packages/pwa-buildpack"')
+    expect(out).toContain('resolved "portal:packages/venia-ui"')
+    // Idempotent re-emit.
+    expect(stringify('yarn-classic', parse('yarn-classic', out))).toBe(out)
+  })
+
+  it('hahazexia-scan2findimgs-localdep round-trips file:/link: resolved + legacy uid', () => {
+    const content = lock('hahazexia-scan2findimgs-localdep')
+    const g = parse('yarn-classic', content)
+    expect(g.getNode('my-local-scanner@1.0.0')?.resolution).toBe('file:../my-local-scanner')
+    expect(g.getNode('vendored-utils@0.0.0')?.resolution).toBe('link:./vendor/utils')
+    const out = stringify('yarn-classic', g)
+    expect(out).toContain('resolved "file:../my-local-scanner"')
+    expect(out).toContain('resolved "link:./vendor/utils"')
+    expect(out).toContain('  uid ""')
+    expect(stringify('yarn-classic', parse('yarn-classic', out))).toBe(out)
+  })
 
   it('gregros-k8ts-853de0d (berry file:-alias vs npm:) parses with distinct sentinel-disambiguated nodes', () => {
     // A `file:` local-tarball alias and an `npm:` locator both resolve to
