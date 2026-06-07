@@ -176,8 +176,18 @@ function checkOne(format: FormatId, input: string): boolean {
   }
 }
 
-function parseOne(format: FormatId, input: string, options: ParseOptions): Graph {
+function parseOne(
+  format: FormatId,
+  input: string,
+  options: ParseOptions,
+  overrides?: OverrideConstraint[],
+): Graph {
   const workspaceRoot = options.workspaceRoot
+  // Bug #99 — the yarn family (classic + berry) is the only one whose edge
+  // resolution joins consumer RANGES to entries by exact key; under a
+  // `resolutions` pin that key is rewritten, so the override map is threaded in
+  // to bridge the miss. pnpm/npm/bun pre-resolve in the lock body (entries carry
+  // resolved versions, not ranges) — they ignore `overrides` at parse.
   switch (format) {
     case 'bun-text':      return bunText.parse(input)
     case 'npm-1':         return npm1.parse(input)
@@ -186,14 +196,14 @@ function parseOne(format: FormatId, input: string, options: ParseOptions): Graph
     case 'pnpm-v5':       return pnpmV5.parse(input)
     case 'pnpm-v6':       return pnpmV6.parse(input, { workspaceRoot })
     case 'pnpm-v9':       return pnpmV9.parse(input, { workspaceRoot })
-    case 'yarn-berry-v4': return yarnBerryV4.parse(input, { workspaceRoot })
-    case 'yarn-berry-v5': return yarnBerryV5.parse(input, { workspaceRoot })
-    case 'yarn-berry-v6': return yarnBerryV6.parse(input, { workspaceRoot })
-    case 'yarn-berry-v7': return yarnBerryV7.parse(input, { workspaceRoot })
-    case 'yarn-berry-v8':  return yarnBerryV8.parse(input, { workspaceRoot })
-    case 'yarn-berry-v9':  return yarnBerryV9.parse(input, { workspaceRoot })
-    case 'yarn-berry-v10': return yarnBerryV10.parse(input, { workspaceRoot })
-    case 'yarn-classic':   return yarnClassic.parse(input)
+    case 'yarn-berry-v4': return yarnBerryV4.parse(input, { workspaceRoot, overrides })
+    case 'yarn-berry-v5': return yarnBerryV5.parse(input, { workspaceRoot, overrides })
+    case 'yarn-berry-v6': return yarnBerryV6.parse(input, { workspaceRoot, overrides })
+    case 'yarn-berry-v7': return yarnBerryV7.parse(input, { workspaceRoot, overrides })
+    case 'yarn-berry-v8':  return yarnBerryV8.parse(input, { workspaceRoot, overrides })
+    case 'yarn-berry-v9':  return yarnBerryV9.parse(input, { workspaceRoot, overrides })
+    case 'yarn-berry-v10': return yarnBerryV10.parse(input, { workspaceRoot, overrides })
+    case 'yarn-classic':   return yarnClassic.parse(input, { overrides })
   }
 }
 
@@ -240,11 +250,17 @@ export function detect(input: string): FormatId | undefined {
 }
 
 export function parse(format: FormatId, input: string, options: ParseOptions = {}): Graph {
-  const graph = parseOne(format, input, options)
-  // ADR-0025 §3/§6 (A2) — F6-capture overrides from supplied manifests onto the
-  // parse-time carrier; read later via `overridesOf(graph)`.
-  if (options.manifests !== undefined) {
-    captureManifestOverrides(format, options.manifests, graph, options.onDiagnostic)
+  // ADR-0025 §3/§6 (A2) — F6-capture overrides from supplied manifests BEFORE the
+  // parse (Bug #99 Option A): the yarn-family edge resolvers need the override map
+  // at parse time to bind a `resolutions`-pinned descriptor (whose entry key was
+  // rewritten to a possibly-NON-satisfying pin) back to its node. The constraints
+  // are also remembered on the returned graph for later `overridesOf(graph)`.
+  const overrides = options.manifests !== undefined
+    ? captureManifestOverrides(format, options.manifests, options.onDiagnostic)
+    : undefined
+  const graph = parseOne(format, input, options, overrides)
+  if (overrides !== undefined && overrides.length > 0) {
+    rememberManifestOverrides(graph, overrides)
   }
   if (options.onDiagnostic !== undefined) {
     for (const d of graph.diagnostics()) options.onDiagnostic(d)
@@ -260,18 +276,18 @@ function pmFamilyOf(format: FormatId): OverridePM {
 }
 
 /**
- * F6-capture overrides from `ParseOptions.manifests` into the recipe carrier
- * (ADR-0025 §6, A2). Prefers a manifest's already-canonical `overrides`; else
- * captures the PM-native block matching the source format's grammar. Iterates
- * workspace-path keys deterministically; later keys win on tuple collision via
- * `mergeOverrides`.
+ * F6-capture overrides from `ParseOptions.manifests` (ADR-0025 §6, A2). Prefers
+ * a manifest's already-canonical `overrides`; else captures the PM-native block
+ * matching the source format's grammar. Iterates workspace-path keys
+ * deterministically; later keys win on tuple collision via `mergeOverrides`.
+ * Pure — returns the canonical union; the caller both threads it into the
+ * parse-time edge resolvers (Bug #99) and remembers it on the parsed graph.
  */
 function captureManifestOverrides(
   format: FormatId,
   manifests: Record<string, Manifest>,
-  graph: Graph,
   onDiagnostic?: (d: Diagnostic) => void,
-): void {
+): OverrideConstraint[] {
   const pm = pmFamilyOf(format)
   let captured: OverrideConstraint[] = []
   for (const key of Object.keys(manifests).sort()) {
@@ -287,7 +303,7 @@ function captureManifestOverrides(
     if (block === undefined) continue
     captured = mergeOverrides(captured, captureOverrides(block, pm, onDiagnostic).canonical)
   }
-  rememberManifestOverrides(graph, captured)
+  return captured
 }
 
 /**

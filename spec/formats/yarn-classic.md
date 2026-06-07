@@ -75,7 +75,7 @@ Keys = comma-separated dep specs that share the same resolved version.
 | Integrity hashes                          | ✓ | sha512; older lockfiles use sha1. Carried under the shared [integrity model](./_common.md#3-integrity-model) as a verbatim multi-hash multiset (every algorithm preserved, [`_common.md` §3.1](./_common.md#31-preserve-every-algorithm-verbatim)) |
 | `dev` / `optional` / `peer` separation    | ~ | `optional` recoverable from lockfile (`optionalDependencies:` sibling block); `dev` / `peer` require `manifests` and otherwise collapse to `dep` |
 | Bundled deps                              | ✗ | |
-| Overrides / resolutions                   | ~ | yarn applies them at resolve time |
+| Overrides / resolutions                   | ~ | yarn applies them at resolve time, rewriting the affected entry key to the pinned descriptor; parse re-joins a forced consumer via the shared descriptor→node ladder ([`_common.md` §5](./_common.md#5-descriptornode-resolution-yarn-family-parse)) — the override map (from `manifests`) is **required** for a non-satisfying pin |
 
 ## Conversion inputs
 
@@ -128,6 +128,30 @@ With `manifests[<workspacePath>]` supplied, full `dep` / `dev` /
 it, only `dep` and `optional` are derivable from the lockfile; `dev` and
 `peer` edges collapse to `dep`. No heuristic re-derives `dev` / `peer`
 from observed nesting — the information is simply not in the lockfile.
+
+### Descriptor→node resolution (shared)
+
+yarn-classic records **ranges**, not resolved versions: a
+`dependencies:`/`optionalDependencies:` inner block lists the consumer's
+verbatim descriptor (`csstype "^3.1.3"`), and the **entry key**
+(`"csstype@^3.1.3":`) is the join surface. Parse binds each edge through the
+shared **descriptor→node ladder** —
+[`_common.md` §5](./_common.md#5-descriptornode-resolution-yarn-family-parse).
+
+Classic specifics:
+
+- Classic has **no Rung 1** (the `patch:`/`link:`/`portal:` structural
+  fallbacks are berry entry-key shapes); its ladder is Rung 0 (exact) → 2
+  (override map) → 3 (source-gated max-satisfying semver) → 4 (drop).
+- A `resolutions` pin rewrites the entry key to the pinned descriptor
+  (`"csstype@3.0.9":`), so a consumer still declaring `csstype "^3.1.3"`
+  misses Rung 0. The override map (from `manifests`) is **required** to honour
+  a NON-satisfying pin (`3.0.9` ∉ `^3.1.3`); without it only the satisfying
+  slice resolves (Rung 3), and a non-satisfying miss drops with
+  `YARN_CLASSIC_RESOLUTION_PIN_UNRESOLVED` (info).
+- The drop diagnostic is `YARN_CLASSIC_MISSING_ENTRY` (unchanged); a Rung-3
+  max-satisfying tie emits `YARN_CLASSIC_AMBIGUOUS_RESOLUTION` (warning) and
+  drops without guessing.
 
 ## Quirks
 

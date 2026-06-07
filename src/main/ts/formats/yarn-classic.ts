@@ -1,22 +1,27 @@
 import {
   GraphError,
   newBuilder,
+  nameOf,
   toTarballKey,
   type Diagnostic,
   type Edge,
   type Graph,
   type Node,
+  type OverrideConstraint,
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
 import { parseSri, emitSri, isEmptyIntegrity, type Integrity } from '../recipe/integrity.ts'
 import {
+  ambiguousResolutionDiagnostic,
   emitDropped as patchEmitDropped,
   emitWorkspaceResolved,
   emitWorkspaceUnresolved,
   invalidIntegrityDiagnostic,
+  resolutionPinUnresolvedDiagnostic,
   unknownResolutionDiagnostic,
 } from '../recipe/diagnostics.ts'
+import { overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import {
   parse as parseResolutionRecipe,
   stringifyForYarnClassic,
@@ -64,6 +69,16 @@ interface YarnClassicEntry {
   optionalDependencies: Map<string, string>
 }
 
+export interface YarnClassicParseOptions {
+  // Bug #99 — canonical override constraints (ADR-0025), threaded from the
+  // public `parse()` after F6-capturing `ParseOptions.manifests`. yarn-classic
+  // joins consumer ranges to entries by exact `<name>@<range>` key; a
+  // `resolutions` pin rewrites that key, so the override map bridges the miss.
+  // Absent → Rung-3 semver only. Classic locks carry no resolved-version entries
+  // (it is range-keyed like berry), so the same ladder applies.
+  overrides?: OverrideConstraint[]
+}
+
 export interface YarnClassicStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
@@ -101,7 +116,7 @@ export function check(input: string): boolean {
   return lines[0] === HEADER_LINE_1 && lines[1] === HEADER_LINE_2
 }
 
-export function parse(input: string): Graph {
+export function parse(input: string, options: YarnClassicParseOptions = {}): Graph {
   const normalized = stripBom(normalizeLineEndings(input))
   ensureClassicHeader(normalized)
 
@@ -114,6 +129,11 @@ export function parse(input: string): Graph {
   const unknownFields = new Set<string>()
   const entryNodes: Array<{ node: Node; entry: YarnClassicEntry }> = []
   const seenEntries = new Map<string, { resolved?: string; integrity?: string }>()
+  // Bug #99 Rung-3 — name → registry-class candidate index for source-gated
+  // max-satisfying semver, built alongside the node table (the resolver runs
+  // against the write-only builder). Source class comes from the F3 canonical
+  // resolution; only `tarball` candidates are eligible for an `npm:`/bare match.
+  const semverCandidatesByName = new Map<string, SemverCandidate[]>()
 
   for (const entry of entries) {
     const specs = splitEntryKey(entry.key)
@@ -180,6 +200,18 @@ export function parse(input: string): Graph {
         diagnostics.push(unknownResolutionDiagnostic(id, entry.resolved!))
       }
 
+      // Bug #99 Rung-3 — register as a max-satisfying-semver candidate under its
+      // name. `'absent'` source (no `resolved:`) is non-registry → ineligible for
+      // an `npm:`/bare match inside `semverResolve`.
+      const candidate: SemverCandidate = {
+        id,
+        version: entry.version,
+        sourceType: canonicalResolution?.type ?? 'absent',
+      }
+      const candidateList = semverCandidatesByName.get(name)
+      if (candidateList === undefined) semverCandidatesByName.set(name, [candidate])
+      else candidateList.push(candidate)
+
       if (entry.integrity !== undefined) {
         const integrity = parseSri(entry.integrity, 'sri')
         if (isEmptyIntegrity(integrity)) {
@@ -214,9 +246,17 @@ export function parse(input: string): Graph {
     })
   }
 
+  // Bug #99 — the descriptor→node ladder's Rung-2/3 inputs (shared shape with
+  // the berry resolver). Bundled once so the steady-state Rung-0 path is a
+  // single `specIndex.get`.
+  const ladder: ClassicEdgeLadderContext = {
+    candidatesByName:  semverCandidatesByName,
+    overrides:         options.overrides ?? [],
+    manifestsProvided: options.overrides !== undefined,
+  }
   for (const { node, entry } of entryNodes) {
-    addEdgesFromMap(builder, diagnostics, node.id, entry.dependencies, 'dep', specIndex)
-    addEdgesFromMap(builder, diagnostics, node.id, entry.optionalDependencies, 'optional', specIndex)
+    addEdgesFromMap(builder, diagnostics, node.id, entry.dependencies, 'dep', specIndex, ladder)
+    addEdgesFromMap(builder, diagnostics, node.id, entry.optionalDependencies, 'optional', specIndex, ladder)
   }
 
   for (const diagnostic of diagnostics) {
@@ -744,6 +784,25 @@ function parseSpec(spec: string): { name: string; spec: string } {
   }
 }
 
+// Bug #99 — Rung-2/3 ladder inputs for the classic edge resolver (the patch /
+// link rungs are berry-specific, so classic has no Rung 1 here — Rung 0 → 2 →
+// 3 → drop). See spec/formats/_common.md §"Descriptor→node resolution".
+interface ClassicEdgeLadderContext {
+  candidatesByName:  Map<string, SemverCandidate[]>
+  overrides:         readonly OverrideConstraint[]
+  manifestsProvided: boolean
+}
+
+// A classic descriptor range is a registry range (bare semver or `npm:`-aliased)
+// — the only class Rung-3 semver + the resolutions-pin INFO hint apply to. A
+// `file:`/`link:`/`git…`/URL range carries an explicit non-`npm:` protocol.
+function isClassicRegistryRange(range: string): boolean {
+  if (range.startsWith('npm:')) return true
+  const colonIdx = range.indexOf(':')
+  if (colonIdx <= 0) return true // bare semver / tag
+  return !/^[a-z][a-z0-9+.-]*$/i.test(range.slice(0, colonIdx))
+}
+
 function addEdgesFromMap(
   builder: ReturnType<typeof newBuilder>,
   diagnostics: Diagnostic[],
@@ -751,16 +810,44 @@ function addEdgesFromMap(
   deps: Map<string, string>,
   kind: 'dep' | 'optional',
   specIndex: Map<string, string>,
+  ladder: ClassicEdgeLadderContext,
 ): void {
   for (const [name, range] of Array.from(deps.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))) {
-    const dstId = specIndex.get(`${name}@${range}`)
+    // Rung 0 — exact specIndex match (UNCHANGED, O(1)).
+    let dstId = specIndex.get(`${name}@${range}`)
+    // Rung 2 — OVERRIDE-MAP forced link. Authoritative pin (`resolutions`) beats
+    // semver inference; handles a NON-satisfying pin. The `to` target is fed back
+    // through Rung 0 (`specIndex.get`); a target classic can't key (a `patch:`
+    // descriptor) falls through to Rung 3 on the ORIGINAL range — never throws.
+    if (dstId === undefined && ladder.overrides.length > 0) {
+      const to = overrideTargetFor(name, range, [nameOf(srcId)], ladder.overrides)
+      if (to !== undefined) {
+        const viaOverride = specIndex.get(`${name}@${to}`)
+        if (viaOverride !== undefined) dstId = viaOverride
+      }
+    }
+    // Rung 3 — SOURCE-GATED max-satisfying semver (tarball candidates only).
     if (dstId === undefined) {
+      const result = semverResolve(range, ladder.candidatesByName.get(name) ?? [])
+      if (result.kind === 'bound') {
+        dstId = result.id
+      } else if (result.kind === 'ambiguous') {
+        diagnostics.push(ambiguousResolutionDiagnostic('YARN_CLASSIC', srcId, name, range, result.candidateIds))
+        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+      }
+    }
+    if (dstId === undefined) {
+      // Rung 4 — drop (UNCHANGED). Add the resolutions-pin INFO hint when a
+      // registry range missed everything and no manifests were supplied.
       diagnostics.push({
         code: 'YARN_CLASSIC_MISSING_ENTRY',
         severity: 'warning',
         subject: srcId,
         message: `missing lockfile entry for ${name}@${range}`,
       })
+      if (!ladder.manifestsProvided && isClassicRegistryRange(range) && (ladder.candidatesByName.get(name)?.length ?? 0) > 0) {
+        diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
+      }
       continue
     }
     builder.addEdge(srcId, dstId, kind, { range })

@@ -103,6 +103,58 @@ export function emitPeerMetaIncomplete(
   onDiagnostic(recipePeerMetaIncomplete(nodeId, peerName, reason))
 }
 
+// === Descriptor→node resolution diagnostics (Bug #99) =======================
+//
+// The yarn-family descriptor→node ladder (spec/formats/_common.md
+// §"Descriptor→node resolution") layers source-safe fallback rungs over the
+// exact entry-key match. Two diagnostics surface its limits, both per-adapter-
+// prefixed (e.g. `YARN_BERRY`, `YARN_CLASSIC`) like the peer-ambiguity family.
+
+/**
+ * `<prefix>_AMBIGUOUS_RESOLUTION` (warning) — Rung 3 (max-satisfying semver)
+ * found ≥2 candidates tied at the maximum satisfying version with NO way to
+ * choose. Mirrors the `<prefix>_PEER_AMBIGUOUS` posture: do NOT guess — drop the
+ * edge and report the tied candidate ids. `subject` is the consumer node id.
+ */
+export function ambiguousResolutionDiagnostic(
+  prefix:       string,
+  subject:      NodeId,
+  depName:      string,
+  range:        string,
+  candidateIds: readonly NodeId[],
+): Diagnostic {
+  return {
+    code:     `${prefix}_AMBIGUOUS_RESOLUTION`,
+    severity: 'warning',
+    subject,
+    message:  `dependency ${depName}=${range} from ${subject} matches multiple max-satisfying entries: [${candidateIds.join(', ')}]; dropping (no way to choose)`,
+  }
+}
+
+/**
+ * `<prefix>_RESOLUTION_PIN_UNRESOLVED` (info) — a yarn descriptor missed the
+ * exact entry-key AND no semver candidate satisfied its range, which is the
+ * SIGNATURE of a `resolutions` pin that rewrote the entry key to a NON-satisfying
+ * descriptor (csstype `^3.1.3` → `3.0.9`). yarn writes no lock-borne
+ * resolutions, so the override map needed to bridge this exists only when the
+ * caller passed `ParseOptions.manifests`. This fires only in the manifest-LESS
+ * path to point at the missing input; with manifests the override rung resolves
+ * it silently. `subject` is the consumer node id.
+ */
+export function resolutionPinUnresolvedDiagnostic(
+  prefix:  string,
+  subject: NodeId,
+  depName: string,
+  range:   string,
+): Diagnostic {
+  return {
+    code:     `${prefix}_RESOLUTION_PIN_UNRESOLVED`,
+    severity: 'info',
+    subject,
+    message:  `dependency ${depName}=${range} from ${subject} has no exact or semver-satisfying entry — likely a resolutions pin to a non-satisfying descriptor; pass ParseOptions.manifests so the override map can bridge it`,
+  }
+}
+
 /**
  * Emit `RECIPE_FEATURE_DROPPED` (warning) per ADR-0014 §5 — the canonical
  * loss diagnostic when a target adapter cannot represent a recipe-owned

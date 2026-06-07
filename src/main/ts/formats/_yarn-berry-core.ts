@@ -16,6 +16,7 @@ import {
   toTarballKey,
   type TarballKeyInputs,
   type Diagnostic,
+  type OverrideConstraint,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
 import { readWorkspaceFileBytes } from './_path.ts'
@@ -39,7 +40,8 @@ import {
   hashAndNormaliseBytes as patchHashAndNormaliseBytes,
   sentinelHashOfLocator,
 } from '../recipe/patch.ts'
-import { emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, recipePeerMetaIncomplete, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, recipePeerMetaIncomplete, resolutionPinUnresolvedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import { readInstalledManifest, type InstalledManifestMeta } from '../complete/local-manifest.ts'
 
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
@@ -111,6 +113,14 @@ const EMPTY_SIDECAR: YarnBerryFamilySidecar = {}
 
 export interface YarnBerryFamilyParseOptions {
   workspaceRoot?: string
+  // Bug #99 — canonical override constraints (ADR-0025), threaded from the public
+  // `parse()` after F6-capturing `ParseOptions.manifests`. yarn writes NO
+  // lock-borne resolutions, so a `resolutions` pin that rewrote an entry key to a
+  // possibly-NON-satisfying descriptor (csstype `^3.1.3` → `3.0.9`) can only be
+  // bridged back to its node via this map. Absent → the edge ladder runs Rung-3
+  // semver only (the satisfying slice resolves; a non-satisfying pin stays
+  // dropped, with an INFO diagnostic noting the missing `manifests`).
+  overrides?: OverrideConstraint[]
 }
 
 export interface YarnBerryFamilyStringifyOptions {
@@ -237,6 +247,13 @@ export function parseFamily(
   // each candidate carries its `locator=` for consumer disambiguation, mirroring
   // the `link:`/`portal:` path.
   const patchDescriptorIndex = new Map<string, PatchDescriptorCandidate[]>()
+  // Bug #99 Rung-3 — name → registry-class candidate index for source-gated
+  // max-satisfying semver. Built alongside the node table because the resolver
+  // runs against the WRITE-ONLY builder (no `graph.byName` / `graph.tarballOf`
+  // available yet). Each candidate carries the F3 source class so the resolver
+  // can keep an `npm:`/bare descriptor from ever binding a git/directory/unknown
+  // node (the #91 source-safety invariant).
+  const semverCandidatesByName = new Map<string, SemverCandidate[]>()
   const seenIds = new Set<string>()
   const entryIds = new Map<string, string>()
 
@@ -335,6 +352,24 @@ export function parseFamily(
     if (canonicalResolution !== undefined && canonicalResolution.type === 'unknown' && !looksLikePatchLocator(resolution)) {
       diagnostics.push(unknownResolutionDiagnostic(id, resolution!))
     }
+
+    // Bug #99 Rung-3 — register this node as a max-satisfying-semver candidate
+    // under its authoritative name. The source class is the F3 canonical type
+    // (`'absent'` when no resolution canonicalised — a workspace node, or an
+    // entry with no `resolution:` field); only `tarball` candidates are ever
+    // eligible for an `npm:`/bare match, enforced inside `semverResolve`. A patch
+    // node carries `canonicalResolution.type === 'unknown'` (patch: → unknown per
+    // recipe/resolution.ts) so it is correctly invisible to a registry range —
+    // the bare `npm:` node remains the semver target; the patch is reached via
+    // the Rung-1 patch-descriptor path.
+    const semverCandidate: SemverCandidate = {
+      id,
+      version,
+      sourceType: canonicalResolution?.type ?? 'absent',
+    }
+    const candidateList = semverCandidatesByName.get(authoritativeName)
+    if (candidateList === undefined) semverCandidatesByName.set(authoritativeName, [semverCandidate])
+    else candidateList.push(semverCandidate)
 
     const peerDependencies = stringRecordOfBlock(asMap(value['peerDependencies']))
     if (peerDependencies !== undefined) {
@@ -438,6 +473,15 @@ export function parseFamily(
     }
   }
 
+  // Bug #99 — bundle the descriptor→node ladder's Rung-2/3 inputs once; passed
+  // to every edge-resolution call so the steady-state Rung-0 path is untouched.
+  const ladderCtx: EdgeLadderContext = {
+    candidatesByName: semverCandidatesByName,
+    overrides:        options.overrides ?? [],
+    codePrefix:       config.codePrefix,
+    manifestsProvided: options.overrides !== undefined,
+  }
+
   for (const { key, value, specs } of entries) {
     const first = specs[0]
     if (!first) continue
@@ -447,8 +491,8 @@ export function parseFamily(
     // The source entry's own resolution doubles as its locator for resolving
     // any `link:` / `portal:` deps it declares (see addEdgesFromBlock).
     const srcResolution = asString(value['resolution'])
-    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, patchDescriptorIndex, diagnostics, srcResolution)
-    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, srcResolution)
+    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution)
+    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution)
   }
 
   // Sort diagnostics by subject + code to keep graph.diagnostics() order
@@ -1917,6 +1961,69 @@ function graphNeedsWorkspaceAttribution(graph: Graph): boolean {
   return false
 }
 
+// Rung 1 — patch-descriptor (#88) + link/portal `::locator=` (#90) fallbacks.
+// Extracted so the override-`to` re-resolution (Rung 2) can reuse the SAME
+// structural rungs: a `to:"patch:…"` target resolves to its patch node exactly
+// as a direct `patch:` descriptor does. Returns the resolved node id, `null`
+// (ambiguous patch descriptor — diagnostic already pushed, caller must skip the
+// edge), or `undefined` (no Rung-1 match — caller falls to Rung 2/3).
+function resolvePatchAndLinkFallbacks(
+  lookup: string,
+  normalizedRange: string,
+  index: Map<string, string>,
+  patchDescriptorIndex: Map<string, PatchDescriptorCandidate[]>,
+  srcResolution: string | undefined,
+  srcId: string,
+  diagnostics: Diagnostic[],
+): string | undefined | null {
+  if (isPatchRange(normalizedRange)) {
+    // Bug #88 (form b) — the dep is referenced DIRECTLY via a `patch:`
+    // descriptor (`<name>@patch:<inner>#<patchPath>`). The bound patch entry
+    // carries an extra `::version=…&hash=…[&locator=…]` block its consumers
+    // omit, so the bare descriptor never hit `specIndex`. Strip the param block
+    // off the descriptor and resolve to the patch NODE keyed under it.
+    const stripped = strippedPatchDescriptor(lookup)
+    if (stripped !== undefined) {
+      return resolvePatchDescriptor(patchDescriptorIndex.get(stripped), srcResolution, srcId, lookup, diagnostics)
+    }
+  }
+  if (srcResolution !== undefined && isLinkOrPortalRange(normalizedRange)) {
+    // `link:` / `portal:` deps are recorded per consumer: yarn appends a
+    // `::locator=<encoded-consumer-locator>` qualifier to the entry key so the
+    // same on-disk path linked from different workspaces stays distinct. The
+    // deps-block descriptor is bare (no qualifier), so reconstruct the
+    // locator-qualified specIndex key from the source consumer's own resolution.
+    // encodeURIComponent matches yarn's entry-key encoding (`@`->%40, `:`->%3A,
+    // `/`->%2F), e.g. `pkg@workspace:.` -> `pkg%40workspace%3A.`.
+    const qualified = `${lookup}::locator=${encodeURIComponent(srcResolution)}`
+    return index.get(qualified)
+  }
+  return undefined
+}
+
+// A descriptor range is a registry range (`npm:`/bare) — the only class Rung-3
+// semver and the resolutions-pin INFO hint apply to. Any explicit non-`npm:`
+// protocol (`patch:`, `link:`, `portal:`, `file:`, `git…`, a URL scheme) is out.
+function isRegistryRange(range: string): boolean {
+  if (range.startsWith('npm:')) return true
+  return !hasExplicitProtocol(range)
+}
+
+// Bug #99 — the descriptor→node ladder's Rung-2/3 inputs (see
+// spec/formats/_common.md §"Descriptor→node resolution"). Bundled so the
+// steady-state Rung-0 exact-match path stays a single `index.get`.
+interface EdgeLadderContext {
+  /** name → registry-class candidates for Rung-3 max-satisfying semver. */
+  candidatesByName: Map<string, SemverCandidate[]>
+  /** canonical override constraints for Rung-2 forced links (`[]` = none). */
+  overrides: readonly OverrideConstraint[]
+  /** adapter code prefix for the ladder diagnostics (e.g. `YARN_BERRY_V8`). */
+  codePrefix: string
+  /** whether `ParseOptions.manifests` was supplied — gates the manifest-less
+   *  INFO hint when a likely resolutions-pin can't be bridged. */
+  manifestsProvided: boolean
+}
+
 function addEdgesFromBlock(
   builder: ReturnType<typeof newBuilder>,
   srcId: string,
@@ -1925,6 +2032,7 @@ function addEdgesFromBlock(
   index: Map<string, string>,
   patchDescriptorIndex: Map<string, PatchDescriptorCandidate[]>,
   diagnostics: Diagnostic[],
+  ladder: EdgeLadderContext,
   srcResolution?: string,
 ): void {
   if (!block) return
@@ -1935,41 +2043,64 @@ function addEdgesFromBlock(
     // `null` ⇒ resolution was attempted and deliberately abandoned (ambiguous
     // patch descriptor, diagnostic already emitted) — distinct from `undefined`
     // (not yet resolved), so the generic UNRESOLVED_DEP fallback is skipped.
+    // Rung 0 — exact specIndex match (UNCHANGED, first, O(1)).
     let dstId: string | undefined | null = index.get(lookup)
-    if (dstId === undefined && isPatchRange(normalizedRange)) {
-      // Bug #88 (form b) — the dep is referenced DIRECTLY via a `patch:`
-      // descriptor (`<name>@patch:<inner>#<patchPath>`). The bound patch entry
-      // carries an extra `::version=…&hash=…[&locator=…]` block its consumers
-      // omit, so the bare descriptor never hit `specIndex` above. Strip the
-      // param block off the descriptor and resolve to the patch NODE keyed
-      // under it. The inner descriptor (`npm%3A…` → `npm:…`) is the identity
-      // that makes descriptor and locator share this stripped prefix.
-      const stripped = strippedPatchDescriptor(lookup)
-      if (stripped !== undefined) {
-        dstId = resolvePatchDescriptor(patchDescriptorIndex.get(stripped), srcResolution, srcId, lookup, diagnostics)
-        if (dstId === null) continue // ambiguous → diagnostic already pushed
+    // Rung 1 — patch-descriptor (#88) + link/portal `::locator=` (#90)
+    // fallbacks (UNCHANGED). Run on the Rung-0 MISS path only, before Rung 2/3,
+    // so a more-specific structural match wins over the override/semver rungs.
+    if (dstId === undefined) {
+      dstId = resolvePatchAndLinkFallbacks(
+        lookup, normalizedRange, index, patchDescriptorIndex, srcResolution, srcId, diagnostics,
+      )
+      if (dstId === null) continue // ambiguous patch descriptor → diagnostic pushed
+    }
+    // Rung 2 — OVERRIDE-MAP forced link. An authoritative human declaration
+    // (`resolutions` / `overrides`) beats inference, so it precedes semver and
+    // handles a NON-satisfying pin (csstype `^3.1.3` → `3.0.9`) or a non-version
+    // target (`patch:` / `portal:`). The override `to` is fed BACK through Rung
+    // 0+1 so `to:"3.0.9"` → the exact node and `to:"patch:…"` → the patch node.
+    // Risk (e): an override `to` that fails Rung 0/1 falls through to Rung 3 on
+    // the ORIGINAL descriptor below — never throws.
+    if (dstId === undefined && ladder.overrides.length > 0) {
+      const to = overrideTargetFor(depName, normalizedRange, [nameOf(srcId)], ladder.overrides)
+      if (to !== undefined) {
+        const toLookup = `${depName}@${entryKeyRangeOf(to)}`
+        let viaOverride: string | undefined | null = index.get(toLookup)
+        if (viaOverride === undefined) {
+          viaOverride = resolvePatchAndLinkFallbacks(
+            toLookup, entryKeyRangeOf(to), index, patchDescriptorIndex, srcResolution, srcId, diagnostics,
+          )
+          if (viaOverride === null) continue // ambiguous patch target → diagnostic pushed
+        }
+        if (viaOverride !== undefined) dstId = viaOverride
       }
     }
-    if (dstId === undefined && srcResolution !== undefined && isLinkOrPortalRange(normalizedRange)) {
-      // `link:` / `portal:` deps are recorded per consumer: yarn appends a
-      // `::locator=<encoded-consumer-locator>` qualifier to the entry key so
-      // the same on-disk path linked from different workspaces stays distinct
-      // (see isLinkOrPortalResolution + the NodeId-disambiguation note above).
-      // The deps-block descriptor is bare (no qualifier), so reconstruct the
-      // locator-qualified specIndex key from the source consumer's own
-      // resolution. encodeURIComponent matches yarn's entry-key encoding
-      // (`@`->%40, `:`->%3A, `/`->%2F), e.g. `pkg@workspace:.` ->
-      // `pkg%40workspace%3A.`.
-      const qualified = `${lookup}::locator=${encodeURIComponent(srcResolution)}`
-      dstId = index.get(qualified)
+    // Rung 3 — SOURCE-GATED max-satisfying semver. Only `npm:`/bare descriptors,
+    // only tarball(registry)-class candidates (a git/directory/unknown node stays
+    // invisible — the #91 source-safety). A final tie → diagnose + drop.
+    if (dstId === undefined) {
+      const result = semverResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
+      if (result.kind === 'bound') {
+        dstId = result.id
+      } else if (result.kind === 'ambiguous') {
+        diagnostics.push(ambiguousResolutionDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, result.candidateIds))
+        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+      }
     }
     if (!dstId) {
+      // Rung 4 — drop (UNCHANGED). When a likely resolutions-pin missed both the
+      // exact key and every semver candidate AND no manifests were supplied, add
+      // an INFO hint pointing at the missing override source (the only place yarn
+      // records a pin) so the non-satisfying-pin case is diagnosable.
       diagnostics.push({
         code: 'YARN_BERRY_UNRESOLVED_DEP',
         subject: srcId,
         severity: 'warning',
         message: `dependency ${depName}=${depRange} from ${srcId} has no matching lockfile entry`,
       })
+      if (!ladder.manifestsProvided && isRegistryRange(normalizedRange) && (ladder.candidatesByName.get(depName)?.length ?? 0) > 0) {
+        diagnostics.push(resolutionPinUnresolvedDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange))
+      }
       continue
     }
     // EdgeAttrs.alias — preserved when the parent's dependencies-block key

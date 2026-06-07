@@ -219,6 +219,32 @@ unconditionally; an ambiguous descriptor with no matching `&locator=`
 stays unresolved and emits `YARN_BERRY_UNRESOLVED_DEP` rather than
 guessing.
 
+### Descriptor→node resolution ladder (shared)
+
+The patch-descriptor and `link:` / `portal:` reconstructions above are
+**Rung 1** of the version-invariant yarn-family descriptor→node ladder —
+normative source [`_common.md` §5](./_common.md#5-descriptornode-resolution-yarn-family-parse).
+The berry rungs are: Rung 0 (exact entry-key match) → **Rung 1** (the
+patch-descriptor + `link:`/`portal:` `::locator=` fallbacks documented here)
+→ Rung 2 (override map) → Rung 3 (source-gated max-satisfying semver) → Rung 4
+(`YARN_BERRY_UNRESOLVED_DEP` drop). Rungs 1–3 run **only** on a Rung-0 miss,
+so the steady-state cost is one lookup.
+
+Rungs 2–3 close Bug #99: a yarn `resolutions` pin **rewrites the affected
+entry key to the pinned descriptor** and drops the consumer's range, so a
+consumer still declaring `csstype: "npm:^3.1.3"` misses Rung 0. The pin can be
+**non-satisfying** (`3.0.9` ∉ `^3.1.3`) and can target a non-version
+(`patch:` / `portal:`), so the **override map** (Rung 2) is required — and
+since yarn writes no lock-borne resolutions, it exists only when the caller
+passes `manifests` (captured per published
+[ADR-0025](../decisions/0025-manifest-overrides.md)). Without `manifests`,
+Rung 3 recovers only the *satisfying* slice (source-gated to registry tarballs
+per [`_common.md` §5.3](./_common.md#53-the-source-awareness-invariant) — an
+`npm:` range never binds a git / directory / unknown node); a non-satisfying
+miss drops with `<prefix>_RESOLUTION_PIN_UNRESOLVED` (info, e.g.
+`YARN_BERRY_V4_RESOLUTION_PIN_UNRESOLVED`). A Rung-3 max-satisfying tie emits
+`<prefix>_AMBIGUOUS_RESOLUTION` (warning) and drops without guessing.
+
 ## Emit
 
 Emit (`stringify(graph, options?)`) is governed by the shared,

@@ -532,3 +532,106 @@ only when an external rung was explicitly requested and failed (in the
 default offline mode the graph is the sole authority and the pass is
 silent). Individual format specs define any further `RECIPE_*` members
 they emit.
+
+---
+
+## §5 Descriptor→node resolution (yarn-family parse)
+
+> **Scope.** §5 is the **yarn-family parse** contract — it governs how a
+> consumer's dependency *descriptor* is matched to a lockfile *entry* (node)
+> during `parse(input, options?)` for **yarn-classic** and the **yarn-berry**
+> family (v3–v10). npm / pnpm / bun do **not** use this ladder: their lock
+> bodies pre-resolve every edge to a concrete entry id, so there is no
+> descriptor→entry matching step to perform at parse.
+
+### 5.1 Why a ladder is needed
+
+The yarn lock records **ranges**, not resolved versions: a consumer's
+`dependencies` block holds the verbatim *descriptor* it declared
+(`csstype: "npm:^3.1.3"` in berry; `csstype "^3.1.3"` in classic), and the
+**entry key** is the join surface — yarn keys each entry by the descriptor(s)
+that resolve to it (`"csstype@npm:^3.1.3":` / `"csstype@^3.1.3":`). Parse
+binds an edge by looking the descriptor up in an index of entry keys.
+
+A manifest **override** (npm `overrides`, yarn `resolutions`, pnpm
+`pnpm.overrides` — the canonical PM-neutral form is specified in published
+[ADR-0025](../decisions/0025-manifest-overrides.md)) breaks that exact-match
+join. When a dependency is forced, yarn **rewrites the entry key to the
+pinned descriptor** and drops the consumer's own range from the key. For a
+backstage-style `"csstype@npm:^3.1.3": "3.0.9"` resolution the entry becomes:
+
+```
+"csstype@npm:3.0.9":          # key = the PIN, not the consumer's ^3.1.3
+  version: 3.0.9
+  resolution: "csstype@npm:3.0.9"
+```
+
+A consumer still declaring `csstype: "npm:^3.1.3"` now finds **no** entry
+keyed `csstype@npm:^3.1.3`. Two further facts make a naive fix unsafe:
+
+- **The pin may be NON-satisfying.** `3.0.9` does **not** satisfy `^3.1.3`,
+  so pure semver cannot recover the link — the override map is *mandatory*
+  for this class.
+- **The pin may target a non-version.** A `resolutions` value can be a
+  `patch:` / `portal:` / git descriptor, not a registry version, so the
+  resolver must re-feed the pin's target through the *whole* ladder rather
+  than assume a semver point.
+
+yarn writes **no lock-borne resolutions** — the override declaration lives in
+`package.json` only. So the override map exists at parse time **iff the caller
+passed `manifests`** (the public `parse(format, input, { manifests })`
+F6-captures them per [ADR-0025](../decisions/0025-manifest-overrides.md) into
+the canonical override form *before* the adapter parse, and threads the
+constraints into the edge resolver).
+
+### 5.2 The resolution ladder (normative)
+
+Each consumer descriptor is resolved by the rungs below **in order**. Rung 0
+is the steady-state path; Rungs 1–3 run **only** when Rung 0 misses, so the
+common case stays a single O(1) lookup. The first rung that yields a node
+binds the edge; the dropped-edge set this ladder produces is a **subset** of
+the exact-match-only result (it only ever *shrinks*).
+
+| Rung | Rule |
+| --- | --- |
+| **0 — exact** | `index.get("<name>@<descriptor>")` — exact entry-key string match. Unchanged, first, O(1). |
+| **1 — structural fallbacks** (berry only) | A `patch:` descriptor binds to its patch node after the entry-key's `::version=…&hash=…[&locator=…]` param block is stripped; a `link:` / `portal:` descriptor binds via the `::locator=<consumer>` qualifier reconstructed from the consumer's own resolution. More-specific than the rungs below, so it runs first. |
+| **2 — override map** | If an override constraint matches `(depName, declaredRange, consumerPath)`, resolve its `to` target by feeding `to` **back through Rungs 0+1** (`to:"3.0.9"` → the exact `<name>@npm:3.0.9` node; `to:"patch:…"` → the patch node). This handles the NON-satisfying pin. The override is **authoritative** — a human declaration beats inference — so it precedes semver. |
+| **3 — source-gated semver** | For an `npm:`/bare descriptor **only**, among the entries that share `depName` and whose **source is a registry tarball**, pick the **max-satisfying** locked version. A single eligible registry sibling binds directly (the unique pin yarn chose, even if its version does not satisfy the bare range). A final tie at the maximum → **diagnose and drop**, never guess. |
+| **4 — drop** | No rung matched → the edge is dropped with the adapter's `*_UNRESOLVED_DEP` / `*_MISSING_ENTRY` diagnostic. Unchanged. |
+
+### 5.3 The source-awareness invariant
+
+Rung 3 is **source-gated**: an `npm:`/bare descriptor may bind **only** a
+node whose canonical resolution is a registry **tarball**
+([§4.4](#44-graph) source taxonomy; the four-case canonical resolution is
+specified in published
+[ADR-0014](../decisions/0014-canonical-recipe-input-normalisation.md) §4.F3
+— `tarball` / `git` / `directory` / `unknown`). A git-fork, directory-link,
+`unknown`-source, or resolution-less node is **invisible** to a registry
+range: a fork pinned at a satisfying version must never silently satisfy an
+`npm:` descriptor, because the bytes are not the registry artefact the range
+asked for. An `unknown`-source node is likewise ineligible — the resolver
+cannot *prove* it is a registry tarball. This gate is independent of node
+**identity**: it holds regardless of whether the source class is also folded
+into the NodeId, so the ladder stays correct on its own.
+
+### 5.4 Diagnostics
+
+Both yarn adapters emit, version-prefixed (mirroring the
+`<prefix>_PEER_AMBIGUOUS` family):
+
+| Code | Severity | `subject` | When | Posture |
+| --- | --- | --- | --- | --- |
+| `<prefix>_AMBIGUOUS_RESOLUTION` | warning | the consumer node | Rung 3 found ≥2 candidates tied at the maximum satisfying version | drop the edge, never guess (mirrors `<prefix>_PEER_AMBIGUOUS`) |
+| `<prefix>_RESOLUTION_PIN_UNRESOLVED` | info | the consumer node | an `npm:`/bare descriptor missed Rung 0 **and** no semver candidate satisfied it, with **no** `manifests` supplied | point at the missing override source — the signature of a `resolutions` pin to a non-satisfying descriptor |
+
+**Manifest-less limit.** Without `manifests`, only Rung 3 runs for forced
+deps. It recovers the *satisfying* slice (a `^3.0.2` consumer still finds a
+satisfying registry sibling). A **non-satisfying** pin cannot be recovered —
+it either stays dropped (no satisfying sibling → `*_RESOLUTION_PIN_UNRESOLVED`
+fires) **or**, when a different satisfying sibling exists, binds to *that*
+sibling rather than the pin (Rung 3's best inference; no diagnostic, since the
+edge resolved). Supplying `manifests` is the only way to honour a
+non-satisfying pin faithfully. This is the documented degradation, not a bug:
+the lock alone does not carry the pin.
