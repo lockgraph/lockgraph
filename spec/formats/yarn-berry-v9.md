@@ -240,10 +240,14 @@ definitively, even when that answer is 'required'):
     the on-lock `peerDependenciesMeta.optional` is the authoritative rung-0 signal
     that stamps `EdgeAttrs.optional` on the derived peer edge (no `node_modules`
     lookup required for a berry source).
-  - Emit order matches yarn for `dependenciesMeta` (immediately before
-    `peerDependenciesMeta`); `conditions`/`checksum`/`languageName`/`linkType`
-    sit in this adapter's intra-emitter schedule, which differs from yarn's
-    native order but is lossless and idempotent.
+  - Emit order matches yarn's emitter **exactly** (#117): `dependenciesMeta`
+    immediately before `peerDependenciesMeta`, and the trailing block is
+    `bin` → `checksum` → `conditions` → `languageName` → `linkType` (`checksum`
+    before `languageName`/`linkType`; `conditions` between `checksum` and
+    `languageName`). This is byte-identical to real yarn output and round-trips
+    under `yarn install --immutable`. See
+    [`_common.md` §1.4](./_common.md#14-entry-internal-field-schedule) for the
+    full schedule and its corpus validation.
 
 ## Degradation rules
 

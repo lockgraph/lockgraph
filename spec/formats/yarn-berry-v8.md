@@ -64,11 +64,11 @@ descriptor — all three round-trip:
   resolution: "some-pkg@npm:1.0.0"
   dependencies:
     fsevents: "npm:2.3.3"
+  peerDependencies:
+    react: "*"
   dependenciesMeta:           # { pkg: { optional | built | … } }
     fsevents:
       optional: true
-  peerDependencies:
-    react: "*"
   peerDependenciesMeta:       # { peer: { optional: true } }
     react:
       optional: true
@@ -77,6 +77,12 @@ descriptor — all three round-trip:
   languageName: node
   linkType: hard
 ```
+
+Field order is yarn's exact emitter schedule (see
+[`_common.md` §1.4](./_common.md#14-entry-internal-field-schedule)):
+`dependencies` → `peerDependencies` → `dependenciesMeta` →
+`peerDependenciesMeta` → `bin` → `checksum` → `conditions` →
+`languageName` → `linkType`.
 
 - `conditions` — a **scalar** platform-condition token (NOT a nested
   map): `os=darwin & cpu=arm64`, `os=linux`, or a grouped form like

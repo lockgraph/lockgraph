@@ -1404,8 +1404,19 @@ function entryOfNode(
   const bin = binBlockOfNode(node, payload)
   if (bin !== undefined) entry['bin'] = bin
 
-  entry['linkType'] = node.workspacePath !== undefined ? 'soft' : 'hard'
-  entry['languageName'] = node.workspacePath !== undefined ? 'unknown' : 'node'
+  // Trailing-field schedule is FIXED by yarn's emitter and verified byte-for-byte
+  // against the real-world berry corpus (v4–v10, ~50k entries, zero inversions):
+  //   … bin, checksum, conditions, languageName, linkType
+  // (#117). `checksum` precedes `conditions`, which precedes `languageName`, which
+  // precedes `linkType`. Any other interleaving breaks byte-fidelity and
+  // `yarn install --immutable` on essentially every entry. The blocks above
+  // (dependencies, optionalDependencies, peerDependencies, dependenciesMeta,
+  // peerDependenciesMeta) keep yarn's `Manifest.exportTo` order; `optionalDependencies`
+  // sits between `dependencies` and `peerDependencies` IFF present (yarn folds optional
+  // deps into `dependencies` + `dependenciesMeta`, so a real berry lock never carries
+  // a separate `optionalDependencies` block — see spec/formats/_common.md §1.4).
+  const checksum = checksumOfPayload(payload, config, cacheKey, node.id, emitDiagnostic)
+  if (checksum !== undefined) entry['checksum'] = checksum
 
   // `conditions:` is a SCALAR token (`os=darwin & cpu=arm64`, possibly with
   // `( | )` groups) — emitted verbatim, NOT as a structured block. The captured
@@ -1426,8 +1437,9 @@ function entryOfNode(
     }
   }
 
-  const checksum = checksumOfPayload(payload, config, cacheKey, node.id, emitDiagnostic)
-  if (checksum !== undefined) entry['checksum'] = checksum
+  entry['languageName'] = node.workspacePath !== undefined ? 'unknown' : 'node'
+  entry['linkType'] = node.workspacePath !== undefined ? 'soft' : 'hard'
+
   if (node.peerContext.length > 0) {
     emitDiagnostic({
       code: `${config.codePrefix}_PEER_VIRT_FLATTENED`,

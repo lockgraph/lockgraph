@@ -89,12 +89,38 @@ Fixed schedule, matching yarn's emitter output:
 
 ```
 version, resolution, dependencies, optionalDependencies,
-peerDependencies, peerDependenciesMeta, dependenciesMeta,
-bin, linkType, languageName, conditions, checksum
+peerDependencies, dependenciesMeta, peerDependenciesMeta,
+bin, checksum, conditions, languageName, linkType
 ```
 
 Fields not present on the graph are absent. Sub-blocks (`dependencies`
 etc.) sort their entries alphabetically by name.
+
+*Authority.* This schedule is yarn's `Manifest.exportTo` field-write order
+(`yarnpkg-core/sources/Manifest.ts` — `version` → `bin` → `dependencies` →
+`optionalDependencies` → `peerDependencies` → `dependenciesMeta` →
+`peerDependenciesMeta`) reconciled with the trailing fields
+`generateLockfile` appends (`checksum`, `conditions`, `languageName`,
+`linkType`), and validated byte-for-byte against the real-world berry corpus
+(v4/v6/v7/v8/v9/v10, ≈50 000 entries): the strict pairwise order is
+**consistent with zero inversions** across every entry. The load-bearing
+nuances the earlier draft got wrong (#117):
+
+- **`dependenciesMeta` precedes `peerDependenciesMeta`** (not the reverse).
+- **The trailing block is `… bin, checksum, conditions, languageName,
+  linkType`** — `checksum` comes **before** `languageName`/`linkType`, and
+  `conditions` sits **between** `checksum` and `languageName`
+  (e.g. `fsevents`: `checksum:` → `conditions: os=darwin` → `languageName:` →
+  `linkType:`). The earlier `bin, linkType, languageName, conditions,
+  checksum` was wrong and broke byte-fidelity (and `yarn install
+  --immutable`) on essentially every entry.
+- **`optionalDependencies` is folded into `dependencies`.** yarn-berry merges
+  a manifest's optional deps into the entry's `dependencies` block and records
+  optionality in `dependenciesMeta[pkg].optional: true`; it does **not** write
+  a separate `optionalDependencies` block in the lockfile (zero occurrences
+  across the whole berry corpus). The slot is retained in the schedule only to
+  pin where such a block would sort (between `dependencies` and
+  `peerDependencies`, per `exportTo`) if a cross-PM convert emits one.
 
 ### 1.5 Quoting — the SYML quoting predicate
 

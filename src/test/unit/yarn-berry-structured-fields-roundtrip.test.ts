@@ -297,16 +297,16 @@ __metadata:
     phantom: "npm:^2.0.0"
   peerDependencies:
     spectre: "*"
-  linkType: hard
-  languageName: node
   checksum: 10c0/${A128}
+  languageName: node
+  linkType: hard
 
 "present@npm:1.2.3":
   version: 1.2.3
   resolution: "present@npm:1.2.3"
-  linkType: hard
-  languageName: node
   checksum: 10c0/${F128}
+  languageName: node
+  linkType: hard
 `
 
   it('round-trips an unresolvable dependencies-block ref byte-for-byte', () => {
@@ -383,16 +383,16 @@ __metadata:
   dependencies:
     ghost: ^1.0.0
     present: 1.2.3
-  linkType: hard
-  languageName: node
   checksum: ${H}
+  languageName: node
+  linkType: hard
 
 "present@npm:1.2.3":
   version: 1.2.3
   resolution: "present@npm:1.2.3"
-  linkType: hard
-  languageName: node
   checksum: ${F}
+  languageName: node
+  linkType: hard
 `
     const out = stringifyV4(parseV4(SRC))
     expect(out).toContain('    ghost: ^1.0.0\n')
