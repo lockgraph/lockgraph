@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { detect, parse, stringify } from '../../../main/ts/index.ts'
@@ -187,5 +187,197 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
     expect(g.getNode('lodash@4.17.21')).toBeDefined()
     expect(g.getNode('ms@2.1.3')).toBeDefined()
     expect(() => stringify('yarn-classic', g)).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// F9 — entry-key quoting fidelity.
+//
+// yarn 1 builds every entry-key line as `valKeys.sort().map(maybeWrap).join(', ')`
+// (@yarnpkg/lockfile stringify, mirrored in yarn cli.js `_stringify`): each
+// descriptor is quote-decided INDEPENDENTLY by `shouldWrapKey`, then comma-joined.
+// It NEVER wraps the whole joined key.
+//
+// Pre-fix our emit whole-quoted any multi-descriptor key
+// (`"abbrev@1, abbrev@^1.0.0":`) — non-yarn-faithful (and yarn-unreadable) for
+// every dedup'd package — and ALSO over-quoted bare single descriptors whose
+// range carries `>`/`<`/`*`/`|` (e.g. `amdefine@>=0.0.4`), none of which are yarn
+// quote triggers.
+//
+// yarn's `shouldWrapKey(str)` wraps iff: str starts with `true`/`false`, OR str
+// contains one of `: \s \ " , [ ]`, OR str does not begin with an ASCII letter
+// (the last clause is what wraps every `@scope/...` and leading-digit descriptor).
+const realWorldDir = resolve(here, '../../resources/fixtures/real-world')
+
+// A faithful re-statement of yarn 1's `shouldWrapKey`, kept INDEPENDENT of the
+// production `mustQuoteSpec` so a drift in either is caught. It is asserted below
+// to agree with what real yarn wrote on disk across the whole corpus (Oracle 1),
+// then asserted to match what we EMIT (Oracle 2).
+const yarnShouldWrapKey = (spec: string): boolean =>
+  spec.startsWith('true')
+  || spec.startsWith('false')
+  || /[:\s\\",[\]]/.test(spec)
+  || !/^[a-zA-Z]/.test(spec)
+
+// The col-0 `<descriptors>:` header lines of a classic lock, verbatim.
+const entryKeyLines = (content: string): string[] =>
+  content
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter(line => line.length > 0 && line[0] !== ' ' && line[0] !== '\t' && line[0] !== '#' && line.endsWith(':'))
+
+// Split a raw `<descriptors>:` header line into its descriptors, recording for
+// each whether it was wrapped in quotes and its unquoted content — the
+// per-descriptor quoting observation (yarn's actual output is the ground truth).
+function descriptorsOf(keyLine: string): Array<{ content: string; quoted: boolean }> {
+  const key = keyLine.endsWith(':') ? keyLine.slice(0, -1) : keyLine
+  const raw: string[] = []
+  let start = 0, quoted = false, escaped = false
+  for (let i = 0; i < key.length; i++) {
+    const c = key[i]
+    if (escaped) { escaped = false; continue }
+    if (c === '\\') { escaped = true; continue }
+    if (c === '"') { quoted = !quoted; continue }
+    if (!quoted && c === ',' && key[i + 1] === ' ') { raw.push(key.slice(start, i)); start = i + 2; i++ }
+  }
+  raw.push(key.slice(start))
+  return raw.map(t => {
+    if (!t.startsWith('"')) return { content: t, quoted: false }
+    let v = ''
+    for (let i = 1; i < t.length - 1; i++) {
+      const c = t[i]
+      if (c !== '\\') { v += c; continue }
+      v += t[++i]
+    }
+    return { content: v, quoted: true }
+  })
+}
+
+// Discover EVERY real-world fixture that detect()s as yarn-classic — the corpus
+// is the oracle, not first-principles. webpack is one; the sweep finds the rest
+// (the git-resolved / duplicate-descriptor robustness set, lodash, *-localdep).
+const classicFixtures = readdirSync(realWorldDir, { withFileTypes: true })
+  .filter(e => e.isDirectory())
+  .map(e => e.name)
+  .filter(name => {
+    try {
+      return detect(lock(name)) === 'yarn-classic'
+    } catch {
+      return false
+    }
+  })
+  .sort()
+
+describe('yarn-classic entry-key quoting fidelity (F9)', () => {
+  it('the corpus sweep found yarn-classic fixtures (incl. webpack)', () => {
+    expect(classicFixtures.length).toBeGreaterThan(0)
+    expect(classicFixtures).toContain('webpack-webpack-main-66f71f8')
+  })
+
+  // ORACLE 1 — the corpus is truth. For every descriptor REAL YARN wrote on disk,
+  // the `yarnShouldWrapKey` rule must reproduce its exact quoted/bare state. This
+  // MINES the bare-vs-quoted boundary across every genuine classic key and proves
+  // the rule (and the production `mustQuoteSpec` port of it) is not a
+  // first-principles guess but matches yarn byte-for-byte. A single divergence
+  // (e.g. if `>` were a trigger, bare `amdefine@>=0.0.4` — which appears bare in
+  // BOTH webpack and lodash — would mismatch) fails here naming the descriptor.
+  //
+  // EXCLUSION: a descriptor whose range is a URL/git protocol (`…://…`) is skipped.
+  // Such entry keys appear ONLY in the hand-authored git-protocol PARSE-robustness
+  // repros (e.g. amedina's `from-git@git+ssh://…:`, written BARE by hand even
+  // though yarn — whose `shouldWrapKey` triggers on the `:` — would QUOTE it). They
+  // are parse fixtures, not yarn-emitted quoting oracles; genuine yarn locks key
+  // registry entries by `name@range`, never by a URL. Oracle 2 still asserts our
+  // EMIT quotes such descriptors (yarn-faithfully), so nothing is left unchecked.
+  it('disk quoting of EVERY descriptor across the corpus matches yarn shouldWrapKey', () => {
+    let checked = 0
+    for (const name of classicFixtures) {
+      for (const line of entryKeyLines(lock(name))) {
+        for (const d of descriptorsOf(line)) {
+          if (d.content.includes('://')) continue // hand-authored git/url repro key
+          expect(
+            yarnShouldWrapKey(d.content),
+            `${name}: descriptor ${JSON.stringify(d.content)} disk-quoted=${d.quoted}`,
+          ).toBe(d.quoted)
+          checked++
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1000) // a real sweep, not a trivially-empty pass
+  })
+
+  // ORACLE 2 — our EMIT matches the rule. For every fixture, every emitted
+  // descriptor is quoted iff `yarnShouldWrapKey` says so, and a multi-descriptor
+  // key is NEVER whole-wrapped (`"a, b":`). Order/set-independent: it judges the
+  // QUOTING of each emitted descriptor, not which descriptors survive
+  // (orphan-drop) or their sort order. With Oracle 1 (disk==rule) this
+  // transitively gives emit==disk quoting.
+  for (const name of classicFixtures) {
+    it(`${name}: every emitted entry-key descriptor is quoted per yarn's rule`, () => {
+      const out = stringify('yarn-classic', parse('yarn-classic', lock(name)))
+      for (const line of entryKeyLines(out)) {
+        const key = line.slice(0, -1)
+        const ds = descriptorsOf(line)
+        // No whole-key wrap: a top-level ', ' inside ONE quote pair is the F9 bug
+        // (a single `<name>@<range>` descriptor never contains a bare ', ').
+        if (key.includes(', ') && key.startsWith('"') && key.endsWith('"')) {
+          expect(ds.length, `${name}: whole-wrapped multi-key ${JSON.stringify(key)}`).toBeGreaterThan(1)
+        }
+        for (const d of ds) {
+          expect(
+            d.quoted,
+            `${name}: emitted descriptor ${JSON.stringify(d.content)} quoted=${d.quoted}, rule=${yarnShouldWrapKey(d.content)}`,
+          ).toBe(yarnShouldWrapKey(d.content))
+        }
+      }
+    })
+  }
+
+  // NOTE on whole-line round-trip: an on-disk MERGED key may re-emit with a
+  // different descriptor SET (a merged descriptor with no surviving consumer edge
+  // is dropped — the documented orphan-descriptor gap) or a different sort ORDER
+  // (we always re-sort; some pre-strict locks merged in resolution order). Those
+  // are SEPARATE from F9 quoting and are intentionally not asserted byte-for-byte
+  // here — the two oracles above pin the quoting, which is what F9 governs.
+
+  // gatsby F5 (#92) — its ONLY divergence from disk was the multi-key whole-quote
+  // (`abbrev@1, abbrev@^1.0.0:`). Post-F9 it byte-round-trips in FULL.
+  it('gatsbyjs-gatsby-1f38c85 byte-round-trips in full (only divergence was multi-key quoting)', () => {
+    const content = readFileSync(
+      resolve(here, '../../resources/fixtures/integrity/gatsbyjs-gatsby-1f38c85-multihash/yarn.lock'), 'utf8')
+    expect(detect(content)).toBe('yarn-classic')
+    // The repro: the bare multi-key must stay BARE, not become `"abbrev@1, …":`.
+    const out = stringify('yarn-classic', parse('yarn-classic', content))
+    expect(out).toContain('\nabbrev@1, abbrev@^1.0.0:\n')
+    expect(out).not.toContain('"abbrev@1, abbrev@^1.0.0"')
+    expect(out).toBe(content)
+  })
+
+  // webpack — the confirmed repro corpus. Targeted boundary assertions drawn
+  // straight from the on-disk bytes (these exact keys survive intact):
+  //  - a bare multi-key of plain (letter-leading, `^`-range) descriptors stays
+  //    all-bare and comma-joined, NOT whole-wrapped;
+  //  - a scoped descriptor is quoted (leading `@` ⇒ not-letter ⇒ wrap); a scoped
+  //    MULTI-key wraps EACH descriptor, never the whole line;
+  //  - a bare `>=` range descriptor stays bare — `>` is NOT a yarn quote trigger.
+  it('webpack — per-descriptor quoting boundary matches disk (bare multi / scoped / >= range)', () => {
+    const content = lock('webpack-webpack-main-66f71f8')
+    const out = stringify('yarn-classic', parse('yarn-classic', content))
+    // bare multi stays bare (NOT whole-quoted)
+    expect(out).toContain('\nacorn@^8.15.0, acorn@^8.16.0, acorn@^8.5.0:\n')
+    expect(out).not.toContain('"acorn@^8.15.0, acorn@^8.16.0, acorn@^8.5.0"')
+    // a single scoped descriptor is quoted, never whole-wrapped with siblings
+    expect(out).toContain('\n"@babel/compat-data@^7.29.7":\n')
+    // the scoped @babel/core key wraps EACH descriptor independently (whatever the
+    // surviving range set), and is NOT a single whole-wrapped pair
+    const babelCore = entryKeyLines(out).find(l => l.includes('@babel/core@'))
+    expect(babelCore, 'no @babel/core entry key emitted').toBeDefined()
+    for (const d of descriptorsOf(babelCore!)) {
+      expect(d.quoted, `@babel/core descriptor ${JSON.stringify(d.content)} must be quoted`).toBe(true)
+    }
+    expect(babelCore!.startsWith('"@babel/core@')).toBe(true)
+    // a bare `>=` range descriptor stays bare — `>` is NOT a yarn quote trigger
+    expect(out).toContain('\namdefine@>=0.0.4:\n')
+    expect(out).not.toContain('"amdefine@>=0.0.4"')
   })
 })

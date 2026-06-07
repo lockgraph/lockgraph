@@ -47,7 +47,19 @@ const cmpUtf16 = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 // them, not only quoted strings.
 const DEP_PAIR_RE = /^("(?:\\.|[^"])*"|[^\s"]\S*) ("(?:\\.|[^"])*"|[^\s"]\S*)$/
 const BARE_DEP_NAME_RE = /^[A-Za-z0-9._-]+$/
-const ENTRY_KEY_SPECIAL_RE = /[\s:",#?*&!|>'`[\]{}]/
+// The EXACT trigger class from yarn 1's `shouldWrapKey` (@yarnpkg/lockfile
+// stringify.js, mirrored in yarn cli.js): a descriptor is wrapped in quotes iff
+// it contains a colon, ANY whitespace, a backslash, a double-quote, a comma, or
+// a square bracket — i.e. `/[:\s\\",[\]]/`. This is DELIBERATELY narrower than a
+// "quote anything non-alphanumeric" heuristic: yarn leaves `^`, `~`, `>`, `<`,
+// `=`, `*`, `|`, `#`, `?`, `&`, `!`, `'`, backtick, and `{}` BARE inside a range
+// (e.g. `amdefine@>=0.0.4:`, `acorn@^8.5.0:`, a bare `foo@*:`). Over-quoting
+// those diverges from real yarn byte-for-byte (a corpus-confirmed regression).
+const ENTRY_KEY_WRAP_RE = /[:\s\\",[\]]/
+// yarn's `shouldWrapKey` ALSO wraps any descriptor that does not begin with an
+// ASCII letter — this is what forces `@scope/...` descriptors (and any leading
+// digit) to be quoted, independent of the trigger class above.
+const ENTRY_KEY_LEADING_ALPHA_RE = /^[a-zA-Z]/
 const BERRY_HEADER_RE = /^__metadata:\s*(?:\r?\n|$)/m
 
 interface YarnClassicSidecar {
@@ -1259,19 +1271,32 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   return [`${node.name}@${node.version}`]
 }
 
+// yarn 1 builds an entry-key line as `valKeys.sort().map(maybeWrap).join(', ')`
+// (cli.js `_stringify`): each descriptor is quote-decided INDEPENDENTLY, then the
+// (already-quoted-or-bare) descriptors are comma-joined. There is NO whole-key
+// quoting — a multi-descriptor key is `"@babel/core@^7.23.9", "@babel/core@^7.24.4":`
+// (per-descriptor) or `acorn@^8.15.0, acorn@^8.16.0:` (all bare), NEVER the
+// single-pair-wrapped `"a, b":` form. Wrapping the joined key was F9: it
+// produced yarn-unreadable output for every dedup'd package.
 function stringifyEntryKey(specs: string[]): string {
-  const key = specs.join(', ')
-  return mustQuoteEntryKey(specs) ? `"${escapeQuoted(key)}"` : key
+  return specs
+    .map(spec => (mustQuoteSpec(spec) ? `"${escapeQuoted(spec)}"` : spec))
+    .join(', ')
 }
 
-function mustQuoteEntryKey(specs: string[]): boolean {
-  if (specs.length > 1) return true
-  return specs.some(spec =>
-    spec.startsWith('@')
-      || spec.includes('||')
-      || ENTRY_KEY_SPECIAL_RE.test(spec)
-      || hasNonAscii(spec),
-  )
+// Per-descriptor quote decision — a faithful port of yarn 1's `shouldWrapKey`
+// (@yarnpkg/lockfile). A descriptor is wrapped iff it begins with `true`/`false`,
+// contains a colon / whitespace / backslash / `"` / `,` / `[` / `]`, or does not
+// begin with an ASCII letter (the leading-`@` of a scoped descriptor, or a
+// leading digit, falls here). Non-ASCII content is covered by the
+// not-leading-letter clause for a leading non-ASCII char; a non-ASCII char later
+// in an otherwise-bare descriptor is left bare exactly as yarn does (its rule
+// inspects only the trigger class + the FIRST character).
+function mustQuoteSpec(spec: string): boolean {
+  return spec.startsWith('true')
+    || spec.startsWith('false')
+    || ENTRY_KEY_WRAP_RE.test(spec)
+    || !ENTRY_KEY_LEADING_ALPHA_RE.test(spec)
 }
 
 function quoteDepName(name: string): string {
@@ -1282,13 +1307,6 @@ function quoteDepName(name: string): string {
 
 function escapeQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-}
-
-function hasNonAscii(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    if (value.charCodeAt(i) > 0x7f) return true
-  }
-  return false
 }
 
 function collectDependencyBlockEntries(
