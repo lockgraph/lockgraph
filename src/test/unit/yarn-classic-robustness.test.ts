@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { detect, parse, stringify } from '../../main/ts/index.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 
@@ -6,6 +7,12 @@ import { LockfileError } from '../../main/ts/errors.ts'
 // Minimal repros only — no external fixtures.
 
 const ANSI_SRI = 'sha512-zbB9rCJAt1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=='
+
+// Valid-length SRI members for the F5 multi-hash tests (sha1 = 20 bytes / 28
+// base64 chars; sha512 = 64 bytes / 88). Derived from `seed` so each is a real,
+// re-parseable digest of the correct algorithm length.
+const sri1 = (seed: string): string => 'sha1-' + createHash('sha1').update(seed).digest('base64')
+const sri512 = (seed: string): string => 'sha512-' + createHash('sha512').update(seed).digest('base64')
 
 describe('yarn-classic robustness — git-protocol resolved URLs', () => {
   it('a git+ssh resolved URL parses (modelled as a git resolution), not a whole-file abort', () => {
@@ -225,5 +232,181 @@ describe('yarn-classic robustness — quoted field-keys (error-log dump / garbag
       '  # yarn lockfile v1\n'
     expect(detect(errlog)).toBeUndefined()
     expect(() => parse('yarn-classic', errlog)).toThrow(/expected yarn-classic lockfile v1 header/)
+  })
+})
+
+// F5 (#92) — quoted multi-hash integrity. VERDICT: GENUINE → FIXED. yarn 1
+// quotes any value containing a space, so a space-separated multi-hash SRI
+// (`integrity "sha1-… sha512-…"`, the gatsby-era shape when the registry served
+// both a legacy sha1 and a sha512) is written QUOTED. The pre-fix parser
+// captured the value verbatim INCLUDING the surrounding quotes, so the stray `"`
+// glued onto the first/last members and `parseSri` skipped EVERY hash — a silent,
+// security-relevant integrity loss (both the sha1 and the recoverable sha512
+// vanished). Now the quoted value is un-quoted, every algorithm is preserved
+// under the shared multi-hash multiset, and emit re-quotes the multi-hash form
+// for a byte-faithful round-trip.
+describe('yarn-classic robustness — quoted multi-hash integrity (F5/#92)', () => {
+  const multiHashLock = (sha1: string, sha512: string): string =>
+    H +
+    'caniuse-lite@^1.0.30000844:\n' +
+    '  version "1.0.30000865"\n' +
+    '  resolved "https://registry.yarnpkg.com/caniuse-lite/-/caniuse-lite-1.0.30000865.tgz#70026616e8afe6e1442f8bb4e1092987d81a2f25"\n' +
+    `  integrity "${sha1} ${sha512}"\n`
+
+  it('preserves BOTH the sha1 and the sha512 of a quoted multi-hash integrity (not dropped)', () => {
+    const sha1 = sri1('caniuse-lite')
+    const sha512 = sri512('caniuse-lite')
+    const g = parse('yarn-classic', multiHashLock(sha1, sha512))
+    const integrity = g.tarballOf('caniuse-lite@1.0.30000865')?.integrity
+    expect(integrity).toBeDefined()
+    expect(integrity!.hashes.map(h => h.algorithm).sort()).toEqual(['sha1', 'sha512'])
+    // Neither member is dropped → no invalid-integrity diagnostic.
+    expect(g.diagnostics().some(d => d.code === 'YARN_CLASSIC_INVALID_INTEGRITY')).toBe(false)
+  })
+
+  it('re-emits the multi-hash integrity QUOTED and round-trips byte-stably', () => {
+    const sha1 = sri1('abbrev')
+    const sha512 = sri512('abbrev')
+    const out = stringify('yarn-classic', parse('yarn-classic', multiHashLock(sha1, sha512)))
+    expect(out).toContain(`integrity "${sha1} ${sha512}"`)
+    expect(stringify('yarn-classic', parse('yarn-classic', out))).toBe(out)
+  })
+
+  it('a single-hash integrity still emits BARE (unquoted) — no regression', () => {
+    const lf =
+      H +
+      'ms@^2.1.3:\n' +
+      '  version "2.1.3"\n' +
+      '  resolved "https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz#574c8138ce1d2b5861f0b44579dbadd60c6615b2"\n' +
+      `  integrity ${ANSI_SRI}\n`
+    const out = stringify('yarn-classic', parse('yarn-classic', lf))
+    expect(out).toContain(`  integrity ${ANSI_SRI}`)
+    expect(out).not.toContain(`integrity "${ANSI_SRI}"`)
+  })
+})
+
+// F6 (#93) — npm-aliased entry node identity. VERDICT: GENUINE → FIXED. yarn 1
+// encodes an npm-alias as `"<alias>@npm:<target>@<range>"`; the RESOLVED package
+// (the node identity) is `<target>`, while `<alias>` lives only as a
+// consumer-facing descriptor name. The pre-fix parser keyed the node off the
+// descriptor's `<alias>` name, minting a PHANTOM `<alias>@<version>` node split
+// from the real `<target>@<version>` — the same registry tarball duplicated. Now
+// the alias descriptor groups under its target (one node), the descriptor is
+// indexed so a consumer that declares it still resolves there, and the
+// consumer's edge records `attrs.alias` so the entry-key + dependency line
+// re-key under the alias on emit. (Distinct from the berry npm:-alias case #76 —
+// this is classic, which has no `resolution:` field to derive the target from.)
+describe('yarn-classic robustness — npm-alias entry identity (F6/#93)', () => {
+  const sw = 'sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=='
+
+  const trioEntry =
+    '"string-width-cjs@npm:string-width@^4.2.0", string-width@^4.1.0, string-width@^4.2.0:\n' +
+    '  version "4.2.3"\n' +
+    '  resolved "https://registry.yarnpkg.com/string-width/-/string-width-4.2.3.tgz#269c7117d27b05ad2e536830a8ec895ef9c6d010"\n' +
+    `  integrity ${sw}\n`
+
+  it('an npm-aliased entry collapses to ONE node keyed by the alias TARGET (no duplicate)', () => {
+    const g = parse('yarn-classic', H + trioEntry)
+    // Exactly one string-width node, identified by the target name — NOT a split
+    // `string-width-cjs@4.2.3` + `string-width@4.2.3` pair.
+    expect(g.byName('string-width')).toEqual(['string-width@4.2.3'])
+    expect(g.byName('string-width-cjs')).toEqual([])
+    expect(g.getNode('string-width@4.2.3')?.name).toBe('string-width')
+  })
+
+  it('a consumer declaring the alias resolves to the target node, with attrs.alias recorded', () => {
+    const lf =
+      H +
+      '"@isaacs/cliui@^8.0.2":\n' +
+      '  version "8.0.2"\n' +
+      '  resolved "https://registry.yarnpkg.com/@isaacs/cliui/-/cliui-8.0.2.tgz#b37667b7bc181c168782259bab42474fbf52b550"\n' +
+      '  integrity sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybyWtA==\n' +
+      '  dependencies:\n' +
+      '    string-width-cjs "npm:string-width@^4.2.0"\n\n' +
+      trioEntry
+    const g = parse('yarn-classic', lf)
+    const edges = g.out('@isaacs/cliui@8.0.2', 'dep')
+    expect(edges).toHaveLength(1)
+    expect(edges[0]!.dst).toBe('string-width@4.2.3')
+    expect(edges[0]!.attrs?.alias).toBe('string-width-cjs')
+    expect(edges[0]!.attrs?.range).toBe('npm:string-width@^4.2.0')
+  })
+
+  it('re-emits the alias descriptor on the entry key + the alias dep line, round-trip stable', () => {
+    const lf =
+      H +
+      '"@isaacs/cliui@^8.0.2":\n' +
+      '  version "8.0.2"\n' +
+      '  resolved "https://registry.yarnpkg.com/@isaacs/cliui/-/cliui-8.0.2.tgz#b37667b7bc181c168782259bab42474fbf52b550"\n' +
+      '  integrity sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybyWtA==\n' +
+      '  dependencies:\n' +
+      '    string-width-cjs "npm:string-width@^4.2.0"\n\n' +
+      trioEntry
+    const out = stringify('yarn-classic', parse('yarn-classic', lf))
+    // The alias descriptor survives on the entry key, and the consumer's dep line
+    // keys under the alias with the `npm:` locator value.
+    expect(out).toContain('string-width-cjs@npm:string-width@^4.2.0')
+    expect(out).toContain('string-width-cjs "npm:string-width@^4.2.0"')
+    expect(stringify('yarn-classic', parse('yarn-classic', out))).toBe(out)
+  })
+
+  it('does NOT treat the berry default-protocol form `npm:<range>` as an alias (no phantom range-node)', () => {
+    // `undici-types@npm:~5.26.4` is the yarn-BERRY default-protocol shape (a bare
+    // range under the npm: protocol, SAME name) that can reach classic emit on a
+    // cross-family convert. Its npm: body has no embedded `@<range>`, so it is
+    // NOT an alias — it must resolve to `undici-types`, never a phantom
+    // `~5.26.4@<version>` node.
+    const lf =
+      H +
+      '"undici-types@npm:~5.26.4":\n' +
+      '  version "5.26.5"\n' +
+      '  resolved "https://registry.yarnpkg.com/undici-types/-/undici-types-5.26.5.tgz#bcd539893d00b56e964fd2657a4866b221a65617"\n' +
+      '  integrity sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA==\n'
+    const g = parse('yarn-classic', lf)
+    expect(g.byName('undici-types')).toEqual(['undici-types@5.26.5'])
+    expect(Array.from(g.nodes()).map(n => n.id)).toEqual(['undici-types@5.26.5'])
+  })
+})
+
+// D1 (#94) — detect() structural fallback. VERDICT: GENUINE → FIXED. The two
+// header comment lines (`# THIS IS AN AUTOGENERATED FILE…` + `# yarn lockfile
+// v1`) can be displaced by a tool-prepended comment or stripped entirely, and
+// the pre-fix `detect()` then returned `undefined` (no structural fallback). The
+// fallback recognises the classic entry-block SHAPE — a col-0 `<name>@<range>:`
+// descriptor immediately followed by `  version "<x>"` — which no npm/pnpm/bun
+// lockfile emits, so the #83 garbage-rejection boundary stays intact.
+describe('yarn-classic robustness — header-less detect fallback (D1/#94)', () => {
+  const body =
+    'lodash@^4.17.21:\n' +
+    '  version "4.17.21"\n' +
+    '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#679591c564c3bffaae8454cf0b3df370c3d6911c"\n' +
+    `  integrity ${sri512('lodash')}\n`
+
+  it('detects a header-less body via the entry-block structural fallback, and parses it', () => {
+    expect(detect(body)).toBe('yarn-classic')
+    expect(parse('yarn-classic', body).getNode('lodash@4.17.21')).toBeDefined()
+  })
+
+  it('detects when a foreign comment is prepended before (or instead of) the header', () => {
+    const withForeignComment = '# generated by some-tool\n' + body
+    expect(detect(withForeignComment)).toBe('yarn-classic')
+    expect(parse('yarn-classic', withForeignComment).getNode('lodash@4.17.21')).toBeDefined()
+  })
+
+  it('does NOT false-positive non-classic inputs (garbage boundary intact)', () => {
+    // pnpm-ish YAML (`version:` colon form, no quotes; no lockfileVersion).
+    expect(detect('importers:\n  .:\n    dependencies:\n      a:\n        specifier: ^1\n        version: 1.0.0\n')).toBeUndefined()
+    // plain YAML with a colon `version:` value.
+    expect(detect('name: x\nversion: 1.0.0\n')).toBeUndefined()
+    // JSON (npm / bun shape).
+    expect(detect('{\n  "name": "x",\n  "version": "1.0.0"\n}\n')).toBeUndefined()
+    // a bare-name entry key (#83 malformed) does not adopt the fallback.
+    expect(detect('foo:\n  version "1.0.0"\n')).toBeUndefined()
+    // a yarn-error.log dump re-indents the lock (entry keys NOT at col 0).
+    const errlog =
+      'Arguments: \n  /usr/bin/node /usr/bin/yarn install\n\n' +
+      'Lockfile: \n' +
+      '  lodash@^4.17.21:\n    version "4.17.21"\n'
+    expect(detect(errlog)).toBeUndefined()
   })
 })

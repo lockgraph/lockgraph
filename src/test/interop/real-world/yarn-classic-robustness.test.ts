@@ -114,4 +114,78 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
     expect(reSample.length).toBe(2)
     expect(reSample.filter(n => n.patch?.startsWith('unresolved-')).length).toBe(1)
   })
+
+  // F5 (#92) — a gatsby-class lock carrying the quoted, space-separated
+  // multi-hash integrity form (`integrity "sha1-… sha512-…"`). Repro class:
+  // gatsbyjs/gatsby@1f38c85963fd6bcfa9ccee2f925e5e02b00eafbb (12/12 entries
+  // dropped their integrity entirely on parse pre-fix). Lives in the focused
+  // `integrity/` dir (small, asserted directly) rather than the auto-scanned
+  // `real-world/`. Every algorithm of every multi-hash entry must survive.
+  it('gatsbyjs-gatsby-1f38c85 multi-hash integrity — every algorithm survives parse + round-trip (F5)', () => {
+    const content = readFileSync(
+      resolve(here, '../../resources/fixtures/integrity/gatsbyjs-gatsby-1f38c85-multihash/yarn.lock'), 'utf8')
+    expect(detect(content)).toBe('yarn-classic')
+    const g = parse('yarn-classic', content)
+    // The two multi-hash entries each keep BOTH a sha1 and a sha512 (not
+    // collapsed to one, not dropped).
+    for (const id of ['abbrev@1.1.1', 'ansi-regex@3.0.1']) {
+      const integrity = g.tarballOf(id)?.integrity
+      expect(integrity, id).toBeDefined()
+      expect(integrity!.hashes.map(h => h.algorithm).sort(), id).toEqual(['sha1', 'sha512'])
+    }
+    // No silent integrity loss anywhere.
+    expect(g.diagnostics().some(d => d.code === 'YARN_CLASSIC_INVALID_INTEGRITY')).toBe(false)
+    const out = stringify('yarn-classic', g)
+    // The multi-hash form re-emits QUOTED; the single-hash `ms` entry stays bare.
+    expect(out).toContain('integrity "sha1-')
+    expect(out).toMatch(/\n {2}integrity sha512-[A-Za-z0-9+/]+=*\n/)
+    expect(stringify('yarn-classic', parse('yarn-classic', out))).toBe(out)
+  })
+
+  // F6 (#93) — the `<pkg>-cjs@npm:<pkg>@^N` self-alias trio (`string-width-cjs`
+  // / `strip-ansi-cjs` / `wrap-ansi-cjs`) that @isaacs/cliui declares. Each
+  // aliased entry must stay ONE node keyed by its target, not split into a
+  // phantom `<alias>@<version>` duplicate. Focused `alias/` dir (not the
+  // auto-scanned `real-world/`).
+  it('isaacs-cliui-8.0.1 cjs-alias trio — each aliased entry is one node by target, round-trips (F6)', () => {
+    const content = readFileSync(
+      resolve(here, '../../resources/fixtures/alias/isaacs-cliui-8.0.1-cjs-aliastrio/yarn.lock'), 'utf8')
+    expect(detect(content)).toBe('yarn-classic')
+    const g = parse('yarn-classic', content)
+    // Each alias target is a SINGLE node; no phantom `<alias>@<version>` siblings.
+    for (const [target, version] of [['string-width', '4.2.3'], ['strip-ansi', '6.0.1'], ['wrap-ansi', '7.0.0']] as const) {
+      expect(g.byName(target), target).toEqual([`${target}@${version}`])
+    }
+    expect(g.byName('string-width-cjs')).toEqual([])
+    expect(g.byName('strip-ansi-cjs')).toEqual([])
+    expect(g.byName('wrap-ansi-cjs')).toEqual([])
+    // The cliui consumer's three alias deps each bind to the target node, with
+    // the alias recorded on the edge.
+    const cliuiEdges = g.out('@isaacs/cliui@8.0.2', 'dep')
+    const byAlias = new Map(cliuiEdges.map(e => [e.attrs?.alias, e.dst]))
+    expect(byAlias.get('string-width-cjs')).toBe('string-width@4.2.3')
+    expect(byAlias.get('strip-ansi-cjs')).toBe('strip-ansi@6.0.1')
+    expect(byAlias.get('wrap-ansi-cjs')).toBe('wrap-ansi@7.0.0')
+    // No dropped edges / integrity loss for the trio.
+    expect(g.diagnostics().some(d => d.code === 'YARN_CLASSIC_INVALID_INTEGRITY')).toBe(false)
+    // Faithful round-trip: the alias descriptors + alias dep lines survive.
+    const out = stringify('yarn-classic', g)
+    expect(out).toContain('string-width-cjs@npm:string-width@^4.2.0')
+    expect(out).toContain('strip-ansi-cjs "npm:strip-ansi@^6.0.1"')
+    expect(stringify('yarn-classic', parse('yarn-classic', out))).toBe(out)
+  })
+
+  // D1 (#94) — a header-less classic lock (the two header comments stripped by a
+  // tool). detect() recognises it via the entry-block structural fallback and
+  // parses it. Focused `detect/` dir.
+  it('yarn-classic-headerless — detect() recovers it via structural fallback, parses + round-trips (D1)', () => {
+    const content = readFileSync(
+      resolve(here, '../../resources/fixtures/detect/yarn-classic-headerless/yarn.lock'), 'utf8')
+    expect(content.startsWith('#')).toBe(false) // genuinely header-less
+    expect(detect(content)).toBe('yarn-classic')
+    const g = parse('yarn-classic', content)
+    expect(g.getNode('lodash@4.17.21')).toBeDefined()
+    expect(g.getNode('ms@2.1.3')).toBeDefined()
+    expect(() => stringify('yarn-classic', g)).not.toThrow()
+  })
 })

@@ -5,6 +5,7 @@ import {
   toTarballKey,
   type Diagnostic,
   type Edge,
+  type EdgeAttrs,
   type Graph,
   type Node,
   type OverrideConstraint,
@@ -113,7 +114,73 @@ export function check(input: string): boolean {
   // trailing blanks). BOM-tolerant — fixes the detect asymmetry vs berry.
   if (normalized.startsWith(HEADER)) return true
   const lines = normalized.split('\n')
-  return lines[0] === HEADER_LINE_1 && lines[1] === HEADER_LINE_2
+  if (lines[0] === HEADER_LINE_1 && lines[1] === HEADER_LINE_2) return true
+  // D1 (#94) — structural fallback. The two header comment lines can be absent
+  // or displaced (a tool prepends its own comment; a `#`-stripper removes them),
+  // leaving a headerless body that detect() would otherwise miss. Recognise the
+  // classic entry-block SHAPE itself — a col-0 `<name>@<range>:` descriptor
+  // immediately followed by `  version "<x>"` — which no other lockfile family
+  // emits, so the npm/pnpm/bun garbage-rejection boundary (#83) stays intact.
+  return hasClassicStructuralBody(normalized, lines)
+}
+
+// D1 (#94) — does the body carry the unmistakable yarn-classic entry-block
+// shape, independent of the header comments? The signature is a col-0 entry-key
+// line that parses as a `<name>@<range>` descriptor and ends with `:`, FOLLOWED
+// (after any inner `#` comment / blank lines) by a 2-space-indented bare
+// `version "<x>"` field — `version` un-quoted, value quoted, NO `:` after the
+// key. That last detail is the discriminant:
+//   - npm / bun are JSON (`{ "version": "…" }`) — never a col-0 `name@range:`;
+//   - pnpm / yarn-berry are SYML/YAML (`version: …` WITH a colon, value bare) —
+//     never the bare-key + quoted-value `version "…"` form;
+//   - a `yarn-error.log` `Lockfile:` dump re-indents the whole lock by 2 spaces,
+//     so its entry keys sit at `  <name>@range:` (indented) and never at col 0.
+// A yarn-berry `__metadata:` head is excluded up front for a fast, unambiguous bail.
+function hasClassicStructuralBody(normalized: string, lines: string[]): boolean {
+  if (BERRY_HEADER_RE.test(normalized)) return false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    // A col-0 entry-key line: no leading whitespace, ends with ':', and is not a
+    // comment/blank. Must parse as a `<name>@<range>` descriptor list.
+    if (line.length === 0 || line[0] === ' ' || line[0] === '\t' || line[0] === '#') continue
+    if (!line.endsWith(':')) continue
+    if (!isClassicEntryKeyLine(line.slice(0, -1))) continue
+    // The first non-comment, non-blank body line must be `  version "<x>"`.
+    for (let j = i + 1; j < lines.length; j++) {
+      const body = lines[j] ?? ''
+      if (body.length === 0) return false       // blank before any body → not an entry
+      if (body.startsWith('  #')) continue       // tolerate an inner comment
+      return CLASSIC_VERSION_FIELD_RE.test(body)
+    }
+    return false
+  }
+  return false
+}
+
+// `  version "<x>"` — exactly two spaces, bare `version` key, a space, then a
+// double-quoted value, to EOL. The quoted value + absence of a `:` after the key
+// is what separates yarn-classic from every YAML/JSON sibling.
+const CLASSIC_VERSION_FIELD_RE = /^ {2}version "(?:\\.|[^"])*"\s*$/
+
+// Is `key` a yarn-classic entry-key descriptor list — one or more comma-joined
+// `<name>@<range>` specs (quoted or bare)? Reuses the parse-side splitter +
+// per-spec `@<range>` check, so the detector and the parser agree on the grammar
+// (no separate, drifting regex). A bare package name with no `@<range>` (the #83
+// malformed shape) does NOT qualify — the structural fallback must not adopt a
+// non-lockfile.
+function isClassicEntryKeyLine(key: string): boolean {
+  let specs: string[]
+  try {
+    specs = splitEntryKey(parseEntryKeyToken(key))
+  } catch {
+    return false
+  }
+  if (specs.length === 0) return false
+  for (const spec of specs) {
+    const idx = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+    if (idx <= 0 || idx === spec.length - 1) return false
+  }
+  return true
 }
 
 export function parse(input: string, options: YarnClassicParseOptions = {}): Graph {
@@ -144,21 +211,27 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
       throw parseFailed(`entry ${JSON.stringify(entry.key)} missing version`)
     }
 
-    const specsByName = new Map<string, string[]>()
+    // F6 (#93) — group entry-key descriptors by their RESOLVED package name
+    // (the `npm:`-alias target, else the descriptor's own name), collecting the
+    // verbatim descriptor keys. An npm-aliased descriptor
+    // (`<alias>@npm:<target>@<range>`) thus joins the SAME group as a plain
+    // `<target>@<range>` descriptor — one node, keyed by the target — instead of
+    // splitting off a duplicate `<alias>@<version>` node.
+    const specsByResolvedName = new Map<string, string[]>()
     for (const spec of specs) {
-      const part = parseSpec(spec)
-      const current = specsByName.get(part.name)
-      if (current === undefined) specsByName.set(part.name, [part.spec])
-      else current.push(part.spec)
+      const identity = specIdentity(parseSpec(spec))
+      const current = specsByResolvedName.get(identity.resolvedName)
+      if (current === undefined) specsByResolvedName.set(identity.resolvedName, [identity.descriptorKey])
+      else current.push(identity.descriptorKey)
     }
 
-    for (const [name, rawRanges] of specsByName) {
-      const ranges = Array.from(new Set(rawRanges)).sort(cmpUtf16)
+    for (const [name, rawDescriptors] of specsByResolvedName) {
+      const descriptors = Array.from(new Set(rawDescriptors)).sort(cmpUtf16)
       const id = `${name}@${entry.version}`
       const prior = seenEntries.get(id)
       if (prior !== undefined) {
         // Two separate entry blocks resolve to the same name@version. Merge
-        // their descriptor ranges onto the one node when the resolution +
+        // their descriptor keys onto the one node when the resolution +
         // integrity agree (the comma-joined `a@^1, a@^2:` form already merges
         // this way); only a genuine conflict — differing `resolved` or
         // `integrity` — is an irreducible loss.
@@ -169,8 +242,7 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
           })
         }
         const merged = sidecar.get(id) ?? []
-        for (const range of ranges) {
-          const spec = `${name}@${range}`
+        for (const spec of descriptors) {
           if (!merged.includes(spec)) merged.push(spec)
           specIndex.set(spec, id)
         }
@@ -225,14 +297,14 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
         builder.setTarball({ name, version: entry.version }, { resolution: canonicalResolution })
       }
 
-      sidecar.set(id, ranges.map(range => `${name}@${range}`))
+      sidecar.set(id, descriptors.slice())
       if (entry.extras !== undefined && entry.extras.length > 0) {
         entryExtras.set(id, entry.extras)
         for (const raw of entry.extras) unknownFields.add(raw.split(' ', 1)[0] ?? raw)
       }
       entryNodes.push({ node, entry })
-      for (const range of ranges) {
-        specIndex.set(`${name}@${range}`, id)
+      for (const spec of descriptors) {
+        specIndex.set(spec, id)
       }
     }
   }
@@ -334,7 +406,11 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
 
     const integrity = payload?.integrity && emitSri(payload.integrity)
     if (integrity !== undefined && integrity !== '') {
-      lines.push(`  integrity ${integrity}`)
+      // F5 (#92) — a single-hash SRI emits BARE; a space-joined multi-hash SRI
+      // (`sha1-… sha512-…`) emits QUOTED, matching yarn 1's "quote any value
+      // with a space" rule, so the round-trip is byte-faithful and reparse
+      // un-quotes it back into the full multiset.
+      lines.push(`  integrity ${integrity.includes(' ') ? `"${integrity}"` : integrity}`)
     }
 
     // Round-trip unknown scalar entry fields (e.g. yarn-1 `uid ""`) captured
@@ -632,7 +708,16 @@ function parseEntries(input: string): YarnClassicEntry[] {
       continue
     }
     if (line.startsWith('  integrity ')) {
-      current.integrity = line.slice('  integrity '.length)
+      // F5 (#92) — the integrity value is BARE for a single hash
+      // (`integrity sha512-…`) but QUOTED when it is a space-separated
+      // multi-hash SRI (`integrity "sha1-… sha512-…"`) — yarn 1 quotes any
+      // value containing a space. A quoted value must be un-quoted here, else
+      // the surrounding `"` glue onto the first/last members and `parseSri`
+      // skips every hash (silent integrity loss — the sha1 AND the sha512 both
+      // vanish). Un-quote into the bare SRI string so the shared multi-hash
+      // parser preserves every algorithm (spec/formats/_common.md §3.1).
+      const value = line.slice('  integrity '.length)
+      current.integrity = value.startsWith('"') ? parseQuotedToken(value) : value
       continue
     }
 
@@ -784,6 +869,58 @@ function parseSpec(spec: string): { name: string; spec: string } {
   }
 }
 
+// F6 (#93) — the package identity carried by one entry-key descriptor.
+//
+// yarn 1 encodes an npm-alias as `"<alias>@npm:<target>@<range>"` (the dep is
+// declared under `<alias>` but resolves to the registry package `<target>`).
+// The RESOLVED package — the node identity — is `<target>`, NOT `<alias>`;
+// `<alias>` lives only as the consumer-facing descriptor name. Keying the node
+// off `<alias>` (as the bare `parseSpec().name` does) splits the npm-aliased
+// entry into a phantom `<alias>@<version>` node DISTINCT from the real
+// `<target>@<version>`, duplicating it. So:
+//   - `resolvedName` is the node-identity name — `<target>` for an `npm:` alias,
+//     else the descriptor's own name;
+//   - `aliasName` is the consumer-facing alias (`<alias>`), or `undefined` for a
+//     canonical (non-aliased) descriptor;
+//   - `descriptorKey` is the verbatim `<part.name>@<part.spec>` join — the exact
+//     entry-key spec, indexed into `specIndex` so a consumer that declares the
+//     alias range resolves to the same node, and preserved on the entry key.
+//
+// Only the `npm:` protocol aliases an identity. A bare/`file:`/`link:`/`git…`
+// spec keeps its own name. The alias TARGET may itself be scoped
+// (`npm:@scope/pkg@^1`).
+function specIdentity(part: { name: string; spec: string }): {
+  resolvedName: string
+  aliasName?: string
+  descriptorKey: string
+} {
+  const descriptorKey = `${part.name}@${part.spec}`
+  if (part.spec.startsWith('npm:')) {
+    const target = part.spec.slice('npm:'.length)
+    // An alias REQUIRES the `npm:` body to be a full `<target-name>@<range>`
+    // locator — a name AND an embedded `@<range>` separator. The target name may
+    // be scoped (`npm:@scope/pkg@^1`).
+    //
+    // CRUCIAL boundary vs the yarn-BERRY default-protocol form `npm:<range>`
+    // (`undici-types@npm:~5.26.4`): there the body is a BARE range with NO
+    // embedded `@`, so it is NOT an alias — the resolved name is the descriptor's
+    // own name. Treating `~5.26.4` as a "target package name" would mint a
+    // phantom `~5.26.4@<version>` node (the cross-family berry→classic regression
+    // this guard prevents). So: no embedded `@` ⇒ default-protocol range, never
+    // an alias.
+    const at = target.indexOf('@', target.startsWith('@') ? 1 : 0)
+    const targetName = at > 0 ? target.slice(0, at) : undefined
+    if (targetName !== undefined && targetName.length > 0 && targetName !== part.name) {
+      return { resolvedName: targetName, aliasName: part.name, descriptorKey }
+    }
+    // A self-referential `npm:` alias to the SAME name (`foo@npm:foo@^1`), or a
+    // bare default-protocol range (`foo@npm:^1`), is not a rename — no alias edge
+    // attr, identity unchanged.
+    return { resolvedName: part.name, descriptorKey }
+  }
+  return { resolvedName: part.name, descriptorKey }
+}
+
 // Bug #99 — Rung-2/3 ladder inputs for the classic edge resolver (the patch /
 // link rungs are berry-specific, so classic has no Rung 1 here — Rung 0 → 2 →
 // 3 → drop). See spec/formats/_common.md §"Descriptor→node resolution".
@@ -866,7 +1003,16 @@ function addEdgesFromMap(
       }
       continue
     }
-    builder.addEdge(srcId, dstId, kind, { range })
+    // F6 (#93) — npm-alias edge attr. When the consumer's dependency-block key
+    // (`name`) differs from the resolved target's actual name, the dep is an
+    // npm-alias (`<alias> "npm:<target>@<range>"`); record `<alias>` on the edge
+    // so emit re-keys the dependency line + entry-key descriptor under the alias
+    // (mirrors the shared `EdgeAttrs.alias` model the berry adapter populates).
+    // Identity-aware, so the canonical + aliased edges to one target coexist.
+    const dstName = nameOf(dstId)
+    const attrs: EdgeAttrs = { range }
+    if (name !== dstName) attrs.alias = name
+    builder.addEdge(srcId, dstId, kind, attrs)
   }
 }
 
@@ -1093,11 +1239,14 @@ function isWorkspaceProtocolRange(range: string): boolean {
 }
 
 function entrySpecsOfNode(graph: Graph, node: Node): string[] {
+  // F6 (#93) — an npm-aliased incoming edge keys its entry-key descriptor under
+  // the ALIAS, not the node's actual name (`<alias>@npm:<target>@<range>`); the
+  // range already carries the `npm:<target>@…` locator. A canonical edge keys
+  // under the node's own name. Mirrors the berry `entryKeyOfNode` alias branch.
   const liveSpecs = Array.from(graph.in(node.id))
     .filter(edge => edge.kind === 'dep' || edge.kind === 'optional')
-    .map(edge => edge.attrs?.range)
-    .filter((range): range is string => range !== undefined)
-    .map(range => `${node.name}@${range}`)
+    .filter(edge => edge.attrs?.range !== undefined)
+    .map(edge => `${edge.attrs!.alias ?? node.name}@${edge.attrs!.range}`)
   if (liveSpecs.length > 0) {
     return Array.from(new Set(liveSpecs)).sort(cmpUtf16)
   }
@@ -1190,7 +1339,12 @@ function collectBlockEntries(
           return [dst.name, resolved] as [string, string]
         }
       }
-      return [dst.name, edge.attrs.range] as [string, string]
+      // F6 (#93) — an npm-aliased edge emits its dependency line under the ALIAS
+      // name with the verbatim `npm:<target>@<range>` locator as the value
+      // (`<alias> "npm:<target>@<range>"`), so reparse re-binds it via the
+      // alias-keyed `specIndex` descriptor. A canonical edge uses the target's
+      // own name.
+      return [edge.attrs.alias ?? dst.name, edge.attrs.range] as [string, string]
     })
     .filter((entry): entry is [string, string] => entry !== undefined)
     .sort((a, b) => cmpUtf16(a[0], b[0]))
