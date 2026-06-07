@@ -137,6 +137,26 @@ v8-specific deltas inherited on top of the shared contract are:
   captured block is the rung-0 hint, unioned with any `optional` peer
   edge, deduped by peer name (no double-emit). Its `optional: true`
   boolean is likewise emitted **bare**.
+- **Unresolvable dependency references** (F8/#103) — a `dependencies:`
+  or `optionalDependencies:` entry whose target package is **absent**
+  from the lock (no `resolution:` entry block; the
+  [descriptor→node ladder](./_common.md#52-the-resolution-ladder-normative)
+  Rung 4 cannot bind it — e.g. a `catalog:` ref, or a `resolutions`-pinned
+  descriptor whose pin has no entry) is **not** a graph edge, so it cannot
+  be reconstructed from the edge set on emit. It is preserved **verbatim**
+  (its block, dep-name, and exact on-disk range string) in a per-node
+  PM-native sidecar — the same role
+  [`Node.resolution`](./_common.md#23-canonical-vs-pm-native-attribution-principle)
+  plays — and re-emitted into the matching inner-block (re-sorted with the
+  live edges to keep yarn's alphabetical block order), so a
+  **same-format** round-trip is byte-faithful. The Rung-4
+  `YARN_BERRY_UNRESOLVED_DEP` diagnostic **still fires** — preservation
+  keeps **both** the bytes and the signal. This is **same-format only**:
+  the sidecar lives solely in the yarn-berry adapter, so a cross-PM
+  convert (yarn-berry → npm/pnpm/bun) does **not** carry these
+  berry-native unresolved refs (they are not edges, and no foreign adapter
+  reads the carrier). No phantom/placeholder node is minted — NodeId and
+  edge identity stay clean.
 - `compressionLevel` is preserved as pass-through `__metadata`
   sidecar data; the current fixture corpus carries `0`.
 
@@ -161,6 +181,14 @@ v8-specific deltas inherited on top of the shared contract are:
   style nit (#89 regression).
 - `compressionLevel` first appears in the current family corpus at v8
   and is preserved through `sidecar.metadata`.
+- A dependency reference to a package **absent** from the lock (no
+  `resolution:` entry) round-trips **verbatim** via a per-node sidecar
+  rather than being dropped (F8/#103). It is observed on real v8/v9 locks
+  (e.g. babel drops 38 such refs, highlight 15) — frequently a `catalog:`
+  ref or a `resolutions` pin with no entry. The
+  `YARN_BERRY_UNRESOLVED_DEP` warning still fires for each. Preservation is
+  **same-format only**: a cross-PM convert does not carry these (the
+  carrier is a berry-adapter sidecar, and these are not graph edges).
 - A `link:`/`portal:` (or locator-qualified `file:`) entry keyed with a
   `::locator=<encoded-consumer>` qualifier round-trips as the **single
   qualified** entry-key descriptor. A consumer records the dependency BARE

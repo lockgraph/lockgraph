@@ -202,6 +202,19 @@ definitively, even when that answer is 'required'):
   (a malformed or hand-edited lock) does not borrow a sibling's sentinel via the
   entry-key descriptor — it reports `YARN_BERRY_UNRESOLVED_DEP` rather than
   silently collapsing onto another consumer's node.
+- **A dependency reference whose target is absent from the lock round-trips
+  verbatim (F8/#103).** The most common v9 trigger is a **`catalog:`** range
+  (`"@jridgewell/trace-mapping": "catalog:"`) — yarn 4 catalogs resolve the
+  version from `.yarnrc.yml`, which is **not** in the lockfile, so the
+  descriptor binds no entry and hits the ladder's
+  [Rung 4](./_common.md#52-the-resolution-ladder-normative). A `resolutions`
+  pin to a descriptor with no entry behaves the same. Such a ref is **not** a
+  graph edge; rather than dropping it, the verbatim descriptor (block,
+  dep-name, exact range) is preserved in a per-node sidecar and re-emitted, so
+  a same-format round-trip is byte-faithful (observed: babel 38 such refs,
+  highlight 15). `YARN_BERRY_UNRESOLVED_DEP` still fires for each. Inherited
+  from the v8 [Emit notes](./yarn-berry-v8.md#emit); **same-format only** — a
+  cross-PM convert does not carry these.
 - **Three structured fields round-trip (`conditions`, `dependenciesMeta`,
   `peerDependenciesMeta`).** Inherited from v8 (see the
   [v8 schema sketch](./yarn-berry-v8.md#schema-sketch) for the entry shape):

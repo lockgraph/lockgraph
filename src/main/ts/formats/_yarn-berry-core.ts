@@ -155,6 +155,31 @@ export interface YarnBerryFamilyConfig {
   conditionsAllowed: boolean
 }
 
+// F8/#103 — a dependency-block reference whose target package is ABSENT from the
+// lock (no `resolution:` entry block; the descriptor→node ladder's Rung 4 cannot
+// bind it). It is NOT a canonical graph edge — there is no target node — so it
+// must never mint a phantom/placeholder node or pollute NodeId/edge identity or
+// cross-PM conversion. This is pure FORMAT-FIDELITY: the verbatim descriptor
+// (its emit block, its dep-name, its exact on-disk range string) is captured here
+// and re-emitted into the same inner-block on stringify, so a SAME-FORMAT
+// round-trip is byte-faithful — exactly the role `Node.resolution` plays as a
+// verbatim PM-native sidecar (ADR-0013 / graph.ts §"Cross-format artefact
+// metadata" `resolution?: string`). A cross-PM convert (yarn-berry → npm/pnpm/
+// bun) does NOT carry these: the carrier lives only in this berry adapter's
+// per-graph WeakMap, which no other adapter reads.
+interface UnresolvedDepRef {
+  // The EMIT inner-block this ref belongs to — keyed by the on-lock block name so
+  // re-emit lands in the right block (`dependencies` for a `dep`-kind drop,
+  // `optionalDependencies` for an `optional`-kind drop). Peer refs do NOT use
+  // this path — they round-trip via the `peerDependencies` raw sidecar.
+  block: 'dependencies' | 'optionalDependencies'
+  // The verbatim dependency-block KEY (`ghost`, `@scope/pkg`, an npm-alias key…).
+  name: string
+  // The verbatim on-disk RANGE string (`npm:^1.0.0`), re-emitted byte-for-byte
+  // (NOT the ladder's normalized form) so round-trip matches the source exactly.
+  range: string
+}
+
 export interface YarnBerryFamilySidecar {
   peerDependencies?: Map<string, Record<string, string>>
   // `conditions:` is a SCALAR token in yarn-berry (e.g. `os=darwin & cpu=arm64`),
@@ -169,6 +194,10 @@ export interface YarnBerryFamilySidecar {
   // node and fed to `peerDependenciesMetaOfNode` as its rung-0 hint, so emit goes
   // through the SAME machinery as the #86 edge-`optional` path (no parallel emit).
   peerDependenciesMeta?: Map<string, SymlMap>
+  // F8/#103 — per-node verbatim refs to dep targets ABSENT from the lock (Rung-4
+  // drops). Same-format round-trip fidelity only (see `UnresolvedDepRef`); never
+  // promoted to graph edges, never carried across a cross-PM convert.
+  unresolvedDeps?: Map<string, UnresolvedDepRef[]>
   metadata?: SymlMap
 }
 
@@ -217,6 +246,10 @@ export function parseFamily(
   const rawConditions = new Map<string, string>()
   const rawDependenciesMeta = new Map<string, SymlMap>()
   const rawPeerDependenciesMeta = new Map<string, SymlMap>()
+  // F8/#103 — verbatim Rung-4-dropped dep refs (target absent from the lock),
+  // keyed by source NodeId, collected during edge resolution and re-emitted into
+  // the matching inner-block for byte-faithful same-format round-trip.
+  const rawUnresolvedDeps = new Map<string, UnresolvedDepRef[]>()
 
   const entries: Array<{ key: string; value: SymlMap; specs: SpecPart[] }> = []
   for (const [key, value] of Object.entries(ast)) {
@@ -517,8 +550,8 @@ export function parseFamily(
     // The source entry's own resolution doubles as its locator for resolving
     // any `link:` / `portal:` deps it declares (see addEdgesFromBlock).
     const srcResolution = asString(value['resolution'])
-    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution)
-    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution)
+    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
+    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
   }
 
   // Sort diagnostics by subject + code to keep graph.diagnostics() order
@@ -547,6 +580,7 @@ export function parseFamily(
     if (rawConditions.size > 0) sidecar.conditions = rawConditions
     if (rawDependenciesMeta.size > 0) sidecar.dependenciesMeta = rawDependenciesMeta
     if (rawPeerDependenciesMeta.size > 0) sidecar.peerDependenciesMeta = rawPeerDependenciesMeta
+    if (rawUnresolvedDeps.size > 0) sidecar.unresolvedDeps = rawUnresolvedDeps
     if (metadata !== undefined) sidecar.metadata = metadata
     rememberSidecar(graph, sidecar)
     // Wrap so that any subsequent graph.mutate() call propagates the sidecar
@@ -1010,6 +1044,18 @@ export function rawPeerDependenciesMetaBlockOfNode(graph: Graph, nodeId: string)
   return block === undefined ? undefined : coerceSymlMap(block)
 }
 
+// F8/#103 — verbatim Rung-4-dropped dep refs for `nodeId` that belong to the
+// given emit block (`dependencies` / `optionalDependencies`). Folded into the
+// live-edge block on emit so a same-format round-trip re-emits them byte-for-byte.
+function unresolvedDepRefsOfNode(
+  graph: Graph,
+  nodeId: string,
+  block: 'dependencies' | 'optionalDependencies',
+): UnresolvedDepRef[] {
+  const refs = sidecarByGraph.get(graph)?.unresolvedDeps?.get(nodeId)
+  return refs === undefined ? [] : refs.filter(ref => ref.block === block)
+}
+
 /**
  * Pull the package name out of an `npm:` resolution locator
  * (`<name>@npm:<version>`). Returns undefined for any non-yarn-locator
@@ -1252,11 +1298,20 @@ function entryOfNode(
   // no separate `devDependencies` block. ADR-0019 §C derives `dev` edges at the
   // workspace root from manifests; merge them with `dep` on emit so the
   // classification survives stringify (parse-side will collapse back to `dep`
-  // per §C's "no on-lockfile signal" table).
-  const dependencies = edgeBlockOfKinds(graph, node, ['dep', 'dev'], config)
+  // per §C's "no on-lockfile signal" table). F8/#103 — fold any verbatim
+  // Rung-4-dropped refs (target absent from the lock) back into the SAME block
+  // so a same-format round-trip is byte-faithful (re-sorted by name with the live
+  // edges to match yarn's alphabetical block order).
+  const dependencies = withUnresolvedDepRefs(
+    edgeBlockOfKinds(graph, node, ['dep', 'dev'], config),
+    unresolvedDepRefsOfNode(graph, node.id, 'dependencies'),
+  )
   if (dependencies !== undefined) entry['dependencies'] = dependencies
 
-  const optionalDependencies = edgeBlockOfKinds(graph, node, ['optional'], config)
+  const optionalDependencies = withUnresolvedDepRefs(
+    edgeBlockOfKinds(graph, node, ['optional'], config),
+    unresolvedDepRefsOfNode(graph, node.id, 'optionalDependencies'),
+  )
   if (optionalDependencies !== undefined) entry['optionalDependencies'] = optionalDependencies
 
   const peerDependencies = extraBlockOfNode(node, 'peerDependencies')
@@ -1426,6 +1481,32 @@ function edgeBlockOfKinds(
     block[name] = range
   }
   return block
+}
+
+// F8/#103 — fold the verbatim Rung-4-dropped refs into a (possibly undefined)
+// live-edge block, re-emitting them byte-for-byte. Returns the merged SymlMap, or
+// `undefined` when both inputs are empty (so the block is omitted exactly as
+// before). A live edge ALWAYS wins a name collision (a resolvable dep was never
+// dropped, so this is defensive only — it guarantees we never duplicate a key
+// nor let a stale verbatim range shadow the live edge). Keys are re-sorted so the
+// merged block keeps yarn's alphabetical inner-block order regardless of which
+// source each entry came from.
+function withUnresolvedDepRefs(
+  liveBlock: SymlMap | undefined,
+  refs: readonly UnresolvedDepRef[],
+): SymlMap | undefined {
+  if (refs.length === 0) return liveBlock
+  const merged: SymlMap = {}
+  if (liveBlock !== undefined) {
+    for (const [name, range] of Object.entries(liveBlock)) merged[name] = range
+  }
+  for (const ref of refs) {
+    if (!(ref.name in merged)) merged[ref.name] = ref.range
+  }
+  if (Object.keys(merged).length === 0) return undefined
+  const sorted: SymlMap = {}
+  for (const name of Object.keys(merged).sort(cmpStr)) sorted[name] = merged[name]!
+  return sorted
 }
 
 function emittedRangeOfEdge(kind: EdgeKind, range: string, config: YarnBerryFamilyConfig, aliased: boolean = false): string {
@@ -2068,6 +2149,10 @@ function addEdgesFromBlock(
   diagnostics: Diagnostic[],
   ladder: EdgeLadderContext,
   srcResolution?: string,
+  // F8/#103 — collector for Rung-4-dropped refs whose target is absent from the
+  // lock. Appended to (keyed by srcId) so emit can re-emit them verbatim into the
+  // matching inner-block; omitted (undefined) on paths that don't preserve.
+  unresolvedDeps?: Map<string, UnresolvedDepRef[]>,
 ): void {
   if (!block) return
   for (const [depName, depRange] of Object.entries(block)) {
@@ -2183,6 +2268,23 @@ function addEdgesFromBlock(
       })
       if (!ladder.manifestsProvided && isRegistryRange(normalizedRange) && (ladder.candidatesByName.get(depName)?.length ?? 0) > 0) {
         diagnostics.push(resolutionPinUnresolvedDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange))
+      }
+      // F8/#103 — the dep target is ABSENT from the lock, so no graph edge can
+      // bind it (we do NOT mint a phantom node — identity stays clean). Preserve
+      // the descriptor VERBATIM (the on-disk block kind, dep-name, and exact range
+      // string) in the per-node sidecar so a SAME-FORMAT round-trip re-emits this
+      // line byte-for-byte. The diagnostic above still fires — preservation keeps
+      // BOTH the bytes and the signal; it does not silence the MISSING-ENTRY warn.
+      // `peer` never reaches here (peers round-trip via the peerDependencies raw
+      // sidecar), so only the dep / optional emit blocks are addressed.
+      if (unresolvedDeps !== undefined && (kind === 'dep' || kind === 'optional')) {
+        const refs = unresolvedDeps.get(srcId) ?? []
+        refs.push({
+          block: kind === 'optional' ? 'optionalDependencies' : 'dependencies',
+          name: depName,
+          range: depRange,
+        })
+        unresolvedDeps.set(srcId, refs)
       }
       continue
     }
@@ -2390,6 +2492,17 @@ function remapSidecar(
     if (next.size > 0) remapped.peerDependenciesMeta = next
   }
 
+  // F8/#103 — the unresolved-dep sidecar is per source NodeId; remap it through
+  // a node-id rewrite (peer enrichment) exactly as the other per-node sidecars.
+  if (sidecar.unresolvedDeps !== undefined) {
+    const next = new Map<string, UnresolvedDepRef[]>()
+    for (const [oldId, refs] of sidecar.unresolvedDeps) {
+      const nextId = nextNodes.get(oldId)?.id ?? oldId
+      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, refs)
+    }
+    if (next.size > 0) remapped.unresolvedDeps = next
+  }
+
   if (sidecar.metadata !== undefined) {
     remapped.metadata = sidecar.metadata
   }
@@ -2436,6 +2549,16 @@ function pruneSidecar(sidecar: YarnBerryFamilySidecar, nextGraph: Graph): YarnBe
     if (next.size > 0) pruned.peerDependenciesMeta = next
   }
 
+  // F8/#103 — drop the unresolved-dep sidecar for a node `optimize()` GC'd; keep
+  // it for every surviving source node so its dropped refs still round-trip.
+  if (sidecar.unresolvedDeps !== undefined) {
+    const next = new Map<string, UnresolvedDepRef[]>()
+    for (const [nodeId, refs] of sidecar.unresolvedDeps) {
+      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, refs)
+    }
+    if (next.size > 0) pruned.unresolvedDeps = next
+  }
+
   if (sidecar.metadata !== undefined) {
     pruned.metadata = sidecar.metadata
   }
@@ -2448,6 +2571,7 @@ function isEmptySidecar(sidecar: YarnBerryFamilySidecar): boolean {
     && sidecar.conditions === undefined
     && sidecar.dependenciesMeta === undefined
     && sidecar.peerDependenciesMeta === undefined
+    && sidecar.unresolvedDeps === undefined
     && sidecar.metadata === undefined
 }
 
