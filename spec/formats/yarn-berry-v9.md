@@ -211,14 +211,21 @@ definitively, even when that answer is 'required'):
     it because of the spaces / `&`). It never participates in NodeId / TarballKey
     identity.
   - `dependenciesMeta` (`{ <pkg>: { optional|built|… } }`) round-trips as a
-    verbatim per-node sidecar block (install-hint fidelity only).
+    verbatim per-node sidecar block (install-hint fidelity only). Its boolean
+    values (`optional` / `built` / `unplugged`) emit **bare** (`built: false`,
+    not `built: "false"`) — like `conditions`, an unquote of what the SYML writer
+    would quote as a YAML boolean token. This is correctness, not cosmetics: a
+    quoted `built: "false"` is a truthy non-empty string, so yarn's
+    `if (meta.built)` reads it as true and may run a postinstall the lock meant
+    to suppress (see [`_common.md` §1.5 bare-emit exceptions](./_common.md#15-quoting-the-syml-quoting-predicate)).
   - `peerDependenciesMeta` (`{ <peer>: { optional: true } }`) round-trips through
     the **same** emitter as the cross-format reconstruction above — the captured
     block is the rung-0 hint, unioned with any `optional` peer edge and deduped
     by peer name, so berry → berry and pnpm → berry share one emit path with no
-    double-emit. On enrich, the on-lock `peerDependenciesMeta.optional` is the
-    authoritative rung-0 signal that stamps `EdgeAttrs.optional` on the derived
-    peer edge (no `node_modules` lookup required for a berry source).
+    double-emit. Its `optional: true` boolean emits **bare**, as above. On enrich,
+    the on-lock `peerDependenciesMeta.optional` is the authoritative rung-0 signal
+    that stamps `EdgeAttrs.optional` on the derived peer edge (no `node_modules`
+    lookup required for a berry source).
   - Emit order matches yarn for `dependenciesMeta` (immediately before
     `peerDependenciesMeta`); `conditions`/`checksum`/`languageName`/`linkType`
     sit in this adapter's intra-emitter schedule, which differs from yarn's

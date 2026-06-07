@@ -137,6 +137,27 @@ authority. If a future yarn-berry patch diverges, the yarn-berry adapter
 absorbs the divergence (see [§1.9](#19-acceptance-gate)); the rule above
 does not move.
 
+**Bare-emit exceptions (yarn writes these unquoted).** A small, closed set
+of scalars that condition 1 (special char) or condition 3 (boolean token)
+*would* quote are emitted **bare** to match yarn's own writer byte-for-byte.
+The adapter applies the quoting predicate uniformly and then strips the
+quotes off exactly these scalars in a post-pass:
+
+- **`conditions`** (entry-level, 2-space indent) — a scalar platform gate
+  (`os=darwin & cpu=arm64`, `(os=darwin | os=linux)`) that condition 1
+  would quote for its spaces / `&` / `|`. Emitted bare.
+- **`dependenciesMeta` / `peerDependenciesMeta` booleans** (the value-level
+  keys `optional`, `built`, `unplugged` at 6-space indent — nesting level 3,
+  reached only inside these two meta blocks) — `true` / `false` that
+  condition 3 would quote as the boolean token. Emitted **bare**, exactly
+  as yarn writes them. This is load-bearing, not merely cosmetic: `built:
+  "false"` is a non-empty (truthy) string, so yarn's `if (meta.built)` would
+  read it as `true` and may run a postinstall the lock meant to suppress;
+  the bare `built: false` is the only correct emit. The unquote is scoped to
+  the 6-space indent + that three-key set + a literal `true`/`false` value,
+  so a genuine string field whose value happens to be `"true"`/`"false"`
+  (e.g. a `bin` target at 4-space indent) is never touched.
+
 ### 1.6 Indent, line endings, trailing newline
 
 - **Indent.** Two spaces per level (a yarn-berry invariant).

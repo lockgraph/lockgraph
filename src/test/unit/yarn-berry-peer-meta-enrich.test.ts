@@ -279,6 +279,8 @@ describe('interop: pnpm-v9 → yarn-berry-v9 peer-optional round-trip (task #86)
     // enrich step and no workspaceRoot.
     const yarn = stringify(graph)
     expect(yarn).toContain('peerDependenciesMeta:')
-    expect(yarn).toMatch(/peerpkg:\s*\n\s*optional: "true"/)
+    // Emitted BARE, like yarn (the #89 regression quoted it).
+    expect(yarn).toMatch(/peerpkg:\s*\n\s*optional: true\n/)
+    expect(yarn).not.toContain('optional: "true"')
   })
 })

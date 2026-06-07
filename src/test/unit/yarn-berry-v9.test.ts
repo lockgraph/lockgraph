@@ -923,8 +923,11 @@ describe('yarn-berry-v9 — stringify', () => {
     const emitted = stringify(graph)
 
     expect(emitted).toContain('  peerDependencies:\n    react: ^18.2.0\n')
-    expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: "true"\n')
-    expect(emitted).toContain('  dependenciesMeta:\n    lodash:\n      unplugged: "true"\n')
+    // Meta-block booleans emit BARE (like yarn), incl. `unplugged` (#89 regression).
+    expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: true\n')
+    expect(emitted).toContain('  dependenciesMeta:\n    lodash:\n      unplugged: true\n')
+    expect(emitted).not.toContain('optional: "true"')
+    expect(emitted).not.toContain('unplugged: "true"')
     // Bare scalar (not quoted) despite the spaces / `&`.
     expect(emitted).toContain('  conditions: os=linux & cpu=arm64\n')
     expect(emitted).not.toContain('conditions: "os=linux')
@@ -955,7 +958,8 @@ describe('yarn-berry-v9 — stringify', () => {
     const emitted = stringify(graph)
 
     expect(emitted).toContain('  peerDependencies:\n    react: ^18.2.0\n')
-    expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: "true"\n')
+    expect(emitted).toContain('  peerDependenciesMeta:\n    react:\n      optional: true\n')
+    expect(emitted).not.toContain('optional: "true"')
   })
 
   it('does not emit peerDependenciesMeta when the peer edge is not optional', () => {
@@ -999,7 +1003,8 @@ describe('yarn-berry-v9 — stringify', () => {
     builder.addEdge('consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: 'npm:react@^18', optional: true, alias: 'react-aliased' })
     const graph = builder.seal()
 
-    expect(stringify(graph)).toContain('  peerDependenciesMeta:\n    react-aliased:\n      optional: "true"\n')
+    expect(stringify(graph)).toContain('  peerDependenciesMeta:\n    react-aliased:\n      optional: true\n')
+    expect(stringify(graph)).not.toContain('optional: "true"')
   })
 
   it('synthesizes peerDependencies blocks from graph peer edges', () => {

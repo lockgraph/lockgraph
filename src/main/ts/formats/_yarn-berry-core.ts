@@ -604,6 +604,11 @@ export function stringifyFamily(
   // condition tokens never contain `"`, `\`, or newlines, so an unquote only ever
   // recovers the original literal (and we bail on any line that does).
   output = unquoteConditionsScalars(output)
+  // `dependenciesMeta:` / `peerDependenciesMeta:` boolean values emit BARE too
+  // (`optional: true`, `built: false`, `unplugged: true`) — same post-pass slot
+  // (before CRLF conversion) so the line anchors hold. `built: "false"` is a
+  // TRUTHY non-empty string, so the bare emit is correctness, not just fidelity.
+  output = unquoteMetaBooleanScalars(output)
   if (options.lineEnding === 'crlf') {
     output = output.replace(/\n/g, '\r\n')
   }
@@ -2338,6 +2343,33 @@ function unquoteMetadataScalar(output: string, key: string, value: string): stri
 function unquoteConditionsScalars(output: string): string {
   return output.replace(
     /^(  conditions): "([^"\\]*)"$/gm,
+    (_m, key: string, body: string) => `${key}: ${body}`,
+  )
+}
+
+// Strip the quotes the syml writer wraps around the BOOLEAN values inside a
+// `dependenciesMeta:` / `peerDependenciesMeta:` block so emit matches yarn's bare
+// form (`optional: true`, `built: false`, `unplugged: true`). The values reach
+// emit as the STRINGS `'true'`/`'false'` (`coerceSymlValue` stringifies parsed
+// booleans), and the generic writer quotes any value matching its YAML boolean
+// pattern. yarn writes them BARE — and the distinction is load-bearing for
+// `built`: `built: "false"` is a non-empty string → TRUTHY, so yarn would read
+// `if (meta.built)` as `true` and run a postinstall the lock meant to suppress.
+//
+// Scope (no false positive on a legit string field whose value is literally
+// `"true"`/`"false"`): the regex triple-gates on (1) exactly the meta-block VALUE
+// indent — 6 spaces / nesting level 3 (entry `dependenciesMeta:` at 2, the pkg
+// key at 4, the boolean key at 6), which in yarn-berry's emitted schema is
+// reached ONLY inside these two meta blocks (every other entry field — `bin`,
+// `dependencies`, `peerDependencies` — bottoms out one level shallower, and
+// `conditions` is a scalar); (2) exactly the boolean KEYS yarn writes there
+// (`optional`/`built`/`unplugged`); and (3) a value of exactly `"true"`/`"false"`.
+// A genuine string field would have to satisfy all three to be touched, which the
+// schema makes impossible. Runs BEFORE the CRLF conversion, mirroring the
+// `conditions` unquote, so it matches on `\n`-terminated lines.
+function unquoteMetaBooleanScalars(output: string): string {
+  return output.replace(
+    /^(      (?:optional|built|unplugged)): "(true|false)"$/gm,
     (_m, key: string, body: string) => `${key}: ${body}`,
   )
 }

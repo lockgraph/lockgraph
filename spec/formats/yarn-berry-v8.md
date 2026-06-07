@@ -126,11 +126,16 @@ v8-specific deltas inherited on top of the shared contract are:
   byte-for-byte.
 - `dependenciesMeta` round-trips verbatim per node (a raw sidecar
   block; install-hint fidelity only — no cross-format EdgeAttrs
-  modelling).
+  modelling). Its boolean values (`optional` / `built` / `unplugged`)
+  are emitted **bare** (`built: false`, not `built: "false"`), matching
+  yarn; bare is correctness, not just fidelity — a quoted `"false"` is a
+  truthy string that flips yarn's `if (meta.built)` to true (see
+  [`_common.md` §1.5 bare-emit exceptions](./_common.md#15-quoting-the-syml-quoting-predicate)).
 - `peerDependenciesMeta` round-trips through the **same emitter** as
   the pnpm→berry `peerDependenciesMeta` reconstruction (task #86): the
   captured block is the rung-0 hint, unioned with any `optional` peer
-  edge, deduped by peer name (no double-emit).
+  edge, deduped by peer name (no double-emit). Its `optional: true`
+  boolean is likewise emitted **bare**.
 - `compressionLevel` is preserved as pass-through `__metadata`
   sidecar data; the current fixture corpus carries `0`.
 
@@ -147,7 +152,12 @@ v8-specific deltas inherited on top of the shared contract are:
   dropped it on 100% of real locks; a value-only sweep had missed it.)
 - `dependenciesMeta` and `peerDependenciesMeta` are present on most
   real-world v8 locks and round-trip; `dependenciesMeta` is emitted
-  immediately before `peerDependenciesMeta`, matching yarn.
+  immediately before `peerDependenciesMeta`, matching yarn. Their boolean
+  values (`optional` / `built` / `unplugged`) emit **bare** (`optional:
+  true`, `built: false`) — like `conditions`, an explicit unquote of what
+  the generic SYML writer would quote as a YAML boolean token; quoting
+  `built: "false"` would be a truthy-string correctness bug, not a style
+  nit (#89 regression).
 - `compressionLevel` first appears in the current family corpus at v8
   and is preserved through `sidecar.metadata`.
 - A `link:`/`portal:` (or locator-qualified `file:`) entry keyed with a
