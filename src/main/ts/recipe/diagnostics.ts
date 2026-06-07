@@ -156,6 +156,34 @@ export function resolutionPinUnresolvedDiagnostic(
 }
 
 /**
+ * `<prefix>_PATCH_PREFERRED` (info, Bug #104, yarn-berry only) — a consumer's
+ * REGISTRY range bound a base node, but the lock carries a sibling `patch:` copy
+ * of that same `name@version`, so the edge was REDIRECTED to the patched node
+ * (yarn's lock-borne `patchedDependencies` behaviour: a patch applies to every
+ * consumer of the base). Fired only when the redirect happened WITHOUT an
+ * override having forced it — so the purely lock-derived heuristic is
+ * observable. With `manifests`, the override rung performs the redirect itself
+ * and this does NOT fire (no double-redirect). `subject` is the consumer node id;
+ * `patchId` is the patch node the edge now points at. The base node is left
+ * GC-able (the patch re-emits from its own locator; `optimize()` prunes the
+ * orphaned base) — this is intentional, matching yarn.
+ */
+export function patchPreferredDiagnostic(
+  prefix:  string,
+  subject: NodeId,
+  depName: string,
+  range:   string,
+  patchId: NodeId,
+): Diagnostic {
+  return {
+    code:     `${prefix}_PATCH_PREFERRED`,
+    severity: 'info',
+    subject,
+    message:  `dependency ${depName}=${range} from ${subject} redirected to sibling patch node ${patchId} (lock-borne patchedDependencies preference); base left GC-able`,
+  }
+}
+
+/**
  * Emit `RECIPE_FEATURE_DROPPED` (warning) per ADR-0014 §5 — the canonical
  * loss diagnostic when a target adapter cannot represent a recipe-owned
  * feature on emit. Feature tag follows ADR-0014 §4 table: `patch` (F2);

@@ -226,9 +226,14 @@ The patch-descriptor and `link:` / `portal:` reconstructions above are
 normative source [`_common.md` §5](./_common.md#5-descriptornode-resolution-yarn-family-parse).
 The berry rungs are: Rung 0 (exact entry-key match) → **Rung 1** (the
 patch-descriptor + `link:`/`portal:` `::locator=` fallbacks documented here)
-→ Rung 2 (override map) → Rung 3 (source-gated max-satisfying semver) → Rung 4
-(`YARN_BERRY_UNRESOLVED_DEP` drop). Rungs 1–3 run **only** on a Rung-0 miss,
-so the steady-state cost is one lookup.
+→ Rung 2 (override map) → Rung 3 (source-gated max-satisfying semver) → Rung 3.5
+(dist-tag — a `latest`/`next` descriptor binds the single registry sibling; ≥2
+siblings → drop) → Rung 4 (`YARN_BERRY_UNRESOLVED_DEP` drop). Rungs 1–3.5 run
+**only** on a Rung-0 miss, so the steady-state cost is one lookup. A registry edge
+that bound a base node with a sibling `patch:` copy is additionally re-targeted by
+the **patch-preference overlay** ([`_common.md` §5.5](./_common.md#55-patch-preference-lock-borne),
+`YARN_BERRY_*_PATCH_PREFERRED` info) — the lock-borne `patchedDependencies`
+behaviour, with the base left GC-able.
 
 Rungs 2–3 close Bug #99: a yarn `resolutions` pin **rewrites the affected
 entry key to the pinned descriptor** and drops the consumer's range, so a

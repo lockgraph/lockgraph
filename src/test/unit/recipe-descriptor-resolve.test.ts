@@ -6,8 +6,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  distTagResolve,
   overrideTargetFor,
+  patchPreferenceFor,
   semverResolve,
+  type PatchSibling,
   type SemverCandidate,
 } from '../../main/ts/recipe/descriptor-resolve.ts'
 import type { OverrideConstraint } from '../../main/ts/graph.ts'
@@ -136,5 +139,106 @@ describe('overrideTargetFor — Rung 2 override-map forced link', () => {
 
   it('returns undefined for an empty override list', () => {
     expect(overrideTargetFor('anything', '^1.0.0', [], [])).toBeUndefined()
+  })
+})
+
+describe('distTagResolve — Rung 3.5 dist-tag bind (#107)', () => {
+  it('binds the SINGLE registry sibling for a dist-tag range', () => {
+    // node-gyp@npm:latest → the one node-gyp node, regardless of its version.
+    expect(distTagResolve('npm:latest', [tarball('node-gyp@10.0.0', '10.0.0')]))
+      .toEqual({ kind: 'bound', id: 'node-gyp@10.0.0' })
+    // bare tag too (no `npm:` prefix)
+    expect(distTagResolve('next', [tarball('pkg@2.0.0-beta.1', '2.0.0-beta.1')]))
+      .toEqual({ kind: 'bound', id: 'pkg@2.0.0-beta.1' })
+  })
+
+  it('declines (none) when the inner token is a valid semver range (Rung 3 owns it)', () => {
+    const candidates = [tarball('a@1.0.0', '1.0.0')]
+    expect(distTagResolve('npm:^1.0.0', candidates)).toEqual({ kind: 'none' })
+    expect(distTagResolve('1.2.3', candidates)).toEqual({ kind: 'none' })
+    expect(distTagResolve('~2', candidates)).toEqual({ kind: 'none' })
+    // `*` is a valid range (matches anything) → Rung 3, not a tag.
+    expect(distTagResolve('*', candidates)).toEqual({ kind: 'none' })
+  })
+
+  it('declines (none) for a non-npm protocol range', () => {
+    const candidates = [tarball('a@1.0.0', '1.0.0')]
+    expect(distTagResolve('patch:a@npm%3A1.0.0#x.patch', candidates)).toEqual({ kind: 'none' })
+    expect(distTagResolve('workspace:^', candidates)).toEqual({ kind: 'none' })
+  })
+
+  it('NEVER binds a git / directory / unknown / absent-source node to a tag (#91 gate)', () => {
+    const nonRegistry: SemverCandidate[] = [
+      { id: 'forked@1.0.0', version: '1.0.0', sourceType: 'git' },
+      { id: 'local@1.0.0', version: '1.0.0', sourceType: 'directory' },
+      { id: 'weird@1.0.0', version: '1.0.0', sourceType: 'unknown' },
+      { id: 'ws@1.0.0', version: '1.0.0', sourceType: 'absent' },
+    ]
+    expect(distTagResolve('latest', nonRegistry)).toEqual({ kind: 'none' })
+  })
+
+  it('a single tarball among non-registry siblings binds; the rest stay invisible', () => {
+    const mixed: SemverCandidate[] = [
+      { id: 'pkg@1.0.0', version: '1.0.0', sourceType: 'git' },
+      tarball('pkg@2.0.0', '2.0.0'),
+    ]
+    expect(distTagResolve('latest', mixed)).toEqual({ kind: 'bound', id: 'pkg@2.0.0' })
+  })
+
+  it('reports ambiguity (no max-version guess) on ≥2 registry siblings — channel pointers are not resolvable', () => {
+    // `latest` could be EITHER version; the lock cannot tell, and `next` is often
+    // < `latest`, so a max-version pick would be wrong. Diagnose + drop.
+    const two = [tarball('pkg@1.0.0', '1.0.0'), tarball('pkg@2.0.0', '2.0.0')]
+    const result = distTagResolve('npm:latest', two)
+    expect(result.kind).toBe('ambiguous')
+    expect(result.kind === 'ambiguous' && result.candidateIds).toEqual(['pkg@1.0.0', 'pkg@2.0.0'])
+  })
+
+  it('returns none for an empty candidate list', () => {
+    expect(distTagResolve('latest', [])).toEqual({ kind: 'none' })
+  })
+})
+
+describe('patchPreferenceFor — Rung-3 patch-preference overlay (#104)', () => {
+  const sib = (id: string, locatorQualifier?: string): PatchSibling => ({ id, locatorQualifier })
+
+  it('returns undefined when there are no patch siblings (keep the base)', () => {
+    expect(patchPreferenceFor('ansi-color', '0.2.1', [])).toBeUndefined()
+  })
+
+  it('redirects to the single patch sibling', () => {
+    expect(patchPreferenceFor('ansi-color', '0.2.1', [sib('ansi-color@0.2.1+patch=abc')]))
+      .toBe('ansi-color@0.2.1+patch=abc')
+  })
+
+  it('on ≥2 siblings, redirects only on a UNIQUE ::locator= match against the consumer', () => {
+    const siblings = [
+      sib('p@1.0.0+patch=aaa', 'app-a%40workspace%3Apackages%2Fa'),
+      sib('p@1.0.0+patch=bbb', 'app-b%40workspace%3Apackages%2Fb'),
+    ]
+    // consumer = app-a → its patch copy
+    expect(patchPreferenceFor('p', '1.0.0', siblings, 'app-a%40workspace%3Apackages%2Fa'))
+      .toBe('p@1.0.0+patch=aaa')
+    // consumer = app-b → its patch copy
+    expect(patchPreferenceFor('p', '1.0.0', siblings, 'app-b%40workspace%3Apackages%2Fb'))
+      .toBe('p@1.0.0+patch=bbb')
+  })
+
+  it('on ≥2 siblings with NO matching consumer locator, keeps the base (no guess)', () => {
+    const siblings = [
+      sib('p@1.0.0+patch=aaa', 'app-a%40workspace%3Apackages%2Fa'),
+      sib('p@1.0.0+patch=bbb', 'app-b%40workspace%3Apackages%2Fb'),
+    ]
+    expect(patchPreferenceFor('p', '1.0.0', siblings, 'app-c%40workspace%3Apackages%2Fc')).toBeUndefined()
+    // …and no consumer locator at all → also keep the base.
+    expect(patchPreferenceFor('p', '1.0.0', siblings)).toBeUndefined()
+  })
+
+  it('on ≥2 siblings where two share the consumer locator, keeps the base (ambiguous, no guess)', () => {
+    const siblings = [
+      sib('p@1.0.0+patch=aaa', 'root%40workspace%3A.'),
+      sib('p@1.0.0+patch=bbb', 'root%40workspace%3A.'),
+    ]
+    expect(patchPreferenceFor('p', '1.0.0', siblings, 'root%40workspace%3A.')).toBeUndefined()
   })
 })

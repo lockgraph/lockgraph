@@ -40,8 +40,8 @@ import {
   hashAndNormaliseBytes as patchHashAndNormaliseBytes,
   sentinelHashOfLocator,
 } from '../recipe/patch.ts'
-import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, recipePeerMetaIncomplete, resolutionPinUnresolvedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
-import { overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
+import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, patchPreferredDiagnostic, recipePeerMetaIncomplete, resolutionPinUnresolvedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { distTagResolve, overrideTargetFor, patchPreferenceFor, semverResolve, type PatchSibling, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import { readInstalledManifest, type InstalledManifestMeta } from '../complete/local-manifest.ts'
 
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
@@ -254,6 +254,17 @@ export function parseFamily(
   // can keep an `npm:`/bare descriptor from ever binding a git/directory/unknown
   // node (the #91 source-safety invariant).
   const semverCandidatesByName = new Map<string, SemverCandidate[]>()
+  // Bug #104 patch-preference — `${name}@${version}` → sibling PATCH nodes whose
+  // canonical base is an `npm:` registry artefact (`node.patch !== undefined` and
+  // the patch locator's inner protocol is `npm:`). Built alongside the candidate
+  // index so the Rung-3 OVERLAY can, after a registry range binds the BASE node,
+  // redirect the consumer onto the patched copy (yarn's lock-borne
+  // `patchedDependencies` behaviour). Keyed by the patch node's own
+  // `name@version` (which equals the base's), so the bound base id maps straight
+  // to its patch siblings. `link:`/`portal:`/`file:` locator-disambiguated
+  // sentinels are EXCLUDED (their "patch" slot carries only a consumer
+  // discriminator, not a registry-base patch).
+  const patchSiblingsByBase = new Map<string, PatchSibling[]>()
   const seenIds = new Set<string>()
   const entryIds = new Map<string, string>()
 
@@ -371,6 +382,20 @@ export function parseFamily(
     if (candidateList === undefined) semverCandidatesByName.set(authoritativeName, [semverCandidate])
     else candidateList.push(semverCandidate)
 
+    // Bug #104 — register a registry-base PATCH node as a patch sibling of its
+    // base `name@version`. Gate on `effectivePatch !== undefined` (a patch slot
+    // is set) AND the resolution being a genuine `@patch:` of an `npm:` base
+    // (excludes the `link:`/`portal:`/`file:` locator-disambiguated sentinels,
+    // which set `effectivePatch` only as a consumer discriminator). The
+    // `::locator=` qualifier disambiguates ≥2 siblings of the same base.
+    if (effectivePatch !== undefined && resolution !== undefined && isNpmBasePatchResolution(resolution, authoritativeName)) {
+      const sibling: PatchSibling = { id, locatorQualifier: locatorQualifierOfPatchResolution(resolution) }
+      const baseKey = `${authoritativeName}@${version}`
+      const siblings = patchSiblingsByBase.get(baseKey)
+      if (siblings === undefined) patchSiblingsByBase.set(baseKey, [sibling])
+      else siblings.push(sibling)
+    }
+
     const peerDependencies = stringRecordOfBlock(asMap(value['peerDependencies']))
     if (peerDependencies !== undefined) {
       rawPeerDependencies.set(id, peerDependencies)
@@ -477,6 +502,7 @@ export function parseFamily(
   // to every edge-resolution call so the steady-state Rung-0 path is untouched.
   const ladderCtx: EdgeLadderContext = {
     candidatesByName: semverCandidatesByName,
+    patchSiblingsByBase,
     overrides:        options.overrides ?? [],
     codePrefix:       config.codePrefix,
     manifestsProvided: options.overrides !== undefined,
@@ -2020,6 +2046,9 @@ function isRegistryRange(range: string): boolean {
 interface EdgeLadderContext {
   /** name → registry-class candidates for Rung-3 max-satisfying semver. */
   candidatesByName: Map<string, SemverCandidate[]>
+  /** `name@version` → sibling registry-base patch nodes for the Bug #104
+   *  Rung-3 patch-preference OVERLAY (`[]`/absent = none). */
+  patchSiblingsByBase: Map<string, PatchSibling[]>
   /** canonical override constraints for Rung-2 forced links (`[]` = none). */
   overrides: readonly OverrideConstraint[]
   /** adapter code prefix for the ladder diagnostics (e.g. `YARN_BERRY_V8`). */
@@ -2050,6 +2079,10 @@ function addEdgesFromBlock(
     // (not yet resolved), so the generic UNRESOLVED_DEP fallback is skipped.
     // Rung 0 — exact specIndex match (UNCHANGED, first, O(1)).
     let dstId: string | undefined | null = index.get(lookup)
+    // Bug #104 — track whether Rung 2 (override map) forced this bind, so the
+    // patch-preference OVERLAY does NOT fire on top of an override redirect (the
+    // override already points at whatever node the human declared, patch or not).
+    let boundViaOverride = false
     // Rung 1 — patch-descriptor (#88) + link/portal `::locator=` (#90)
     // fallbacks (UNCHANGED). Run on the Rung-0 MISS path only, before Rung 2/3,
     // so a more-specific structural match wins over the override/semver rungs.
@@ -2077,7 +2110,10 @@ function addEdgesFromBlock(
           )
           if (viaOverride === null) continue // ambiguous patch target → diagnostic pushed
         }
-        if (viaOverride !== undefined) dstId = viaOverride
+        if (viaOverride !== undefined) {
+          dstId = viaOverride
+          boundViaOverride = true
+        }
       }
     }
     // Rung 3 — SOURCE-GATED max-satisfying semver. Only `npm:`/bare descriptors,
@@ -2090,6 +2126,48 @@ function addEdgesFromBlock(
       } else if (result.kind === 'ambiguous') {
         diagnostics.push(ambiguousResolutionDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, result.candidateIds))
         continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+      }
+    }
+    // Rung 3.5 — DIST-TAG bind (#107). A registry descriptor whose range is a
+    // published dist-TAG (`latest` / `next`), not a semver range, binds the
+    // UNIQUE registry sibling of that name (source-gated exactly like Rung 3). A
+    // multi-version tag is genuine ambiguity → diagnose + drop (never guess a max
+    // version: `latest`/`next` are channel pointers and `next` is often older).
+    if (dstId === undefined) {
+      const result = distTagResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
+      if (result.kind === 'bound') {
+        dstId = result.id
+      } else if (result.kind === 'ambiguous') {
+        diagnostics.push(ambiguousResolutionDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, result.candidateIds))
+        // The manifest-less INFO hint also applies to a multi-version tag drop:
+        // a `latest`/`next` against ≥2 siblings is the same "lock can't resolve
+        // it; a manifest could" signature as a non-satisfying pin.
+        if (!ladder.manifestsProvided) {
+          diagnostics.push(resolutionPinUnresolvedDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange))
+        }
+        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+      }
+    }
+    // Bug #104 Rung-3 OVERLAY — PATCH PREFERENCE (berry only). After a REGISTRY
+    // range bound its BASE node via Rung 0 or 3 with NO override forcing it, yarn
+    // redirects the consumer onto a sibling `patch:` copy of the same
+    // `name@version` when the lock carries one (the `patchedDependencies` map
+    // patches the package for every consumer). A single patch sibling redirects;
+    // ≥2 bind only on a unique `::locator=` match against the consumer's own
+    // resolution; no match keeps the base (no guess). WITH manifests the override
+    // rung already performed the redirect (boundViaOverride) → skip (no double-
+    // redirect). The base node is left GC-able (the patch re-emits from its own
+    // locator; `optimize()` prunes the orphan) — matching yarn.
+    if (typeof dstId === 'string' && !boundViaOverride && isRegistryRange(normalizedRange)) {
+      const bound = nodeNameVersion(dstId)
+      const siblings = bound === undefined ? undefined : ladder.patchSiblingsByBase.get(bound)
+      if (siblings !== undefined && siblings.length > 0) {
+        const consumerLocator = srcResolution !== undefined ? encodeURIComponent(srcResolution) : undefined
+        const patchId = patchPreferenceFor(depName, normalizedRange, siblings, consumerLocator)
+        if (patchId !== undefined && patchId !== dstId) {
+          dstId = patchId
+          diagnostics.push(patchPreferredDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, patchId))
+        }
       }
     }
     if (!dstId) {
@@ -2127,6 +2205,25 @@ function addEdgesFromBlock(
 function normalizedEdgeRange(kind: EdgeKind, range: string): string {
   if (kind === 'peer') return range
   return hasExplicitProtocol(range) ? range : `npm:${range}`
+}
+
+// Bug #104 — project a bound NodeId to its bare `${name}@${version}` key for the
+// patch-sibling index lookup, stripping a peerContext `(...)` tail and a
+// `+<slot>=…` disambiguator suffix. At parse time a Rung-0/3-bound base id is
+// already bare (peerContext is empty pre-enrich, a registry base carries no patch
+// slot), so this is identity in the common path; the strips are defensive for a
+// form-a Rung-0 bind onto a patch node (whose `+patch=` suffix is removed so the
+// lookup keys off the shared base `name@version`). `nameOf` is peerContext-depth-
+// aware; the version is the segment after the last depth-0 `@`, minus any `+slot`.
+function nodeNameVersion(id: string): string | undefined {
+  const name = nameOf(id)
+  if (name.length >= id.length) return undefined
+  let rest = id.slice(name.length + 1) // drop `name@`
+  const parenIdx = rest.indexOf('(') // peerContext tail
+  if (parenIdx >= 0) rest = rest.slice(0, parenIdx)
+  const plusIdx = rest.indexOf('+') // TarballKey-style disambiguator slot
+  if (plusIdx >= 0) rest = rest.slice(0, plusIdx)
+  return rest.length > 0 ? `${name}@${rest}` : undefined
 }
 
 function hasExplicitProtocol(range: string): boolean {
@@ -2185,6 +2282,32 @@ function locatorQualifierOfPatchSpec(spec: string): string | undefined {
     if (param.startsWith('locator=')) return param.slice('locator='.length)
   }
   return undefined
+}
+
+// Bug #104 — is this resolution a `@patch:` locator whose patched BASE is an
+// `npm:` registry artefact (`<name>@patch:<name>@npm%3A<ver>#<patch>…`)? Only such
+// patches are eligible for the patch-preference overlay: the base is a registry
+// node a consumer's `npm:`/bare range can bind, so redirecting to the patched copy
+// is the lock-borne yarn behaviour. A `~builtin<…>` patch, a patch of a git/file
+// base, or a `link:`/`portal:`/`file:` locator-sentinel (no `@patch:` at all) is
+// excluded. The inner base is `%3A`-encoded in the locator (`npm%3A`).
+function isNpmBasePatchResolution(resolution: string, name: string): boolean {
+  const locator = patchLocatorOfResolution(resolution)
+  if (locator === undefined) return false
+  // The patch source body sits between `patch:` and the first `#`; the patched
+  // base locator is the body before that. Require the base to be `<name>@npm:…`.
+  const base = baseSpecOfPatchLocator(locator)
+  return base !== undefined && base.startsWith(`${name}@npm:`)
+}
+
+// Bug #104 — extract the `::locator=<encoded-consumer>` qualifier from a full
+// patch RESOLUTION string (the `node.resolution` carrier), reusing the
+// post-`patch:`-body extractor. Returns undefined when the patch is not bound to
+// a specific consumer (no `locator=` in the `::`-param block).
+function locatorQualifierOfPatchResolution(resolution: string): string | undefined {
+  const locator = patchLocatorOfResolution(resolution)
+  if (locator === undefined || !locator.startsWith('patch:')) return undefined
+  return locatorQualifierOfPatchSpec(locator.slice('patch:'.length))
 }
 
 interface PatchDescriptorCandidate {

@@ -21,7 +21,7 @@ import {
   resolutionPinUnresolvedDiagnostic,
   unknownResolutionDiagnostic,
 } from '../recipe/diagnostics.ts'
-import { overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
+import { distTagResolve, overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import {
   parse as parseResolutionRecipe,
   stringifyForYarnClassic,
@@ -833,6 +833,22 @@ function addEdgesFromMap(
         dstId = result.id
       } else if (result.kind === 'ambiguous') {
         diagnostics.push(ambiguousResolutionDiagnostic('YARN_CLASSIC', srcId, name, range, result.candidateIds))
+        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+      }
+    }
+    // Rung 3.5 — DIST-TAG bind (#107). A registry range that is a published
+    // dist-TAG (`latest` / `next`, e.g. `node-gyp "latest"`), not a semver range,
+    // binds the UNIQUE registry sibling of that name (source-gated like Rung 3).
+    // A multi-version tag → diagnose + drop (channel pointers are never guessed).
+    if (dstId === undefined) {
+      const result = distTagResolve(range, ladder.candidatesByName.get(name) ?? [])
+      if (result.kind === 'bound') {
+        dstId = result.id
+      } else if (result.kind === 'ambiguous') {
+        diagnostics.push(ambiguousResolutionDiagnostic('YARN_CLASSIC', srcId, name, range, result.candidateIds))
+        if (!ladder.manifestsProvided) {
+          diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
+        }
         continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
       }
     }

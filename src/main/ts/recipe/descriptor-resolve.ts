@@ -20,6 +20,21 @@
 //     must never satisfy a registry range). Final ties are NOT guessed — the
 //     caller is told via `{ kind: 'ambiguous' }` and emits a `*_AMBIGUOUS_
 //     RESOLUTION` warning, mirroring the existing peer-ambiguity rule.
+//   - `distTagResolve` — Rung 3.5: DIST-TAG bind. A registry descriptor whose
+//     range is a dist-TAG (`latest` / `next` / `node-gyp@npm:latest`) — NOT a
+//     semver range — binds the SINGLE registry sibling of that name. SOURCE-gated
+//     exactly like Rung 3 (tarball-only). 0 → none; 1 → bound; ≥2 → ambiguous
+//     (the caller diagnoses + drops — a multi-version tag is never guessed, since
+//     `latest`/`next` are channel pointers the lock cannot resolve and `next` is
+//     often < `latest`).
+//   - `patchPreferenceFor` — Rung-3 OVERLAY (berry only): after the registry
+//     range bound its base node, prefer a sibling PATCH node of the same
+//     `name@version` (the lock-borne yarn behaviour — a `patchedDependencies`
+//     entry redirects every consumer of the base to the patched copy). A single
+//     patch sibling redirects; ≥2 disambiguate by `::locator=` against the
+//     consumer; no match keeps the base (no guess). PURE: returns the patch id or
+//     `undefined`; the adapter owns the index, the boolean gates, and the
+//     `*_PATCH_PREFERRED` diagnostic.
 //   - `overrideTargetFor` — Rung 2: OVERRIDE-MAP forced link. Resolves the
 //     human-declared pin (`OverrideConstraint`) for `(depName, declaredRange,
 //     consumerPath)`. Authoritative: it precedes semver and handles a
@@ -124,6 +139,50 @@ export function semverResolve(range: string, candidates: readonly SemverCandidat
 }
 
 /**
+ * Rung 3.5 — DIST-TAG bind. yarn permits a dependency range to be a published
+ * dist-TAG (`latest`, `next`, `node-gyp@npm:latest`) rather than a semver range.
+ * A tag is NOT a version constraint the lock can re-evaluate — it is a channel
+ * pointer resolved at install time — so the only safe parse-time bind is the
+ * UNIQUE registry sibling of that name. Runs after Rung 3 (semver) and before
+ * the drop.
+ *
+ * Gates (mirroring `semverResolve` exactly — the source-safety invariant holds):
+ *   1. `range` must be `npm:`/bare — any other protocol → `{ kind: 'none' }`;
+ *   2. the inner token must NOT be a valid semver range — a real range is Rung
+ *      3's domain, so `semver.validRange(tag) !== null` → `{ kind: 'none' }`
+ *      (this primitive owns only the genuine-tag residue Rung 3 declined);
+ *   3. only `sourceType === 'tarball'` candidates are eligible — a tag must
+ *      never bind a git / directory / unknown / absent-source node (same #91
+ *      gate as Rung 3);
+ *   4. 0 eligible → `{ kind: 'none' }`; exactly 1 → `{ kind: 'bound' }` (the one
+ *      registry sibling the tag must point at, e.g. `node-gyp@npm:latest` → the
+ *      single `node-gyp` node); ≥2 → `{ kind: 'ambiguous' }` — the caller
+ *      diagnoses + DROPS, never guessing a max version (`latest`/`next` are
+ *      channel pointers and `next` is frequently older than `latest`, so a
+ *      max-version pick would be actively wrong).
+ *
+ * `candidates` need not be pre-filtered or pre-sorted; this function does both
+ * deterministically.
+ */
+export function distTagResolve(range: string, candidates: readonly SemverCandidate[]): SemverResolveResult {
+  const tag = registryRangeOf(range)
+  if (tag === undefined) return { kind: 'none' }
+  // A real semver range is Rung 3's job — Rung 3.5 owns ONLY the genuine-tag
+  // residue (`*` is a valid range, so it never reaches here).
+  if (semver.validRange(tag) !== null) return { kind: 'none' }
+
+  const eligible = candidates.filter(c => c.sourceType === 'tarball')
+  if (eligible.length === 0) return { kind: 'none' }
+  if (eligible.length === 1) return { kind: 'bound', id: eligible[0]!.id }
+
+  // ≥2 registry siblings and a non-resolvable tag → genuine ambiguity. Never
+  // guess max-version: a dist-tag is a channel pointer, not a range, so the
+  // lock cannot tell which version the tag named. Mirror the Rung-3 tie posture.
+  const ids = eligible.map(c => c.id).sort(cmpStr)
+  return { kind: 'ambiguous', candidateIds: ids }
+}
+
+/**
  * Rung 2 — OVERRIDE-MAP forced link. Find the human-declared override pin for a
  * dependency `(depName, declaredRange, consumerPath)` and return its verbatim
  * `to` target, or `undefined` when no constraint matches.
@@ -204,6 +263,61 @@ function parentPathMatches(parentPath: readonly string[], consumerPath: readonly
     if (parentPath[i] !== consumerPath[offset + i]) return false
   }
   return true
+}
+
+/**
+ * A patch node sibling of some base `name@version` (Rung-3 overlay input,
+ * berry only). `id` is the patch node id; `locatorQualifier` is its
+ * `::locator=<encoded-consumer>` qualifier (yarn writes it on a patch bound to a
+ * specific workspace consumer) used to disambiguate when ≥2 patch siblings share
+ * the same base. Source order is deterministic so callers list candidates
+ * stably.
+ */
+export interface PatchSibling {
+  id: string
+  locatorQualifier?: string
+}
+
+/**
+ * Rung-3 OVERLAY — PATCH PREFERENCE (berry only; classic flattens patches so it
+ * never calls this). After a REGISTRY range bound its base node (Rung 0 or Rung
+ * 3) with NO override having fired, yarn's lock-borne behaviour is to redirect
+ * the consumer to a sibling PATCH copy of the same `name@version` when the lock
+ * carries one (the `patchedDependencies` map patches the package for every
+ * consumer of the base). This primitive is the pure redirect decision:
+ *
+ *   - 0 patch siblings → `undefined` (no redirect; keep the base);
+ *   - exactly 1 → that patch's id (single unambiguous patch copy);
+ *   - ≥2 → redirect ONLY when EXACTLY ONE sibling's `::locator=` qualifier
+ *     matches the consumer's own resolution (the same disambiguation the
+ *     `patch:`-descriptor and `link:`/`portal:` paths use); otherwise `undefined`
+ *     (keep the base — never guess among multiple patch copies, no diagnostic).
+ *
+ * The base node is intentionally left GC-able: the patch is re-emitted from its
+ * own locator regardless of whether the base NODE survives (the base is the
+ * patch's diff source, not a separately-installed artefact), and `optimize()`
+ * GCs the now-orphaned base — matching yarn, which lists only the patched copy
+ * once every consumer is redirected. The adapter (not this primitive) builds the
+ * sibling index, tracks the no-override / registry-range gates, and emits the
+ * `<prefix>_PATCH_PREFERRED` diagnostic on a redirect.
+ */
+export function patchPreferenceFor(
+  _name: string,
+  _version: string,
+  patchSiblings: readonly PatchSibling[],
+  consumerLocator?: string,
+): string | undefined {
+  if (patchSiblings.length === 0) return undefined
+  if (patchSiblings.length === 1) return patchSiblings[0]!.id
+
+  // ≥2 patch copies of the same base (same patch from different workspaces, or
+  // distinct patches) — bind only on a UNIQUE consumer-locator match. The
+  // consumer's resolution is `::locator=`-encoded the same way the entry key is.
+  if (consumerLocator !== undefined) {
+    const matches = patchSiblings.filter(s => s.locatorQualifier === consumerLocator)
+    if (matches.length === 1) return matches[0]!.id
+  }
+  return undefined
 }
 
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0

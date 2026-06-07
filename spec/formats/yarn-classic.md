@@ -142,7 +142,11 @@ Classic specifics:
 
 - Classic has **no Rung 1** (the `patch:`/`link:`/`portal:` structural
   fallbacks are berry entry-key shapes); its ladder is Rung 0 (exact) → 2
-  (override map) → 3 (source-gated max-satisfying semver) → 4 (drop).
+  (override map) → 3 (source-gated max-satisfying semver) → 3.5 (dist-tag — a
+  `latest`/`next` descriptor that missed Rung 0 binds the single registry
+  sibling; ≥2 siblings → drop) → 4 (drop). The berry **patch-preference overlay**
+  ([`_common.md` §5.5](./_common.md#55-patch-preference-lock-borne)) does **not**
+  apply — classic flattens patches.
 - A `resolutions` pin rewrites the entry key to the pinned descriptor
   (`"csstype@3.0.9":`), so a consumer still declaring `csstype "^3.1.3"`
   misses Rung 0. The override map (from `manifests`) is **required** to honour

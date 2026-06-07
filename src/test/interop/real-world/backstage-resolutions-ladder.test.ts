@@ -114,11 +114,32 @@ describe('Bug #99 — backstage resolutions-pin ladder (real-world)', () => {
 
     const withoutM = parse('yarn-berry-v8', lock)
     const withM = parse('yarn-berry-v8', lock, { manifests })
-    // Without the override map, ast-types consumers bind plain nodes (or drop);
-    // with it, they bind the patch nodes the resolutions pin forces.
-    expect(countPatchTargets(withoutM)).toBe(0)
+    // Bug #104 (lock-borne patch preference): the lock carries BOTH a base
+    // `ast-types@npm:0.16.1` AND a sibling `ast-types@patch:…0.16.1` node. Even
+    // WITHOUT manifests, an `npm:^0.16.1` consumer binds the base (Rung 3) and the
+    // Rung-3 patch-preference OVERLAY then redirects it onto the patched copy —
+    // the same node yarn installs — so patch targets appear from the lock alone.
+    expect(countPatchTargets(withoutM)).toBeGreaterThan(0)
+    // WITH manifests the override path (Rung 2 → Rung 1) ALSO yields patch
+    // targets; it additionally rescues consumers with no base sibling to bind
+    // (which would otherwise drop), so the count is at least the lock-borne one
+    // and the ast-types drops fall to zero.
+    expect(countPatchTargets(withM)).toBeGreaterThanOrEqual(countPatchTargets(withoutM))
     expect(countPatchTargets(withM)).toBeGreaterThan(0)
-    // …and the ast-types drops the bare/semver path produced go to zero.
+    // Each redirect WITHOUT an override fires the observable `_PATCH_PREFERRED`
+    // info. Supplying manifests can only REPLACE a lock-borne overlay-redirect
+    // with an authoritative override-redirect (which fires no `_PATCH_PREFERRED`),
+    // never add one — so the count is monotone non-increasing. (A strict
+    // no-double-redirect-under-override is proven on the controlled fixture in
+    // yarn-patch-preference.test.ts; the backstage corpus mixes override-covered
+    // and override-uncovered ast-types consumers, so here we assert the bound.)
+    const patchPreferredCount = (g: Graph): number =>
+      g.diagnostics().filter(d => d.code === 'YARN_BERRY_V8_PATCH_PREFERRED' && /ast-types=/.test(d.message)).length
+    expect(patchPreferredCount(withoutM)).toBeGreaterThan(0)
+    expect(patchPreferredCount(withM)).toBeLessThanOrEqual(patchPreferredCount(withoutM))
+    // A consumer range satisfied by no base sibling (`^0.13.4` — neither 0.14.2
+    // nor 0.16.1 satisfies it) still DROPS without manifests; the override map
+    // (which version-conditions `^0.13.4`) rescues it, so drops fall to zero.
     expect(astDrops(withoutM)).toBeGreaterThan(0)
     expect(astDrops(withM)).toBe(0)
   })

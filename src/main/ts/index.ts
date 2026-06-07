@@ -129,6 +129,15 @@ export type ConvertOptions = {
   to:             FormatId
   from?:          FormatId
   workspaceRoot?: string
+  /**
+   * Declared manifests keyed by workspace path (ADR-0025) — same shape as
+   * {@link ParseOptions.manifests}. Threaded into the underlying `parse()` so a
+   * yarn-family source honours its `resolutions`/`overrides` pins on convert
+   * (the override map bridges a pinned, possibly-NON-satisfying descriptor back
+   * to its node — Bug #99). `convert` stays a pure parse→stringify: the captured
+   * overrides are NOT auto-threaded into the stringify `overrides` slot.
+   */
+  manifests?:     Record<string, Manifest>
   lineEnding?:    'lf' | 'crlf'
   cacheKey?:      string
   onDiagnostic?:  (d: Diagnostic) => void
@@ -341,6 +350,7 @@ export function convert(input: string, options: ConvertOptions): string {
   if (from === undefined) throw new Error('convert: source format not detected')
   const graph = parse(from, input, {
     workspaceRoot: options.workspaceRoot,
+    manifests:     options.manifests,
     onDiagnostic:  options.onDiagnostic,
   })
   return stringify(options.to, graph, {

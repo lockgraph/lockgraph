@@ -608,17 +608,21 @@ constraints into the edge resolver).
 ### 5.2 The resolution ladder (normative)
 
 Each consumer descriptor is resolved by the rungs below **in order**. Rung 0
-is the steady-state path; Rungs 1–3 run **only** when Rung 0 misses, so the
+is the steady-state path; Rungs 1–3.5 run **only** when Rung 0 misses, so the
 common case stays a single O(1) lookup. The first rung that yields a node
 binds the edge; the dropped-edge set this ladder produces is a **subset** of
-the exact-match-only result (it only ever *shrinks*).
+the exact-match-only result (it only ever *shrinks*). The berry
+**patch-preference overlay** ([§5.5](#55-patch-preference-lock-borne)) is the one
+post-bind step that *re-targets* (base → patched copy) rather than rescuing a
+miss — it never drops an edge, so the shrink-only invariant still holds.
 
 | Rung | Rule |
 | --- | --- |
 | **0 — exact** | `index.get("<name>@<descriptor>")` — exact entry-key string match. Unchanged, first, O(1). |
 | **1 — structural fallbacks** (berry only) | A `patch:` descriptor binds to its patch node after the entry-key's `::version=…&hash=…[&locator=…]` param block is stripped; a `link:` / `portal:` descriptor binds via the `::locator=<consumer>` qualifier reconstructed from the consumer's own resolution. More-specific than the rungs below, so it runs first. |
 | **2 — override map** | If an override constraint matches `(depName, declaredRange, consumerPath)`, resolve its `to` target by feeding `to` **back through Rungs 0+1** (`to:"3.0.9"` → the exact `<name>@npm:3.0.9` node; `to:"patch:…"` → the patch node). This handles the NON-satisfying pin. The override is **authoritative** — a human declaration beats inference — so it precedes semver. |
-| **3 — source-gated semver** | For an `npm:`/bare descriptor **only**, among the entries that share `depName` and whose **source is a registry tarball**, pick the **max-satisfying** locked version. A single eligible registry sibling binds directly (the unique pin yarn chose, even if its version does not satisfy the bare range). A final tie at the maximum → **diagnose and drop**, never guess. |
+| **3 — source-gated semver** | For an `npm:`/bare descriptor **only**, among the entries that share `depName` and whose **source is a registry tarball**, pick the **max-satisfying** locked version. A single eligible registry sibling binds directly (the unique pin yarn chose, even if its version does not satisfy the bare range). A final tie at the maximum → **diagnose and drop**, never guess. *(berry) When the bound node has a sibling `patch:` copy of the same `name@version` and no override fired, the* **patch-preference overlay** ([§5.5](#55-patch-preference-lock-borne)) *redirects the edge onto the patched copy.* |
+| **3.5 — dist-tag** | For an `npm:`/bare descriptor whose inner token is a published **dist-TAG** (`latest`, `next`) rather than a semver range (`semver.validRange(tag) === null`), among the same registry-**tarball** entries that share `depName`, bind the **single** eligible sibling. A tag against **≥2** registry siblings is **diagnose and drop** — a tag is a channel pointer the lock cannot resolve and `next` is frequently older than `latest`, so a max-version pick would be actively wrong. Source-gated exactly like Rung 3. |
 | **4 — drop** | No rung matched → the edge is dropped with the adapter's `*_UNRESOLVED_DEP` / `*_MISSING_ENTRY` diagnostic. Unchanged. |
 
 ### 5.3 The source-awareness invariant
@@ -637,6 +641,13 @@ cannot *prove* it is a registry tarball. This gate is independent of node
 **identity**: it holds regardless of whether the source class is also folded
 into the NodeId, so the ladder stays correct on its own.
 
+**Rung 3.5 inherits the same gate.** A dist-tag descriptor binds **only** a
+registry-tarball sibling — a git / directory / `unknown` / resolution-less node is
+invisible to a tag exactly as to a semver range. The gate keys on the candidate's
+**source-class projection**, never on the key string, so a future source-id slot
+on the TarballKey (the `+src=` work) does not affect it: source-awareness is
+slot-independent.
+
 ### 5.4 Diagnostics
 
 Both yarn adapters emit, version-prefixed (mirroring the
@@ -644,8 +655,9 @@ Both yarn adapters emit, version-prefixed (mirroring the
 
 | Code | Severity | `subject` | When | Posture |
 | --- | --- | --- | --- | --- |
-| `<prefix>_AMBIGUOUS_RESOLUTION` | warning | the consumer node | Rung 3 found ≥2 candidates tied at the maximum satisfying version | drop the edge, never guess (mirrors `<prefix>_PEER_AMBIGUOUS`) |
-| `<prefix>_RESOLUTION_PIN_UNRESOLVED` | info | the consumer node | an `npm:`/bare descriptor missed Rung 0 **and** no semver candidate satisfied it, with **no** `manifests` supplied | point at the missing override source — the signature of a `resolutions` pin to a non-satisfying descriptor |
+| `<prefix>_AMBIGUOUS_RESOLUTION` | warning | the consumer node | Rung 3 found ≥2 candidates tied at the maximum satisfying version, **or** Rung 3.5 found a dist-tag against ≥2 registry siblings | drop the edge, never guess (mirrors `<prefix>_PEER_AMBIGUOUS`) |
+| `<prefix>_RESOLUTION_PIN_UNRESOLVED` | info | the consumer node | an `npm:`/bare descriptor missed Rung 0 **and** no semver candidate satisfied it (or a dist-tag was ambiguous), with **no** `manifests` supplied | point at the missing override source — the signature of a `resolutions` pin to a non-satisfying descriptor (or a tag the lock cannot resolve) |
+| `<prefix>_PATCH_PREFERRED` (berry) | info | the consumer node | the patch-preference overlay ([§5.5](#55-patch-preference-lock-borne)) redirected a registry edge from a base node onto a sibling `patch:` copy, **without** an override having forced it | observability for the purely lock-derived redirect; does **not** fire when an override performed the redirect (no double-signal) |
 
 **Manifest-less limit.** Without `manifests`, only Rung 3 runs for forced
 deps. It recovers the *satisfying* slice (a `^3.0.2` consumer still finds a
@@ -656,3 +668,56 @@ sibling rather than the pin (Rung 3's best inference; no diagnostic, since the
 edge resolved). Supplying `manifests` is the only way to honour a
 non-satisfying pin faithfully. This is the documented degradation, not a bug:
 the lock alone does not carry the pin.
+
+### 5.5 Patch preference (lock-borne)
+
+> **Scope.** yarn-**berry** only. yarn-classic has no `patch:` protocol — it
+> flattens patches on emit — so the overlay never runs there.
+
+yarn's `patchedDependencies` (root-manifest) make **every** consumer of a base
+package install a **patched** copy. On disk the lock records two sibling entries
+for the same `name@version`: the base `<name>@npm:<ver>` node, and a
+`<name>@patch:<name>@npm%3A<ver>#<patch>…` node whose canonical base is that npm
+artefact. A consumer declaring a plain `npm:`/bare range keys neither directly, so
+it binds the **base** (Rung 0 or 3) — but the package yarn actually installs is the
+**patched** copy. The patch-preference overlay reconciles this:
+
+**The redirect rule.** *After* a **registry** descriptor
+(`isRegistryRange(descriptor)`) bound a node via Rung 0 or Rung 3, **and no
+override fired** (Rung 2 did not bind it), look up the sibling patch nodes of the
+bound node's `name@version`:
+
+- **0 siblings** → keep the base (no redirect).
+- **1 sibling** → redirect the edge onto that patch node.
+- **≥2 siblings** (the same base patched from different workspaces, each a
+  distinct `::locator=` qualifier) → redirect **only** when **exactly one**
+  sibling's `::locator=<consumer>` qualifier matches the consumer's own resolution
+  (the same disambiguation Rung 1 uses for a `patch:` descriptor and for
+  `link:`/`portal:`). No unique match → keep the base (**no guess, no
+  diagnostic**).
+
+A redirect that fires **without** an override emits the info diagnostic
+`<prefix>_PATCH_PREFERRED` ([§5.4](#54-diagnostics)) on the consumer node, so the
+purely lock-derived heuristic is observable.
+
+**No double-redirect under override.** With `manifests`, a `resolutions` pin onto
+the patch is the **authoritative** path: Rung 2 binds the patch node directly, the
+overlay sees the bind came via an override, and it does **not** fire (no
+`<prefix>_PATCH_PREFERRED`). The override and the overlay never both redirect the
+same edge.
+
+**The base is left GC-able (intentional).** The overlay does **not** add a
+synthetic base ← patch edge to keep the base reachable. The base is the patch's
+**diff source**, not a separately-installed artefact: the patch node is re-emitted
+from its own `patch:` locator on stringify regardless of whether a base **node**
+survives, so identity is never lost. Once every consumer is redirected, the base
+carries no incoming dependency edge; `optimize()` GCs it — matching yarn, whose
+lock lists only the patched copy. (Were a base genuinely depended on **unpatched**
+elsewhere — a consumer whose descriptor binds it via a rung this overlay does not
+touch, e.g. an exact Rung-0 hit on the base key — that edge keeps the base
+reachable and it is **not** GC'd; the overlay only re-targets the registry-range
+binds it actually fires on.)
+
+**Shrink-only preserved.** The overlay re-targets an already-bound edge (base →
+patched copy); it never drops one. The ladder's dropped-edge set therefore still
+only ever shrinks ([§5.2](#52-the-resolution-ladder-normative)).
