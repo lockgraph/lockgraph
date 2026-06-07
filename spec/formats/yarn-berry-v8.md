@@ -200,6 +200,28 @@ v8-specific deltas inherited on top of the shared contract are:
   parse → stringify → parse. See the
   [v9 locator-disambiguation note](./yarn-berry-v9.md) for the full
   sentinel-slot rationale (shared across v8+).
+- **Entry-key descriptors — no synthesized resolved-version (B-EXACT).** yarn
+  keys each entry by the **descriptor(s)** that reference it — the consumer
+  **ranges** (`"@actions/core@npm:^1.2.6":`) — and stores the resolved version
+  ONLY in the entry's `version:` / `resolution:` fields. The resolved version is
+  **never** a key descriptor: an ordinary range entry stays range-keyed, and yarn
+  does not write `"<name>@npm:<resolvedVersion>, <name>@npm:<range>"`. On a
+  **same-format** round-trip the entry key is therefore re-emitted **verbatim**
+  from a per-node sidecar that captures the source key descriptor list at parse —
+  so `format(parse(x))` is byte-identical for every entry key (and
+  `yarn install --immutable` sees no change). A **genuine** `resolutions`-pinned
+  entry — keyed by its exact resolved version because the pin rewrote the
+  consumer's range (`"csstype@npm:3.0.9":`, see [`_common.md` §5.1](./_common.md#51-why-a-ladder-is-needed))
+  — keeps that exact descriptor: it is what the source key genuinely carried, not
+  a synthesized one. When the sidecar is absent (a **cross-PM** convert, a
+  hand-built node, or a node the graph **replaced** on a version bump) the key is
+  reconstructed from the incoming-edge ranges; a registry node gets **no**
+  exact-version descriptor, with a single `<name>@npm:<version>` **name-anchor**
+  added only when no key descriptor already carries `<name>@` (a cross-PM convert
+  that collapsed aliased git/tarball edges onto one canonical-named node, so
+  reparse can recover the name). This is the inverse of the F7/#99 ladder — the
+  ladder RESOLVES a range descriptor to its node on parse; emit must not invent a
+  resolved-version descriptor on the way back.
 
 ## Degradation rules
 

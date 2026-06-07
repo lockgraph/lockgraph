@@ -1097,9 +1097,13 @@ describe('yarn-berry-v9 — stringify', () => {
 
     const emitted = stringify(graph)
 
-    // Entry-key carries the synthesised `npm:` form (sorted after the
-    // primary `lodash@npm:4.17.21` spec).
-    expect(emitted).toContain('"lodash@npm:4.17.21, lodash@npm:^4.17.0":\n')
+    // Entry-key carries the synthesised `npm:` form of the referencing RANGE.
+    // B-EXACT: a registry node is keyed by the range, NOT its resolved version —
+    // the exact `lodash@npm:4.17.21` resolution stays in `version:`/`resolution:`
+    // and is never a key descriptor (yarn never writes it there).
+    expect(emitted).toContain('"lodash@npm:^4.17.0":\n')
+    expect(emitted).not.toContain('lodash@npm:4.17.21,')
+    expect(emitted).not.toContain(', lodash@npm:4.17.21')
     // Reparse stays well-formed — primary blocker is the PARSE_FAILED
     // "no protocol colon" throw when an entry-key spec misses `<scheme>:`.
     expect(() => parse(emitted)).not.toThrow()
@@ -1130,7 +1134,10 @@ describe('yarn-berry-v9 — stringify', () => {
 
     const emitted = stringify(graph)
 
-    expect(emitted).toContain('"lodash@npm:4.17.21, lodash@npm:^4.17.0":\n')
+    // B-EXACT: keyed by the (already protocol-prefixed) range, not the resolved
+    // version; the `npm:` prefix passes through verbatim (no `npm:npm:` doubling).
+    expect(emitted).toContain('"lodash@npm:^4.17.0":\n')
+    expect(emitted).not.toContain('lodash@npm:4.17.21,')
     expect(emitted).not.toContain('npm:npm:')
   })
 

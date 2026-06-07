@@ -156,20 +156,63 @@ Classic specifics:
 - The drop diagnostic is `YARN_CLASSIC_MISSING_ENTRY` (unchanged); a Rung-3
   max-satisfying tie emits `YARN_CLASSIC_AMBIGUOUS_RESOLUTION` (warning) and
   drops without guessing.
-- **Entry keys are reconstructed from LIVE in-edges on emit (orphan-descriptor
-  gap).** The emit side rebuilds each entry key from the node's surviving incoming
-  `dep`/`optional` edges (`entrySpecsOfNode` — `<edge.alias ?? node.name>@<edge.range>`
-  per in-edge, de-duped + sorted; falling back to the parse-time descriptor
-  sidecar, then to `<name>@<version>`). A descriptor that was merged onto the
-  entry key on disk but has **no surviving consumer edge** — e.g. a second range
-  in `a@^1, a@^2:` where nothing in the graph still declares `a@^2` — is therefore
-  **dropped** from the re-emitted key. This is the inverse of the join surface and
-  is the **correct post-mutation** behaviour (after a remove/dedup the orphaned
-  range should not reappear), but it means an *unmutated* parse → stringify of a
-  lock carrying an orphan merged descriptor is **not** byte-identical at that one
-  key (the orphan range is absent on re-emit). It is a narrow round-trip byte gap,
-  not a resolution or integrity loss. (Distinct from — and not to be confused with
-  — the entry-key *quoting* rule above, which **is** byte-faithful.)
+- **Entry keys preserve the verbatim on-disk descriptor set (orphan descriptors
+  survive).** The emit side builds each entry key from the **union** of (a) the
+  node's surviving incoming `dep`/`optional` edges (`<edge.alias ?? node.name>@<edge.range>`
+  per in-edge) and (b) the **verbatim parse-time descriptor sidecar** — the full
+  on-disk entry-key descriptor list captured per [NodeId](./_common.md#41-nodeid)
+  at parse — de-duped + sorted (`entrySpecsOfNode`; falling back to
+  `<name>@<version>` only for a hand-built node with neither). The verbatim
+  sidecar is the emit **anchor**, the classic analogue of the yarn-berry
+  `entryKeyOfNode` `primary` spec (which always anchors the key and is only ever
+  *added* to by live in-edges, never subtracted).
+  - **Why the union (and not live-only).** yarn 1 keys an entry by the full set
+    of consumer descriptors sharing its resolution, but a `dependencies:` block
+    only re-creates an edge for an **in-lock** consumer. A descriptor whose
+    consumer's `package.json` is **not** in the lock — a manifest-blind workspace
+    in a monorepo, or a peer/dev dependency declared only in a root manifest (e.g.
+    `facebook/react`'s `@babel/core@^7.11.1` / `^7.24.4`, declared by a workspace
+    absent from the parsed lock) — leaves **no** incoming edge on
+    parse-without-manifests, so it **orphans**. Re-emitting from live edges alone
+    would **drop** that descriptor: a real **data loss**, because a consumer of the
+    dropped range can no longer find its locked entry and re-resolves. The union
+    re-emits it verbatim, so an *unmutated* parse → stringify round-trips the
+    descriptor set **byte-faithfully**.
+  - **The preservation survives `parse → stringify`, `optimize`, AND `modify`.**
+    The verbatim descriptor sidecar is a per-graph `WeakMap`, but every mutating
+    operation (`optimize`, `enrich`, and the audit-fix modify primitives
+    `removeDependency` / `replaceVersion` / `addDependency`) calls
+    `graph.mutate()`, which returns a **brand-new** Graph instance. The parsed
+    graph is therefore wrapped (`withSidecarPropagation`, the exact analogue of
+    the yarn-berry wrapper that propagates `peerDependencies`/`conditions`/
+    `metadata`): the wrapper's `mutate` override **re-attaches** the sidecar to
+    the new graph, **membership-pruned** to its surviving node set
+    (`pruneSidecar`), and re-wraps the result so a chain of mutations keeps
+    propagating. So a **surviving (non-renamed)** node keeps its full on-disk
+    descriptor set — orphans included — across a parse → modify → stringify
+    audit-fix flow, not just a pure read→write round-trip.
+  - **A node the modify itself replaces / version-bumps resets its key (by
+    design).** When a primitive mints a **new NodeId** for a node (e.g.
+    `replaceVersion` of the very node whose key held orphans), the old NodeId is
+    absent from the next graph, so `pruneSidecar` drops that entry and the
+    replacement node reconstructs its key from live edges (plus any fresh
+    sidecar). The old version's orphan ranges do **not** apply to the new version
+    and correctly do **not** carry across the bump — this is not data loss. (No
+    old→new NodeId remap is threaded for a rename: that is the separate,
+    pre-existing sidecar-rename limitation shared by **all** adapters, berry
+    included, and is out of scope for this rule.)
+  - **Post-mutation, live reconstruction still governs the mutated edges.** A
+    post-parse `addEdge` with a new range surfaces through the live half and joins
+    the union; a node removed by `optimize`/GC drops its whole sidecar entry
+    (`pruneSidecar`). Re-emitting a verbatim orphan descriptor cannot *resurrect* a
+    removed dependency edge: a descriptor in the entry **key** creates only a
+    `specIndex` lookup on reparse, never an edge — edges come from
+    `dependencies:`/`optionalDependencies:` blocks. The conservative cost is that
+    an in-place edge *retarget* on a surviving node may leave its prior descriptor
+    in the key until the node is pruned; that is a still-valid (consumer-less)
+    descriptor, never a resolution or integrity loss. (Distinct from — and not to
+    be confused with — the entry-key *quoting* rule above, which is **also**
+    byte-faithful.)
 
 ### npm-alias entry identity (classic-specific)
 

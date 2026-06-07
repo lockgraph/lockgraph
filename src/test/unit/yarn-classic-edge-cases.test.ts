@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { check, parse, stringify } from '../../main/ts/formats/yarn-classic.ts'
 import { detect } from '../../main/ts/index.ts'
+import { removeDependency } from '../../main/ts/modify/remove-dependency.ts'
 
 // yarn-classic parse edge cases: bare/unquoted dependency values, UTF-8 BOM
 // detection, header-only (empty) lockfiles, legacy unknown entry fields.
@@ -75,5 +76,259 @@ describe('yarn-classic — parse edge cases', () => {
     expect(check(headerOnly)).toBe(true)
     expect(detect(headerOnly)).toBe('yarn-classic')
     expect(Array.from(parse(headerOnly).nodes())).toEqual([])
+  })
+})
+
+// C-KEYDROP — a multi-descriptor entry key whose merged descriptors do NOT all
+// have an in-lock consumer must NOT lose the consumer-less ("orphan") descriptors
+// on format(parse(x)). This reproduces the facebook/react@557e28f data loss in
+// miniature: react's `@babel/core` entry key carries five `^7.x` ranges, two of
+// which (`^7.11.1`, `^7.24.4`) are declared only by a workspace whose
+// package.json is absent from the parsed lock — so they have no incoming edge,
+// orphan, and were DROPPED from the re-emitted key (a consumer of the dropped
+// range then no longer finds its locked entry → re-resolution). The fix unions
+// the live-edge-reconstructed descriptors with the verbatim parse-time
+// entry-key sidecar, so every on-disk descriptor round-trips.
+describe('yarn-classic — entry-key orphan descriptors round-trip (C-KEYDROP)', () => {
+  // The `<descriptors>:` head lines, parsed into per-entry descriptor sets.
+  function entryKeyDescriptorSets(lock: string): string[][] {
+    const out: string[][] = []
+    for (const line of lock.replace(/\r\n/g, '\n').split('\n')) {
+      if (line.length === 0 || line[0] === ' ' || line[0] === '\t' || line[0] === '#') continue
+      if (!line.endsWith(':')) continue
+      const key = line.slice(0, -1)
+      const raw: string[] = []
+      let start = 0, quoted = false, escaped = false
+      for (let i = 0; i < key.length; i++) {
+        const c = key[i]
+        if (escaped) { escaped = false; continue }
+        if (c === '\\') { escaped = true; continue }
+        if (c === '"') { quoted = !quoted; continue }
+        if (!quoted && c === ',' && key[i + 1] === ' ') { raw.push(key.slice(start, i)); start = i + 2; i++ }
+      }
+      raw.push(key.slice(start))
+      out.push(raw.map(t => {
+        if (!t.startsWith('"')) return t
+        let v = ''
+        for (let i = 1; i < t.length - 1; i++) {
+          const c = t[i]
+          if (c !== '\\') { v += c; continue }
+          v += t[++i]
+        }
+        return v
+      }))
+    }
+    return out
+  }
+
+  it('preserves consumer-less (orphan) descriptors of a 5-range @babel/core key (react@557e28f repro)', () => {
+    // A second + third in-lock consumer so `^7.11.6`, `^7.12.3`, `^7.23.9` are
+    // all edge-backed and ONLY `^7.11.1` + `^7.24.4` orphan (the react finding).
+    const lock =
+      H +
+      '"@babel/core@^7.11.1", "@babel/core@^7.11.6", "@babel/core@^7.12.3", "@babel/core@^7.23.9", "@babel/core@^7.24.4":\n' +
+      '  version "7.24.5"\n' +
+      '  resolved "https://registry.yarnpkg.com/@babel/core/-/core-7.24.5.tgz#aaa"\n' +
+      '\n' +
+      'consumer-a@^1.0.0:\n' +
+      '  version "1.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/consumer-a/-/consumer-a-1.0.0.tgz#bbb"\n' +
+      '  dependencies:\n' +
+      '    "@babel/core" "^7.11.6"\n' +
+      '\n' +
+      'consumer-b@^1.0.0:\n' +
+      '  version "1.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/consumer-b/-/consumer-b-1.0.0.tgz#ccc"\n' +
+      '  dependencies:\n' +
+      '    "@babel/core" "^7.12.3"\n' +
+      '\n' +
+      'consumer-c@^1.0.0:\n' +
+      '  version "1.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/consumer-c/-/consumer-c-1.0.0.tgz#ddd"\n' +
+      '  dependencies:\n' +
+      '    "@babel/core" "^7.23.9"\n'
+
+    const g = parse(lock)
+    // Two of the five ranges (`^7.11.1`, `^7.24.4`) have no in-lock consumer edge.
+    const babelIn = g.in('@babel/core@7.24.5')
+      .filter(e => e.kind === 'dep' || e.kind === 'optional')
+      .map(e => e.attrs?.range)
+      .sort()
+    expect(babelIn).toEqual(['^7.11.6', '^7.12.3', '^7.23.9'])
+
+    const out = stringify(g)
+    const emittedBabelKey = entryKeyDescriptorSets(out)
+      .find(set => set.some(d => d.startsWith('@babel/core@')))
+    expect(emittedBabelKey, 'no @babel/core entry key emitted').toBeDefined()
+    // The full five-range descriptor SET survives — the two orphans included.
+    expect([...emittedBabelKey!].sort()).toEqual([
+      '@babel/core@^7.11.1',
+      '@babel/core@^7.11.6',
+      '@babel/core@^7.12.3',
+      '@babel/core@^7.23.9',
+      '@babel/core@^7.24.4',
+    ])
+    // Byte round-trip: the emitted lock re-emits identically (idempotent).
+    expect(stringify(parse(out))).toBe(out)
+  })
+
+  // The simplest possible repro: a two-descriptor key where ONE range has no
+  // in-lock consumer. Pre-fix the orphan `a@^2.0.0` was dropped (live-only emit);
+  // post-fix the union with the verbatim sidecar preserves it.
+  it('preserves the orphan range of a 2-descriptor key (a@^1, a@^2 — only ^1 consumed)', () => {
+    const lock =
+      H +
+      'a@^1.0.0, a@^2.0.0:\n' +
+      '  version "2.5.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/a/-/a-2.5.0.tgz#aaa"\n' +
+      '\n' +
+      'b@^1.0.0:\n' +
+      '  version "1.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/b/-/b-1.0.0.tgz#bbb"\n' +
+      '  dependencies:\n' +
+      '    a "^1.0.0"\n'
+
+    const g = parse(lock)
+    // Only `^1.0.0` has an in-lock consumer edge.
+    expect(g.in('a@2.5.0').filter(e => e.kind === 'dep').map(e => e.attrs?.range)).toEqual(['^1.0.0'])
+
+    const out = stringify(g)
+    const aKey = entryKeyDescriptorSets(out).find(set => set.some(d => d.startsWith('a@')))
+    expect([...aKey!].sort()).toEqual(['a@^1.0.0', 'a@^2.0.0'])
+    expect(stringify(parse(out))).toBe(out)
+  })
+})
+
+// C-KEYDROP (full fix) — the verbatim entry-key descriptor sidecar must survive
+// `graph.mutate()`. The sidecar is a per-graph WeakMap, but every modify
+// primitive (and optimize/enrich) builds a BRAND-NEW Graph via graph.mutate();
+// without the `withSidecarPropagation` wrapper the new graph has no sidecar
+// entry, so `entrySpecsOfNode` falls back to live edges only and the orphan key
+// descriptors of an UNTOUCHED node drop again — the react@557e28f data loss on
+// the audit-fix (parse → modify → stringify) path. These tests fail on the
+// pre-wrapper worktree and pass after it.
+describe('yarn-classic — orphan descriptors survive graph.mutate (C-KEYDROP audit-fix path)', () => {
+  // Parse the emitted entry-key head lines into per-entry descriptor sets
+  // (un-quoting each descriptor). Same helper as the read→write block above.
+  function entryKeyDescriptorSets(lock: string): string[][] {
+    const out: string[][] = []
+    for (const line of lock.replace(/\r\n/g, '\n').split('\n')) {
+      if (line.length === 0 || line[0] === ' ' || line[0] === '\t' || line[0] === '#') continue
+      if (!line.endsWith(':')) continue
+      const key = line.slice(0, -1)
+      const raw: string[] = []
+      let start = 0, quoted = false, escaped = false
+      for (let i = 0; i < key.length; i++) {
+        const c = key[i]
+        if (escaped) { escaped = false; continue }
+        if (c === '\\') { escaped = true; continue }
+        if (c === '"') { quoted = !quoted; continue }
+        if (!quoted && c === ',' && key[i + 1] === ' ') { raw.push(key.slice(start, i)); start = i + 2; i++ }
+      }
+      raw.push(key.slice(start))
+      out.push(raw.map(t => {
+        if (!t.startsWith('"')) return t
+        let v = ''
+        for (let i = 1; i < t.length - 1; i++) {
+          const c = t[i]
+          if (c !== '\\') { v += c; continue }
+          v += t[++i]
+        }
+        return v
+      }))
+    }
+    return out
+  }
+
+  // X = `a@2.5.0` carries an orphan descriptor `a@^2.0.0` (no in-lock consumer);
+  // its only live edge is `a@^1.0.0` (from `b`). Y = `b` is the modify target.
+  const LOCK =
+    H +
+    'a@^1.0.0, a@^2.0.0:\n' +
+    '  version "2.5.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/a/-/a-2.5.0.tgz#aaa"\n' +
+    '\n' +
+    'app@^0.0.0:\n' +
+    '  version "0.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/app/-/app-0.0.0.tgz#000"\n' +
+    '  dependencies:\n' +
+    '    a "^1.0.0"\n' +
+    '    spare "^1.0.0"\n' +
+    '\n' +
+    'b@^1.0.0:\n' +
+    '  version "1.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/b/-/b-1.0.0.tgz#bbb"\n' +
+    '\n' +
+    'spare@^1.0.0:\n' +
+    '  version "1.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/spare/-/spare-1.0.0.tgz#ccc"\n'
+
+  const aKeyOf = (lock: string): string[] | undefined =>
+    entryKeyDescriptorSets(lock).find(set => set.some(d => d.startsWith('a@')))
+
+  it('a bare graph.mutate() on an UNRELATED node keeps node a@2.5.0`s orphan a@^2.0.0', () => {
+    const g = parse(LOCK)
+    // Only `^1.0.0` is edge-backed; `^2.0.0` is a consumer-less orphan.
+    expect(g.in('a@2.5.0').filter(e => e.kind === 'dep').map(e => e.attrs?.range)).toEqual(['^1.0.0'])
+
+    // Audit-fix-style: drop an edge from a DIFFERENT node (app → spare), then GC.
+    const mutated = g.mutate(m => {
+      m.removeEdge('app@0.0.0', 'spare@1.0.0', 'dep')
+      m.removeNode('spare@1.0.0')
+    }).graph
+
+    // a@2.5.0 was untouched — its full on-disk descriptor set must survive.
+    const out = stringify(mutated)
+    expect(aKeyOf(out), 'no a@ entry key emitted after mutate').toBeDefined()
+    expect([...aKeyOf(out)!].sort()).toEqual(['a@^1.0.0', 'a@^2.0.0'])
+    expect(stringify(parse(out))).toBe(out)
+  })
+
+  it('audit-fix removeDependency on a DIFFERENT node keeps node a@2.5.0`s orphan a@^2.0.0', async () => {
+    const g = parse(LOCK)
+
+    // The real audit-fix primitive: remove app -> spare. This GC-sweeps `spare`
+    // and runs entirely through graph.mutate(), the exact path that re-builds
+    // the Graph and (pre-fix) loses the sidecar.
+    const result = await removeDependency(g, 'app@0.0.0', 'spare')
+    expect(result.removed).toContain('spare@1.0.0')
+    expect(result.graph.getNode('a@2.5.0')).toBeDefined()
+
+    const out = stringify(result.graph)
+    expect(aKeyOf(out), 'no a@ entry key emitted after removeDependency').toBeDefined()
+    // The untouched a@2.5.0 node keeps BOTH descriptors — orphan a@^2.0.0 survives.
+    expect([...aKeyOf(out)!].sort()).toEqual(['a@^1.0.0', 'a@^2.0.0'])
+    expect(stringify(parse(out))).toBe(out)
+  })
+
+  // Rename / version-bump of the orphan-bearing node ITSELF legitimately resets
+  // its key — the old version's orphan ranges do not apply to the new version,
+  // so they must NOT carry across the bump. The replacement reconstructs its key
+  // from live edges. This is correct-by-design (the #114 sidecar-rename limit),
+  // NOT the data loss the wrapper fixes — verify the wrapper does not over-reach
+  // into it.
+  it('a version-bump of node a ITSELF resets its key (orphan a@^2.0.0 does NOT carry to the new version)', () => {
+    const g = parse(LOCK)
+
+    // Mint a NEW NodeId for the orphan-bearing node (a@2.5.0 -> a@3.0.0) and
+    // retarget app`s live edge onto it (app is a`s only in-lock consumer). This
+    // is the rename shape every modify primitive produces for a self-bump; the
+    // old NodeId leaves the graph, so its sidecar entry is pruned.
+    const renamed = g.mutate(m => {
+      m.removeEdge('app@0.0.0', 'a@2.5.0', 'dep')
+      m.addNode({ id: 'a@3.0.0', name: 'a', version: '3.0.0', peerContext: [] })
+      m.addEdge('app@0.0.0', 'a@3.0.0', 'dep', { range: '^3.0.0' })
+      m.removeNode('a@2.5.0')
+    }).graph
+
+    const out = stringify(renamed)
+    // The bumped node`s key is reconstructed from its single live edge ONLY —
+    // the stale orphan `a@^2.0.0` (and the old `a@^1.0.0`) are gone.
+    const newKey = entryKeyDescriptorSets(out).find(set => set.some(d => d.startsWith('a@')))
+    expect(newKey, 'no a@ entry key after rename').toBeDefined()
+    expect([...newKey!].sort()).toEqual(['a@^3.0.0'])
+    expect(out).not.toContain('a@^2.0.0')
+    expect(out).not.toContain('a@2.5.0')
+    expect(stringify(parse(out))).toBe(out)
   })
 })

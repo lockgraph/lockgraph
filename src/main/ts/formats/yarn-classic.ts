@@ -7,6 +7,8 @@ import {
   type Edge,
   type EdgeAttrs,
   type Graph,
+  type MutateResult,
+  type Mutator,
   type Node,
   type OverrideConstraint,
   type TarballKeyInputs,
@@ -349,8 +351,14 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
 
   try {
     const graph = builder.seal()
-    rememberSidecar(graph, { entrySpecs: sidecar, entryExtras })
-    return graph
+    const parsedSidecar: YarnClassicSidecar = { entrySpecs: sidecar, entryExtras }
+    rememberSidecar(graph, parsedSidecar)
+    // Wrap so any subsequent graph.mutate() (modify primitives, optimize,
+    // enrich) re-attaches the key-descriptor sidecar — membership-pruned — to
+    // the new graph instance, mirroring the berry adapter. Without this the
+    // C-KEYDROP orphan-descriptor preservation would not survive the audit-fix
+    // (parse→modify→stringify) path. Empty sidecar → return the bare graph.
+    return isEmptySidecar(parsedSidecar) ? graph : withSidecarPropagation(graph, parsedSidecar)
   } catch (error) {
     if (error instanceof GraphError) {
       throw new LockfileError({
@@ -608,6 +616,75 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
     }
   }
   return entryExtras !== undefined ? { entrySpecs, entryExtras } : { entrySpecs }
+}
+
+function isEmptySidecar(sidecar: YarnClassicSidecar): boolean {
+  return sidecar.entrySpecs.size === 0 && (sidecar.entryExtras?.size ?? 0) === 0
+}
+
+/**
+ * Wraps a Graph so that every `.mutate()` call re-attaches the yarn-classic
+ * key-descriptor sidecar (the verbatim parse-time entry-key set + unknown-field
+ * extras, keyed by NodeId) to the brand-new Graph instance `mutate()` returns —
+ * MEMBERSHIP-PRUNED to that graph's surviving node set via `pruneSidecar`.
+ *
+ * This mirrors the yarn-BERRY `withSidecarPropagation` wrapper in
+ * `_yarn-berry-core.ts` (which propagates peerDependencies / conditions /
+ * metadata the same way). Without it, the sidecar is a per-graph WeakMap and a
+ * bare `graph.mutate()` (called by EVERY modify primitive —
+ * removeDependency/replaceVersion/addDependency — and by `optimize`/`enrich`)
+ * builds a fresh Graph with no sidecar entry, so `entrySpecsOfNode` loses the
+ * verbatim entry-key descriptors and the C-KEYDROP orphan ranges drop again on
+ * the audit-fix path (the react@557e28f data loss returns). With the wrapper, a
+ * surviving (non-renamed) node keeps its full on-disk descriptor set across
+ * parse → modify → stringify.
+ *
+ * A node that is itself version-BUMPED / RENAMED by the modify (e.g.
+ * `replaceVersion` of the very node whose key held orphans → a NEW NodeId)
+ * legitimately RESETS its key: its old NodeId is absent from the next graph, so
+ * `pruneSidecar` drops that sidecar entry and the new node reconstructs its key
+ * from live edges (+ any fresh sidecar). The old version's orphan ranges do not
+ * apply to the new version, so they correctly do NOT carry across the bump. (No
+ * old→new NodeId remap is threaded for renames — that is the separate
+ * pre-existing #114 sidecar-rename limitation shared by ALL adapters, incl.
+ * berry, and is out of scope here.)
+ */
+function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Graph {
+  // Thin delegation proxy — only `mutate` is overridden; everything else
+  // forwards to the underlying graph so the object is still a true Graph.
+  const proxy: Graph = {
+    getNode:     (...args) => graph.getNode(...args),
+    nodes:       ()        => graph.nodes(),
+    byName:      (...args) => graph.byName(...args),
+    roots:       ()        => graph.roots(),
+    out:         (...args) => graph.out(...args),
+    in:          (...args) => graph.in(...args),
+    walk:        (...args) => graph.walk(...args),
+    topoSort:    ()        => graph.topoSort(),
+    subgraph:    (...args) => graph.subgraph(...args),
+    diff:        (...args) => graph.diff(...args),
+    tarball:     (...args) => graph.tarball(...args),
+    tarballOf:   (...args) => graph.tarballOf(...args),
+    tarballs:    ()        => graph.tarballs(),
+    diagnostics: ()        => graph.diagnostics(),
+    layoutHints: ()        => graph.layoutHints(),
+    mutate(transaction: (m: Mutator) => void): MutateResult {
+      const result = graph.mutate(transaction)
+      // Membership-prune to the NEW graph's node set: surviving NodeIds keep
+      // their verbatim entry-key descriptors; a removed / bumped / renamed node
+      // drops its entry (its old NodeId is gone), so the replacement node
+      // reconstructs its key from live edges. Mirrors berry's prune-on-mutate.
+      const nextSidecar = pruneSidecar(sidecar, result.graph)
+      rememberSidecar(result.graph, nextSidecar)
+      // Recursively re-wrap so a SUBSEQUENT mutate on the returned graph
+      // propagates too (modify primitives chain several mutate calls).
+      return { ...result, graph: withSidecarPropagation(result.graph, nextSidecar) }
+    },
+  }
+  // Register the sidecar on the proxy instance too so stringify works when
+  // called with the proxy directly (not just with the underlying graph).
+  rememberSidecar(proxy, sidecar)
+  return proxy
 }
 
 function ensureClassicHeader(input: string): void {
@@ -1259,13 +1336,32 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
     .filter(edge => edge.kind === 'dep' || edge.kind === 'optional')
     .filter(edge => edge.attrs?.range !== undefined)
     .map(edge => `${edge.attrs!.alias ?? node.name}@${edge.attrs!.range}`)
-  if (liveSpecs.length > 0) {
-    return Array.from(new Set(liveSpecs)).sort(cmpUtf16)
-  }
 
-  const sidecarSpecs = sidecarByGraph.get(graph)?.entrySpecs.get(node.id)
-  if (sidecarSpecs !== undefined && sidecarSpecs.length > 0) {
-    return sidecarSpecs.slice().sort(cmpUtf16)
+  // C-KEYDROP — UNION the live-edge-reconstructed descriptors with the verbatim
+  // parse-time entry-key descriptor SIDECAR, NOT live-or-sidecar. yarn 1 keys an
+  // entry by the full set of consumer descriptors that share its resolution, but
+  // a `dependencies:` block only re-creates an edge for an IN-LOCK consumer — a
+  // descriptor whose consumer's package.json is NOT in the lock (a manifest-blind
+  // workspace in a monorepo, or a peer/devDep declared only in a root manifest)
+  // leaves NO incoming edge on parse-without-manifests, so it ORPHANS. Emitting
+  // live-only would DROP that descriptor (real data loss: a consumer of the
+  // dropped range can no longer find its locked entry → re-resolution).
+  //
+  // The sidecar is captured verbatim at parse (the full on-disk entry-key set,
+  // per NodeId) and is classic's emit ANCHOR — the analogue of the berry
+  // `entryKeyOfNode` `primary` spec, which always anchors the key and is only
+  // ever ADDED to by live in-edges, never subtracted. Unioning preserves every
+  // on-disk descriptor while LIVE reconstruction still governs MUTATED edges: a
+  // post-parse `addEdge` with a new range surfaces via `liveSpecs` (and joins the
+  // union); a removed node drops its whole sidecar entry via `pruneSidecar`
+  // (optimize). A descriptor in the entry KEY creates only a `specIndex` lookup
+  // on reparse — never an edge — so re-emitting a verbatim orphan descriptor
+  // cannot resurrect a removed dependency edge.
+  const sidecarSpecs = sidecarByGraph.get(graph)?.entrySpecs.get(node.id) ?? []
+  const union = new Set<string>(liveSpecs)
+  for (const spec of sidecarSpecs) union.add(spec)
+  if (union.size > 0) {
+    return Array.from(union).sort(cmpUtf16)
   }
 
   return [`${node.name}@${node.version}`]

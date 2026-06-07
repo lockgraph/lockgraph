@@ -198,6 +198,21 @@ export interface YarnBerryFamilySidecar {
   // drops). Same-format round-trip fidelity only (see `UnresolvedDepRef`); never
   // promoted to graph edges, never carried across a cross-PM convert.
   unresolvedDeps?: Map<string, UnresolvedDepRef[]>
+  // B-EXACT — the VERBATIM entry-key descriptor list captured per node at parse
+  // (`"<n>@npm:^1.2.3"` → `['<n>@npm:^1.2.3']`; a compound key →
+  // `['<n>@npm:@alias@^1', '<n>@npm:^2']`). yarn keys each entry by the
+  // descriptor(s) that REFERENCE it (the ranges); the resolved version lives in
+  // `version:`/`resolution:` and is NEVER a key descriptor. Reconstructing the key
+  // from incoming edges + `node.resolution` synthesizes a spurious exact-version
+  // descriptor on EVERY range-only entry (`"<n>@npm:1.2.6, <n>@npm:^1.2.3"`),
+  // breaking byte-fidelity and `yarn install --immutable`. Preserving the source
+  // descriptor list verbatim re-emits the exact key bytes — and keeps a GENUINE
+  // resolutions-pin's exact descriptor (`csstype@npm:3.0.9`) intact, since that is
+  // what the source key carried. Same-format round-trip fidelity only: a node the
+  // graph REPLACED (new id — a version bump) loses this sidecar and falls back to
+  // edge-reconstruction (a fresh, correct key); a cross-PM convert never carries it
+  // (the WeakMap is berry-local), so the cross-format key is rebuilt from edges.
+  entryKeyDescriptors?: Map<string, string[]>
   metadata?: SymlMap
 }
 
@@ -250,6 +265,10 @@ export function parseFamily(
   // keyed by source NodeId, collected during edge resolution and re-emitted into
   // the matching inner-block for byte-faithful same-format round-trip.
   const rawUnresolvedDeps = new Map<string, UnresolvedDepRef[]>()
+  // B-EXACT — verbatim entry-key descriptor list per NodeId, captured below so
+  // emit re-keys each entry from the SOURCE descriptors (never a synthesized
+  // resolved-version). See `YarnBerryFamilySidecar.entryKeyDescriptors`.
+  const rawEntryKeyDescriptors = new Map<string, string[]>()
 
   const entries: Array<{ key: string; value: SymlMap; specs: SpecPart[] }> = []
   for (const [key, value] of Object.entries(ast)) {
@@ -363,6 +382,10 @@ export function parseFamily(
     }
     seenIds.add(id)
     entryIds.set(key, id)
+    // B-EXACT — remember the VERBATIM source key descriptors so emit re-keys this
+    // entry from exactly what yarn wrote (split on `, ` mirrors `parseEntryKey`),
+    // never synthesizing the resolved version into the key.
+    rawEntryKeyDescriptors.set(id, key.split(', '))
 
     const node: Node = {
       id,
@@ -581,6 +604,7 @@ export function parseFamily(
     if (rawDependenciesMeta.size > 0) sidecar.dependenciesMeta = rawDependenciesMeta
     if (rawPeerDependenciesMeta.size > 0) sidecar.peerDependenciesMeta = rawPeerDependenciesMeta
     if (rawUnresolvedDeps.size > 0) sidecar.unresolvedDeps = rawUnresolvedDeps
+    if (rawEntryKeyDescriptors.size > 0) sidecar.entryKeyDescriptors = rawEntryKeyDescriptors
     if (metadata !== undefined) sidecar.metadata = metadata
     rememberSidecar(graph, sidecar)
     // Wrap so that any subsequent graph.mutate() call propagates the sidecar
@@ -1191,8 +1215,27 @@ function validateMetadata(ast: SymlMap, config: YarnBerryFamilyConfig): SymlMap 
 }
 
 function entryKeyOfNode(graph: Graph, node: Node): string {
-  const primary = primarySpecOfNode(node)
-  const specs = new Set<string>([primary])
+  // B-EXACT — same-format round-trip: re-emit the VERBATIM source key descriptors
+  // (captured at parse) so the key is byte-identical to what yarn wrote (an
+  // ordinary range entry stays range-only; a genuine resolutions-pin keeps its
+  // exact descriptor). Absent only for nodes the graph minted or REPLACED
+  // (cross-PM convert, hand-built node, a version-bump `replaceNode` whose new id
+  // dropped the sidecar) — those fall through to edge-reconstruction below.
+  const verbatim = sidecarByGraph.get(graph)?.entryKeyDescriptors?.get(node.id)
+  if (verbatim !== undefined && verbatim.length > 0) {
+    return verbatim.join(', ')
+  }
+
+  // Reconstruction fallback. The node's SELF-descriptor (a `workspace:` path or a
+  // `patch:` locator) is a key descriptor yarn ALWAYS writes, so it is unconditional.
+  // For a plain registry node there is NO self-descriptor: yarn keys it purely by
+  // the referencing RANGE(s), and the resolved-version locator is NEVER a key
+  // descriptor — so the exact `<name>@npm:<version>` is used only as a LAST-RESORT
+  // anchor when the node has no incoming-edge descriptor (keeping reparse bindable),
+  // never prepended alongside real ranges (the B-EXACT synthesis bug).
+  const self = selfDescriptorOfNode(node)
+  const specs = new Set<string>()
+  if (self !== undefined) specs.add(self)
   const patchBase = baseSpecOfPatchedNode(node)
   if (patchBase !== undefined) specs.add(patchBase)
 
@@ -1216,16 +1259,35 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
       // `<name>@link:packages/x` to the entry key (descriptor count 2→3) — a
       // shape yarn never writes (the entry key is the single qualified spec).
       // Suppress the bare secondary IFF it is exactly the unqualified prefix of
-      // the node's `::locator=`-qualified primary; the qualified primary already
+      // the node's `::locator=`-qualified self-descriptor; that descriptor already
       // covers this consumer (and reparse re-derives the qualifier).
-      if (!isLocatorQualifiedPrefix(primary, secondary)) {
+      if (self === undefined || !isLocatorQualifiedPrefix(self, secondary)) {
         specs.add(secondary)
       }
     }
   }
 
-  const rest = Array.from(specs).filter(spec => spec !== primary).sort(cmpStr)
-  return [primary, ...rest].join(', ')
+  // NAME-ANCHOR fallback. On reparse the entry's canonical name is recovered as
+  // `nameFromResolutionLocator(resolution) ?? first.name` — so a node whose
+  // resolution is NON-`npm:` (git / file / http) and whose key descriptors all
+  // carry an ALIAS name (a cross-PM convert that collapsed git aliases onto one
+  // `<name>@<version>` node — `is-git@…`, `is-github@…` vs name `@scope/is`) would
+  // reparse under the wrong name and lose its node identity. Add a
+  // `<name>@npm:<version>` descriptor IFF no key descriptor already carries
+  // `<name>@`, so reparse can recover the name. This NEVER fires for an ordinary
+  // registry node (its range descriptors are `<name>@npm:<range>`, already
+  // name-carrying) — so the B-EXACT exact-version synthesis stays removed — and a
+  // same-format round-trip re-keys verbatim via the sidecar above (this path is
+  // only reached for cross-PM converts and hand-built / mutated-replaced nodes).
+  // Also covers the zero-descriptor orphan (a registry pin whose only consumer
+  // dropped) — it gets a bindable key.
+  if (!Array.from(specs).some(spec => spec.startsWith(`${node.name}@`))) {
+    specs.add(`${node.name}@npm:${node.version}`)
+  }
+
+  // Stable, content-sorted key (matches yarn's lexical multi-descriptor order;
+  // verbatim source order is preserved by the sidecar path above).
+  return Array.from(specs).sort(cmpStr).join(', ')
 }
 
 // Bug #90 — is `secondary` exactly the unqualified prefix of a
@@ -1244,20 +1306,29 @@ function isLocatorQualifiedPrefix(primary: string, secondary: string): boolean {
   return primary.startsWith(`${secondary}::locator=`)
 }
 
-function primarySpecOfNode(node: Node): string {
+// The node's SELF-descriptor — a key descriptor yarn ALWAYS writes for the entry
+// because it is an EXACT locator, not a referencing range. Returns:
+//   - workspace node → `<name>@workspace:<path>` (the canonical workspace key);
+//   - `patch:` node  → the full `@patch:` locator (the patch entry's key);
+//   - git / file / http / any non-`npm:` resolution → the resolution locator
+//     verbatim (an exact locator, e.g. `forky@https://github.com/o/forky.git#…`);
+//   - plain `npm:` REGISTRY node → `undefined`. This is the B-EXACT distinction:
+//     a registry entry is keyed by the referencing RANGE(s); its
+//     `<name>@npm:<exact-version>` resolution is NEVER a key descriptor, so it
+//     must not be force-added (the resolved version lives in `version:`/
+//     `resolution:`). `entryKeyOfNode` falls back to the exact locator ONLY when
+//     no incoming-edge descriptor exists (a bindable last-resort anchor).
+function selfDescriptorOfNode(node: Node): string | undefined {
   if (node.workspacePath !== undefined) {
     return `${node.name}@workspace:${node.workspacePath === '' ? '.' : node.workspacePath}`
   }
-
-  const exact = exactSpecOfResolution(node)
-  return exact ?? `${node.name}@npm:${node.version}`
-}
-
-function exactSpecOfResolution(node: Node): string | undefined {
   if (node.resolution === undefined) return undefined
-  if (node.resolution.startsWith(`${node.name}@patch:`)) {
-    return node.resolution
-  }
+  if (node.resolution.startsWith(`${node.name}@patch:`)) return node.resolution
+  // A plain `npm:` registry resolution is the resolved version, NOT a key
+  // descriptor — exclude it so it is never synthesized into the key.
+  if (node.resolution.startsWith(`${node.name}@npm:`)) return undefined
+  // Any other locator-shaped resolution (git / file / http / portal / link) IS
+  // the exact key descriptor yarn writes for the entry.
   return node.resolution.startsWith(`${node.name}@`) ? node.resolution : undefined
 }
 
@@ -2503,6 +2574,20 @@ function remapSidecar(
     if (next.size > 0) remapped.unresolvedDeps = next
   }
 
+  // B-EXACT — the verbatim entry-key descriptor sidecar is per NodeId; remap it
+  // through a peer-enrichment id rewrite (a peerContext change keeps the same
+  // package/version, so the source key stays valid). A node whose id was REPLACED
+  // by something other than a tracked remap (a version bump) drops out here, so
+  // emit reconstructs a fresh key for the new node.
+  if (sidecar.entryKeyDescriptors !== undefined) {
+    const next = new Map<string, string[]>()
+    for (const [oldId, descriptors] of sidecar.entryKeyDescriptors) {
+      const nextId = nextNodes.get(oldId)?.id ?? oldId
+      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, descriptors)
+    }
+    if (next.size > 0) remapped.entryKeyDescriptors = next
+  }
+
   if (sidecar.metadata !== undefined) {
     remapped.metadata = sidecar.metadata
   }
@@ -2559,6 +2644,16 @@ function pruneSidecar(sidecar: YarnBerryFamilySidecar, nextGraph: Graph): YarnBe
     if (next.size > 0) pruned.unresolvedDeps = next
   }
 
+  // B-EXACT — drop the verbatim key descriptors for a GC'd node; keep them for
+  // every surviving node so its source key still re-emits byte-faithfully.
+  if (sidecar.entryKeyDescriptors !== undefined) {
+    const next = new Map<string, string[]>()
+    for (const [nodeId, descriptors] of sidecar.entryKeyDescriptors) {
+      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, descriptors)
+    }
+    if (next.size > 0) pruned.entryKeyDescriptors = next
+  }
+
   if (sidecar.metadata !== undefined) {
     pruned.metadata = sidecar.metadata
   }
@@ -2572,6 +2667,7 @@ function isEmptySidecar(sidecar: YarnBerryFamilySidecar): boolean {
     && sidecar.dependenciesMeta === undefined
     && sidecar.peerDependenciesMeta === undefined
     && sidecar.unresolvedDeps === undefined
+    && sidecar.entryKeyDescriptors === undefined
     && sidecar.metadata === undefined
 }
 

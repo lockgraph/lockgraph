@@ -333,12 +333,16 @@ describe('yarn-classic entry-key quoting fidelity (F9)', () => {
     })
   }
 
-  // NOTE on whole-line round-trip: an on-disk MERGED key may re-emit with a
-  // different descriptor SET (a merged descriptor with no surviving consumer edge
-  // is dropped — the documented orphan-descriptor gap) or a different sort ORDER
-  // (we always re-sort; some pre-strict locks merged in resolution order). Those
-  // are SEPARATE from F9 quoting and are intentionally not asserted byte-for-byte
-  // here — the two oracles above pin the quoting, which is what F9 governs.
+  // NOTE on whole-line round-trip: post C-KEYDROP the descriptor SET no longer
+  // shrinks — the emit unions the live-edge-reconstructed descriptors with the
+  // verbatim parse-time entry-key sidecar, so a merged descriptor with no
+  // surviving consumer edge (the former "orphan-descriptor gap") now round-trips.
+  // What may still differ from disk byte-for-byte at a merged key is the sort
+  // ORDER (we always re-sort; some pre-strict locks merged in resolution order),
+  // which is SEPARATE from F9 quoting and intentionally not asserted here — the
+  // two oracles above pin the quoting, which is what F9 governs. The
+  // descriptor-SET equality the C-KEYDROP fix guarantees is asserted directly
+  // below (and on a minimal repro in yarn-classic-edge-cases.test.ts).
 
   // gatsby F5 (#92) — its ONLY divergence from disk was the multi-key whole-quote
   // (`abbrev@1, abbrev@^1.0.0:`). Post-F9 it byte-round-trips in FULL.
@@ -379,5 +383,68 @@ describe('yarn-classic entry-key quoting fidelity (F9)', () => {
     // a bare `>=` range descriptor stays bare — `>` is NOT a yarn quote trigger
     expect(out).toContain('\namdefine@>=0.0.4:\n')
     expect(out).not.toContain('"amdefine@>=0.0.4"')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// C-KEYDROP — entry-key descriptor SET equality (no orphan-descriptor loss).
+//
+// A multi-descriptor entry key (`"@babel/core@^7.23.9", "@babel/core@^7.24.4", …:`)
+// merges every consumer descriptor that shares one resolution. A `dependencies:`
+// block only re-creates an edge for an IN-LOCK consumer, so a descriptor declared
+// only by a manifest-blind workspace (or a peer/dev dep in a root manifest absent
+// from the lock) ORPHANS on parse-without-manifests. Pre-fix the emit rebuilt the
+// key from LIVE in-edges alone and DROPPED those orphans — a real data loss
+// (facebook/react@557e28f: key descriptor set 2940→2912, e.g. `@babel/core`'s
+// `^7.11.1` + `^7.24.4` vanished, so their consumers no longer found the locked
+// entry). The fix unions the live descriptors with the verbatim parse-time
+// sidecar, so every on-disk entry-key descriptor survives the round-trip.
+const descriptorSetOf = (keyLine: string): string[] =>
+  descriptorsOf(keyLine).map(d => d.content)
+
+describe('yarn-classic entry-key descriptor-set equality (C-KEYDROP)', () => {
+  // The webpack corpus is the oracle (it carries the `@babel/core` multi-range
+  // key whose `^7.27.1` / `^7.27.4` are devDep/peer-only — declared by a manifest
+  // absent from the lock — and so orphan). Every descriptor real yarn wrote on a
+  // col-0 entry key must reappear on emit; NONE may be dropped.
+  it('webpack — every on-disk entry-key descriptor survives emit (no orphan dropped)', () => {
+    const content = lock('webpack-webpack-main-66f71f8')
+    const out = stringify('yarn-classic', parse('yarn-classic', content))
+
+    const diskDescriptors = new Set<string>()
+    for (const line of entryKeyLines(content)) for (const d of descriptorSetOf(line)) diskDescriptors.add(d)
+    const emitDescriptors = new Set<string>()
+    for (const line of entryKeyLines(out)) for (const d of descriptorSetOf(line)) emitDescriptors.add(d)
+
+    expect(diskDescriptors.size).toBeGreaterThan(1000) // a real sweep
+    const dropped = [...diskDescriptors].filter(d => !emitDescriptors.has(d)).sort()
+    expect(dropped, `dropped on-disk descriptors: ${JSON.stringify(dropped.slice(0, 20))}`).toEqual([])
+  })
+
+  // The exact react finding, on the webpack `@babel/core` analogue: the full
+  // on-disk descriptor SET round-trips. Pre-fix the live-edge-only emit dropped
+  // the orphaned `^7.27.1` / `^7.27.4` (declared by manifests absent from the
+  // lock); post-fix every on-disk range survives. Asserted as set CONTAINMENT
+  // (no disk descriptor dropped) — the fix's precise guarantee — rather than
+  // strict equality, since a legitimate in-lock consumer whose range semver-binds
+  // (Rung 3) may add a range NOT present on the disk key, which is correct
+  // (a live consumer), not invented loss.
+  it('webpack — the @babel/core multi-range key re-emits its full on-disk descriptor set (none dropped)', () => {
+    const content = lock('webpack-webpack-main-66f71f8')
+    const diskBabel = entryKeyLines(content).find(l => l.includes('@babel/core@'))
+    expect(diskBabel, 'fixture lacks an @babel/core multi-range key').toBeDefined()
+    const diskSet = descriptorSetOf(diskBabel!).sort()
+    expect(diskSet.length).toBeGreaterThan(1) // genuinely multi-descriptor
+
+    const out = stringify('yarn-classic', parse('yarn-classic', content))
+    const emitBabel = entryKeyLines(out).find(l => l.includes('@babel/core@'))
+    expect(emitBabel, 'no @babel/core entry key emitted').toBeDefined()
+    const emitSet = descriptorSetOf(emitBabel!)
+
+    // Every disk descriptor survives the round-trip (the C-KEYDROP guarantee);
+    // the emitted set never shrinks below the on-disk set.
+    const dropped = diskSet.filter(d => !emitSet.includes(d))
+    expect(dropped, `@babel/core dropped on emit: ${JSON.stringify(dropped)}`).toEqual([])
+    expect(emitSet.length).toBeGreaterThanOrEqual(diskSet.length)
   })
 })

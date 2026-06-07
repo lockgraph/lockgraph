@@ -200,12 +200,17 @@ threads it.
 - **Byte-lossless roundtrip.** Comments, original whitespace, the
   caller's quoting style, and original key ordering MAY diverge from the
   input bytes.
-- **CST-grade fidelity.** No source-map, no comment retention, no
-  preservation of multi-spec entry-key concrete shape beyond what the
-  graph remembers. If the input merged `foo@npm:^1, foo@npm:^2` into one
-  entry, stringify emits it as one entry; if a future modifier splits the
-  spec set, stringify emits two entries. Recovering the original concrete
-  shape across modifier action is not in scope.
+- **CST-grade fidelity.** No source-map, no comment retention. The
+  multi-spec entry-key concrete shape is preserved only as far as the graph
+  (and its per-node sidecars) remembers it: an **unmodified** same-format
+  parse → stringify pass re-emits each entry key **verbatim** from the captured
+  source descriptor list (so `foo@npm:^1, foo@npm:^2` round-trips byte-for-byte
+  — the B-EXACT guarantee, [§5.1](#51-why-a-ladder-is-needed)). But the sidecar
+  is keyed by NodeId and same-format-only: a node the graph **replaced** (a
+  version bump) or a **cross-PM** convert drops it, and stringify then
+  reconstructs the key from the edge set. So if a future modifier splits the
+  spec set, stringify emits two entries; recovering the original concrete shape
+  across modifier action is not in scope.
 - **Field-level preservation of `__metadata` keys we do not model.**
   Unknown `__metadata` keys are dropped on parse with a `warning`
   diagnostic; stringify cannot resurrect them.
@@ -620,6 +625,18 @@ passed `manifests`** (the public `parse(format, input, { manifests })`
 F6-captures them per [ADR-0025](../decisions/0025-manifest-overrides.md) into
 the canonical override form *before* the adapter parse, and threads the
 constraints into the edge resolver).
+
+> **Emit-side corollary (B-EXACT).** The same fact — the entry key holds the
+> referencing **descriptor**, while the **resolved version** lives only in
+> `version:` / `resolution:` — constrains stringify too: emit must **never**
+> synthesize the resolved version into the key (`"<n>@npm:<resolvedVersion>,
+> <n>@npm:<range>"` is a shape yarn never writes; it breaks
+> `yarn install --immutable`). An ordinary range entry re-emits its range
+> descriptor verbatim; only a **genuine** pin keyed by its exact version keeps
+> that descriptor (because the source key carried it). See the
+> [yarn-berry-v8 Emit notes](./yarn-berry-v8.md#emit). This is the exact inverse
+> of the ladder below: the ladder resolves a range descriptor to its node on
+> parse; emit re-keys from the source descriptors and adds no resolved-version.
 
 ### 5.2 The resolution ladder (normative)
 
