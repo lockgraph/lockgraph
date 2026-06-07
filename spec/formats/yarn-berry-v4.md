@@ -298,7 +298,13 @@ emit deltas layered on top of that contract:
 
 - `__metadata.cacheKey` is empirically `7` across the current v4 fixtures.
 - Inner `dependencies` / `optionalDependencies` emit bare ranges
-  (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form.
+  (`lodash: 4.17.21`), unlike v8/v9's quoted protocol form. A **complex**
+  range stays bare too — `js-tokens: ^3.0.0 || ^4.0.0` is emitted unquoted,
+  NOT `"^3.0.0 || ^4.0.0"` (F3c/#106): the SYML quoting predicate
+  ([`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate))
+  permits interior spaces and `||` in the body, so only a leading `>` or a
+  `:` (the v8/v9 `npm:` protocol prefix) forces the quotes. Per-peer
+  `peerDependencies` ranges follow the same rule (`react: ^16 || ^17` bare).
 - `checksum` cacheKey prefix: BOTH shapes occur in the wild. yarn-2.0
   (the earliest v4 producer) writes `checksum: 2/<sha512-hex>` — the same
   `<cacheKey>/<hex>` shape v8/v9 use (`10c0/…`) — with NO

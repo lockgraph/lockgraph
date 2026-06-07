@@ -98,65 +98,81 @@ etc.) sort their entries alphabetically by name.
 
 ### 1.5 Quoting — the SYML quoting predicate
 
-A SYML key or value scalar **MUST** be double-quoted iff at least one of
-the following five conditions holds. The same predicate applies to keys
-and values; there is **no key-vs-value asymmetry**.
+A SYML key or value scalar is emitted **unquoted iff it matches the single
+"simple string" pattern** below; otherwise it is double-quoted. The same
+predicate applies to keys and values, at every nesting depth, with **no
+key-vs-value asymmetry** and **no special-casing by key name** — this is
+exactly yarn's own SYML writer rule (one uniform `stringifyString`).
 
-1. **Special character.** The scalar contains any of: space
-   (` `, U+0020), tab (`\t`, U+0009), `:`, `,`, `[`, `]`, `{`,
-   `}`, `#`, `&`, `*`, `!`, `|`, `>`, `'`, `"`, `%`, `@`,
-   `` ` ``.
-2. **Leading indicator.** The scalar's first codepoint is `-`
-   or `?` (would otherwise be parsed as a YAML 1.2 sequence /
-   mapping indicator).
-3. **YAML 1.2 scalar-token collision.** The unquoted form would
-   resolve to a non-string YAML token. Specifically, the scalar
-   - matches the *number* regex
-     `^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`, or
-   - matches a *boolean* token under case-insensitive equality
-     with exactly one of `true`, `false`, `yes`, `no`, `on`,
-     `off`, or
-   - matches a *null* token under case-sensitive equality with
-     exactly one of `null` or `~`.
-4. **Empty string.** The scalar is `""` (length zero).
-5. **Non-ASCII codepoint.** The scalar contains any codepoint
-   strictly greater than U+007F. Such codepoints are emitted
-   inside the double quotes as `\uXXXX` escapes.
+```
+SIMPLE_STRING = /^(?![-?:,\][{}#&*!|>'"%@` \t\r\n]).([ \t]*(?![,\][{}:# \t\r\n]).)*$/
+```
 
-All five tests are evaluated against the *raw* scalar string before any
-quoting or escaping. Inside double quotes the only escapes emitted are
-`\\`, `\"`, `\n`, `\t`, `\r`, and `\uXXXX` (YAML 1.2 § 5.7); no other
-escape forms are produced. If none of the five conditions holds, the
-scalar is emitted unquoted.
+Decoded, a scalar stays **bare** iff **both** hold:
 
-*Cross-check, not authority.* The rule above is defined locally and **is**
-the contract. It is intended to match the yarn-berry SYML writer at
-[4.14.1](https://github.com/yarnpkg/berry/blob/%40yarnpkg/cli/4.14.1/packages/yarnpkg-core/sources/syml.ts)
-for the working fixture set; the citation is evidence of agreement, not
-authority. If a future yarn-berry patch diverges, the yarn-berry adapter
-absorbs the divergence (see [§1.9](#19-acceptance-gate)); the rule above
-does not move.
+1. **Leading codepoint** is **not** one of
+   `-` `?` `:` `,` `]` `[` `{` `}` `#` `&` `*` `!` `|` `>` `'` `"` `%` `@`
+   `` ` `` , space, tab, CR, LF — i.e. not a YAML indicator at scalar start;
+   **and**
+2. **Body:** after each (possibly empty) run of spaces/tabs, the next
+   codepoint is **not** one of `,` `]` `[` `{` `}` `:` `#`, space, tab, CR,
+   LF. (The lookahead is applied *after* consuming the space/tab run, so a
+   space is allowed only when the following non-space char is itself
+   permitted — a **trailing** space therefore forces quoting.)
 
-**Bare-emit exceptions (yarn writes these unquoted).** A small, closed set
-of scalars that condition 1 (special char) or condition 3 (boolean token)
-*would* quote are emitted **bare** to match yarn's own writer byte-for-byte.
-The adapter applies the quoting predicate uniformly and then strips the
-quotes off exactly these scalars in a post-pass:
+Otherwise the scalar is double-quoted. The predicate is evaluated against
+the *raw* scalar string before any escaping.
 
-- **`conditions`** (entry-level, 2-space indent) — a scalar platform gate
-  (`os=darwin & cpu=arm64`, `(os=darwin | os=linux)`) that condition 1
-  would quote for its spaces / `&` / `|`. Emitted bare.
-- **`dependenciesMeta` / `peerDependenciesMeta` booleans** (the value-level
-  keys `optional`, `built`, `unplugged` at 6-space indent — nesting level 3,
-  reached only inside these two meta blocks) — `true` / `false` that
-  condition 3 would quote as the boolean token. Emitted **bare**, exactly
-  as yarn writes them. This is load-bearing, not merely cosmetic: `built:
-  "false"` is a non-empty (truthy) string, so yarn's `if (meta.built)` would
-  read it as `true` and may run a postinstall the lock meant to suppress;
-  the bare `built: false` is the only correct emit. The unquote is scoped to
-  the 6-space indent + that three-key set + a literal `true`/`false` value,
-  so a genuine string field whose value happens to be `"true"`/`"false"`
-  (e.g. a `bin` target at 4-space indent) is never touched.
+**Crucial consequences (and the F3c/#106 fix).** Because `|`, `&`, `*`,
+`!`, `@`, `%`, `` ` ``, `<`, `=`, `(`, `)`, `-`, `.` and **interior spaces**
+are all permitted in the *body*, a complex range stays **bare**:
+
+| scalar | emit | why |
+|---|---|---|
+| `^3.0.0 \|\| ^4.0.0` | **bare** | `\|`+space are body chars |
+| `^16 \|\| ^17` | **bare** | same |
+| `0.12 - 0.28` | **bare** | `-`+space are body chars |
+| `^7.0.0-0 \|\| ^8.0.0-0 <8.0.0` | **bare** | `<` is a body char |
+| `os=darwin & cpu=arm64` | **bare** | `&`/`=`/space are body chars |
+| `true` / `false` / `42` / `null` | **bare** | no indicator, no forbidden body char |
+| `>=4.8.4 <6.1.0` | **quoted** | leading `>` |
+| `npm:^3.0.0 \|\| ^4.0.0` | **quoted** | `:` in body |
+| `@scope/x` (key) | **quoted** | leading `@` |
+| `pkg#hash` (key) | **quoted** | `#` in body |
+| `""` (empty) | **quoted** | fails the mandatory leading `.` |
+
+There is **no** separate YAML number / boolean / null rule and **no**
+non-ASCII rule: yarn quotes none of those for being a number/boolean/null
+or for carrying a non-ASCII codepoint (a `>U+007F` char is an ordinary body
+character and stays bare). Reading a bare `true` / `42` back is
+unambiguous because both yarn's parser and this implementation read **every
+SYML scalar as a string** — there is no YAML scalar-type coercion for keys
+or values.
+
+Inside double quotes the escapes emitted are `\\`, `\"`, `\n`, `\t`, `\r`,
+and `\uXXXX` for codepoints `>U+007F`; no other escape forms are produced.
+
+*Authority.* This rule is transcribed verbatim from the upstream
+yarn-berry SYML writer (`yarnpkg-parsers/sources/syml.ts`,
+`simpleStringPattern`) and validated byte-for-byte against the full
+fixture corpus (every distinct dependency / peerDependency / bin value
+under `src/test/resources/fixtures/**`, 1958 bare + 4613 quoted distinct
+values, **zero mismatches**). If a future yarn patch diverges, the
+yarn-berry adapter absorbs the divergence (see
+[§1.9](#19-acceptance-gate)).
+
+**Note — redundant post-pass safety nets.** Because the predicate above
+already keeps `conditions` scalars (`os=darwin & cpu=arm64`,
+`(os=darwin | os=linux)`) and `dependenciesMeta` / `peerDependenciesMeta`
+booleans (`optional: true`, `built: false`, `unplugged: true`) **bare**,
+the adapter's `unquoteConditionsScalars` / `unquoteMetaBooleanScalars` /
+`unquoteMetadataScalar` post-passes are now **no-ops** for those lines and
+are retained only as defence-in-depth. The `built: false` case remains
+load-bearing for correctness — `built: "false"` would be a non-empty
+(truthy) string that yarn's `if (meta.built)` reads as `true` — but the
+single quoting predicate now delivers the bare form directly, so a genuine
+string field whose value is literally `"true"` / `"false"` (e.g. a `bin`
+target) is likewise emitted **bare**, exactly as yarn writes it.
 
 ### 1.6 Indent, line endings, trailing newline
 

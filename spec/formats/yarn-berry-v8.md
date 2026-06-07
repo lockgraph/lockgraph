@@ -104,7 +104,7 @@ version-invariant yarn-berry emit contract in
 — normative source for the *Graph-level roundtrip* property
 (`parse(stringify(parse(x))) ≡ parse(x)`), the canonical preamble,
 block ordering, entry-internal field schedule, the SYML quoting
-predicate (the five-condition rule;
+predicate (the single upstream "simple string" rule;
 [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate)),
 indent, line endings (`lf` default, `crlf` opt-in), trailing newline,
 `__metadata.cacheKey` threading, and the non-goals (no byte-lossless
@@ -128,9 +128,10 @@ v8-specific deltas inherited on top of the shared contract are:
   block; install-hint fidelity only — no cross-format EdgeAttrs
   modelling). Its boolean values (`optional` / `built` / `unplugged`)
   are emitted **bare** (`built: false`, not `built: "false"`), matching
-  yarn; bare is correctness, not just fidelity — a quoted `"false"` is a
+  yarn — the quoting predicate leaves a bare `true`/`false` token unquoted
+  directly; bare is correctness, not just fidelity — a quoted `"false"` is a
   truthy string that flips yarn's `if (meta.built)` to true (see
-  [`_common.md` §1.5 bare-emit exceptions](./_common.md#15-quoting-the-syml-quoting-predicate)).
+  [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate)).
 - `peerDependenciesMeta` round-trips through the **same emitter** as
   the pnpm→berry `peerDependenciesMeta` reconstruction (task #86): the
   captured block is the rung-0 hint, unioned with any `optional` peer
@@ -154,10 +155,10 @@ v8-specific deltas inherited on top of the shared contract are:
   real-world v8 locks and round-trip; `dependenciesMeta` is emitted
   immediately before `peerDependenciesMeta`, matching yarn. Their boolean
   values (`optional` / `built` / `unplugged`) emit **bare** (`optional:
-  true`, `built: false`) — like `conditions`, an explicit unquote of what
-  the generic SYML writer would quote as a YAML boolean token; quoting
-  `built: "false"` would be a truthy-string correctness bug, not a style
-  nit (#89 regression).
+  true`, `built: false`) — like `conditions`, the single SYML quoting
+  predicate leaves a bare `true`/`false` token unquoted, matching yarn;
+  quoting `built: "false"` would be a truthy-string correctness bug, not a
+  style nit (#89 regression).
 - `compressionLevel` first appears in the current family corpus at v8
   and is preserved through `sidecar.metadata`.
 - A `link:`/`portal:` (or locator-qualified `file:`) entry keyed with a

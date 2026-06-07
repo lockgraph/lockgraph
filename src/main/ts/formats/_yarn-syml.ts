@@ -12,10 +12,24 @@
 export type SymlValue = string | SymlMap
 export interface SymlMap { [key: string]: SymlValue }
 
-const YAML_NUMBER_RE = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
-const YAML_BOOLEAN_RE = /^(true|false|yes|no|on|off)$/i
-const YAML_NULL_RE = /^(null|~)$/
-const YAML_SPECIAL_RE = /[ \t:,[\]{}#&*!|>'"%@`]/
+// Yarn's SYML writer leaves a scalar UNQUOTED iff it matches this pattern,
+// otherwise it `JSON.stringify`s it (double-quoted). Transcribed verbatim from
+// the upstream reference `yarnpkg/berry/packages/yarnpkg-parsers/sources/syml.ts`
+// (`simpleStringPattern`), which is the single source of truth for yarn's
+// quoting — there is NO separate YAML number/boolean/null/non-ASCII rule.
+//
+// Decoded (and validated byte-for-byte against 6571 distinct real-fixture
+// dependency/peerDependency values, 1958 bare + 4613 quoted, zero mismatches):
+//   - FIRST char must NOT be one of `- ? : , ] [ { } # & * ! | > ' " % @ ` `,
+//     space, tab, CR, LF (a leading YAML indicator);
+//   - after each (optional run of) space/tab in the BODY, the next char must NOT
+//     be one of `, ] [ { } : # `, space, tab, CR, LF.
+// Crucially `|` is allowed in the BODY, so `^16 || ^17`, `^3.0.0 || ^4.0.0`,
+// `0.12 - 0.28`, `^7.0.0-0 || ^8.0.0-0 <8.0.0` stay BARE — fixing the F3c/#106
+// over-quote — while a leading `>` (`>=4.8.4 <6.1.0`) or a `:` anywhere
+// (`npm:^1 || ^2`, `workspace:*`) still forces quoting (no under-quote). The
+// empty string fails the mandatory leading `.`, so it is quoted, as before.
+const SYML_SIMPLE_STRING_RE = /^(?![-?:,\][{}#&*!|>'"%@` \t\r\n]).([ \t]*(?![,\][{}:# \t\r\n]).)*$/
 
 export class SymlParseError extends Error {
   readonly line: number
@@ -223,16 +237,9 @@ export function parse(input: string): SymlMap {
 }
 
 function needsQuotes(raw: string): boolean {
-  if (raw === '') return true
-  if (YAML_SPECIAL_RE.test(raw)) return true
-  if (raw[0] === '-' || raw[0] === '?') return true
-  if (YAML_NUMBER_RE.test(raw)) return true
-  if (YAML_BOOLEAN_RE.test(raw)) return true
-  if (YAML_NULL_RE.test(raw)) return true
-  for (let i = 0; i < raw.length; i++) {
-    if (raw.charCodeAt(i) > 0x7f) return true
-  }
-  return false
+  // Quote exactly when yarn would: i.e. when the value is NOT a simple string
+  // per the upstream `simpleStringPattern`. See SYML_SIMPLE_STRING_RE above.
+  return !SYML_SIMPLE_STRING_RE.test(raw)
 }
 
 function escapeQuoted(raw: string): string {

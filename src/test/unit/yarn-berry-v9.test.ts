@@ -895,10 +895,18 @@ describe('yarn-berry-v9 — stringify', () => {
 
     const emitted = stringify(graph)
 
-    expect(emitted).toContain('    "true": "npm:1.0.0"\n')
+    // `true` is NOT quoted: yarn's `simpleStringPattern` permits a bare
+    // boolean-looking token, and both yarn's parser and ours read entry/dep KEYS
+    // as literal strings (no YAML boolean coercion), so `true:` round-trips to
+    // the key `true`. Quoting it would over-quote vs real yarn (F3c/#106).
+    expect(emitted).toContain('    true: "npm:1.0.0"\n')
+    expect(emitted).not.toContain('"true": "npm:1.0.0"')
+    // These genuinely collide and STAY quoted: a leading `@`, or a structural
+    // `#` / `:` in the key body, all force quoting (no under-quote).
     expect(emitted).toContain('    "@scope/name": "npm:2.0.0"\n')
     expect(emitted).toContain('    "pkg#hash": "npm:3.0.0"\n')
     expect(emitted).toContain('    "pkg:colon": "npm:4.0.0"\n')
+    // A leading `-` forces quoting (YAML block-sequence indicator).
     expect(emitted).toContain('  version: "-1.0.0"\n')
   })
 

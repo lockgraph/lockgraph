@@ -72,7 +72,7 @@ version-invariant yarn-berry emit contract in
 - the *Graph-level roundtrip* property
   (`parse(stringify(parse(x))) ≡ parse(x)`),
 - canonical preamble, block ordering, entry-internal field schedule,
-  SYML quoting predicate (the five-condition rule;
+  SYML quoting predicate (the single upstream "simple string" rule;
   [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate)),
   indent, line endings (`lf` default, `crlf` opt-in), trailing newline,
   `__metadata.cacheKey` threading,
@@ -207,17 +207,18 @@ definitively, even when that answer is 'required'):
   [v8 schema sketch](./yarn-berry-v8.md#schema-sketch) for the entry shape):
   - `conditions` is a **scalar** platform-gate token (`os=darwin & cpu=arm64`,
     or a grouped `(os=darwin | os=linux | …)`) — NOT a structured map. It is
-    captured verbatim and emitted **bare** (the SYML writer would otherwise quote
-    it because of the spaces / `&`). It never participates in NodeId / TarballKey
-    identity.
+    captured verbatim and emitted **bare**: the single SYML quoting predicate
+    ([`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate))
+    leaves it unquoted because spaces / `&` / `|` / `(` are permitted body
+    characters. It never participates in NodeId / TarballKey identity.
   - `dependenciesMeta` (`{ <pkg>: { optional|built|… } }`) round-trips as a
     verbatim per-node sidecar block (install-hint fidelity only). Its boolean
     values (`optional` / `built` / `unplugged`) emit **bare** (`built: false`,
-    not `built: "false"`) — like `conditions`, an unquote of what the SYML writer
-    would quote as a YAML boolean token. This is correctness, not cosmetics: a
+    not `built: "false"`) — the quoting predicate leaves a bare `true`/`false`
+    token unquoted, exactly as yarn does. This is correctness, not cosmetics: a
     quoted `built: "false"` is a truthy non-empty string, so yarn's
     `if (meta.built)` reads it as true and may run a postinstall the lock meant
-    to suppress (see [`_common.md` §1.5 bare-emit exceptions](./_common.md#15-quoting-the-syml-quoting-predicate)).
+    to suppress (see [`_common.md` §1.5](./_common.md#15-quoting-the-syml-quoting-predicate)).
   - `peerDependenciesMeta` (`{ <peer>: { optional: true } }`) round-trips through
     the **same** emitter as the cross-format reconstruction above — the captured
     block is the rung-0 hint, unioned with any `optional` peer edge and deduped
