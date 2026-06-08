@@ -122,6 +122,45 @@ nuances the earlier draft got wrong (#117):
   pin where such a block would sort (between `dependencies` and
   `peerDependencies`, per `exportTo`) if a cross-PM convert emits one.
 
+#### 1.4.1 `linkType` / `languageName` derivation (#95)
+
+`linkType` and `languageName` are not graph facts — they are **derived on
+emit** from the node's resolution (the emitter owns the dispatch; ADR-0010).
+Both mirror yarn's own fetcher dispatch (`yarnpkg-core`), validated
+byte-for-byte against the real-world berry corpus (babel, backstage,
+storybook, yarnpkg-berry).
+
+- **`languageName`** is `unknown` for a **workspace member** (`Node.workspacePath`
+  is set) and `node` for everything else.
+
+- **`linkType`** is **`soft` for filesystem-IN-PLACE sources** — the package
+  lives at its original location and is symlinked, so its bytes are never
+  copied into yarn's cache — and **`hard` for everything yarn copies or
+  extracts**. The `soft` set is exactly:
+
+  | source (emitted resolution protocol) | `linkType` | why |
+  | --- | --- | --- |
+  | `workspace:` (a `Node.workspacePath` member) | `soft` | symlinked in place |
+  | `link:` | `soft` | directory symlink, in place |
+  | `portal:` | `soft` | directory portal, in place |
+  | `file:` → a **directory** (`file:../pkg`) | `soft` | directory link, in place |
+  | `file:` → an **archive** (`file:./x.tgz`, `.tar.gz`, `.tar`) | `hard` | tarball **extracted** into the cache |
+  | `npm:` (registry tarball) | `hard` | downloaded + extracted |
+  | `git` / `https:` / codeload | `hard` | cloned/downloaded + extracted |
+  | `patch:` of **any** base — incl. a `patch:` whose `::locator=` names a workspace | `hard` | the patched copy is **materialised** into the cache; `patch:` is never `soft` |
+
+  The protocol is read from the **emitted** locator, so the rule is correct
+  both for same-format `link:`/`portal:` `::locator=` sentinels (whose verbatim
+  locator round-trips on `Node.resolution`) and for a **cross-PM** directory
+  link that converts to a `portal:` locator on emit (no `Node.resolution`, but
+  the emitted `resolution:` is the `portal:` form). A locator that cannot be
+  peeled falls through to `hard` (the safe default for a copied artefact).
+
+  > The earlier emitter derived `linkType` as *workspace → `soft`, else
+  > `hard`*, which wrongly stamped `hard` on every `link:`/`portal:` sentinel
+  > and broke byte-fidelity (and `yarn install --immutable`) on monorepos that
+  > link local packages (#95).
+
 ### 1.5 Quoting — the SYML quoting predicate
 
 A SYML key or value scalar is emitted **unquoted iff it matches the single

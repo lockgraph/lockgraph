@@ -42,14 +42,8 @@ const BERRY_FORMATS: FormatId[] = [
 // are tracked here so the #117 oracle isn't blocked by orthogonal bugs; each has
 // its own follow-up. The field-ORDER check still runs for them.
 const KNOWN_NON_BYTE_IDENTICAL: Record<string, string> = {
-  'babel-babel-main-ae57969':
-    'link:/portal: `::locator=` sentinel emits `linkType: hard` instead of `soft` (linkType-derivation, not field-order)',
-  'backstage-backstage-master-b55138e':
-    'link: `::locator=` sentinel emits `linkType: hard` instead of `soft` (linkType-derivation, not field-order)',
-  'storybookjs-storybook-next-d6ce689':
-    'portal: `::locator=` sentinel emits `linkType: hard` instead of `soft` (linkType-derivation, not field-order)',
   'yarnpkg-berry-master-6861e75':
-    'portal: `::locator=` sentinel emits `linkType: hard` instead of `soft` (linkType-derivation, not field-order)',
+    'a `dependencies:` ref to a GitHub-shorthand range (`pem: dexus/pem`) is re-emitted with a synthesized `npm:` prefix (`npm:dexus/pem`) (range-normalization, not field-order or linkType — the `link:`/`portal:` linkType bug #95 is fixed; same class as parcel-bundler-parcel-v2)',
   'highlight-highlight-main-7a297b5':
     'very long compound entry key uses yarn `? <key> :` explicit-key wrapping; emitter writes it as one quoted line (key-wrapping, not field-order)',
   'parcel-bundler-parcel-v2-5948485':

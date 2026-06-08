@@ -1368,6 +1368,47 @@ function baseSpecOfPatchLocator(locator: string): string | undefined {
   }
 }
 
+// #95 — yarn's per-entry `linkType` (`soft` | `hard`), derived from the emitted
+// resolution locator. Mirrors yarn's fetcher dispatch (`yarnpkg-core`): the
+// `LinkFetcher`/`PortalFetcher`/`WorkspaceFetcher` report `LinkType.SOFT` (the
+// package is symlinked IN PLACE — its bytes are never copied), and the
+// `FileFetcher` reports `SOFT` for a `file:` DIRECTORY link but `HARD` for a
+// `file:` archive (a `.tgz`/`.tar.gz` it extracts into the cache). Every other
+// source — registry `npm:`, `git`/`https`, and a `patch:` of ANY base (a
+// patched copy is materialised into the cache, so `patch:` is `hard` even when
+// its `::locator=` names a workspace — verified on backstage/yarnpkg-berry) —
+// is `hard`. Workspace members are handled by the caller (`node.workspacePath`)
+// and never reach here.
+//
+// The protocol is read from the EMITTED locator (`<name>@<protocol>:<spec>`) so
+// the rule is correct for cross-PM converts too (an npm/pnpm `file:` directory
+// link emits as `<name>@portal:<path>`). A locator we cannot peel (a bare URL
+// from a leaked cross-format sidecar) falls through to `hard`, the safe default
+// for a copied/extracted artefact.
+const ARCHIVE_PATH_RE = /\.(?:tgz|tar\.gz|tar)(?:$|[#?])/i
+function linkTypeOfResolution(resolution: string | undefined): 'soft' | 'hard' {
+  if (resolution === undefined) return 'hard'
+  let part: SpecPart
+  try {
+    part = parseSpec(resolution)
+  } catch {
+    return 'hard'
+  }
+  switch (part.protocol) {
+    case 'link':
+    case 'portal':
+      // Always an in-place directory symlink → soft.
+      return 'soft'
+    case 'file':
+      // `file:` is soft for a directory link, hard for an extracted archive.
+      // The spec body may carry a `#<hash>`/`::<params>` tail — the archive
+      // test anchors on the path segment's extension before any such tail.
+      return ARCHIVE_PATH_RE.test(part.spec) ? 'hard' : 'soft'
+    default:
+      return 'hard'
+  }
+}
+
 function entryOfNode(
   graph: Graph,
   node: Node,
@@ -1454,7 +1495,18 @@ function entryOfNode(
   }
 
   entry['languageName'] = node.workspacePath !== undefined ? 'unknown' : 'node'
-  entry['linkType'] = node.workspacePath !== undefined ? 'soft' : 'hard'
+  // #95 — `linkType` is `soft` for filesystem-IN-PLACE sources (the package
+  // lives at its original location and is symlinked) and `hard` for everything
+  // yarn copies/extracts into its cache (registry tarball, git, local tarball,
+  // patch). Derived from the EMITTED resolution locator so it is correct for
+  // both same-format sentinels (`node.resolution` carries the verbatim
+  // `link:`/`portal:` locator) AND a cross-PM directory→`portal:` convert (no
+  // `node.resolution`, but `entry.resolution` is the `portal:` locator we just
+  // emitted). See `linkTypeOfResolution` for the exact soft set (verified
+  // byte-for-byte against babel/backstage/storybook/yarnpkg-berry real locks).
+  entry['linkType'] = node.workspacePath !== undefined
+    ? 'soft'
+    : linkTypeOfResolution(asString(entry['resolution']))
 
   if (node.peerContext.length > 0) {
     emitDiagnostic({

@@ -317,7 +317,10 @@ emit deltas layered on top of that contract:
   nodeId → scalar token), not a structured block. If a parsed/synthetic
   graph carries such a captured scalar, the v4 emitter drops it with
   `YARN_BERRY_V4_CONDITIONS_DROPPED`.
-- `linkType: hard` vs `soft` distinguishes hard-linkable vs symlink-only deps.
+- `linkType: hard` vs `soft` distinguishes copied/extracted deps (registry,
+  git, tarball, `patch:`) from filesystem-in-place deps (`workspace:`, `link:`,
+  `portal:`, a `file:` directory link). Derived on emit — see
+  [`_common.md` §1.4.1](./_common.md#141-linktype--languagename-derivation-95).
 - Virtual instances appear with `virtual:<random>#<base-resolution>` keys.
   These are PEER-RESOLVED forks of one underlying package — modelled in the
   graph layer as distinct peer-context NodeIds
