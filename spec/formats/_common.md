@@ -72,7 +72,7 @@ Regenerate the yarn-berry preamble verbatim:
 ```
 
 — followed by one blank line, then `__metadata:`. Source comments are
-not preserved across roundtrip (see [Non-goals](#16-non-goals-explicit)).
+not preserved across roundtrip (see [Non-goals](#18-non-goals-explicit)).
 The preamble is regenerated even if the input lacked one.
 
 ### 1.3 Block ordering
@@ -214,8 +214,12 @@ unambiguous because both yarn's parser and this implementation read **every
 SYML scalar as a string** — there is no YAML scalar-type coercion for keys
 or values.
 
-Inside double quotes the escapes emitted are `\\`, `\"`, `\n`, `\t`, `\r`,
-and `\uXXXX` for codepoints `>U+007F`; no other escape forms are produced.
+Inside double quotes the escapes emitted are `\\`, `\"`, `\n`, `\t`, `\r`;
+no other escape forms are produced. A **non-ASCII** codepoint (`>U+007F`) is
+written **literally** inside the quotes — yarn stringifies a quoted scalar with
+`JSON.stringify`, which does **not** `\uXXXX`-escape non-ASCII — so e.g. `"héllo:x"`
+emits `héllo` verbatim (the interior `:` forces the quotes; the `é` stays raw),
+and a parse → stringify → parse round-trip is byte-faithful (#112).
 
 *Authority.* This rule is transcribed verbatim from the upstream
 yarn-berry SYML writer (`yarnpkg-parsers/sources/syml.ts`,
@@ -314,6 +318,22 @@ threads it.
   new node — so stringify reconstructs the key from the live edge set. So if a
   future modifier splits the spec set, stringify emits two entries; recovering the
   original concrete shape across a non-rename modifier action is not in scope.
+- **Adapter sidecars across `Graph.subgraph()`.** `subgraph(seeds, opts)`
+  returns a freshly-sealed `Graph` carrying nodes / edges / tarballs /
+  layout-hints only — it does **not** carry any adapter sidecar (the yarn-berry
+  `peerDependencies` / `conditions` / `*Meta` / `unresolvedDeps` / verbatim
+  entry-key-descriptor maps, the yarn-classic entry-spec / extras maps). Those
+  sidecars live in a **per-adapter `WeakMap<Graph, …>`** keyed by the Graph
+  instance; `graph.ts` is the platform-invariant layer and **must not** import
+  format internals, so it cannot re-key the sidecar subset for the retained
+  nodes — that knowledge lives only in the adapter. Re-emitting a `subgraph()`
+  result in its source format therefore reconstructs each entry key from the
+  live edge set (the same fallback a cross-PM convert uses), not from the
+  verbatim source descriptors. This is a **same-format-fidelity boundary**, not a
+  correctness gap: `subgraph()` is a graph-analysis accessor that is **off the
+  audit-fix path** (parse → modify → stringify goes through `mutate()`, whose
+  adapter wrapper *does* propagate the sidecar — see the CST-grade bullet above);
+  nothing in the normative emit flow calls it.
 - **Field-level preservation of `__metadata` keys we do not model.**
   Unknown `__metadata` keys are dropped on parse with a `warning`
   diagnostic; stringify cannot resurrect them.
@@ -904,9 +924,14 @@ survives, so identity is never lost. Once every consumer is redirected, the base
 carries no incoming dependency edge; `optimize()` GCs it — matching yarn, whose
 lock lists only the patched copy. (Were a base genuinely depended on **unpatched**
 elsewhere — a consumer whose descriptor binds it via a rung this overlay does not
-touch, e.g. an exact Rung-0 hit on the base key — that edge keeps the base
-reachable and it is **not** GC'd; the overlay only re-targets the registry-range
-binds it actually fires on.)
+touch — that edge keeps the base reachable and it is **not** GC'd; the overlay only
+re-targets the registry-range binds it actually fires on. The untouched bind must be
+**non-registry**: a `link:` / `workspace:` / `file:` consumer of the base, or a
+peer-only reference (`isRegistryRange(descriptor) === false`), since those never
+enter the overlay. An exact Rung-0 hit on the **base key** does *not* qualify — a
+base-key descriptor like `csstype@npm:1.2.3` is still a registry range
+(`isRegistryRange('npm:1.2.3') === true`), so the overlay fires on it too and
+redirects that edge onto the patched copy; it does not leave the base reachable.)
 
 **Shrink-only preserved.** The overlay re-targets an already-bound edge (base →
 patched copy); it never drops one. The ladder's dropped-edge set therefore still

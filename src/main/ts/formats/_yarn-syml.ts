@@ -243,16 +243,23 @@ function needsQuotes(raw: string): boolean {
 }
 
 function escapeQuoted(raw: string): string {
+  // #112 — yarn's SYML writer stringifies a non-simple value with `JSON.stringify`,
+  // which keeps a non-ASCII codepoint (`>U+007F`) LITERAL inside the quotes (it
+  // does NOT emit `\uXXXX`). The previous `\uXXXX` branch both diverged from yarn
+  // AND corrupted round-trips: our `unquote` only decodes `\\`/`\"`, so a `\uXXXX`
+  // it emitted came back as the literal 6 chars `é` rather than `é`. So a
+  // non-ASCII char now passes through verbatim, matching yarn byte-for-byte and
+  // surviving parse → stringify → parse. (`\n`/`\t`/`\r` stay escaped — yarn's
+  // JSON.stringify escapes those too — and no yarn.lock scalar carries a literal
+  // control char in practice.)
   let out = ''
   for (let i = 0; i < raw.length; i++) {
-    const code = raw.charCodeAt(i)
     const c = raw[i]
     if (c === '\\') out += '\\\\'
     else if (c === '"') out += '\\"'
     else if (c === '\n') out += '\\n'
     else if (c === '\t') out += '\\t'
     else if (c === '\r') out += '\\r'
-    else if (code > 0x7f) out += `\\u${code.toString(16).padStart(4, '0')}`
     else out += c
   }
   return out

@@ -717,6 +717,10 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
     layoutHints: ()        => graph.layoutHints(),
     mutate(transaction: (m: Mutator) => void): MutateResult {
       const result = graph.mutate(transaction)
+      // Empty-sidecar fast-path (mirrors berry's `withSidecarPropagation`): with
+      // nothing to carry there is no point remapping or re-wrapping — return the
+      // bare mutate result and skip the proxy allocation entirely.
+      if (isEmptySidecar(sidecar)) return result
       // #114 — build the old→new NodeId map from the applied ChangeRecords for
       // IDENTITY-PRESERVING renames only (`name@version[+…]` base unchanged — a
       // peerContext shift). A genuine version/identity change is left UNMAPPED so
@@ -736,8 +740,8 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
       }
       const nextSidecar = remapSidecar(sidecar, nextNodes, result.graph)
       rememberSidecar(result.graph, nextSidecar)
-      // Recursively re-wrap so a SUBSEQUENT mutate on the returned graph
-      // propagates too (modify primitives chain several mutate calls).
+      // Re-wrap the new graph so a SUBSEQUENT mutate propagates the sidecar too
+      // (the modify primitives chain several mutate calls).
       return { ...result, graph: withSidecarPropagation(result.graph, nextSidecar) }
     },
   }
@@ -1429,10 +1433,15 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   return [`${node.name}@${node.version}`]
 }
 
-// yarn 1 builds an entry-key line as `valKeys.sort().map(maybeWrap).join(', ')`
-// (cli.js `_stringify`): each descriptor is quote-decided INDEPENDENTLY, then the
-// (already-quoted-or-bare) descriptors are comma-joined. There is NO whole-key
-// quoting — a multi-descriptor key is `"@babel/core@^7.23.9", "@babel/core@^7.24.4":`
+// yarn 1 builds an entry-key line as `valKeys.sort(sortAlpha).map(maybeWrap)
+// .join(', ')` (cli.js `_stringify`): each descriptor is quote-decided
+// INDEPENDENTLY, then the (already-quoted-or-bare) descriptors are comma-joined.
+// `sortAlpha` (yarn's `src/util/misc.js`) compares charCode-by-charCode and breaks
+// an equal-prefix tie by the SHORTER string first — which JS string `<` (our
+// `cmpUtf16`, applied by the caller `entrySpecsOfNode`) reproduces exactly (UTF-16
+// code-unit order, shorter-prefix-first), so naming `sortAlpha` here is for
+// precision, not a behavioural diff. There is NO whole-key quoting — a
+// multi-descriptor key is `"@babel/core@^7.23.9", "@babel/core@^7.24.4":`
 // (per-descriptor) or `acorn@^8.15.0, acorn@^8.16.0:` (all bare), NEVER the
 // single-pair-wrapped `"a, b":` form. Wrapping the joined key was F9: it
 // produced yarn-unreadable output for every dedup'd package.
@@ -1450,6 +1459,12 @@ function stringifyEntryKey(specs: string[]): string {
 // not-leading-letter clause for a leading non-ASCII char; a non-ASCII char later
 // in an otherwise-bare descriptor is left bare exactly as yarn does (its rule
 // inspects only the trigger class + the FIRST character).
+//
+// NB yarn's own `shouldWrapKey` carries a SEPARATE `/^[0-9]/` (leading-digit)
+// clause alongside its not-a-letter check; that clause is REDUNDANT — a leading
+// digit already fails `/^[a-zA-Z]/` — so it is intentionally folded into the
+// single `!ENTRY_KEY_LEADING_ALPHA_RE.test(spec)` term here. One regex, identical
+// outcome (a leading-digit descriptor like `7zip@^1` is quoted either way).
 function mustQuoteSpec(spec: string): boolean {
   return spec.startsWith('true')
     || spec.startsWith('false')

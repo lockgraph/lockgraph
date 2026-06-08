@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { parse, SymlParseError, type SymlMap } from '../../main/ts/formats/_yarn-syml.ts'
+import { parse, stringify, SymlParseError, type SymlMap } from '../../main/ts/formats/_yarn-syml.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -113,6 +113,26 @@ describe('SYML — synthetic', () => {
 
   it('explicit ? key missing `:` indicator rejected', () => {
     expect(() => parse('? "k"\n  version: 1\n')).toThrow(SymlParseError)
+  })
+
+  // #112 — a non-ASCII value that ALSO carries a quote-forcing char (interior
+  // `:`) must round-trip. Previously `escapeQuoted` emitted `\uXXXX` for the
+  // non-ASCII codepoint, but `unquote` only decodes `\\`/`\"`, so the value came
+  // back as the literal 6 chars `é` — corruption. yarn keeps the non-ASCII
+  // char LITERAL (its writer is `JSON.stringify`), so the fixed emit must too.
+  it('non-ASCII value with interior colon round-trips (no \\uXXXX corruption)', () => {
+    const value = 'héllo:x'                       // é (>U+007F) + quote-forcing `:`
+    const out = stringify({ k: value })
+    expect(out).toBe('k: "héllo:x"\n')             // quoted (interior `:`), é LITERAL
+    expect(out).not.toContain('\\u')               // no `\uXXXX` escape emitted
+    expect(parse(out)).toEqual({ k: value })       // byte-faithful round-trip
+  })
+
+  it('non-ASCII key with interior colon round-trips', () => {
+    const tree: SymlMap = { 'café@npm:^1.0.0': { version: '1.0.0' } }
+    const out = stringify(tree)
+    expect(out).toContain('"café@npm:^1.0.0":')    // é stays literal in the key too
+    expect(parse(out)).toEqual(tree)
   })
 })
 

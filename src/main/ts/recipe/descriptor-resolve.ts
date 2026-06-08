@@ -146,6 +146,12 @@ export function semverResolve(range: string, candidates: readonly SemverCandidat
  * UNIQUE registry sibling of that name. Runs after Rung 3 (semver) and before
  * the drop.
  *
+ * NB the bind is for ANY dist-tag, not only `latest`/`next` — the gate is purely
+ * `semver.validRange(tag) === null` (gate 2 below), so an arbitrary registry tag
+ * (`canary`, `beta`, `experimental`, `rc`, a user-defined channel name) lands here
+ * exactly the same. `latest`/`next` are merely the common examples; the primitive
+ * never special-cases a tag NAME.
+ *
  * Gates (mirroring `semverResolve` exactly — the source-safety invariant holds):
  *   1. `range` must be `npm:`/bare — any other protocol → `{ kind: 'none' }`;
  *   2. the inner token must NOT be a valid semver range — a real range is Rung
