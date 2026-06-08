@@ -188,9 +188,15 @@ describe('npm-1 — parse fixtures', () => {
 
   it('parses git/github resolutions where version itself carries the URL', () => {
     const graph = parseFixtureGraph('git-github-tarball')
-    const gitNode = graph.getNode('is-git@git+https://github.com/sindresorhus/is.git#47f49741eacf0a3678684738159a87c2011bb026')
+    // ADR-0032 — address the nodes by name rather than a hard-coded bare id.
+    // `is-git`'s version is a `git+https://…#sha` URL → canonical `git` → it
+    // gains a `+src=` discriminator. `is-github`'s version is the `github:`
+    // shorthand → canonical `unknown` (the recipe does not peel `github:`) →
+    // BARE per ADR-0032's unknown-is-bare rule. Both nodes still exist.
+    const gitNode = graph.byName('is-git').map(id => graph.getNode(id)).find(n => n !== undefined)
     expect(gitNode).toBeDefined()
-    const ghNode = graph.getNode('is-github@github:sindresorhus/is#47f49741eacf0a3678684738159a87c2011bb026')
+    expect(gitNode!.id).toContain('+src=')
+    const ghNode = graph.byName('is-github').map(id => graph.getNode(id)).find(n => n !== undefined)
     expect(ghNode).toBeDefined()
   })
 

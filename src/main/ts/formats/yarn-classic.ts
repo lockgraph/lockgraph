@@ -2,6 +2,7 @@ import {
   GraphError,
   newBuilder,
   nameOf,
+  serializeNodeId,
   toTarballKey,
   type Diagnostic,
   type Edge,
@@ -27,6 +28,7 @@ import {
 import { distTagResolve, overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import {
   parse as parseResolutionRecipe,
+  sourceDiscriminatorOf,
   stringifyForYarnClassic,
 } from '../recipe/resolution.ts'
 import {
@@ -241,14 +243,32 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
 
     for (const [name, rawDescriptors] of specsByResolvedName) {
       const descriptors = Array.from(new Set(rawDescriptors)).sort(cmpUtf16)
-      const id = `${name}@${entry.version}`
+      // ADR-0014 §4.F3 — canonical resolution into TarballPayload. Computed
+      // ahead of the NodeId so the ADR-0032 `+src=` slot can be threaded in.
+      // Workspace canonical (yarn-classic sentinel-version entries) lives on
+      // Node.workspacePath via enrich; not on TarballPayload.
+      const canonicalResolution = entry.resolved !== undefined
+        ? canonicalResolutionOfResolved(entry.resolved)
+        : undefined
+      // ADR-0032 — the `+src=` discriminator for a NON-REGISTRY source, so a git
+      // (or non-registry-host tarball / unknown) `name@version` no longer
+      // collapses onto a same-`name@version` registry sibling (#2b). yarn-classic
+      // has no patch slot, so the gate is just "canonical resolution present".
+      // Bare for registry / directory / absent (zero registry blast radius).
+      const effectiveSource = canonicalResolution !== undefined
+        ? sourceDiscriminatorOf(canonicalResolution)
+        : undefined
+      const id = serializeNodeId(name, entry.version, [], undefined, effectiveSource)
       const prior = seenEntries.get(id)
       if (prior !== undefined) {
-        // Two separate entry blocks resolve to the same name@version. Merge
-        // their descriptor keys onto the one node when the resolution +
-        // integrity agree (the comma-joined `a@^1, a@^2:` form already merges
-        // this way); only a genuine conflict — differing `resolved` or
-        // `integrity` — is an irreducible loss.
+        // Two separate entry blocks resolve to the same NodeId. Merge their
+        // descriptor keys onto the one node when the resolution + integrity
+        // agree (the comma-joined `a@^1, a@^2:` form already merges this way);
+        // only a genuine conflict — differing `resolved` or `integrity` — is an
+        // irreducible loss. ADR-0032: a registry vs git collision at the same
+        // `name@version` now mints DISTINCT `id`s (the git one carries `+src=`),
+        // so it never reaches this branch — the loud IRREDUCIBLE_LOSS is reserved
+        // for a true same-source conflict.
         if (prior.resolved !== entry.resolved || prior.integrity !== entry.integrity) {
           throw new LockfileError({
             code: 'IRREDUCIBLE_LOSS',
@@ -274,14 +294,11 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
       if (entry.resolved !== undefined) {
         node.resolution = parseResolution(entry.resolved)
       }
+      // ADR-0032 — carry the `+src=` slot on the Node so the seal re-derives the
+      // NodeId from the Node alone.
+      if (effectiveSource !== undefined) node.source = effectiveSource
       builder.addNode(node)
 
-      // ADR-0014 §4.F3 — canonical resolution into TarballPayload.
-      // Workspace canonical (yarn-classic sentinel-version entries) lives on
-      // Node.workspacePath via enrich; not on TarballPayload.
-      const canonicalResolution = entry.resolved !== undefined
-        ? canonicalResolutionOfResolved(entry.resolved)
-        : undefined
       if (canonicalResolution !== undefined && canonicalResolution.type === 'unknown') {
         diagnostics.push(unknownResolutionDiagnostic(id, entry.resolved!))
       }
@@ -305,10 +322,10 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
         } else {
           const payload: { integrity: Integrity; resolution?: typeof canonicalResolution } = { integrity }
           if (canonicalResolution !== undefined) payload.resolution = canonicalResolution
-          builder.setTarball({ name, version: entry.version }, payload)
+          builder.setTarball({ name, version: entry.version, source: effectiveSource }, payload)
         }
       } else if (canonicalResolution !== undefined) {
-        builder.setTarball({ name, version: entry.version }, { resolution: canonicalResolution })
+        builder.setTarball({ name, version: entry.version, source: effectiveSource }, { resolution: canonicalResolution })
       }
 
       sidecar.set(id, descriptors.slice())
@@ -566,7 +583,7 @@ export function optimize(
     )
 
   for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch }
+    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
     const key = toTarballKey(inputs)
     if (unreachable.has(node.id)) {
       tarballsToRemove.set(key, inputs)
@@ -1186,13 +1203,15 @@ function planClassicEnrich(
   // manifest-declared version, but a same-name+version external published
   // package would also satisfy that. Tarball presence discriminates: external
   // published packages carry a tarball entry; workspace members are
-  // soft-linked and do not.
+  // soft-linked and do not. `tarballOf(node.id)` is source-aware (keys by the
+  // node's full identity incl. any `+src=`/`+patch=` slot), so a non-registry
+  // or patched published package — keyed under a slotted tarball — is still found.
   for (const node of graph.nodes()) {
     if (node.workspacePath !== undefined) continue
     const member = memberManifests.get(node.name)
     if (member === undefined) continue
     if (node.version !== '0.0.0-use.local' && node.version !== member.manifest.version) continue
-    if (graph.tarball({ name: node.name, version: node.version }) !== undefined) continue
+    if (graph.tarballOf(node.id) !== undefined) continue
     memberNodeReplacements.push({ ...node, workspacePath: member.path })
   }
 

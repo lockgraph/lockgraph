@@ -156,6 +156,22 @@ export const CROSS_FAMILY_YB_MID_NPM3_FIXTURES = [
   'yarn-crlf',
 ] as const
 
+// ADR-0032 — FORWARD-only (yarn-berry -> npm-3) corpora narrow
+// `git-github-tarball` AWAY. A git source carries a `+src=` NodeId discriminator
+// on the yarn-berry side, but npm-3 emit writes the berry `<name>@<locator>`
+// envelope verbatim into `resolved:`, which npm-3 reparse degrades to canonical
+// `unknown` -> BARE (no `+src=`). The git node's identity therefore legitimately
+// diverges across the forward boundary (berry `is-git@6.3.1+src=…` vs npm
+// `is-git@6.3.1`), an irreducible shape collision — narrowed rather than
+// declared as a node-identity loss feature, exactly as the npm-1 git path does
+// (see `_matrix.NPM_TO_NPM_1_EXCLUDED`). The REVERSE direction (npm-3 ->
+// yarn-berry) keeps the git fixture: npm-3's canonical git/tarball URLs survive
+// yarn-berry parse, so identity aligns there.
+export const CROSS_FAMILY_YB4_NPM3_FORWARD_FIXTURES =
+  CROSS_FAMILY_YB4_NPM3_FIXTURES.filter(f => f !== 'git-github-tarball')
+export const CROSS_FAMILY_YB_MID_NPM3_FORWARD_FIXTURES =
+  CROSS_FAMILY_YB_MID_NPM3_FIXTURES.filter(f => f !== 'git-github-tarball')
+
 // Cross-family pnpm-v9 <-> npm-3 shared corpus (ADR-0020 Phase C-iv): fixtures
 // with both `pnpm-v9.lock` AND `npm-3.lock` on disk. Same six-fixture list as
 // CROSS_FAMILY_YB9_NPM3_FIXTURES (the npm-3 ∩ pnpm-v9 disk intersection happens

@@ -31,9 +31,11 @@ import {
   CROSS_FAMILY_YB9_PNPM6_FIXTURES,
   CROSS_FAMILY_YB_MID_BUN_FIXTURES,
   CROSS_FAMILY_YB_MID_NPM3_FIXTURES,
+  CROSS_FAMILY_YB_MID_NPM3_FORWARD_FIXTURES,
   CROSS_FAMILY_YB_MID_PNPM9_FIXTURES,
   CROSS_FAMILY_YB4_BUN_FIXTURES,
   CROSS_FAMILY_YB4_NPM3_FIXTURES,
+  CROSS_FAMILY_YB4_NPM3_FORWARD_FIXTURES,
   CROSS_FAMILY_YB4_PNPM9_FIXTURES,
   CROSS_FAMILY_YB9_BUN_FIXTURES,
   CROSS_FAMILY_YB9_NPM3_FIXTURES,
@@ -1264,13 +1266,13 @@ function buildCrossFamilyYb4ToNpm3(): ConversionContract {
         feature:    'resolved-url',
         diagnostic: 'INTEROP_YARN_BERRY_V4_TO_NPM_3_RESOLVED_URL_DROPPED',
         severity:   'warning',
-        rationale:  'yarn-berry-v4 stringifier emits the PM-native `<name>@<locator>` envelope into npm-3 `resolved:` fields; the npm-3 parser cannot translate that back to canonical registry/git resolution, so `tarball.resolution.type` and `git.resolution.type` degrade to `unknown` (raw locator preserved as attribution). Distinct from yb4 <-> pnpm-v9 where the apparent resolved-url loss is subsumed under workspace-rekey; here workspace identity aligns (yb4 + npm-3 both use `<name>@0.0.0-use.local` for workspace members). Fires on every tarball-/git-bearing node across the 7-fixture corpus, including `git-github-tarball`.',
+        rationale:  'yarn-berry-v4 stringifier emits the PM-native `<name>@<locator>` envelope into npm-3 `resolved:` fields; the npm-3 parser cannot translate that back to canonical registry resolution, so `tarball.resolution.type` degrades to `unknown` (raw locator preserved as attribution). Distinct from yb4 <-> pnpm-v9 where the apparent resolved-url loss is subsumed under workspace-rekey; here workspace identity aligns (yb4 + npm-3 both use `<name>@0.0.0-use.local` for workspace members). ADR-0032: `git-github-tarball` is NARROWED OUT of the forward corpus — a git source carries a `+src=` NodeId discriminator on the yarn-berry side that the npm-3 reparse (canonical `unknown` -> BARE) cannot reproduce, an irreducible identity divergence narrowed rather than declared (mirrors NPM_TO_NPM_1_EXCLUDED). The drop fires on the remaining tarball-bearing registry nodes.',
       },
     ],
     added:       [],
     passthrough: [],
     reentrancy:  'asymmetric',
-    fixtureSubset: [...CROSS_FAMILY_YB4_NPM3_FIXTURES],
+    fixtureSubset: [...CROSS_FAMILY_YB4_NPM3_FORWARD_FIXTURES],
   }
 }
 
@@ -1343,13 +1345,13 @@ function buildCrossFamilyYbMidToNpm3(version: MidBerryVersion): ConversionContra
         feature:    'resolved-url',
         diagnostic: `INTEROP_${fromCode(from)}_TO_NPM_3_RESOLVED_URL_DROPPED`,
         severity:   'warning',
-        rationale:  `yarn-berry-v${version} stringifier emits the PM-native \`<name>@<locator>\` envelope into npm-3 \`resolved:\` fields; the npm-3 parser cannot translate that back to canonical registry/git resolution, so \`tarball.resolution.type\` and \`git.resolution.type\` degrade to \`unknown\` (raw locator preserved as attribution). Distinct from yb-v${version} <-> pnpm-v9 where the apparent resolved-url loss is subsumed under workspace-rekey; here workspace identity aligns (yb-v${version} + npm-3 both use \`<name>@0.0.0-use.local\` for workspace members). Fires on every tarball-/git-bearing node across the 7-fixture corpus, including \`git-github-tarball\`.`,
+        rationale:  `yarn-berry-v${version} stringifier emits the PM-native \`<name>@<locator>\` envelope into npm-3 \`resolved:\` fields; the npm-3 parser cannot translate that back to canonical registry resolution, so \`tarball.resolution.type\` degrades to \`unknown\` (raw locator preserved as attribution). Distinct from yb-v${version} <-> pnpm-v9 where the apparent resolved-url loss is subsumed under workspace-rekey; here workspace identity aligns (yb-v${version} + npm-3 both use \`<name>@0.0.0-use.local\` for workspace members). ADR-0032: \`git-github-tarball\` is NARROWED OUT of the forward corpus — a git source carries a \`+src=\` NodeId discriminator on the yarn-berry side that npm-3 reparse (canonical \`unknown\` -> BARE) cannot reproduce, an irreducible identity divergence narrowed rather than declared (mirrors NPM_TO_NPM_1_EXCLUDED). The drop fires on the remaining tarball-bearing registry nodes.`,
       },
     ],
     added:       [],
     passthrough: [],
     reentrancy:  'asymmetric',
-    fixtureSubset: [...CROSS_FAMILY_YB_MID_NPM3_FIXTURES],
+    fixtureSubset: [...CROSS_FAMILY_YB_MID_NPM3_FORWARD_FIXTURES],
   }
 }
 

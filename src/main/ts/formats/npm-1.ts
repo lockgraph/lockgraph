@@ -40,6 +40,7 @@
 import {
   GraphError,
   newBuilder,
+  serializeNodeId,
   toTarballKey,
   type Diagnostic,
   type Edge,
@@ -63,6 +64,7 @@ import { derivePeerCandidates, pruneSidecar } from './_npm-core.ts'
 import { emitDropped as patchEmitDropped, emitDropped as recipeEmitDropped } from '../recipe/diagnostics.ts'
 import {
   parse as parseResolutionRecipe,
+  sourceDiscriminatorOf,
   stringifyForNpm,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
@@ -195,7 +197,16 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
         })
         continue
       }
-      const id = `${declaredName}@${version}`
+      const resolved = entry.resolved ?? (isUrlLikeVersion(version) ? version : undefined)
+      // ADR-0032 — the `+src=` non-registry discriminator, folded into the
+      // NodeId so a git `is@6.3.1` does not collapse onto a registry `is@6.3.1`
+      // (#2b). Bare for registry / directory / absent (zero registry blast
+      // radius). The full canonical (with its UNKNOWN diagnostic) is recomputed
+      // inside the new-node block below where `id` is available as the subject.
+      const source = resolved !== undefined
+        ? sourceDiscriminatorOf(parseResolutionRecipe(resolved, { sourceKind: 'npm-resolved' }))
+        : undefined
+      const id = serializeNodeId(declaredName, version, [], undefined, source)
       const installPath = parentPath === '' ? `node_modules/${declaredName}` : `${parentPath}/node_modules/${declaredName}`
 
       if (!seenIds.has(id)) {
@@ -206,8 +217,9 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
           version,
           peerContext: [],
         }
-        const resolved = entry.resolved ?? (isUrlLikeVersion(version) ? version : undefined)
         if (resolved !== undefined) node.resolution = resolved
+        // ADR-0032 — carry the slot on the Node so the seal re-derives the id.
+        if (source !== undefined) node.source = source
         builder.addNode(node)
         const payload: TarballPayload = {}
         if (entry.integrity !== undefined) {
@@ -228,7 +240,7 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
           payload.resolution = canonical
         }
         if (Object.keys(payload).length > 0) {
-          builder.setTarball({ name: declaredName, version }, payload)
+          builder.setTarball({ name: declaredName, version, source }, payload)
         }
       }
 
@@ -556,7 +568,7 @@ export function optimize(
     )
 
   for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch }
+    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
     const key = toTarballKey(inputs)
     if (unreachable.has(node.id)) {
       tarballsToRemove.set(key, inputs)
@@ -1082,7 +1094,7 @@ function planManifestEnrich(
     const member = memberByName.get(node.name)
     if (member === undefined) continue
     if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
-    if (graph.tarball({ name: node.name, version: node.version }) !== undefined) continue
+    if (graph.tarballOf(node.id) !== undefined) continue
     memberNodeReplacements.push({ ...node, workspacePath: member.path })
   }
 

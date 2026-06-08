@@ -20,6 +20,8 @@
 // no Graph-type imports. The `RECIPE_RESOLUTION_UNKNOWN` diagnostic
 // emit helper lives in `recipe/diagnostics.ts`.
 
+import { createHash } from 'node:crypto'
+
 // === Canonical type =========================================================
 
 export type HostingProvider = 'github' | 'gitlab' | 'bitbucket'
@@ -355,6 +357,99 @@ export function isCanonical(value: unknown): value is ResolutionCanonical {
 
 export function isUnknown(can: ResolutionCanonical): can is { type: 'unknown'; raw: string } {
   return can.type === 'unknown'
+}
+
+// === Source discriminator (ADR-0032 §"+src= slot") ==========================
+
+// The default public npm-registry hosts. A `tarball` canonical pointing at one
+// of these is the content-addressed registry artefact for `(name, version)` —
+// the same bytes for everyone — so it is the BARE majority that carries NO
+// `+src=` slot (ZERO registry blast radius). Both are the SAME default registry:
+// `registry.npmjs.org` is npm's; `registry.yarnpkg.com` is yarn's CDN mirror of
+// it (yarn-classic's default `resolved` host) — neither is a distinct source.
+// Any OTHER tarball host (private registry, GitHub release `.tgz`, a CDN, a
+// codeload that did not canonicalise to git) can legitimately serve different
+// code under the same `name@version`, so it IS discriminated.
+const REGISTRY_HOSTS: ReadonlySet<string> = new Set([
+  'registry.npmjs.org',
+  'registry.yarnpkg.com',
+])
+
+function hostOfTarballUrl(url: string): string | undefined {
+  // Tarball canonicals are always `http(s)://<host>/…` (deriveRegistryUrl and
+  // parseUrlOrFallback only mint http(s) tarball URLs). Peel the host; a shape
+  // we cannot peel is treated as host-less (the caller slots it as a non-
+  // registry tarball so two unpeelable URLs never silently collapse).
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return undefined
+  const noScheme = url.replace(/^https?:\/\//, '')
+  const host = noScheme.split('/')[0]
+  return host === undefined || host.length === 0 ? undefined : host
+}
+
+/**
+ * ADR-0032 — the `+src=` NodeId/TarballKey slot value for a node's
+ * `ResolutionCanonical`, or `undefined` when the node is a default-registry
+ * tarball (the ~99% majority, which stays BARE so registry NodeIds never
+ * change). The slot disambiguates the #2b collapse: the same `name@version`
+ * from DIFFERENT non-registry sources (a registry copy AND a git fork; two
+ * private-registry hosts) would otherwise share ONE NodeId and lose data.
+ *
+ * The value is the 16-hex prefix of `sha256` over the F3-canonical source
+ * string (NUL-separated), populated ONLY for the WELL-DEFINED non-registry
+ * source classes:
+ *
+ *   - `git`                       → `git\0<url>\0<sha>`        (slot)
+ *   - `tarball` (non-registry)    → `tarball\0<host>`         (slot)
+ *   - `tarball` (default registry)→ undefined                 (bare)
+ *   - `directory`                 → undefined                 (bare)
+ *   - `unknown`                   → undefined                 (bare)
+ *
+ * `directory` and `unknown` stay BARE deliberately (ADR-0032 §"bare classes"):
+ *
+ *   - `directory` — its `path` is a consumer-relative filesystem string with no
+ *     well-defined cross-PM canonical source identity; the adapters that CAN
+ *     collide on a directory locator already disambiguate via the sentinel-patch
+ *     `::locator=` slot (`_yarn-berry-core.isLocalLocatorDisambiguatedResolution`).
+ *   - `unknown` — the F3 escape hatch (ADR-0013): its `raw` is a PM-native shape
+ *     the primitive could NOT canonicalise, so it has NO well-defined source
+ *     string. Folding it into identity is also UNSAFE for round-trips: a lossy
+ *     cross-PM emit can turn a registry package's clean `tarball` canonical into
+ *     an `unknown` raw on re-parse (e.g. a yarn-berry `name@npm:ver` locator
+ *     written verbatim into npm's `resolved:` field, which `npm-resolved` parse
+ *     cannot peel), so an `unknown`-derived slot would appear on ONE side of a
+ *     convert but not the other and spuriously fork the node. A `patch:` locator
+ *     also canonicalises to `unknown` — its identity is already F2's `+patch=`.
+ *
+ * The `hostingProvider` attribution hint is NEVER folded into the source string
+ * — identity drops it, exactly as the canonical URL/sha already do (two git refs
+ * to the same url+sha are one node regardless of which provider mirror recorded
+ * it).
+ */
+export function sourceDiscriminatorOf(resolution: ResolutionCanonical): string | undefined {
+  const sourceString = canonicalSourceStringOf(resolution)
+  return sourceString === undefined ? undefined : sha256Prefix16(sourceString)
+}
+
+// The NUL-separated F3-canonical source string for the discriminated classes
+// (git, non-registry tarball), or `undefined` for the bare classes (default-
+// registry tarball, directory, unknown). Split out from the hash so the mapping
+// is independently testable and the ADR can cite it.
+function canonicalSourceStringOf(resolution: ResolutionCanonical): string | undefined {
+  switch (resolution.type) {
+    case 'git':
+      return `git\0${resolution.url}\0${resolution.sha}`
+    case 'tarball': {
+      const host = hostOfTarballUrl(resolution.url)
+      return host !== undefined && REGISTRY_HOSTS.has(host) ? undefined : `tarball\0${host ?? resolution.url}`
+    }
+    case 'directory':
+    case 'unknown':
+      return undefined
+  }
+}
+
+function sha256Prefix16(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex').slice(0, 16)
 }
 
 // === Per-target stringify ===================================================

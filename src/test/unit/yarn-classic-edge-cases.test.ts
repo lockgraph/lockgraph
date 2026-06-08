@@ -66,7 +66,9 @@ describe('yarn-classic — parse edge cases', () => {
     expect(check(lock)).toBe(true)
     expect(detect(lock)).toBe('yarn-classic')
     expect(() => parse(lock)).not.toThrow()
-    expect(parse(lock).getNode('foo@1.0.0')).toBeDefined()
+    // ADR-0032 — `https://r/foo` is a NON-registry-host tarball, so `foo`
+    // carries a `+src=` discriminator; address it by name.
+    expect(parse(lock).byName('foo').length).toBe(1)
   })
 
   // Header-only (fresh-init, empty) v1 lockfile: detect + empty graph (was

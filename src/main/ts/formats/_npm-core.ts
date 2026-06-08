@@ -37,6 +37,7 @@ import {
   GraphError,
   nameOf,
   newBuilder,
+  serializeNodeId,
   toTarballKey,
   type Diagnostic,
   type Edge,
@@ -57,6 +58,7 @@ import {
 } from '../recipe/diagnostics.ts'
 import {
   parse as parseResolutionRecipe,
+  sourceDiscriminatorOf,
   stringifyForNpm,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
@@ -289,20 +291,26 @@ export function parseFamily(
     if (version === undefined) {
       throw parseFailed(config, `entry ${JSON.stringify(path)} missing version`)
     }
-    const id = `${tailName}@${version}`
+    // ADR-0032 — fold the `+src=` non-registry discriminator into the NodeId so a
+    // git `is@6.3.1` does not collapse onto a registry `is@6.3.1` (#2b).
+    const source = sourceDiscriminatorOfNpmEntry(entry)
+    const id = serializeNodeId(tailName, version, [], undefined, source)
     pathToId.set(path, id)
 
     const existing = idToEntry.get(id)
     if (existing === undefined) {
       idToEntry.set(id, entry)
-      builder.addNode({
+      const node: Node = {
         id,
         name: tailName,
         version,
         peerContext: [],
-      })
+      }
+      // ADR-0032 — carry the slot on the Node so the seal re-derives the id.
+      if (source !== undefined) node.source = source
+      builder.addNode(node)
       if (entry.integrity !== undefined || hasTarballPayload(entry)) {
-        builder.setTarball({ name: tailName, version }, tarballPayloadOf(entry, id, diagnostics))
+        builder.setTarball({ name: tailName, version, source }, tarballPayloadOf(entry, id, diagnostics))
       }
     }
   }
@@ -668,7 +676,7 @@ export function optimizeFamily(
     )
 
   for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch }
+    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
     const key = toTarballKey(inputs)
     if (unreachable.has(node.id)) {
       tarballsToRemove.set(key, inputs)
@@ -810,6 +818,18 @@ function hasTarballPayload(entry: NpmEntry): boolean {
     || entry.os !== undefined
     || entry.libc !== undefined
     || entry.resolved !== undefined
+}
+
+// ADR-0032 — the `+src=` discriminator for an npm entry's NON-REGISTRY source.
+// npm keys an install entry's node by `<name>@<version>` (the resolution URL is
+// only the `resolved:` field), so a registry `is@6.3.1` and a git `is@6.3.1`
+// would collapse onto one NodeId (#2b). Derived from the same `resolved`-URL
+// canonical as `tarballPayloadOf`; bare for registry / directory / link / absent
+// (zero registry blast radius). A `link:` entry is a workspace/local link whose
+// identity is on Node.workspacePath, never source-discriminated.
+function sourceDiscriminatorOfNpmEntry(entry: NpmEntry): string | undefined {
+  if (typeof entry.resolved !== 'string' || entry.link) return undefined
+  return sourceDiscriminatorOf(parseResolutionRecipe(entry.resolved, { sourceKind: 'npm-resolved' }))
 }
 
 function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnostic[]): TarballPayload {

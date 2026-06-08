@@ -267,8 +267,9 @@ graph-level facts its parser currently extracts.
 `TarballKey` extends from a flat `${name}@${version}` to a *suffixed*
 string with ordered disambiguator slots. The unsuffixed form remains
 canonical for the common case; slots appear only when an adapter supplies
-a slot value. The full grammar is in [§4.3](#43-tarballkey). The one slot
-defined today is `patch`:
+a slot value. The full grammar (and the second slot, `+src=` for
+non-registry sources per ADR-0032) is in [§4.3](#43-tarballkey). This
+section specifies the `+patch=` slot:
 
 - For **file-backed** patches, the `+patch=` value is the **sha512 of the
   patch source bytes**, lower-case hex, no prefix. The adapter computes it
@@ -461,7 +462,12 @@ peerId      := <name>@<version>(<peerContext>)?   # recursive
 The serialization is **deterministic**: alphabetical sort of peer-name
 groups, canonical lower-case, exactly one `(...)` block per peerId — no
 whitespace, no empty parens. `id` is a pure function of `(name, version,
-peerContext)`.
+peerContext)` **and the [TarballKey](#43-tarballkey) disambiguator slots**
+(`+patch=`, `+src=`): the NodeId is the slotted TarballKey followed by the
+peer-context block, so two instances that share `name@version` and
+`peerContext` but differ on a slot (a patched copy; a non-registry **source**
+per ADR-0032) are distinct NodeIds. Slots precede the `(...)` block:
+`<name>@<version>[+patch=…][+src=…](<peerContext>)?`.
 
 Formats that flatten peer-virtualization (`npm-*`, `yarn-classic`) cannot
 encode distinct NodeIds that share `name@version`; emitting to them
@@ -490,29 +496,58 @@ plus ordered disambiguator slots.
 ```
 TarballKey      := <name>@<version> ( '+' <slot-name> '=' <slot-value> )*
 
-slot-name       := 'patch'                 # the only slot today; future slots are ADR-gated
-slot-value      := canonical-token | sentinel-token
-canonical-token := per-slot fixed shape; for `+patch=`, sha512 of the
-                   canonical recipe input bytes — 128 lower-case hex
-                   chars; never empty, never carrying `+` or whitespace,
-                   never the `unresolved-` prefix
+slot-name       := 'patch' | 'src'         # ADR-gated; sorted alphabetically (`patch` < `src`)
+slot-value      := canonical-token | sentinel-token | src-token
+canonical-token := for `+patch=`, sha512 of the canonical recipe input
+                   bytes — 128 lower-case hex chars; never empty, never
+                   carrying `+` or whitespace, never the `unresolved-` prefix
 sentinel-token  := literal `unresolved-` followed by exactly 64 lower-case
-                   hex chars (sha256 hex)
+                   hex chars (sha256 hex)                # `+patch=` only
+src-token       := exactly 16 lower-case hex chars (sha256 prefix)  # `+src=` only
 ```
 
-Peer-virtualised siblings that share `name@version` and any slot inputs
+**`+patch=`** ([§2](#2-patch-slot--tarballkey-sentinel)) — the patch
+fingerprint; `Node.patch` is its per-node carrier.
+
+**`+src=`** (ADR-0032) — a **source discriminator** for NON-REGISTRY
+sources, so the same `name@version` installed from genuinely different code
+(a registry copy AND a git fork; two non-registry hosts) does **not**
+collapse onto one node. `Node.source` is its per-node carrier. The value is
+the 16-hex prefix of `sha256` over the F3-canonical source string
+(`ResolutionCanonical`, ADR-0014 §4.F3), populated **only** for the
+well-defined non-registry classes — everything else stays **BARE** (no
+slot), so the ~99% registry majority's keys are byte-identical to a
+slot-less world and the lockfile emit is unchanged (emit re-keys from entry
+descriptors / the canonical resolution, never from the NodeId):
+
+| `ResolutionCanonical` | source string (NUL-separated) | `+src=` |
+|-----------------------|-------------------------------|---------|
+| `git` | `git\0<url>\0<sha>` (hostingProvider dropped) | **set** |
+| `tarball`, non-registry host | `tarball\0<host>` | **set** |
+| `tarball`, default registry (`registry.npmjs.org`, `registry.yarnpkg.com`) | — | **bare** |
+| `directory` | — | **bare** |
+| `unknown` | — | **bare** |
+
+`directory` (no well-defined cross-PM source string; its `::locator=`
+sentinel-patch already disambiguates) and `unknown` (the F3 escape hatch —
+folding it in is unsafe, since a lossy cross-PM emit can degrade a registry
+`tarball` to `unknown` on one side of a convert) are deliberately bare.
+Formats that already encode the source in the key's version slot
+(pnpm `<name>@<url>`, bun) do **not** add `+src=`.
+
+Peer-virtualised siblings that share `name@version` and **all** slot inputs
 share **one** entry (five virt-copies of `react@18.0.0` reference the same
-`TarballPayload`). The `+patch=` recipes and the sentinel inputs are
-specified in [§2](#2-patch-slot--tarballkey-sentinel).
+`TarballPayload`); a slot difference splits the entry.
 
 `toTarballKey(inputs)` is the **only** route to a `TarballKey` value: it
 throws on a malformed slot value (`+` or whitespace, empty string, or a
-value matching neither token form), drops `undefined` slots, sorts
-remaining slots alphabetically by slot-name, and concatenates. Equal
-inputs always yield byte-equal keys (deterministic, idempotent); callers
-do not construct key strings by concatenation. `Node.patch` is the
-per-node carrier for the `+patch=` slot value; it describes the underlying
-tarball, not the per-instance peer context.
+value matching no token form), drops `undefined` slots, sorts remaining
+slots alphabetically by slot-name (so the order is always
+`…+patch=…+src=…`), and concatenates. Equal inputs always yield byte-equal
+keys (deterministic, idempotent); callers do not construct key strings by
+concatenation. `Node.patch` / `Node.source` are the per-node carriers for
+the `+patch=` / `+src=` slot values; they describe the underlying tarball /
+its source, not the per-instance peer context.
 
 ### 4.4 Graph
 

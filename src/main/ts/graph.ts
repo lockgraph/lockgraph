@@ -8,13 +8,22 @@ import type { WorkspaceRange } from './recipe/workspace.ts'
 
 export type NodeId = string
 
-/** `${name}@${version}[+patch=…]` — NodeId stripped of peerContext. Per ADR-0010/0011. */
+/** `${name}@${version}[+patch=…][+src=…]` — NodeId stripped of peerContext. Per ADR-0010/0011/0032. */
 export type TarballKey = string
 export type Patch = string
+/** ADR-0032 — the `+src=` slot value: 16 lowercase-hex chars (sha256 prefix of
+ *  the F3-canonical source string), or `undefined` for the bare default-registry
+ *  / directory majority. Derived by `recipe/resolution.sourceDiscriminatorOf`. */
+export type SourceDiscriminator = string
 export interface TarballKeyInputs {
   name:    string
   version: string
   patch?:  Patch
+  // ADR-0032 — discriminates NON-REGISTRY sources that share `name@version`
+  // (a registry copy vs a git fork). Sorts AFTER `patch=` in the slot list.
+  // `undefined` for the registry-tarball / directory majority → BARE key
+  // (zero registry blast radius).
+  source?: SourceDiscriminator
 }
 
 export type EdgeKind = 'dep' | 'dev' | 'optional' | 'peer' | 'bundled'
@@ -25,6 +34,14 @@ export interface Node {
   version:        string
   peerContext:    NodeId[]
   patch?:         Patch
+  // ADR-0032 — the `+src=` slot carrier. The 16-hex source discriminator for a
+  // NON-REGISTRY node (git / non-registry-host tarball / unknown), so the node's
+  // identity is re-derivable from the Node alone at seal time (parallels how
+  // `patch` carries the `+patch=` slot). `undefined` for the bare registry /
+  // directory majority — those NodeIds are byte-identical to the pre-ADR-0032
+  // form. Populated by `recipe/resolution.sourceDiscriminatorOf(node's
+  // ResolutionCanonical)` at construction.
+  source?:        SourceDiscriminator
   workspacePath?: string
   resolution?:    string
 }
@@ -260,25 +277,32 @@ export function serializeNodeId(
   version: string,
   peerContext: readonly NodeId[],
   patch?: Patch,
+  source?: SourceDiscriminator,
 ): NodeId {
-  const base = toTarballKey({ name, version, patch })
+  const base = toTarballKey({ name, version, patch, source })
   if (peerContext.length === 0) return base
   return base + peerContext.map(p => `(${p})`).join('')
 }
 
 function acceptedNodeIds(node: Node): readonly NodeId[] {
-  const bare = serializeNodeId(node.name, node.version, node.peerContext)
+  // ADR-0032 — the `+src=` slot ALWAYS participates in the derived id (it
+  // describes which non-registry source minted the node and, unlike `patch`,
+  // has no bare/slotted duality: a node either is from a discriminated source
+  // or is bare). Thread `node.source` through every candidate so re-derivation
+  // is exact; the bare majority (`source === undefined`) is unaffected.
+  const bare = serializeNodeId(node.name, node.version, node.peerContext, undefined, node.source)
   if (node.patch === undefined) return [bare]
-  const patched = serializeNodeId(node.name, node.version, node.peerContext, node.patch)
+  const patched = serializeNodeId(node.name, node.version, node.peerContext, node.patch, node.source)
   return bare === patched ? [bare] : [bare, patched]
 }
 
-function carriesPatchInNodeId(node: Pick<Node, 'id' | 'name' | 'version' | 'patch'>): boolean {
+function carriesPatchInNodeId(node: Pick<Node, 'id' | 'name' | 'version' | 'patch' | 'source'>): boolean {
   if (node.patch === undefined) return false
   return stripPeerContextFromNodeId(node.id) === toTarballKey({
     name: node.name,
     version: node.version,
     patch: node.patch,
+    source: node.source,
   })
 }
 
@@ -339,22 +363,53 @@ function refuseSentinelMutation(patch: Patch | undefined, opName: string, subjec
   }
 }
 
+// ADR-0032 — the `+src=` slot value is the 16-lowercase-hex source discriminator
+// minted by `recipe/resolution.sourceDiscriminatorOf`. Guard the slot grammar
+// (no `+`/whitespace so the `+`-joined slot list stays parseable) exactly as
+// `validatePatchToken` guards `+patch=`. The 16-hex shape is asserted too — the
+// only legitimate producer is the recipe primitive, so a malformed value is a
+// caller bug, not lossy data.
+const SRC_TOKEN_RE = /^[0-9a-f]{16}$/
+
+export function validateSourceToken(source: string): void {
+  if (source.length === 0) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `source slot must not be empty` })
+  }
+  if (source.includes('+')) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `source slot must not contain '+'` })
+  }
+  if (/\s/.test(source)) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `source slot must not contain whitespace` })
+  }
+  if (!SRC_TOKEN_RE.test(source)) {
+    throw new LockfileError({ code: 'INVALID_INPUT', message: `source slot must be 16 lowercase-hex chars` })
+  }
+}
+
 export function toTarballKey(inputs: TarballKeyInputs): TarballKey {
   const slots: string[] = []
   if (inputs.patch !== undefined) {
     validatePatchToken(inputs.patch)
     slots.push(`patch=${inputs.patch}`)
   }
+  // ADR-0032 — the `+src=` slot. `cmpStr`-sorted alongside `patch=`; since
+  // `'patch' < 'src'` the canonical order is `…+patch=…+src=…`. Bare for the
+  // registry / directory majority (`source === undefined`) → zero-blast-radius.
+  if (inputs.source !== undefined) {
+    validateSourceToken(inputs.source)
+    slots.push(`src=${inputs.source}`)
+  }
   return slots.length === 0
     ? `${inputs.name}@${inputs.version}`
     : `${inputs.name}@${inputs.version}+${slots.sort(cmpStr).join('+')}`
 }
 
-function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch'>): TarballKeyInputs {
+function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch' | 'source'>): TarballKeyInputs {
   return {
     name: node.name,
     version: node.version,
     patch: node.patch,
+    source: node.source,
   }
 }
 
@@ -942,8 +997,8 @@ class GraphImpl implements Graph {
         }
 
         const newId = carriesPatchInNodeId(old)
-          ? serializeNodeId(old.name, old.version, peers, old.patch)
-          : serializeNodeId(old.name, old.version, peers)
+          ? serializeNodeId(old.name, old.version, peers, old.patch, old.source)
+          : serializeNodeId(old.name, old.version, peers, undefined, old.source)
         if (newId !== id && next.nodes.has(newId)) {
           throw new GraphError('PATCH_REJECTED', `replacePeerContext: target id ${newId} already exists`)
         }

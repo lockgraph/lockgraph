@@ -33,6 +33,7 @@ import {
 } from '../recipe/integrity.ts'
 import {
   parse as parseResolutionRecipe,
+  sourceDiscriminatorOf,
   stringifyForYarnBerry,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
@@ -363,7 +364,30 @@ export function parseFamily(
       ? sentinelHashOfLocator(resolution)
       : undefined
     const effectivePatch = rawPatchResult?.patch ?? linkLocatorPatch
-    const id = serializeNodeId(authoritativeName, version, [], effectivePatch)
+    // Workspace detection must precede both the NodeId and the F3 canonical:
+    // a workspace member carries NO F3 resolution (its identity lives on
+    // Node.workspacePath), so it is never source-discriminated. Computed here
+    // (moved ahead of `id`) so the ADR-0032 `+src=` slot can be threaded into
+    // the NodeId at construction. `node.workspacePath` is still assigned from
+    // this same value below.
+    const workspaceSpec = workspaceSpecOfEntry(resolution, specs, first)
+    // ADR-0014 §4.F3 — canonical resolution into TarballPayload. Workspace
+    // identity is NOT part of F3 canonical (it lives on Node.workspacePath);
+    // skip the primitive entirely for workspace-protocol locators.
+    const canonicalResolution = resolution !== undefined && workspaceSpec === undefined
+      ? parseResolutionRecipe(resolution, { sourceKind: 'yarn-berry-locator', name: authoritativeName })
+      : undefined
+    // ADR-0032 — the `+src=` discriminator for a NON-REGISTRY source. Gated on
+    // `effectivePatch === undefined`: a node already carrying a `+patch=` slot
+    // is identity-disambiguated by F2, and a `patch:` locator canonicalises to
+    // `unknown` for an orthogonal reason (patch identity is F2's, not F3's) —
+    // folding a second discriminator onto it would change every patched
+    // NodeId for no #2b benefit. Bare for registry/directory (zero blast
+    // radius); set for git / non-registry-host tarball / non-patch unknown.
+    const effectiveSource = effectivePatch === undefined && canonicalResolution !== undefined
+      ? sourceDiscriminatorOf(canonicalResolution)
+      : undefined
+    const id = serializeNodeId(authoritativeName, version, [], effectivePatch, effectiveSource)
     const patchResult = rawPatchResult?.diagnostic !== undefined
       ? {
           ...rawPatchResult,
@@ -395,27 +419,18 @@ export function parseFamily(
     }
     if (resolution !== undefined) node.resolution = resolution
     if (effectivePatch !== undefined) node.patch = effectivePatch
+    // ADR-0032 — carry the `+src=` discriminator on the Node so the seal can
+    // re-derive the NodeId from the Node alone (parallels `node.patch`).
+    if (effectiveSource !== undefined) node.source = effectiveSource
     // Workspace identification keys off `resolution` (the canonical, single
-    // identity per ADR-0014 §4.F3), not `specs[0].protocol`. A compound entry
-    // may list `<n>@npm:<ver>, <n>@workspace:<path>` in any order — the npm
-    // alias claims spec[0] when it sorts first lexically, yet the entry is
-    // still the local workspace (resolution is authoritative). Falling back
-    // to `first.spec` only when resolution is absent preserves the legacy
-    // single-spec workspace shape (`<n>@workspace:<path>`).
-    const workspaceSpec = workspaceSpecOfEntry(resolution, specs, first)
+    // identity per ADR-0014 §4.F3), not `specs[0].protocol` — see the
+    // `workspaceSpec` derivation moved ahead of `id` above.
     if (workspaceSpec !== undefined) {
       node.workspacePath = workspacePathOf(workspaceSpec)
     }
     builder.addNode(node)
     if (patchResult?.diagnostic) diagnostics.push(patchResult.diagnostic)
 
-    // ADR-0014 §4.F3 — canonical resolution into TarballPayload. Workspace
-    // identity is NOT part of F3 canonical (it lives on Node.workspacePath);
-    // skip the primitive entirely for workspace-protocol locators (driven by
-    // the resolution, not by spec[0] — see workspaceSpec derivation above).
-    const canonicalResolution = resolution !== undefined && workspaceSpec === undefined
-      ? parseResolutionRecipe(resolution, { sourceKind: 'yarn-berry-locator', name: authoritativeName })
-      : undefined
     if (canonicalResolution !== undefined && canonicalResolution.type === 'unknown' && !looksLikePatchLocator(resolution)) {
       diagnostics.push(unknownResolutionDiagnostic(id, resolution!))
     }
@@ -524,8 +539,9 @@ export function parseFamily(
     }
     if (Object.keys(payload).length > 0) {
       // Key MUST match the NodeId built above: authoritativeName (Bug #3
-      // canonical-name) + effectivePatch (Bug #2 link/portal locator slot).
-      builder.setTarball({ name: authoritativeName, version, patch: effectivePatch }, payload)
+      // canonical-name) + effectivePatch (Bug #2 link/portal locator slot) +
+      // effectiveSource (ADR-0032 `+src=` non-registry discriminator).
+      builder.setTarball({ name: authoritativeName, version, patch: effectivePatch, source: effectiveSource }, payload)
     }
 
     for (const spec of specs) {
@@ -661,7 +677,7 @@ export function stringifyFamily(
     const node = graph.getNode(entry.nodeId)
     const emitId = node === undefined
       ? entry.nodeId
-      : toTarballKey({ name: node.name, version: node.version, patch: node.patch })
+      : toTarballKey({ name: node.name, version: node.version, patch: node.patch, source: node.source })
     const prevNodeId = seenIds.get(emitId)
     if (prevNodeId !== undefined) {
       throw new LockfileError({
@@ -886,7 +902,7 @@ export function enrichFamily(
   for (const node of graph.nodes()) {
     const payload = graph.tarballOf(node.id)
     if (payload === undefined) continue
-    builder.setTarball({ name: node.name, version: node.version, patch: node.patch }, payload)
+    builder.setTarball({ name: node.name, version: node.version, patch: node.patch, source: node.source }, payload)
   }
   for (const diagnostic of graph.diagnostics()) {
     builder.diagnostic(diagnostic)
@@ -936,7 +952,7 @@ export function optimizeFamily(
     )
 
   for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch }
+    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
     const key = toTarballKey(inputs)
     if (unreachable.has(node.id)) {
       tarballsToRemove.set(key, inputs)
@@ -1938,7 +1954,7 @@ function deriveFinalNodeIds(graph: Graph, derivedPeersByNodeId: Map<string, Deri
       if (derivedPeers === undefined) continue
 
       const peerContext = sortPeerContext(derivedPeers.map(peer => finalIds.get(peer.dstOldId) ?? peer.dstOldId))
-      const nextId = serializeNodeId(node.name, node.version, peerContext, node.patch)
+      const nextId = serializeNodeId(node.name, node.version, peerContext, node.patch, node.source)
       if (finalIds.get(node.id) !== nextId) {
         finalIds.set(node.id, nextId)
         changed = true

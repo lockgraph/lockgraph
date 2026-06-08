@@ -22,9 +22,12 @@ describe('yarn-classic robustness — git-protocol resolved URLs', () => {
       '  version "0.0.0"\n' +
       '  resolved "git+ssh://git@github.com/example/from-git.git#0123456789abcdef0123456789abcdef01234567"\n'
     const g = parse('yarn-classic', lf)
-    expect(g.getNode('from-git@0.0.0')).toBeDefined()
-    expect(g.getNode('from-git@0.0.0')?.resolution).toBe('git+ssh://git@github.com/example/from-git.git#0123456789abcdef0123456789abcdef01234567')
-    expect(g.tarballOf('from-git@0.0.0')?.resolution?.type).toBe('git')
+    // ADR-0032 — a git source carries a `+src=` discriminator; address by name.
+    const id = g.byName('from-git')[0]!
+    expect(g.getNode(id)).toBeDefined()
+    expect(id).toContain('+src=')
+    expect(g.getNode(id)?.resolution).toBe('git+ssh://git@github.com/example/from-git.git#0123456789abcdef0123456789abcdef01234567')
+    expect(g.tarballOf(id)?.resolution?.type).toBe('git')
   })
 
   it('git:// and scp-like git@ forms also parse', () => {
@@ -34,8 +37,10 @@ describe('yarn-classic robustness — git-protocol resolved URLs', () => {
       '  version "1.0.0"\n' +
       '  resolved "git://github.com/frozeman/WebSocket-Node.git#deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"\n'
     const g = parse('yarn-classic', lf)
-    expect(g.getNode('ws@1.0.0')?.resolution).toMatch(/^git:\/\//)
-    expect(g.tarballOf('ws@1.0.0')?.resolution?.type).toBe('git')
+    // ADR-0032 — a git source carries a `+src=` discriminator; address by name.
+    const id = g.byName('ws')[0]!
+    expect(g.getNode(id)?.resolution).toMatch(/^git:\/\//)
+    expect(g.tarballOf(id)?.resolution?.type).toBe('git')
   })
 
   // F2 (snapshot.50 round-trip sweep): the git `resolved` line must SURVIVE
@@ -110,8 +115,25 @@ describe('yarn-classic robustness — duplicate descriptors that should merge', 
     expect(out.match(/version "4\.3\.0"/g)).toHaveLength(1)
   })
 
-  it('a GENUINE conflict (same name@version, differing resolution) still throws IRREDUCIBLE_LOSS', () => {
-    const conflict = dupBlocks(REG, 'https://example.com/other-ansi-styles-4.3.0.tgz')
+  it('two blocks at the same name@version from DIFFERENT sources become DISTINCT nodes (ADR-0032 #2b)', () => {
+    // Pre-ADR-0032 this collapsed onto one NodeId and threw IRREDUCIBLE_LOSS
+    // (data-loss prevention). Now the non-registry copy carries a `+src=`
+    // discriminator, so the registry artefact and the example.com artefact are
+    // genuinely DISTINCT nodes — the #2b collapse is resolved, not aborted.
+    const distinct = dupBlocks(REG, 'https://example.com/other-ansi-styles-4.3.0.tgz')
+    const g = parse('yarn-classic', distinct)
+    const ids = g.byName('ansi-styles')
+    expect(ids).toHaveLength(2)
+    // The registry copy is BARE; the example.com copy carries `+src=`.
+    expect(ids.some(id => id === 'ansi-styles@4.3.0')).toBe(true)
+    expect(ids.some(id => id.startsWith('ansi-styles@4.3.0+src='))).toBe(true)
+  })
+
+  it('a TRUE irreducible conflict (same SOURCE, differing integrity) still throws IRREDUCIBLE_LOSS', () => {
+    // Both copies resolve to the registry default (both BARE NodeIds — `+src=`
+    // cannot tell them apart), but carry different integrity: a genuine
+    // collision the discriminator does not resolve, so the loud abort stands.
+    const conflict = dupBlocks(REG, REG, sri512('A'), sri512('B'))
     expect(() => parse('yarn-classic', conflict)).toThrow(/collapse onto NodeId ansi-styles@4\.3\.0/)
   })
 })

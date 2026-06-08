@@ -312,7 +312,9 @@ describe('recipe/resolution — yarn-classic parse populates canonical', () => {
   })
   it('codeload-tarball form → canonical git', () => {
     const g = parse('yarn-classic', fixture('git-github-tarball/yarn-classic.lock'))
-    const payload = g.tarball({ name: 'is-github', version: '6.3.1' })
+    // ADR-0032 — git source carries a `+src=` slot; address the node by id.
+    const id = g.byName('is-github').find(i => g.getNode(i)?.version === '6.3.1')!
+    const payload = g.tarballOf(id)
     expect(payload?.resolution).toMatchObject({
       type: 'git',
       url:  'https://github.com/sindresorhus/is.git',
@@ -355,7 +357,9 @@ describe('recipe/resolution — npm-3 parse populates canonical', () => {
   })
   it('git+ssh URL → canonical git', () => {
     const g = parse('npm-3', fixture('git-github-tarball/npm-3.lock'))
-    const payload = g.tarball({ name: '@sindresorhus/is', version: '6.3.1' })
+    // ADR-0032 — git source carries a `+src=` slot; address the node by id.
+    const id = g.byName('@sindresorhus/is').find(i => g.getNode(i)?.version === '6.3.1')!
+    const payload = g.tarballOf(id)
     expect(payload?.resolution).toMatchObject({
       type: 'git',
       sha:  '47f49741eacf0a3678684738159a87c2011bb026',
@@ -384,7 +388,11 @@ describe('recipe/resolution — convert npm-3 → yarn-berry-v9 preserves git ca
     const output = convert(fixture('git-github-tarball/npm-3.lock'), { from: 'npm-3', to: 'yarn-berry-v9' })
     const g = parse('yarn-berry-v9', output)
     // The npm graph collapsed git aliases onto `@sindresorhus/is@6.3.1`.
-    const payload = g.tarball({ name: '@sindresorhus/is', version: '6.3.1' })
+    // ADR-0032 — a git source carries a `+src=` slot on its NodeId/TarballKey,
+    // so the bare `{ name, version }` key no longer addresses it; resolve via
+    // the node id (tarballOf threads the node's source slot).
+    const nodeId = g.byName('@sindresorhus/is').find(id => g.getNode(id)?.version === '6.3.1')!
+    const payload = g.tarballOf(nodeId)
     expect(payload?.resolution?.type).toBe('git')
     expect((payload?.resolution as { sha?: string }).sha)
       .toBe('47f49741eacf0a3678684738159a87c2011bb026')
