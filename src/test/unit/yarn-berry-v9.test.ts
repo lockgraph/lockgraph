@@ -1528,7 +1528,7 @@ describe('yarn-berry-v9 — modify', () => {
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(result.applied).toEqual([
-      { kind: 'node-replaced', subject: 'ms@2.1.4' },
+      { kind: 'node-replaced', subject: 'ms@2.1.4', oldSubject: 'ms@2.1.3' },
     ])
   })
 
@@ -1583,7 +1583,7 @@ describe('yarn-berry-v9 — modify', () => {
     expect(peerVirtFlat?.message).toContain('["react@18.2.0"]')
     expect(peerVirtFlat?.message).toContain('react-dom@npm:18.2.0')
     expect(result.applied).toEqual([
-      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)' },
+      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)', oldSubject: 'react-dom@18.2.0' },
     ])
   })
 
@@ -1613,6 +1613,82 @@ describe('yarn-berry-v9 — modify', () => {
     } catch (error) {
       expect((error as LockfileError).code).toBe('IRREDUCIBLE_LOSS')
     }
+  })
+
+  // #114 — an IDENTITY-PRESERVING rename (a peerContext shift that keeps the
+  // `name@version` base) must CARRY the node's per-NodeId sidecar — its berry
+  // `conditions` scalar and `dependenciesMeta` block — onto the renamed node, not
+  // drop it. Audit-fix renames nodes (replacePeerContext); before the fix the
+  // sidecar was keyed by the old id and pruned, silently losing fidelity.
+  const CONDITIONS_LOCK =
+    '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
+    '"react@npm:18.2.0":\n' +
+    '  version: 18.2.0\n' +
+    '  resolution: "react@npm:18.2.0"\n' +
+    '  languageName: node\n' +
+    '  linkType: hard\n\n' +
+    '"react@npm:17.0.2":\n' +
+    '  version: 17.0.2\n' +
+    '  resolution: "react@npm:17.0.2"\n' +
+    '  languageName: node\n' +
+    '  linkType: hard\n\n' +
+    '"react-dom@npm:18.2.0":\n' +
+    '  version: 18.2.0\n' +
+    '  resolution: "react-dom@npm:18.2.0"\n' +
+    '  peerDependencies:\n' +
+    '    react: ^18.2.0\n' +
+    '  dependenciesMeta:\n' +
+    '    react:\n' +
+    '      optional: true\n' +
+    '  conditions: os=linux & cpu=arm64\n' +
+    '  languageName: node\n' +
+    '  linkType: hard\n'
+
+  it('#114 carries conditions + dependenciesMeta across an identity-preserving rename (replacePeerContext)', () => {
+    const graph = parse(CONDITIONS_LOCK)
+    // Sanity: the source node emits its conditions + dependenciesMeta.
+    expect(stringify(graph)).toContain('  conditions: os=linux & cpu=arm64\n')
+
+    // Re-key react-dom's peerContext onto react@18.2.0 — base key `react-dom@18.2.0`
+    // is UNCHANGED, so this is identity-preserving (only the `(...)` suffix moves).
+    const result = graph.mutate(m => {
+      m.replacePeerContext('react-dom@18.2.0', ['react@18.2.0'])
+    })
+    const newId = 'react-dom@18.2.0(react@18.2.0)'
+    expect(result.graph.getNode(newId)).toBeDefined()
+    expect(result.graph.getNode('react-dom@18.2.0')).toBeUndefined()
+
+    const emitted = stringify(result.graph)
+    // The sidecar followed the rename: both fields survive on the renamed node.
+    expect(emitted).toContain('  conditions: os=linux & cpu=arm64\n')
+    expect(emitted).toContain('  dependenciesMeta:\n    react:\n      optional: true\n')
+  })
+
+  it('#114 a true version bump RESETS the sidecar — old conditions do NOT carry to the new version', () => {
+    const graph = parse(CONDITIONS_LOCK)
+    const current = uniqueNodeByNameVersion(graph, 'react-dom', '18.2.0')
+
+    // Bump react-dom 18.2.0 → 18.3.0: a new `name@version` base (NOT identity-
+    // preserving), so the old version's conditions must NOT carry to the new node.
+    const result = graph.mutate(m => {
+      m.replaceNode(current.id, {
+        ...current,
+        id: 'react-dom@18.3.0',
+        version: '18.3.0',
+        resolution: 'react-dom@npm:18.3.0',
+      })
+    })
+    expect(result.applied).toEqual([
+      { kind: 'node-replaced', subject: 'react-dom@18.3.0', oldSubject: 'react-dom@18.2.0' },
+    ])
+    expect(result.graph.getNode('react-dom@18.3.0')).toBeDefined()
+
+    const emitted = stringify(result.graph)
+    // The new version is keyed/emitted from live data — the stale conditions and
+    // dependenciesMeta of the old 18.2.0 entry are gone (correct C-KEYDROP reset).
+    expect(emitted).toContain('"react-dom@npm:18.3.0":')
+    expect(emitted).not.toContain('conditions: os=linux & cpu=arm64')
+    expect(emitted).not.toContain('dependenciesMeta:')
   })
 })
 

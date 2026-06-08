@@ -456,7 +456,7 @@ describe('yarn-classic — modify', () => {
     expect(diagnostics.find(diagnostic => diagnostic.code === 'YARN_CLASSIC_PEER_VIRT_FLATTENED')?.message)
       .toContain('["react@18.2.0"]')
     expect(result.applied).toEqual([
-      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)' },
+      { kind: 'peer-context-replaced', subject: 'react-dom@18.2.0(react@18.2.0)', oldSubject: 'react-dom@18.2.0' },
     ])
   })
 

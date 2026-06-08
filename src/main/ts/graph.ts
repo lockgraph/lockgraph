@@ -180,10 +180,19 @@ export interface WalkOpts {
 export type ChangeRecord =
   | { kind: 'node-added';            subject: NodeId }
   | { kind: 'node-removed';          subject: NodeId }
-  | { kind: 'node-replaced';         subject: NodeId }
+  // `subject` is the NEW id; `oldSubject` is the id that was re-keyed away
+  // (present iff the op changed the id — `newNode.id !== id`). Re-keying drops
+  // the old id from the graph, so a per-NodeId sidecar (yarn entry-key
+  // descriptors, berry conditions / meta) cannot membership-survive on the new
+  // id without this old→new pair. Absent when the replace kept the same id
+  // (`newNode.id === id`), since no remap is then needed (#114).
+  | { kind: 'node-replaced';         subject: NodeId; oldSubject?: NodeId }
   | { kind: 'edge-added';            subject: EdgeTriple }
   | { kind: 'edge-removed';          subject: EdgeTriple }
-  | { kind: 'peer-context-replaced'; subject: NodeId }
+  // `oldSubject` is the pre-rekey id when the peerContext change shifted the id
+  // (`newId !== id`); absent when the context change left the id unchanged. Same
+  // role as on `node-replaced` — lets a per-NodeId sidecar follow the rename (#114).
+  | { kind: 'peer-context-replaced'; subject: NodeId; oldSubject?: NodeId }
   | { kind: 'tarball-set';           subject: TarballKey }
   | { kind: 'tarball-removed';       subject: TarballKey }
 
@@ -953,7 +962,9 @@ class GraphImpl implements Graph {
           }
           rebindNodeId(next, id, newNode.id, newNode)
         }
-        applied.push({ kind: 'node-replaced', subject: newNode.id })
+        applied.push(newNode.id === id
+          ? { kind: 'node-replaced', subject: newNode.id }
+          : { kind: 'node-replaced', subject: newNode.id, oldSubject: id })
       },
       addEdge(src, dst, kind, attrs) {
         if (!next.nodes.has(src)) throw new GraphError('PATCH_REJECTED', `addEdge: src ${src} missing`)
@@ -1023,7 +1034,9 @@ class GraphImpl implements Graph {
           pushTo(next.incoming, p, e)
         }
 
-        applied.push({ kind: 'peer-context-replaced', subject: newId })
+        applied.push(newId === id
+          ? { kind: 'peer-context-replaced', subject: newId }
+          : { kind: 'peer-context-replaced', subject: newId, oldSubject: id })
       },
       setTarball(inputs, payload) {
         const key = toTarballKey(inputs)

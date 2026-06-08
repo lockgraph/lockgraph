@@ -303,12 +303,17 @@ threads it.
   (and its per-node sidecars) remembers it: an **unmodified** same-format
   parse → stringify pass re-emits each entry key **verbatim** from the captured
   source descriptor list (so `foo@npm:^1, foo@npm:^2` round-trips byte-for-byte
-  — the B-EXACT guarantee, [§5.1](#51-why-a-ladder-is-needed)). But the sidecar
-  is keyed by NodeId and same-format-only: a node the graph **replaced** (a
-  version bump) or a **cross-PM** convert drops it, and stringify then
-  reconstructs the key from the edge set. So if a future modifier splits the
-  spec set, stringify emits two entries; recovering the original concrete shape
-  across modifier action is not in scope.
+  — the B-EXACT guarantee, [§5.1](#51-why-a-ladder-is-needed)). The sidecar is
+  keyed by NodeId and same-format-only, and a `graph.mutate()` that **re-keys** a
+  node carries the sidecar onto the new id **iff the rename is identity-preserving**
+  — the `<name>@<version>[+patch=][+src=]` base ([§4.3](#43-tarballkey)) is
+  unchanged, i.e. only the `(<peerContext>)` suffix moved (`replacePeerContext`,
+  the audit-fix peer-virtualisation shape). A **version/identity change**
+  (`replaceNode` to a new `name@version`) or a **cross-PM** convert deliberately
+  **drops** it — the old version's descriptors/conditions/meta do not describe the
+  new node — so stringify reconstructs the key from the live edge set. So if a
+  future modifier splits the spec set, stringify emits two entries; recovering the
+  original concrete shape across a non-rename modifier action is not in scope.
 - **Field-level preservation of `__metadata` keys we do not model.**
   Unknown `__metadata` keys are dropped on parse with a `warning`
   diagnostic; stringify cannot resurrect them.

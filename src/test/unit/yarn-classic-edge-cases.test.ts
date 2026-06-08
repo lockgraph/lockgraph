@@ -303,12 +303,12 @@ describe('yarn-classic — orphan descriptors survive graph.mutate (C-KEYDROP au
     expect(stringify(parse(out))).toBe(out)
   })
 
-  // Rename / version-bump of the orphan-bearing node ITSELF legitimately resets
-  // its key — the old version's orphan ranges do not apply to the new version,
-  // so they must NOT carry across the bump. The replacement reconstructs its key
-  // from live edges. This is correct-by-design (the #114 sidecar-rename limit),
-  // NOT the data loss the wrapper fixes — verify the wrapper does not over-reach
-  // into it.
+  // A genuine VERSION bump of the orphan-bearing node ITSELF legitimately resets
+  // its key — the old version's orphan ranges do not apply to the new version, so
+  // they must NOT carry across the bump. The replacement reconstructs its key from
+  // live edges. This is the deliberate identity-change reset (#114 carries ONLY
+  // identity-PRESERVING renames — see the replacePeerContext test below), NOT the
+  // data loss the wrapper fixes — verify the wrapper does not over-reach into it.
   it('a version-bump of node a ITSELF resets its key (orphan a@^2.0.0 does NOT carry to the new version)', () => {
     const g = parse(LOCK)
 
@@ -331,6 +331,59 @@ describe('yarn-classic — orphan descriptors survive graph.mutate (C-KEYDROP au
     expect([...newKey!].sort()).toEqual(['a@^3.0.0'])
     expect(out).not.toContain('a@^2.0.0')
     expect(out).not.toContain('a@2.5.0')
+    expect(stringify(parse(out))).toBe(out)
+  })
+
+  // #114 — an IDENTITY-PRESERVING rename (a peerContext shift that keeps the
+  // `name@version` base) must CARRY the verbatim entry-key descriptors — incl. the
+  // consumer-less orphan — onto the renamed node. This is the audit-fix shape that
+  // virtualizes a peer consumer (replacePeerContext) on a node whose on-disk key
+  // held orphans; pre-fix the sidecar was keyed by the old id and pruned by the
+  // rename, re-dropping the orphan (the react@557e28f loss returning under a peer
+  // re-key). Distinct from the version-bump RESET above: the base key is unchanged.
+  // NB: yarn-classic v1 has no `peerDependencies:` entry block (berry-only). The
+  // peer edge here is introduced PROGRAMMATICALLY via replacePeerContext — exactly
+  // how a modify pass virtualizes a consumer — so `peer@1.0.0` is just a sibling
+  // node to re-key onto. `pc`'s on-disk key carries the orphan `pc@^2.0.0`.
+  const PEER_LOCK =
+    H +
+    '"pc@^1.0.0, pc@^2.0.0":\n' +           // orphan `^2.0.0` (no in-lock consumer)
+    '  version "1.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/pc/-/pc-1.0.0.tgz#ppp"\n' +
+    '\n' +
+    'app@^0.0.0:\n' +
+    '  version "0.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/app/-/app-0.0.0.tgz#000"\n' +
+    '  dependencies:\n' +
+    '    pc "^1.0.0"\n' +
+    '\n' +
+    'peer@^1.0.0:\n' +
+    '  version "1.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/peer/-/peer-1.0.0.tgz#eee"\n'
+
+  it('replacePeerContext (identity-preserving) on the orphan-bearing node KEEPS its orphan pc@^2.0.0', () => {
+    const g = parse(PEER_LOCK)
+    // Only `^1.0.0` is edge-backed; `^2.0.0` is a consumer-less orphan.
+    expect(g.getNode('pc@1.0.0')).toBeDefined()
+    const pcKeyBefore = entryKeyDescriptorSets(stringify(g)).find(set => set.some(d => d.startsWith('pc@')))
+    expect([...pcKeyBefore!].sort()).toEqual(['pc@^1.0.0', 'pc@^2.0.0'])
+
+    // Re-key pc's peerContext onto peer@1.0.0 — base `pc@1.0.0` is UNCHANGED, so
+    // this is identity-preserving; the new id is `pc@1.0.0(peer@1.0.0)`.
+    const result = g.mutate(m => {
+      m.replacePeerContext('pc@1.0.0', ['peer@1.0.0'])
+    })
+    expect(result.applied).toEqual([
+      { kind: 'peer-context-replaced', subject: 'pc@1.0.0(peer@1.0.0)', oldSubject: 'pc@1.0.0' },
+    ])
+    expect(result.graph.getNode('pc@1.0.0(peer@1.0.0)')).toBeDefined()
+
+    // The verbatim entry-key descriptors followed the rename — the orphan survives.
+    const out = stringify(result.graph)
+    const pcKeyAfter = entryKeyDescriptorSets(out).find(set => set.some(d => d.startsWith('pc@')))
+    expect(pcKeyAfter, 'no pc@ entry key after rename').toBeDefined()
+    expect([...pcKeyAfter!].sort()).toEqual(['pc@^1.0.0', 'pc@^2.0.0'])
+    expect(out).toContain('pc@^2.0.0')
     expect(stringify(parse(out))).toBe(out)
   })
 })

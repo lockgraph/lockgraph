@@ -3,6 +3,7 @@ import {
   newBuilder,
   nameOf,
   serializeNodeId,
+  stripPeerContextFromNodeId,
   toTarballKey,
   type Diagnostic,
   type Edge,
@@ -635,6 +636,29 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
   return entryExtras !== undefined ? { entrySpecs, entryExtras } : { entrySpecs }
 }
 
+// #114 — re-key the per-NodeId sidecar through an old→new id map (built from a
+// mutate's ChangeRecords for IDENTITY-PRESERVING renames only), then membership-
+// prune to the surviving node set. Mirrors berry's `remapSidecar`: an oldId in
+// `nextNodes` is rewritten to the new node's id; an oldId absent from `nextNodes`
+// keeps its own id (and is dropped when that id is gone — the version-bump reset).
+function remapSidecar(
+  sidecar: YarnClassicSidecar,
+  nextNodes: Map<string, Node>,
+  graph: Graph,
+): YarnClassicSidecar {
+  const remap = (m: Map<string, string[]>): Map<string, string[]> => {
+    const next = new Map<string, string[]>()
+    for (const [oldId, lines] of m) {
+      const nextId = nextNodes.get(oldId)?.id ?? oldId
+      if (graph.getNode(nextId) !== undefined) next.set(nextId, lines.slice())
+    }
+    return next
+  }
+  const entrySpecs = remap(sidecar.entrySpecs)
+  const entryExtras = sidecar.entryExtras !== undefined ? remap(sidecar.entryExtras) : undefined
+  return entryExtras !== undefined ? { entrySpecs, entryExtras } : { entrySpecs }
+}
+
 function isEmptySidecar(sidecar: YarnClassicSidecar): boolean {
   return sidecar.entrySpecs.size === 0 && (sidecar.entryExtras?.size ?? 0) === 0
 }
@@ -643,7 +667,8 @@ function isEmptySidecar(sidecar: YarnClassicSidecar): boolean {
  * Wraps a Graph so that every `.mutate()` call re-attaches the yarn-classic
  * key-descriptor sidecar (the verbatim parse-time entry-key set + unknown-field
  * extras, keyed by NodeId) to the brand-new Graph instance `mutate()` returns —
- * MEMBERSHIP-PRUNED to that graph's surviving node set via `pruneSidecar`.
+ * id-REMAPPED for identity-preserving renames then membership-pruned to that
+ * graph's surviving node set via `remapSidecar`.
  *
  * This mirrors the yarn-BERRY `withSidecarPropagation` wrapper in
  * `_yarn-berry-core.ts` (which propagates peerDependencies / conditions /
@@ -656,15 +681,20 @@ function isEmptySidecar(sidecar: YarnClassicSidecar): boolean {
  * surviving (non-renamed) node keeps its full on-disk descriptor set across
  * parse → modify → stringify.
  *
- * A node that is itself version-BUMPED / RENAMED by the modify (e.g.
- * `replaceVersion` of the very node whose key held orphans → a NEW NodeId)
- * legitimately RESETS its key: its old NodeId is absent from the next graph, so
- * `pruneSidecar` drops that sidecar entry and the new node reconstructs its key
- * from live edges (+ any fresh sidecar). The old version's orphan ranges do not
- * apply to the new version, so they correctly do NOT carry across the bump. (No
- * old→new NodeId remap is threaded for renames — that is the separate
- * pre-existing #114 sidecar-rename limitation shared by ALL adapters, incl.
- * berry, and is out of scope here.)
+ * #114 — an IDENTITY-PRESERVING rename (a peerContext shift that re-keys the
+ * `(...)` suffix but keeps the `name@version` base) CARRIES its key descriptors
+ * onto the new id: the old→new pair is read off the mutate's ChangeRecords and
+ * threaded through `remapSidecar`, so the renamed node keeps its verbatim
+ * entry-key set across parse → modify → stringify (this is the gap that dropped
+ * sidecar fidelity for renamed nodes on the audit-fix path).
+ *
+ * A node that is itself version-BUMPED by the modify (e.g. `replaceVersion` of
+ * the very node whose key held orphans → a NEW name@version NodeId) legitimately
+ * RESETS its key: the base key differs, so the old→new guard below leaves it
+ * UNMAPPED, its old NodeId is absent from the next graph, and `remapSidecar`'s
+ * membership check drops that entry — the new node reconstructs its key from live
+ * edges (+ any fresh sidecar). The old version's orphan ranges do not apply to
+ * the new version, so they correctly do NOT carry across the bump.
  */
 function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Graph {
   // Thin delegation proxy — only `mutate` is overridden; everything else
@@ -687,11 +717,24 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
     layoutHints: ()        => graph.layoutHints(),
     mutate(transaction: (m: Mutator) => void): MutateResult {
       const result = graph.mutate(transaction)
-      // Membership-prune to the NEW graph's node set: surviving NodeIds keep
-      // their verbatim entry-key descriptors; a removed / bumped / renamed node
-      // drops its entry (its old NodeId is gone), so the replacement node
-      // reconstructs its key from live edges. Mirrors berry's prune-on-mutate.
-      const nextSidecar = pruneSidecar(sidecar, result.graph)
+      // #114 — build the old→new NodeId map from the applied ChangeRecords for
+      // IDENTITY-PRESERVING renames only (`name@version[+…]` base unchanged — a
+      // peerContext shift). A genuine version/identity change is left UNMAPPED so
+      // its entry membership-prunes (the old version's descriptors do not apply to
+      // the new node — it resets to a key reconstructed from live edges). Surviving
+      // (non-renamed) NodeIds map to themselves and keep their verbatim descriptors.
+      const nextNodes = new Map<string, Node>()
+      for (const rec of result.applied) {
+        if (rec.kind !== 'node-replaced' && rec.kind !== 'peer-context-replaced') continue
+        const oldId = rec.oldSubject
+        if (oldId === undefined) continue // id unchanged — no remap needed
+        if (stripPeerContextFromNodeId(oldId) !== stripPeerContextFromNodeId(rec.subject)) {
+          continue // identity/version change — reset, do not carry the old sidecar
+        }
+        const newNode = result.graph.getNode(rec.subject)
+        if (newNode !== undefined) nextNodes.set(oldId, newNode)
+      }
+      const nextSidecar = remapSidecar(sidecar, nextNodes, result.graph)
       rememberSidecar(result.graph, nextSidecar)
       // Recursively re-wrap so a SUBSEQUENT mutate on the returned graph
       // propagates too (modify primitives chain several mutate calls).

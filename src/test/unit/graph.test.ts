@@ -687,7 +687,7 @@ describe('mutate', () => {
     expect(g2.out(newId, 'peer').map(e => e.dst)).toEqual(['react@17.0.0'])
     // react@18.0.0 no longer the peer target
     expect(g2.in('react@18.0.0', 'peer')).toEqual([])
-    expect(applied).toEqual([{ kind: 'peer-context-replaced', subject: newId }])
+    expect(applied).toEqual([{ kind: 'peer-context-replaced', subject: newId, oldSubject: 'rd@18.0.0(react@18.0.0)' }])
   })
 
   it('mutate result graph and original both remain valid', () => {

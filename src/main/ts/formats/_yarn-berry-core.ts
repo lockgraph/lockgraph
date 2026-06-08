@@ -12,6 +12,7 @@ import {
   type EdgeKind,
   nameOf,
   serializeNodeId,
+  stripPeerContextFromNodeId,
   type TarballPayload,
   toTarballKey,
   type TarballKeyInputs,
@@ -1030,11 +1031,13 @@ export function rememberSidecar(graph: Graph, sidecar: YarnBerryFamilySidecar): 
  * back to `EMPTY_SIDECAR` and drop `__metadata.cacheKey` (and any other
  * sidecar data) from the emitted lockfile.
  *
- * nodeId remapping: when a `replaceNode` or `replacePeerContext` change is
- * recorded, the old nodeId is no longer in the graph; the sidecar's
- * peerDependencies / conditions maps are keyed by nodeId, so we remap them
- * through the applied ChangeRecord list exactly as `remapSidecar` does for
- * `enrichFamily`.
+ * nodeId remapping (#114): a `replaceNode` / `replacePeerContext` that re-keys a
+ * node drops its old id from the graph; the sidecar's per-node maps
+ * (peerDependencies / conditions / *Meta / unresolvedDeps / entryKeyDescriptors)
+ * are keyed by nodeId, so the old→new pair is read off the applied ChangeRecord
+ * (`oldSubject`) and threaded through `remapSidecar` exactly as `enrichFamily`
+ * does — but ONLY for an IDENTITY-PRESERVING rename (same `name@version[+…]`
+ * base); a version/identity bump is left to reset (see the guard in `mutate`).
  */
 function withSidecarPropagation(graph: Graph, sidecar: YarnBerryFamilySidecar): Graph {
   // Thin delegation proxy — only `mutate` is overridden; everything else
@@ -1058,28 +1061,38 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnBerryFamilySidecar): 
     mutate(transaction: (m: Mutator) => void): MutateResult {
       const result = graph.mutate(transaction)
       if (!isEmptySidecar(sidecar)) {
-        // Build a nodeId remap from applied ChangeRecords so peerDependencies
-        // and conditions survive replaceNode / replacePeerContext mutations.
-        const idRemap = new Map<string, string>()
-        for (const rec of result.applied) {
-          if (rec.kind === 'node-replaced' || rec.kind === 'peer-context-replaced') {
-            // rec.subject is the NEW id; we need the old id to find the sidecar entry.
-            // We cannot recover the old id from a ChangeRecord alone, but we can scan
-            // the old graph's nodes and see which ones are missing in the new graph.
-            // Rather than a full scan here, we rely on `remapSidecar` which iterates
-            // the old sidecar's keyed entries and maps unknown ids through the remap.
-            // Since we don't track old→new pairs in ChangeRecord, we pass an empty
-            // remap Map and let `remapSidecar`'s fallback (`?? oldId`) handle it —
-            // unchanged ids (most cases) survive as-is; replaced ids whose old-id
-            // no longer exists in nextGraph are simply pruned by `pruneSidecar`.
-            void rec
-          }
-        }
+        // #114 — build the old→new NodeId map from the applied ChangeRecords so a
+        // RENAMED node's per-NodeId sidecar (conditions / dependenciesMeta /
+        // peerDependenciesMeta / peerDependencies / unresolvedDeps / verbatim
+        // entry-key descriptors) follows it onto the new id, instead of being
+        // dropped by `remapSidecar`'s membership prune (its old id is gone).
+        //
+        // CRITICAL NUANCE — carry the sidecar ONLY for an IDENTITY-PRESERVING
+        // rename: one where the `name@version[+patch=][+src=]` base key is
+        // unchanged (a peerContext shift — replacePeerContext, or a replaceNode
+        // that only re-keys the peer suffix). A genuine VERSION/identity bump
+        // (replaceNode to a new name@version) must NOT carry the old node's
+        // sidecar: the old version's conditions / meta / key-descriptors do not
+        // describe the new version, so that node legitimately RESETS to a fresh
+        // key/sidecar reconstructed from live data (the C-KEYDROP-confirmed
+        // behaviour). The base-key guard below leaves version bumps unmapped so
+        // `remapSidecar`'s membership check prunes them.
         const nextNodes = new Map<string, Node>()
-        // No old→new id mapping available from ChangeRecord; metadata (cacheKey etc.)
-        // is global and does not need remapping. peerDependencies/conditions that refer
-        // to a replaced node's old id will be pruned by the nextGraph membership check
-        // inside remapSidecar — matching the behaviour of enrichFamily.
+        for (const rec of result.applied) {
+          if (rec.kind !== 'node-replaced' && rec.kind !== 'peer-context-replaced') continue
+          const oldId = rec.oldSubject
+          if (oldId === undefined) continue // id unchanged — no remap needed
+          if (stripPeerContextFromNodeId(oldId) !== stripPeerContextFromNodeId(rec.subject)) {
+            continue // identity/version change — reset, do not carry the old sidecar
+          }
+          const newNode = result.graph.getNode(rec.subject)
+          if (newNode !== undefined) nextNodes.set(oldId, newNode)
+        }
+        // `remapSidecar` rewrites each per-node key through `nextNodes.get(oldId)?.id`
+        // and keeps it iff the new id is a live node; metadata (cacheKey etc.) is
+        // global and carries unconditionally. An old id absent from `nextNodes` (a
+        // version bump, or any non-rename) still falls back to its own id and is
+        // pruned by the membership check when that id is gone — unchanged behaviour.
         const nextSidecar = remapSidecar(sidecar, nextNodes, result.graph)
         // If remapSidecar pruned everything (replaced nodes), fall back to at least
         // preserving the format-level metadata (cacheKey, compressionLevel, etc.)
