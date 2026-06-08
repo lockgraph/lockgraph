@@ -41,14 +41,14 @@ const BERRY_FORMATS: FormatId[] = [
 // (not field-order — verified by the field-order assertion still passing). These
 // are tracked here so the #117 oracle isn't blocked by orthogonal bugs; each has
 // its own follow-up. The field-ORDER check still runs for them.
-const KNOWN_NON_BYTE_IDENTICAL: Record<string, string> = {
-  'yarnpkg-berry-master-6861e75':
-    'a `dependencies:` ref to a GitHub-shorthand range (`pem: dexus/pem`) is re-emitted with a synthesized `npm:` prefix (`npm:dexus/pem`) (range-normalization, not field-order or linkType — the `link:`/`portal:` linkType bug #95 is fixed; same class as parcel-bundler-parcel-v2)',
-  'highlight-highlight-main-7a297b5':
-    'very long compound entry key uses yarn `? <key> :` explicit-key wrapping; emitter writes it as one quoted line (key-wrapping, not field-order)',
-  'parcel-bundler-parcel-v2-5948485':
-    'GitHub-shorthand dep range `mischnic/buffer#…` re-emitted with synthesized `npm:` prefix (range-normalization, not field-order)',
-}
+//
+// EMPTY (#119): every real-world berry lock now reaches FULL byte-identity. The
+// last two nits are fixed — GitHub-shorthand dep ranges (`pem: dexus/pem`,
+// `buffer: "mischnic/buffer#…"`) emit VERBATIM instead of gaining a synthesised
+// `npm:` prefix (parcel, yarnpkg-berry), and a very long compound entry key
+// (> 1024 quoted chars) emits in yarn's explicit-key `? <key>\n:` form (highlight).
+// Add a lock here ONLY for a genuinely NEW orthogonal nit — never to force-pass.
+const KNOWN_NON_BYTE_IDENTICAL: Record<string, string> = {}
 
 type BerryLock = { repo: string; format: FormatId; source: string }
 

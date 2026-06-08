@@ -51,8 +51,33 @@ import { readInstalledManifest, type InstalledManifestMeta } from '../complete/l
 // reparse stays well-formed. Per ADR-0016 §B `npm:` is the default
 // protocol for registry packages.
 const PROTOCOL_RE = /^[A-Za-z][A-Za-z0-9+\-.]*:/
+
+// #119 NIT A — a GitHub-shorthand range (`owner/repo`, `owner/repo#ref`) is NOT
+// a bare npm range: yarn writes it VERBATIM in both the entry key and the
+// dependency-block value (`pem: dexus/pem`, `buffer: "mischnic/buffer#…"`),
+// resolving it via the `git`/`github` plugin — it must NEVER be defaulted to
+// `npm:`. This is the no-protocol branch of yarn's `gitUtils.gitPatterns`
+// shorthand recogniser, transcribed verbatim from
+// `yarnpkg/berry/packages/plugin-git/sources/gitUtils.ts`:
+//   /^(?:github:|https:\/\/github\.com\/)?(?!\.{1,2}\/)([a-zA-Z._0-9-]+)\/
+//    (?!\.{1,2}(?:#|$))([a-zA-Z._0-9-]+?)(?:\.git)?(?:#.*)?$/
+// reduced to the bare form (the optional `github:`/URL prefix is already caught
+// by `PROTOCOL_RE` / `hasExplicitProtocol`, so only the prefix-less `owner/repo`
+// shape reaches here). The `(?!\.{1,2}\/)` / `(?!\.{1,2}(?:#|$))` look-aheads
+// reject `./`-`../` relative paths; the `[a-zA-Z._0-9-]+` segments forbid `:`
+// and whitespace, so a semver range (`5.0.x || 5.1.x`, `>=4.8.4 <6.1.0`) — which
+// never contains `/` — and any protocol-bearing or path range can never match.
+// Validated against the whole real-world berry corpus: the ONLY two prefix-less
+// dependency ranges containing `/` are exactly `dexus/pem` and
+// `mischnic/buffer#b8a4fa94`, both genuine GitHub shorthands.
+const GITHUB_SHORTHAND_RE =
+  /^(?!\.{1,2}\/)[a-zA-Z._0-9-]+\/(?!\.{1,2}(?:#|$))[a-zA-Z._0-9-]+?(?:\.git)?(?:#.*)?$/
+
+// Does `range` need the synthesised `npm:` default protocol? No for an explicit
+// `<scheme>:` (already well-formed) and no for a GitHub shorthand (yarn keeps it
+// verbatim — #119 NIT A); yes for a prefix-less semver range.
 function entryKeyRangeOf(range: string): string {
-  return PROTOCOL_RE.test(range) ? range : `npm:${range}`
+  return PROTOCOL_RE.test(range) || GITHUB_SHORTHAND_RE.test(range) ? range : `npm:${range}`
 }
 
 function looksLikePatchLocator(raw: string | undefined): boolean {
@@ -221,6 +246,12 @@ interface SpecPart {
   name: string
   protocol: string
   spec: string
+  // The VERBATIM range substring after `<name>@` (`npm:^1`, `dexus/pem`,
+  // `workspace:.`, `1.14.1`). Drives the specIndex-key build through the SAME
+  // `entryKeyRangeOf` normalisation the edge side uses, so a GitHub-shorthand
+  // entry (#119 NIT A) indexes under its verbatim range and the Rung-0 lookup
+  // aligns. `protocol`/`spec` stay split for the patch/workspace/name logic.
+  raw: string
 }
 
 interface DerivedPeer {
@@ -545,7 +576,13 @@ export function parseFamily(
     }
 
     for (const spec of specs) {
-      const lookup = `${spec.name}@${spec.protocol}:${spec.spec}`
+      // #119 NIT A — build the specIndex key through the SAME `entryKeyRangeOf`
+      // normalisation the edge `lookup` uses, so a GitHub-shorthand entry
+      // (`pem@dexus/pem`) indexes under its verbatim range — not a synthesised
+      // `pem@npm:dexus/pem` — and a consumer's `pem: dexus/pem` dep resolves at
+      // Rung-0. A protocol-bearing spec (`npm:^1`, `workspace:.`, `patch:…`) is
+      // returned verbatim by `entryKeyRangeOf`, so this is identity for them.
+      const lookup = `${spec.name}@${entryKeyRangeOf(spec.raw)}`
       // Cross-family emit can intentionally advertise the same spec from
       // multiple sibling entries to preserve source-graph edge targets when
       // the input lacks yarn-native resolution sidecars. Keep the first
@@ -1144,13 +1181,15 @@ function parseSpec(raw: string): SpecPart {
   const colon = rest.indexOf(':')
   // Yarn 4 occasionally emits a bare `<name>@<version>` half in a compound
   // entry-key when a workspace package is also published to the npm registry
-  // (e.g. `"@scope/pkg@1.14.1, @scope/pkg@workspace:packages/pkg"`).
-  // Per ADR-0016 §B `npm:` is the default protocol — synthesise it so the
-  // grammar stays uniform downstream (matches `entryKeyRangeOf`).
+  // (e.g. `"@scope/pkg@1.14.1, @scope/pkg@workspace:packages/pkg"`), and a
+  // GitHub-shorthand half (`pem@dexus/pem` — #119 NIT A). `rest` (the verbatim
+  // range) is carried on `raw` so the specIndex key is built through the shared
+  // `entryKeyRangeOf` normalisation: a bare semver gets `npm:`, a GitHub
+  // shorthand stays verbatim — keeping the key aligned with the edge lookup.
   if (colon < 0) {
-    return { name, protocol: 'npm', spec: rest }
+    return { name, protocol: 'npm', spec: rest, raw: rest }
   }
-  return { name, protocol: rest.slice(0, colon), spec: rest.slice(colon + 1) }
+  return { name, protocol: rest.slice(0, colon), spec: rest.slice(colon + 1), raw: rest }
 }
 
 function parseEntryKey(key: string): SpecPart[] {
@@ -2457,7 +2496,13 @@ function addEdgesFromBlock(
 
 function normalizedEdgeRange(kind: EdgeKind, range: string): string {
   if (kind === 'peer') return range
-  return hasExplicitProtocol(range) ? range : `npm:${range}`
+  // #119 NIT A — a GitHub shorthand (`dexus/pem`, `mischnic/buffer#…`) is kept
+  // verbatim, exactly as the entry-key side (`entryKeyRangeOf`); only a true
+  // prefix-less semver range gets the `npm:` default. This keeps the edge
+  // `attrs.range` byte-identical to what yarn wrote so the dependency-block value
+  // round-trips, and keeps the Rung-0 `lookup` aligned with the verbatim entry
+  // key (`parseEntryKey` is github-shorthand-aware too — see `parseSpec`).
+  return hasExplicitProtocol(range) || GITHUB_SHORTHAND_RE.test(range) ? range : `npm:${range}`
 }
 
 // Bug #104 — project a bound NodeId to its bare `${name}@${version}` key for the

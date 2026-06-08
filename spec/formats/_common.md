@@ -239,6 +239,39 @@ single quoting predicate now delivers the bare form directly, so a genuine
 string field whose value is literally `"true"` / `"false"` (e.g. a `bin`
 target) is likewise emitted **bare**, exactly as yarn writes it.
 
+#### 1.5.1 Explicit-key wrapping for very long keys (#119)
+
+A mapping key is written **inline** as `<key>:` unless its **stringified
+(quoted) length exceeds 1024 characters**, at which point yarn's SYML writer
+switches to the YAML explicit-key form:
+
+```
+? "<very-long-key>"
+:
+  <value block at +1 indent>
+```
+
+i.e. the `? ` marker + the (quoted) key on one line, a bare `:` value-indicator
+line at the key's own indentation, then the value. The threshold is `> 1024` on
+the **already-quoted** key string (the surrounding `"` count toward the length —
+keys are stringified by the same `stringifyString` as values per
+[§1.5](#15-quoting-the-syml-quoting-predicate)), transcribed verbatim from the
+upstream writer (`yarnpkg-parsers/sources/syml.ts`, `stringifyValue`):
+
+```
+const keyPart = stringifiedKey.length > 1024
+  ? `? ${stringifiedKey}\n${recordIndentation}:`
+  : `${stringifiedKey}:`;
+```
+
+This affects only the rare **compound entry key** that concatenates many
+descriptors (`"<dep>@npm:^a, <dep>@npm:^b, …"`) past the bound — e.g. a package
+referenced under ~40 distinct ranges. The SYML **parser** already reads the
+`? key\n:` form (per #5/#37); this is the **emit** rule. Validated against the
+real-world corpus: the only keys that cross the bound are highlight's two
+~1 KB `@babel/runtime` compound keys (quoted length 1028 and 1092); the longest
+**inline** key anywhere is 978 (≤ 1024).
+
 ### 1.6 Indent, line endings, trailing newline
 
 - **Indent.** Two spaces per level (a yarn-berry invariant).
@@ -737,6 +770,25 @@ constraints into the edge resolver).
 > [yarn-berry-v8 Emit notes](./yarn-berry-v8.md#emit). This is the exact inverse
 > of the ladder below: the ladder resolves a range descriptor to its node on
 > parse; emit re-keys from the source descriptors and adds no resolved-version.
+
+> **Range defaulting & the GitHub-shorthand exception (#119).** A berry
+> descriptor without an explicit `<scheme>:` protocol is defaulted to the `npm:`
+> registry protocol (per [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md) §B) — both
+> for the specIndex **key** built on parse and the edge `attrs.range`, so the two
+> stay aligned and a bare `^1.2.3` resolves. **Exception:** a **GitHub shorthand**
+> — `owner/repo` or `owner/repo#ref` — is **not** a bare npm range; yarn resolves
+> it via the `git`/`github` plugin and writes it **verbatim** in both the entry
+> key (`pem@dexus/pem:`) and the dependency-block value (`pem: dexus/pem`,
+> `buffer: "mischnic/buffer#…"`). It must therefore **never** gain a synthesised
+> `npm:` prefix. The recogniser is the prefix-less branch of yarn's
+> `gitUtils.gitPatterns` (`plugin-git/sources/gitUtils.ts`):
+> `^(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}(?:#|$))[\w.-]+?(?:\.git)?(?:#.*)?$`
+> — the `(?!\.{1,2}\/)` look-ahead excludes `./`-`../` relative paths, and the
+> `[a-zA-Z._0-9-]` segments forbid `:` / whitespace, so a semver range (which
+> never contains `/`) and any protocol-bearing or path range can never match.
+> Defaulting and the exception are applied **symmetrically** on the parse
+> entry-key/lookup side and the emit dependency-value side, so a same-format
+> round-trip is byte-faithful.
 
 ### 5.2 The resolution ladder (normative)
 

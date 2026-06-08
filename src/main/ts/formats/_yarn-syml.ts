@@ -262,6 +262,30 @@ function formatScalar(raw: string): string {
   return needsQuotes(raw) ? `"${escapeQuoted(raw)}"` : raw
 }
 
+// #119 NIT B — yarn's SYML writer switches a key from the inline `<key>:` form to
+// the YAML explicit-key form `? <key>\n<indent>:` once the STRINGIFIED (quoted)
+// key exceeds an internal line-width threshold. Transcribed verbatim from
+// `yarnpkg/berry/packages/yarnpkg-parsers/sources/syml.ts` (`stringifyValue`):
+//
+//   const keyPart = stringifiedKey.length > 1024
+//     ? `? ${stringifiedKey}\n${recordIndentation}:`
+//     : `${stringifiedKey}:`;
+//
+// The bound is `> 1024` on the QUOTED key length (`stringifiedKey` is produced by
+// the same string-stringifier as values, so the surrounding `"` count). Verified
+// against the real-world corpus: highlight's two ~1 KB compound `@babel/runtime`
+// keys (quoted length 1028 and 1092) are the ONLY keys that cross it; the longest
+// inline key anywhere is 978 (≤ 1024). `recordIndentation` is the key's own indent
+// padding (empty for a top-level entry key).
+const EXPLICIT_KEY_LENGTH_THRESHOLD = 1024
+
+function keyPart(key: string, pad: string): string {
+  const stringifiedKey = formatScalar(key)
+  return stringifiedKey.length > EXPLICIT_KEY_LENGTH_THRESHOLD
+    ? `? ${stringifiedKey}\n${pad}:`
+    : `${stringifiedKey}:`
+}
+
 function renderMap(map: SymlMap, indent: number, topLevel: boolean): string[] {
   const lines: string[] = []
   const entries = Object.entries(map)
@@ -271,9 +295,9 @@ function renderMap(map: SymlMap, indent: number, topLevel: boolean): string[] {
     const [key, value] = entries[i] ?? []
     if (key === undefined || value === undefined) continue
     if (typeof value === 'string') {
-      lines.push(`${pad}${formatScalar(key)}: ${formatScalar(value)}`)
+      lines.push(`${pad}${keyPart(key, pad)} ${formatScalar(value)}`)
     } else {
-      lines.push(`${pad}${formatScalar(key)}:`)
+      lines.push(`${pad}${keyPart(key, pad)}`)
       lines.push(...renderMap(value, indent + 1, false))
     }
     if (topLevel && i < entries.length - 1) lines.push('')
