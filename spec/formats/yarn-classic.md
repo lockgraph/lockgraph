@@ -300,6 +300,12 @@ package name" would mint a phantom `~5.26.4@<version>` node).
     faithful port of yarn's `shouldWrapKey`. The last clause is what forces every
     **scoped** `@scope/...` descriptor (leading `@`) and any leading-digit
     descriptor to be quoted.
+  - **Dependency-block VALUES obey the same rule.** yarn's `_stringify` writes a
+    leaf string value (`<name> <range>` inside `dependencies:`/`optionalDependencies:`)
+    through the same `maybeWrap`/`shouldWrapKey` as keys — so a dist-tag value like
+    `is-empty latest` (letter-start, no special char) emits **bare**, while
+    `chalk "^2.4.2"` / `foo "1.0.0"` / `x "npm:y@^1"` stay quoted. Emitting every
+    value quoted over-quotes the letter-start (dist-tag) case vs real yarn (#107).
   - Crucially the trigger class is **narrow**: `^`, `~`, `>`, `<`, `=`, `*`, `|`,
     `#`, `?`, `&`, `!`, `'`, backtick, and `{}` are **not** triggers, so a bare
     range descriptor such as `amdefine@>=0.0.4:`, `acorn@^8.5.0:`, or a bare

@@ -495,7 +495,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     if (dependencies.length > 0) {
       lines.push('  dependencies:')
       for (const [name, range] of dependencies) {
-        lines.push(`    ${quoteDepName(name)} "${escapeQuoted(range)}"`)
+        lines.push(`    ${quoteDepName(name)} ${mustQuoteSpec(range) ? `"${escapeQuoted(range)}"` : range}`)
       }
     }
 
@@ -506,7 +506,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     if (optionalDependencies.length > 0) {
       lines.push('  optionalDependencies:')
       for (const [name, range] of optionalDependencies) {
-        lines.push(`    ${quoteDepName(name)} "${escapeQuoted(range)}"`)
+        lines.push(`    ${quoteDepName(name)} ${mustQuoteSpec(range) ? `"${escapeQuoted(range)}"` : range}`)
       }
     }
 
