@@ -67,11 +67,33 @@ const ENTRY_KEY_WRAP_RE = /[:\s\\",[\]]/
 const ENTRY_KEY_LEADING_ALPHA_RE = /^[a-zA-Z]/
 const BERRY_HEADER_RE = /^__metadata:\s*(?:\r?\n|$)/m
 
+// F8 — a per-node verbatim reference to a dependency whose TARGET is ABSENT from
+// the lock entirely (a genuine Rung-4 drop: no entry, no candidate, never an
+// ambiguous miss). yarn-classic joins consumer ranges to entries by exact
+// `<name>@<range>` key; when the target package has NO entry block at all there
+// is nothing to bind, so we do NOT mint a phantom node (identity stays clean) —
+// instead we capture the dependency line VERBATIM (its on-disk block kind,
+// dep-name, exact range string) and re-emit it into the same inner-block on
+// stringify, so a SAME-FORMAT round-trip is byte-faithful. Mirrors the
+// yarn-berry `UnresolvedDepRef` (#103) one-for-one. The MISSING-ENTRY diagnostic
+// still fires alongside capture — preservation keeps BOTH the bytes and the
+// signal; it never silences the warning. Same-format round-trip fidelity only:
+// never promoted to a graph edge, never carried across a cross-PM convert (the
+// sidecar is classic-local).
+interface UnresolvedDepRef {
+  block: 'dependencies' | 'optionalDependencies'
+  name: string
+  range: string
+}
+
 interface YarnClassicSidecar {
   entrySpecs: Map<string, string[]>
   /** Per-NodeId verbatim unknown entry-field lines (see YarnClassicEntry.extras),
    *  for round-trip re-emit. */
   entryExtras?: Map<string, string[]>
+  /** F8 — per-node verbatim refs to dep targets ABSENT from the lock (genuine
+   *  Rung-4 drops). Same-format round-trip fidelity only (see UnresolvedDepRef). */
+  unresolvedDeps?: Map<string, UnresolvedDepRef[]>
 }
 
 interface YarnClassicEntry {
@@ -210,6 +232,10 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
   const specIndex = new Map<string, string>()
   const sidecar = new Map<string, string[]>()
   const entryExtras = new Map<string, string[]>()
+  // F8 — verbatim Rung-4-dropped dep refs (target absent from the lock), keyed by
+  // source NodeId, collected during edge resolution and re-emitted into the
+  // matching inner-block for byte-faithful same-format round-trip.
+  const unresolvedDeps = new Map<string, UnresolvedDepRef[]>()
   const unknownFields = new Set<string>()
   const entryNodes: Array<{ node: Node; entry: YarnClassicEntry }> = []
   const seenEntries = new Map<string, { resolved?: string; integrity?: string }>()
@@ -359,8 +385,8 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
     manifestsProvided: options.overrides !== undefined,
   }
   for (const { node, entry } of entryNodes) {
-    addEdgesFromMap(builder, diagnostics, node.id, entry.dependencies, 'dep', specIndex, ladder)
-    addEdgesFromMap(builder, diagnostics, node.id, entry.optionalDependencies, 'optional', specIndex, ladder)
+    addEdgesFromMap(builder, diagnostics, node.id, entry.dependencies, 'dep', specIndex, ladder, unresolvedDeps)
+    addEdgesFromMap(builder, diagnostics, node.id, entry.optionalDependencies, 'optional', specIndex, ladder, unresolvedDeps)
   }
 
   for (const diagnostic of diagnostics) {
@@ -369,7 +395,7 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
 
   try {
     const graph = builder.seal()
-    const parsedSidecar: YarnClassicSidecar = { entrySpecs: sidecar, entryExtras }
+    const parsedSidecar = buildSidecar(sidecar, entryExtras, unresolvedDeps)
     rememberSidecar(graph, parsedSidecar)
     // Wrap so any subsequent graph.mutate() (modify primitives, optimize,
     // enrich) re-attaches the key-descriptor sidecar — membership-pruned — to
@@ -458,7 +484,14 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       for (const raw of extras) lines.push(`  ${raw}`)
     }
 
-    const dependencies = collectDependencyBlockEntries(graph, node.id, emitDiagnostic)
+    // F8 — fold any verbatim Rung-4-dropped refs (target absent from the lock)
+    // back into their original block so a same-format round-trip is byte-faithful.
+    // Re-sorted by name alongside the live edges to keep yarn's alphabetical block
+    // order; a live edge of the same name always wins (never overwritten).
+    const dependencies = withUnresolvedDepRefs(
+      collectDependencyBlockEntries(graph, node.id, emitDiagnostic),
+      unresolvedDepRefsOfNode(emitSidecar, node.id, 'dependencies'),
+    )
     if (dependencies.length > 0) {
       lines.push('  dependencies:')
       for (const [name, range] of dependencies) {
@@ -466,7 +499,10 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       }
     }
 
-    const optionalDependencies = collectBlockEntries(graph, graph.out(node.id, 'optional'), emitDiagnostic)
+    const optionalDependencies = withUnresolvedDepRefs(
+      collectBlockEntries(graph, graph.out(node.id, 'optional'), emitDiagnostic),
+      unresolvedDepRefsOfNode(emitSidecar, node.id, 'optionalDependencies'),
+    )
     if (optionalDependencies.length > 0) {
       lines.push('  optionalDependencies:')
       for (const [name, range] of optionalDependencies) {
@@ -614,7 +650,7 @@ export function optimize(
 }
 
 function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
-  if (sidecar.entrySpecs.size === 0 && (sidecar.entryExtras?.size ?? 0) === 0) return
+  if (isEmptySidecar(sidecar)) return
   sidecarByGraph.set(graph, sidecar)
 }
 
@@ -633,7 +669,14 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
       if (reachableIds.has(nodeId)) entryExtras.set(nodeId, extras.slice())
     }
   }
-  return entryExtras !== undefined ? { entrySpecs, entryExtras } : { entrySpecs }
+  let unresolvedDeps: Map<string, UnresolvedDepRef[]> | undefined
+  if (sidecar.unresolvedDeps !== undefined) {
+    unresolvedDeps = new Map<string, UnresolvedDepRef[]>()
+    for (const [nodeId, refs] of sidecar.unresolvedDeps) {
+      if (reachableIds.has(nodeId)) unresolvedDeps.set(nodeId, refs.map(r => ({ ...r })))
+    }
+  }
+  return buildSidecar(entrySpecs, entryExtras, unresolvedDeps)
 }
 
 // #114 — re-key the per-NodeId sidecar through an old→new id map (built from a
@@ -646,21 +689,41 @@ function remapSidecar(
   nextNodes: Map<string, Node>,
   graph: Graph,
 ): YarnClassicSidecar {
-  const remap = (m: Map<string, string[]>): Map<string, string[]> => {
-    const next = new Map<string, string[]>()
-    for (const [oldId, lines] of m) {
+  const remap = <T>(m: Map<string, T[]>, clone: (v: T) => T): Map<string, T[]> => {
+    const next = new Map<string, T[]>()
+    for (const [oldId, vals] of m) {
       const nextId = nextNodes.get(oldId)?.id ?? oldId
-      if (graph.getNode(nextId) !== undefined) next.set(nextId, lines.slice())
+      if (graph.getNode(nextId) !== undefined) next.set(nextId, vals.map(clone))
     }
     return next
   }
-  const entrySpecs = remap(sidecar.entrySpecs)
-  const entryExtras = sidecar.entryExtras !== undefined ? remap(sidecar.entryExtras) : undefined
-  return entryExtras !== undefined ? { entrySpecs, entryExtras } : { entrySpecs }
+  const identityStr = (s: string): string => s
+  const entrySpecs = remap(sidecar.entrySpecs, identityStr)
+  const entryExtras = sidecar.entryExtras !== undefined ? remap(sidecar.entryExtras, identityStr) : undefined
+  const unresolvedDeps = sidecar.unresolvedDeps !== undefined
+    ? remap(sidecar.unresolvedDeps, (r: UnresolvedDepRef) => ({ ...r }))
+    : undefined
+  return buildSidecar(entrySpecs, entryExtras, unresolvedDeps)
+}
+
+// Assemble a YarnClassicSidecar, omitting the optional carriers when they are
+// empty so the shape stays minimal (an absent map is cheaper than an empty one
+// and keeps `isEmptySidecar`/equality checks clean).
+function buildSidecar(
+  entrySpecs: Map<string, string[]>,
+  entryExtras: Map<string, string[]> | undefined,
+  unresolvedDeps: Map<string, UnresolvedDepRef[]> | undefined,
+): YarnClassicSidecar {
+  const sidecar: YarnClassicSidecar = { entrySpecs }
+  if (entryExtras !== undefined && entryExtras.size > 0) sidecar.entryExtras = entryExtras
+  if (unresolvedDeps !== undefined && unresolvedDeps.size > 0) sidecar.unresolvedDeps = unresolvedDeps
+  return sidecar
 }
 
 function isEmptySidecar(sidecar: YarnClassicSidecar): boolean {
-  return sidecar.entrySpecs.size === 0 && (sidecar.entryExtras?.size ?? 0) === 0
+  return sidecar.entrySpecs.size === 0
+    && (sidecar.entryExtras?.size ?? 0) === 0
+    && (sidecar.unresolvedDeps?.size ?? 0) === 0
 }
 
 /**
@@ -1101,6 +1164,10 @@ function addEdgesFromMap(
   kind: 'dep' | 'optional',
   specIndex: Map<string, string>,
   ladder: ClassicEdgeLadderContext,
+  // F8 — collector for Rung-4-dropped refs whose target is ABSENT from the lock.
+  // Appended to (keyed by srcId) so emit re-emits them verbatim into the matching
+  // inner-block; omitted on paths that don't preserve.
+  unresolvedDeps?: Map<string, UnresolvedDepRef[]>,
 ): void {
   for (const [name, range] of Array.from(deps.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))) {
     // Rung 0 — exact specIndex match (UNCHANGED, O(1)).
@@ -1153,6 +1220,25 @@ function addEdgesFromMap(
       })
       if (!ladder.manifestsProvided && isClassicRegistryRange(range) && (ladder.candidatesByName.get(name)?.length ?? 0) > 0) {
         diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
+      }
+      // F8 — the dep target is ABSENT from the lock (no entry, no candidate to
+      // bind), so no graph edge can carry it AND we do NOT mint a phantom node
+      // (identity stays clean). Preserve the descriptor VERBATIM (on-disk block
+      // kind, dep-name, exact range string) in the per-node sidecar so a
+      // SAME-FORMAT round-trip re-emits this line byte-for-byte. This is the
+      // GENUINELY-absent case only — the two ambiguous-miss rungs above `continue`
+      // before reaching here, so an ambiguous descriptor is NOT captured (it must
+      // stay dropped + diagnosed, never silently re-emitted). The MISSING-ENTRY
+      // warning above still fires — preservation keeps BOTH the bytes and the
+      // signal; it does not silence the diagnostic. Mirrors yarn-berry F8 (#103).
+      if (unresolvedDeps !== undefined) {
+        const refs = unresolvedDeps.get(srcId) ?? []
+        refs.push({
+          block: kind === 'optional' ? 'optionalDependencies' : 'dependencies',
+          name,
+          range,
+        })
+        unresolvedDeps.set(srcId, refs)
       }
       continue
     }
@@ -1539,6 +1625,36 @@ function collectBlockEntries(
     })
     .filter((entry): entry is [string, string] => entry !== undefined)
     .sort((a, b) => cmpUtf16(a[0], b[0]))
+}
+
+// F8 — the verbatim absent-target dep refs captured for `nodeId` in the given
+// block, or `[]` when none (no sidecar / no refs for that node+block). The
+// `block` filter routes a `dep`-kind drop to the `dependencies:` emit and an
+// `optional`-kind drop to `optionalDependencies:`.
+function unresolvedDepRefsOfNode(
+  sidecar: YarnClassicSidecar | undefined,
+  nodeId: string,
+  block: 'dependencies' | 'optionalDependencies',
+): UnresolvedDepRef[] {
+  const refs = sidecar?.unresolvedDeps?.get(nodeId)
+  return refs === undefined ? [] : refs.filter(ref => ref.block === block)
+}
+
+// F8 — merge the verbatim absent-target refs into a live `[name, range]` block,
+// then re-sort by name to match yarn's alphabetical block order. A LIVE edge of
+// the same dep-name always wins (the ref is skipped) so a re-emitted edge is
+// never clobbered by a stale verbatim line. Mirrors the yarn-berry
+// `withUnresolvedDepRefs` (#103) merge-then-sort.
+function withUnresolvedDepRefs(
+  liveBlock: Array<[string, string]>,
+  refs: readonly UnresolvedDepRef[],
+): Array<[string, string]> {
+  if (refs.length === 0) return liveBlock
+  const byName = new Map<string, string>(liveBlock)
+  for (const ref of refs) {
+    if (!byName.has(ref.name)) byName.set(ref.name, ref.range)
+  }
+  return Array.from(byName.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))
 }
 
 function warnDroppedPeerEdges(

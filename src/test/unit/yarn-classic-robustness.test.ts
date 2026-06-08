@@ -449,6 +449,82 @@ describe('yarn-classic robustness — aliased dist-tag dependency (F6 + dist-tag
     expect(
       g.diagnostics().some(d => d.code === 'YARN_CLASSIC_MISSING_ENTRY' && /foo@npm:bar@latest/.test(d.message)),
     ).toBe(true)
+    // F8 — the absent dep mints no edge/node (above) BUT the verbatim dependency
+    // line is preserved through the per-node sidecar so a same-format round-trip
+    // re-emits it byte-for-byte (preservation ≠ binding — it never becomes a node).
+    const out = stringify('yarn-classic', g)
+    expect(out).toContain('foo "npm:bar@latest"')
+  })
+})
+
+// F8 — a dependency whose TARGET is genuinely ABSENT from the lock (no entry, no
+// candidate to bind) must round-trip its dependency line VERBATIM on a
+// same-format pass, mirroring the yarn-berry F8/#103 `unresolvedDeps` mechanism.
+// The descriptor mints NO edge and NO phantom node (identity stays clean) and the
+// YARN_CLASSIC_MISSING_ENTRY diagnostic still fires — preservation keeps BOTH the
+// bytes and the signal. This is DISTINCT from the dist-tag case where the target
+// EXISTS (that binds a real edge, tested above): only the genuinely-absent ref is
+// preserved verbatim; an AMBIGUOUS miss stays dropped (never resurrected).
+describe('yarn-classic robustness — absent-target dep preserved verbatim (F8)', () => {
+  const lf =
+    H +
+    'pkg-a@^1.0.0:\n' +
+    '  version "1.0.0"\n' +
+    '  resolved "https://registry.yarnpkg.com/pkg-a/-/pkg-a-1.0.0.tgz#deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"\n' +
+    '  dependencies:\n' +
+    '    missing-dep "^1.0.0"\n' +
+    '    other-missing "~2.0.0"\n' +
+    '  optionalDependencies:\n' +
+    '    opt-missing "^3.0.0"\n'
+
+  it('re-emits the absent dep + optional lines verbatim; mints no node; warns', () => {
+    const g = parse('yarn-classic', lf)
+    // No phantom nodes for any absent target.
+    expect(Array.from(g.nodes()).map(n => n.id)).toEqual(['pkg-a@1.0.0'])
+    expect(g.byName('missing-dep')).toEqual([])
+    expect(g.byName('other-missing')).toEqual([])
+    expect(g.byName('opt-missing')).toEqual([])
+    // No edges bound.
+    expect(g.out('pkg-a@1.0.0')).toHaveLength(0)
+    // The missing-entry diagnostic still fires for every absent dep.
+    const missing = g.diagnostics().filter(d => d.code === 'YARN_CLASSIC_MISSING_ENTRY')
+    expect(missing.length).toBe(3)
+    // Verbatim re-emit into the matching block.
+    const out = stringify('yarn-classic', g)
+    expect(out).toContain('  dependencies:')
+    expect(out).toContain('    missing-dep "^1.0.0"')
+    expect(out).toContain('    other-missing "~2.0.0"')
+    expect(out).toContain('  optionalDependencies:')
+    expect(out).toContain('    opt-missing "^3.0.0"')
+  })
+
+  it('round-trip is idempotent (byte-stable on re-parse + re-stringify)', () => {
+    const out1 = stringify('yarn-classic', parse('yarn-classic', lf))
+    const out2 = stringify('yarn-classic', parse('yarn-classic', out1))
+    expect(out2).toBe(out1)
+  })
+
+  it('an AMBIGUOUS dist-tag (≥2 siblings) stays DROPPED — not preserved verbatim', () => {
+    const ambig =
+      H +
+      'dup@1.0.0:\n' +
+      '  version "1.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/dup/-/dup-1.0.0.tgz#1111111111111111111111111111111111111111"\n' +
+      'dup@2.0.0:\n' +
+      '  version "2.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/dup/-/dup-2.0.0.tgz#2222222222222222222222222222222222222222"\n' +
+      'consumer@^1.0.0:\n' +
+      '  version "1.0.0"\n' +
+      '  resolved "https://registry.yarnpkg.com/consumer/-/consumer-1.0.0.tgz#3333333333333333333333333333333333333333"\n' +
+      '  dependencies:\n' +
+      '    dup latest\n'
+    const g = parse('yarn-classic', ambig)
+    const out = stringify('yarn-classic', g)
+    // The ambiguous dep is NOT re-emitted (preservation is genuinely-absent only).
+    expect(out).not.toContain('dup "latest"')
+    expect(out).not.toContain('dup latest')
+    // It is diagnosed as ambiguous, not preserved.
+    expect(g.diagnostics().some(d => /AMBIGUOUS/.test(d.code))).toBe(true)
   })
 })
 

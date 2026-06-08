@@ -163,6 +163,27 @@ Classic specifics:
 - The drop diagnostic is `YARN_CLASSIC_MISSING_ENTRY` (unchanged); a Rung-3
   max-satisfying tie emits `YARN_CLASSIC_AMBIGUOUS_RESOLUTION` (warning) and
   drops without guessing.
+- **A dependency whose target is genuinely ABSENT from the lock round-trips its
+  dependency line verbatim (F8).** When a `dependencies:`/`optionalDependencies:`
+  descriptor reaches Rung 4 because the target package has **no entry at all** (no
+  candidate to bind — `missing-dep "^1.0.0"` with no `missing-dep@…:` entry), the
+  adapter mints **no edge and no phantom node** (identity stays clean) but captures
+  the line verbatim — block kind, dep-name, exact range string — in a per-node
+  sidecar (`unresolvedDeps`) and **re-emits it into the same inner block** on
+  stringify, so a same-format round-trip is byte-faithful. This is the
+  dependency-block analogue of the entry-key orphan preservation below, and the
+  one-for-one mirror of the yarn-berry `unresolvedDeps` mechanism. Two boundaries:
+  - The `YARN_CLASSIC_MISSING_ENTRY` warning **still fires** alongside capture —
+    preservation keeps **both** the bytes and the signal; it never silences the
+    diagnostic.
+  - **Only the genuinely-absent case is preserved.** An **ambiguous** miss (a
+    dist-tag or range against ≥2 siblings → `YARN_CLASSIC_AMBIGUOUS_RESOLUTION`)
+    stays **dropped** — it is `continue`-d before Rung 4, so it is never captured
+    and never resurrected. A dist-tag whose target **exists** binds a real **edge**
+    (Rung 3.5) and likewise never enters this sidecar. Same-format fidelity only:
+    the `unresolvedDeps` sidecar is classic-local and is never promoted to a graph
+    edge nor carried across a cross-PM convert; it propagates through `optimize` /
+    `modify` exactly like the entry-key sidecar (`pruneSidecar` / `remapSidecar`).
 - **Entry keys preserve the verbatim on-disk descriptor set (orphan descriptors
   survive).** The emit side builds each entry key from the **union** of (a) the
   node's surviving incoming `dep`/`optional` edges (`<edge.alias ?? node.name>@<edge.range>`
