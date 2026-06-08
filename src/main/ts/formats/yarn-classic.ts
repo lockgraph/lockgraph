@@ -455,7 +455,14 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     warnPeerContextFlatten(node, warnedPeerContexts, emitDiagnostic)
     warnDroppedPeerEdges(graph, node.id, warnedPeerEdges, emitDiagnostic)
 
-    const key = stringifyEntryKey(entrySpecsOfNode(graph, node))
+    // F11 — yarn sorts entries by the FIRST descriptor's CONTENT (ASCII/code-point),
+    // not the serialized key line: a leading wrapping `"` (ASCII 34, below `@` and
+    // letters) would otherwise cluster all quoted keys ahead of bare ones instead of
+    // interleaving by descriptor. `entrySpecsOfNode` is already sortAlpha-ordered, so
+    // its first element is yarn's entry sort key (raw, unquoted).
+    const specs = entrySpecsOfNode(graph, node)
+    const key = stringifyEntryKey(specs)
+    const entrySortKey = specs[0] ?? key
     const lines = [
       `${key}:`,
       `  version "${escapeQuoted(node.version)}"`,
@@ -510,8 +517,8 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       }
     }
 
-    return { key, text: lines.join('\n') }
-  }).sort((a, b) => cmpUtf16(a.key, b.key))
+    return { key, text: lines.join('\n'), entrySortKey }
+  }).sort((a, b) => cmpUtf16(a.entrySortKey, b.entrySortKey))
 
   // §A header strict shape: empty graph emits HEADER as-is (two blank lines
   // after `# yarn lockfile v1`), so `check` / `ensureClassicHeader` treat the
