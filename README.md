@@ -24,6 +24,13 @@ Published as `0.0.0-snapshot.*` builds — the first stable release is pending.
 [SCHEMAS.md](./SCHEMAS.md) maps each format id to the package-manager versions
 that emit it.
 
+> **ℹ️ Active R&D — snapshot channel.** While the project is under active research &
+> development, every release ships to the **snapshot channel** (`0.0.0-snapshot.N`,
+> published under the `snapshot` npm dist-tag) rather than `latest`. Install the newest
+> snapshot with `npm i @antongolub/lockfile@snapshot`, or pin an exact build
+> (e.g. `npm i @antongolub/lockfile@0.0.0-snapshot.61`). The first stable `latest`
+> release is pending.
+
 | Format | `detect` | `parse` | `stringify` |
 |--------|:-:|:-:|:-:|
 | `npm-1` · `npm-2` · `npm-3`        | ✓ | ✓ | ✓ |
