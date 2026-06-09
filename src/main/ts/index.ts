@@ -27,6 +27,7 @@ import * as yarnBerryV8  from './formats/yarn-berry-v8.ts'
 import * as yarnBerryV9  from './formats/yarn-berry-v9.ts'
 import * as yarnBerryV10 from './formats/yarn-berry-v10.ts'
 import * as yarnClassic  from './formats/yarn-classic.ts'
+import * as lockgraph    from './formats/lockgraph.ts'
 
 export const version = '0.0.0'
 
@@ -91,6 +92,10 @@ export type FormatId =
   | 'pnpm-v6'
   | 'pnpm-v9'
   | 'bun-text'
+  // Native graph-serialization format (#101). Not a PM lockfile — a portable,
+  // versioned, graph-IDENTITY serialization of the L2 model itself. Sits at the
+  // top of detect order (its `@lockgraph` magic is unambiguous).
+  | 'lockgraph'
 
 // L1 Manifest + canonical override types (ADR-0025). The `manifests` /
 // `overrides` options below are the surface ADR-0014 §3 / ADR-0025 specify;
@@ -148,6 +153,7 @@ export type ConvertOptions = {
 // npm `lockfileVersion: N`, pnpm `lockfileVersion: '<v>'`) — но guard
 // against future loosening with newest-first / family-distinctive-first.
 const DETECT_ORDER: readonly FormatId[] = [
+  'lockgraph',
   'bun-text',
   'yarn-berry-v10',
   'yarn-berry-v9',
@@ -182,6 +188,7 @@ function checkOne(format: FormatId, input: string): boolean {
     case 'yarn-berry-v9':  return yarnBerryV9.check(input)
     case 'yarn-berry-v10': return yarnBerryV10.check(input)
     case 'yarn-classic':   return yarnClassic.check(input)
+    case 'lockgraph':      return lockgraph.check(input)
   }
 }
 
@@ -213,6 +220,7 @@ function parseOne(
     case 'yarn-berry-v9':  return yarnBerryV9.parse(input, { workspaceRoot, overrides })
     case 'yarn-berry-v10': return yarnBerryV10.parse(input, { workspaceRoot, overrides })
     case 'yarn-classic':   return yarnClassic.parse(input, { overrides })
+    case 'lockgraph':      return lockgraph.parse(input)
   }
 }
 
@@ -244,6 +252,7 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions)
     case 'yarn-berry-v9':  return yarnBerryV9.stringify(graph,  { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v10': return yarnBerryV10.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-classic':   return yarnClassic.stringify(graph,  { lineEnding, onDiagnostic })
+    case 'lockgraph':      return lockgraph.stringify(graph,    { lineEnding, onDiagnostic })
   }
 }
 

@@ -28,7 +28,13 @@ const fixture = (scenario: string, file: string): string =>
 // yarn-berry-v10.md). Excluded from this fixture-based dispatcher sweep;
 // the dedicated v10 unit test (src/test/unit/yarn-berry-v10.test.ts)
 // exercises the dispatcher path via synthesised content.
-type FixturedFormatId = Exclude<FormatId, 'yarn-berry-v10'>
+//
+// `lockgraph` is the native graph-serialization format (#101), not a
+// hand-authored PM lockfile — there is no on-disk `simple/lockgraph.lock`
+// fixture (its body embeds a content seal, so it is generated from a graph,
+// never authored). Its dedicated unit test (src/test/unit/lockgraph.test.ts)
+// drives the full dispatcher + convert path on generated content.
+type FixturedFormatId = Exclude<FormatId, 'yarn-berry-v10' | 'lockgraph'>
 
 const ALL_FORMATS: FixturedFormatId[] = [
   'yarn-berry-v4',

@@ -86,6 +86,10 @@
     "./formats/yarn-classic": {
       "types": "./dist/formats/yarn-classic.d.ts",
       "default": "./dist/formats/yarn-classic.js"
+    },
+    "./formats/lockgraph": {
+      "types": "./dist/formats/lockgraph.d.ts",
+      "default": "./dist/formats/lockgraph.js"
     }
   },
   "files": [
