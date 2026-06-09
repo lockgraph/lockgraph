@@ -231,13 +231,13 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions)
   const overrides    = options.overrides
   // ADR-0025 §4 — yarn lockfiles (classic + berry) carry no overrides block;
   // forced resolutions live in package.json only. Surface the loss once before
-  // dispatch. npm-2/3 and pnpm project the constraints into their lock below;
-  // bun-text + npm-1 do not yet thread overrides (tracked follow-up).
+  // dispatch. npm-2/3, pnpm, and bun-text project the constraints into their
+  // lock below; npm-1 does not yet thread overrides (tracked follow-up).
   if (overrides !== undefined && overrides.length > 0 && format.startsWith('yarn')) {
     noteYarnOverridesNotProjected(overrides.length, onDiagnostic)
   }
   switch (format) {
-    case 'bun-text':      return bunText.stringify(graph,     { lineEnding, onDiagnostic })
+    case 'bun-text':      return bunText.stringify(graph,     { lineEnding, onDiagnostic, overrides })
     case 'npm-1':         return npm1.stringify(graph,        { lineEnding, onDiagnostic })
     case 'npm-2':         return npm2.stringify(graph,        { lineEnding, onDiagnostic, overrides })
     case 'npm-3':         return npm3.stringify(graph,        { lineEnding, onDiagnostic, overrides })
@@ -346,6 +346,7 @@ export function overridesOf(graph: Graph): OverrideConstraint[] {
   const lockBorne =
     getFlatSidecar(graph)?.rootMeta?.overrides ??
     getPnpmOverridesCanonical(graph) ??
+    bunText.getBunOverridesCanonical(graph) ??
     []
   return mergeOverrides(lockBorne, manifest)
 }

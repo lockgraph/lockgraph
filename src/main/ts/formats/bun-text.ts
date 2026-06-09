@@ -49,6 +49,8 @@ import {
 } from '../recipe/workspace.ts'
 import { cmpStr, sortRecord } from './_npm-flat-types.ts'
 import { nodeVersionOf } from './_node-id.ts'
+import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
+import type { OverrideConstraint } from '../graph.ts'
 
 // === Public option types ====================================================
 
@@ -56,6 +58,15 @@ export interface BunTextParseOptions {}
 
 export interface BunTextStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
+  /**
+   * Caller-supplied canonical override constraints (ADR-0025). bun's `overrides`
+   * block is npm-shaped, so these project through the npm grammar
+   * (`projectOverrides(_, 'npm')`). An explicit `[]` suppresses the verbatim
+   * carrier captured at parse; `undefined` falls back to it. This is the
+   * audit-fix write path — `pinOverride` results land here as a forced
+   * resolution into bun's top-level `overrides`.
+   */
+  overrides?: OverrideConstraint[]
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
@@ -126,12 +137,35 @@ interface BunTextSidecar {
   nodes: Map<string, BunTextNodeSidecar>
   /** declared peer ranges keyed by `<srcId>|<peerName>`. */
   peerDeclarations: Map<string, string>
+  /** Verbatim top-level `overrides` block (ADR-0025 §3 lossless same-PM carrier,
+   *  symmetric to npm's `rootMeta.nativeOverrides` / pnpm's `sidecar.overrides`).
+   *  bun's block is npm-shaped (flat `{name: target}` or nested). */
+  nativeOverrides?: Record<string, unknown>
+  /** Canonical projection of `overrides` (ADR-0025 §6) — for cross-PM reads. */
+  canonicalOverrides?: OverrideConstraint[]
+  /** Verbatim top-level `trustedDependencies` — postinstall-execution allowlist;
+   *  load-bearing for reproducibility (spec/formats/bun-text.md Quirks). */
+  trustedDependencies?: string[]
+  /** Verbatim top-level `patchedDependencies` — bun's patch-protocol map
+   *  (`<name>@<version>` -> patch-file path). */
+  patchedDependencies?: Record<string, string>
 }
 
 const sidecarByGraph = new WeakMap<Graph, BunTextSidecar>()
 
 function rememberSidecar(graph: Graph, sidecar: BunTextSidecar): void {
   sidecarByGraph.set(graph, sidecar)
+}
+
+/**
+ * Canonical override constraints captured from a bun-text graph's top-level
+ * `overrides` block (ADR-0025 §6, A2). Mirrors `getPnpmOverridesCanonical` /
+ * npm's `rootMeta.overrides` so `index.ts` `overridesOf` can fold a bun source's
+ * overrides into a cross-PM conversion. Returns undefined when the graph carries
+ * no overrides block (or the sidecar was lost to a bare `mutate`).
+ */
+export function getBunOverridesCanonical(graph: Graph): OverrideConstraint[] | undefined {
+  return sidecarByGraph.get(graph)?.canonicalOverrides
 }
 
 // === Public API: check / parse / stringify / enrich / optimize =============
@@ -363,6 +397,36 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
     addBlockEdges(builder, diagnostics, entry.id, entry.inner, consumerScope, undefined, peerDeclarations)
   }
 
+  // === Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md) ====
+  // Capture `overrides` / `trustedDependencies` / `patchedDependencies`
+  // verbatim so a same-PM round-trip is lossless. `overrides` is bun's
+  // forced-resolution mechanism — the npm/bun analog of yarn `resolutions`,
+  // load-bearing for audit-fix transitive pins. The canonical projection
+  // (npm grammar — bun's block is npm-shaped) backs cross-PM reads.
+  let nativeOverrides: Record<string, unknown> | undefined
+  let canonicalOverrides: OverrideConstraint[] | undefined
+  if (lf.overrides !== undefined && lf.overrides !== null && typeof lf.overrides === 'object') {
+    nativeOverrides = lf.overrides as Record<string, unknown>
+    // Capture canonical form for cross-PM reads. No `onDiagnostic` is threaded:
+    // the only event `captureOverrides` emits is the `RECIPE_OVERRIDE_NORMALISED`
+    // *info* observability ping, and landing it on `graph.diagnostics()` would be
+    // pure noise on the same-PM bun round-trip (the verbatim block is the
+    // load-bearing carrier). The canonical projection is still computed.
+    const captured = captureOverrides(lf.overrides, 'npm')
+    if (captured.canonical.length > 0) canonicalOverrides = captured.canonical
+  }
+  const trustedDependencies = Array.isArray(lf.trustedDependencies)
+    ? (lf.trustedDependencies as unknown[]).filter((v): v is string => typeof v === 'string')
+    : undefined
+  const patchedDependencies = lf.patchedDependencies !== undefined
+    && lf.patchedDependencies !== null
+    && typeof lf.patchedDependencies === 'object'
+    ? Object.fromEntries(
+        Object.entries(lf.patchedDependencies as Record<string, unknown>)
+          .filter((e): e is [string, string] => typeof e[1] === 'string'),
+      )
+    : undefined
+
   for (const diagnostic of diagnostics) {
     builder.diagnostic(diagnostic)
   }
@@ -376,6 +440,10 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
       workspaceByPath,
       nodes: nodeSidecar,
       peerDeclarations,
+      nativeOverrides,
+      canonicalOverrides,
+      trustedDependencies,
+      patchedDependencies,
     }
     rememberSidecar(graph, sidecar)
     return graph
@@ -455,12 +523,50 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
     packagesBlock[key] = [`${node.name}@${node.version}`, '', inner, integrity]
   }
 
-  const json = renderJsonc({
+  // Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md). Key
+  // order mirrors bun's emit: workspaces, overrides, packages, then the
+  // trailing reproducibility blocks. `overrides` source precedence matches the
+  // npm-core precedent (ADR-0025 §3/§4):
+  //   1. caller `options.overrides` (canonical) → project via npm grammar
+  //      (bun's block is npm-shaped). An explicit `[]` suppresses the carrier.
+  //   2. else the VERBATIM parse-time block (lossless same-PM round-trip).
+  //   3. else a canonical-only carrier (cross-PM capture) → project.
+  const overridesBlock = resolveOverridesBlock(options.overrides, sidecar, emitDiagnostic)
+
+  const out: Record<string, unknown> = {
     lockfileVersion: 1,
     workspaces: workspacesBlock,
-    packages: packagesBlock,
-  })
+  }
+  if (overridesBlock !== undefined && Object.keys(overridesBlock).length > 0) {
+    out.overrides = overridesBlock
+  }
+  out.packages = packagesBlock
+  if (sidecar?.patchedDependencies !== undefined && Object.keys(sidecar.patchedDependencies).length > 0) {
+    out.patchedDependencies = sortRecord(sidecar.patchedDependencies)
+  }
+  if (sidecar?.trustedDependencies !== undefined && sidecar.trustedDependencies.length > 0) {
+    out.trustedDependencies = [...sidecar.trustedDependencies].sort(cmpStr)
+  }
+
+  const json = renderJsonc(out)
   return options.lineEnding === 'crlf' ? json.replace(/\n/g, '\r\n') : json
+}
+
+function resolveOverridesBlock(
+  callerOverrides: OverrideConstraint[] | undefined,
+  sidecar: BunTextSidecar | undefined,
+  emitDiagnostic: (d: Diagnostic) => void,
+): Record<string, unknown> | undefined {
+  if (callerOverrides !== undefined) {
+    return callerOverrides.length > 0
+      ? projectOverrides(callerOverrides, 'npm', emitDiagnostic)
+      : undefined
+  }
+  if (sidecar?.nativeOverrides !== undefined) return sidecar.nativeOverrides
+  if (sidecar?.canonicalOverrides !== undefined && sidecar.canonicalOverrides.length > 0) {
+    return projectOverrides(sidecar.canonicalOverrides, 'npm', emitDiagnostic)
+  }
+  return undefined
 }
 
 export function enrich(
@@ -1126,5 +1232,12 @@ function pruneSidecar(sidecar: BunTextSidecar, graph: Graph): BunTextSidecar {
         return srcId !== undefined && reachableIds.has(srcId)
       }),
     ),
+    // Top-level fidelity blocks are project-global (not per-node), so they
+    // survive an orphan-prune verbatim — pruning unreachable nodes never
+    // invalidates a declared override / trusted / patched entry.
+    nativeOverrides: sidecar.nativeOverrides,
+    canonicalOverrides: sidecar.canonicalOverrides,
+    trustedDependencies: sidecar.trustedDependencies,
+    patchedDependencies: sidecar.patchedDependencies,
   }
 }

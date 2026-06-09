@@ -5,6 +5,9 @@
 // cross-adapter isolation rejection.
 
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { toTarballKey, type Graph } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
@@ -12,7 +15,7 @@ import { LockfileError } from '../../main/ts/errors.ts'
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const MODIFIED_SRI = sriOf('modified-ms-integrity')
 const BUMPED_SRI = sriOf('bumped-ms-integrity')
-import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/bun-text.ts'
+import { check, enrich, getBunOverridesCanonical, optimize, parse, stringify } from '../../main/ts/formats/bun-text.ts'
 import { parse as parseNpm1 } from '../../main/ts/formats/npm-1.ts'
 import { parse as parseNpm3 } from '../../main/ts/formats/npm-3.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
@@ -575,5 +578,108 @@ describe('bun-text — optimize (§D prune unreachable + idempotence)', () => {
     const reparsed = enrich(parse(stringify(optimized.graph)))
     expect(graphSnapshot(reparsed.graph)).toEqual(graphSnapshot(optimized.graph))
     expectEmptyGraphDiff(optimized.graph.diff(reparsed.graph))
+  })
+})
+
+// === Top-level fidelity blocks (overrides / trusted / patched) ==============
+//
+// ADR-0025 §3 carrier + audit-fix write path. bun's `overrides` is the
+// npm/bun analog of yarn `resolutions` — the mechanism an audit-fix uses to
+// force a transitive vulnerable dep onto a safe version. These blocks were
+// silently dropped on round-trip before this slice; the tests below pin the
+// verbatim same-PM carrier, the caller-`options.overrides` projection, and
+// the cross-PM canonical read.
+
+describe('bun-text — top-level fidelity blocks (overrides / trusted / patched)', () => {
+  const withBlocks = (extra: Record<string, unknown>): string =>
+    JSON.stringify(
+      {
+        lockfileVersion: 1,
+        workspaces: { '': { name: 'root', dependencies: { lodash: '^4.17.20' } } },
+        ...extra,
+        packages: {
+          lodash: ['lodash@4.17.21', '', {}, sriOf('lodash')],
+        },
+      },
+      null,
+      2,
+    )
+
+  it('round-trips a verbatim `overrides` block (flat npm-shaped, parse-time order)', () => {
+    const input = withBlocks({ overrides: { lodash: '4.17.21', '@types/node': '20.0.0' } })
+    const out = stringify(parse(input))
+    expect(out).toContain('"overrides"')
+    expect(out).toMatch(/"overrides":\s*\{/)
+    expect(out).toContain('"lodash": "4.17.21"')
+    expect(out).toContain('"@types/node": "20.0.0"')
+    // overrides sits between workspaces and packages (bun's key order).
+    expect(out.indexOf('"overrides"')).toBeGreaterThan(out.indexOf('"workspaces"'))
+    expect(out.indexOf('"overrides"')).toBeLessThan(out.indexOf('"packages"'))
+  })
+
+  it('round-trips `trustedDependencies` and `patchedDependencies`', () => {
+    const input = withBlocks({
+      trustedDependencies: ['esbuild', 'core-js'],
+      patchedDependencies: { 'lodash@4.17.21': 'patches/lodash.patch' },
+    })
+    const out = stringify(parse(input))
+    expect(out).toContain('"trustedDependencies"')
+    expect(out).toContain('"esbuild"')
+    expect(out).toContain('"patchedDependencies"')
+    expect(out).toContain('"lodash@4.17.21": "patches/lodash.patch"')
+  })
+
+  it('absent blocks stay absent (no fabrication)', () => {
+    const out = stringify(parse(withBlocks({})))
+    expect(out).not.toContain('"overrides"')
+    expect(out).not.toContain('"trustedDependencies"')
+    expect(out).not.toContain('"patchedDependencies"')
+  })
+
+  it('caller `options.overrides` (canonical) projects into the emitted block — audit-fix write path', () => {
+    const graph = parse(withBlocks({}))
+    const out = stringify(graph, {
+      overrides: [{ package: 'lodash', to: '4.17.21' }],
+    })
+    expect(out).toContain('"overrides"')
+    expect(out).toContain('"lodash": "4.17.21"')
+  })
+
+  it('caller `options.overrides: []` suppresses the verbatim carrier', () => {
+    const graph = parse(withBlocks({ overrides: { lodash: '4.17.21' } }))
+    const out = stringify(graph, { overrides: [] })
+    expect(out).not.toContain('"overrides"')
+  })
+
+  it('exposes captured overrides as canonical constraints for cross-PM reads', () => {
+    const graph = parse(withBlocks({ overrides: { lodash: '4.17.21' } }))
+    const canonical = getBunOverridesCanonical(graph)
+    expect(canonical).toEqual([{ package: 'lodash', to: '4.17.21' }])
+  })
+
+  it('preserves blocks across optimize() (sidecar re-attached, blocks are project-global)', () => {
+    // optimize re-attaches a pruned sidecar via rememberSidecar; the top-level
+    // blocks are project-global (not per-node) so they survive verbatim.
+    const graph = parse(
+      withBlocks({ overrides: { lodash: '4.17.21' }, trustedDependencies: ['esbuild'] }),
+    )
+    const pruned = optimize(graph)
+    const out = stringify(pruned.graph)
+    expect(out).toContain('"overrides"')
+    expect(out).toContain('"lodash": "4.17.21"')
+    expect(out).toContain('"trustedDependencies"')
+  })
+
+  it('preserves the real-world oven-sh/bun `overrides` block on round-trip', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const realWorld = resolve(
+      here,
+      '../resources/fixtures/real-world/oven-sh-bun-main-3a79bd7/bun.lock',
+    )
+    const input = readFileSync(realWorld, 'utf8')
+    const out = stringify(parse(input))
+    // The fixture carries `{ "@types/node": "25.0.0", ... }` — must survive.
+    expect(out).toContain('"overrides"')
+    expect(out).toContain('"@types/node": "25.0.0"')
   })
 })
