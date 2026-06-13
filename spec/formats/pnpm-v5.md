@@ -79,6 +79,23 @@ packages:
 | Bundled deps                              | ~ | rare; respected if present |
 | Overrides / resolutions                   | ✓ | `pnpm.overrides` baked in |
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how pnpm *carries* it.
+
+- Integrity lives under each `packages` entry as
+  `resolution: { integrity: sha512-<base64> }` — a Subresource-Integrity
+  string parsed with `parseSri(…, 'sri')` and emitted with `emitSri`
+  (shared `_pnpm-flat-core.ts`). The hash is of the **tarball** bytes
+  (`origin: 'sri'`).
+- An `integrity`-only `resolution` block implies the **registry** tarball
+  whose URL is derived by convention from `name@version` (no explicit
+  `tarball:` URL is needed or emitted for the npm-registry default).
+- A space-joined multi-algorithm SRI is preserved in full as a multiset
+  ([`_common.md` §3.5](./_common.md#35-the-multi-hash-case-and-the-equivalence-rule)).
+  This carry shape is identical across pnpm-v5 / v6 / v9.
+
 ## Conversion inputs
 
 | Operation | Option       | Required? | Effect when omitted |

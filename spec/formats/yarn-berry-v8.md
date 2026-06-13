@@ -102,6 +102,29 @@ implemented against the fixture matrix at
 
 Same as [yarn-berry-v4](./yarn-berry-v4.md#conversion-inputs).
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how yarn-berry v8 *carries* it.
+
+- Integrity is the per-entry `checksum:` field, parsed with
+  `parseBerryChecksum` (shared `_yarn-berry-core.ts`). A yarn-berry checksum
+  is a **sha512 of yarn's post-processed zip-cache, NOT the tarball**, so it
+  is tagged `origin: 'berry-zip'` and is **not** interchangeable with a
+  tarball SRI ([`_common.md` §3.3](./_common.md#33-the-berry-zip--tarball-sri-boundary)).
+  It is **not directly tarball-verifiable** — verifying it requires
+  reproducing yarn's zip transform.
+- **Body shape (v8, `checksumPrefix: true`).** The on-disk form is
+  `<cacheKey>/<128-hex>` (e.g. `10c0/<hex>`), not raw hex. The cacheKey comes
+  from a per-node captured prefix when present, else `__metadata.cacheKey` /
+  the caller / the v8 default ([Emit](#emit), [Quirks](#quirks));
+  `parseBerryChecksum` returns it separately as sidecar attribution.
+- Converting **into** v8 from a tarball-only source (npm / pnpm / bun /
+  yarn-classic) yields **no** `berry-zip` digest, so `checksum:` is **omitted**
+  with `RECIPE_INTEGRITY_INCOMPLETE` rather than fabricated from a tarball
+  sha512 ([`_common.md` §3.4](./_common.md#34-omit-never-fabricate)); yarn
+  recomputes it on install.
+
 ## Emit
 
 Emit (`stringify(graph, options?)`) is governed by the shared,

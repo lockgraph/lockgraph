@@ -191,6 +191,7 @@ graph identity**:
 schema 1.0
 generatedAt <RFC-3339 UTC, second precision, 'Z'>
 generator @antongolub/lockfile@<version>
+carries <token> <token> …
 ```
 
 - **`@lockgraph 1`** — the magic discriminant; MUST be the first token of the
@@ -204,9 +205,91 @@ generator @antongolub/lockfile@<version>
   whole document byte-stable, useful for golden tests).
 - **`generator`** — the producing library id
   (`@antongolub/lockfile@<version>`). Provenance only.
+- **`carries`** — the **fidelity envelope** (see [§ carries](#carries--the-fidelity-envelope)).
+  A **sorted, space-joined** set of facet tokens declaring which variable detail
+  facets this lockgraph actually holds. Auto-derived; provenance-class, **not**
+  part of graph identity; **omitted entirely** when the derived set is empty.
 
 Unknown META lines are ignored on parse (they are provenance, not graph facts).
 There is deliberately **no** `checksum` / `seal` line.
+
+#### `carries` — the fidelity envelope
+
+The `carries` line is a self-describing declaration of **which variable detail
+facets this particular lockgraph holds** — an honest **mirror of content**, not
+a promise. It lets a reader know the lockgraph's fidelity *without scanning every
+node*: one line answers "does this graph preserve engines? bin? license? peer
+contexts? aliases?".
+
+**Grammar.** A single META line, emitted **after `generator`**:
+
+```
+carries := 'carries' ( ' ' <token> )+
+```
+
+The tokens are a **sorted** (ascending UTF-16 code-unit order, the same `cmpStr`
+the tables use), space-joined **set** — no duplicates, no trailing space. The
+line is **omitted entirely** when the derived set is empty (a graph carrying no
+variable detail at all). The position is **after `generator`** (and after the
+optional `source` line, when one is present).
+
+**Auto-derived — a mirror, not a promise.** The set is **computed at
+`stringify`** as the **union of the variable detail facets actually emitted**
+across the graph's nodes / edges / payloads: a token appears **iff ≥1 element in
+the graph carries that detail**. It is therefore an honest description of *this
+serialization's content*, never an aspiration or a capability claim — if the line
+says `engines`, at least one node carries `engines`; if it does not, none do.
+
+**Not part of identity — parse ignores it, it is re-derived.** Like
+`generatedAt` / `generator`, `carries` is **provenance-class**: it is **not**
+part of [graph identity](#defining-property--graph-identity) and is **not
+hashed**. On parse it is **accepted and ignored** — it never drives parsing — and
+on the next `stringify` it is **re-derived from scratch** from the reconstructed
+graph. Because it is a pure function of the graph, a structurally-equal graph
+reproduces the **identical** line, so round-trip stays **byte-stable**:
+`parse(serialize(g))` drops the read line and recomputes a byte-identical one.
+
+**Canonical facet vocabulary.** The tokens are the **variable** detail facets
+whose presence is informative. Always-trivially-present structure (that nodes
+exist, that edges exist) is deliberately **excluded** — it carries no signal.
+Tokens are lowercase and stable:
+
+| token | meaning | derived-from (token present iff ≥1 element has it) |
+|---|---|---|
+| `bin` | package executables present | a node's `TarballPayload.bin` is set |
+| `engines` | engine constraints present | `TarballPayload.engines` is set |
+| `license` | license metadata present | `TarballPayload.license` is set |
+| `cpu` | cpu platform constraints present | `TarballPayload.cpu` is set |
+| `os` | os platform constraints present | `TarballPayload.os` is set |
+| `libc` | libc constraints present | `TarballPayload.libc` is set |
+| `funding` | funding metadata present | `TarballPayload.funding` is set |
+| `deprecated` | a deprecation notice present | `TarballPayload.deprecated` is set |
+| `bundled` | bundled-dependency lists present | `TarballPayload.bundledDependencies` is set (the token is `bundled`, **not** `bundledDependencies` — short and stable) |
+| `integrity` | integrity hashes present | a node's `TarballPayload.integrity` has ≥1 hash member |
+| `ck` | a yarn-berry checksum-cache-key present | `TarballPayload.berryChecksumCacheKey` is set (the `ck=` slot) |
+| `resolution` | a resolution detail is preserved | a node has **either** a `Node.resolution` sidecar (the `res` / `res=` / recomposed-`u`-member forms) **or** a canonical `TarballPayload.resolution` union — one token covers both, since both mean "this graph preserves where the source pointed" |
+| `patch` | a yarn-patched node present | a node's `Node.patch` is set (a `+patch=` node) |
+| `src` | a `+src=` source discriminator present | a node's `Node.source` is set (an ADR-0032 `+src=` node) |
+| `peer` | peer-virtualised instances present | a node's `peerContext` is non-empty (a peer-virtual node) |
+| `alias` | npm-alias edges present | an edge's `EdgeAttrs.alias` is set |
+| `workspace` | `workspace:`-resolved edges present | an edge's `EdgeAttrs.workspace` flag is `true` |
+| `optional` | optional edges present | an edge's `EdgeAttrs.optional` flag is `true` |
+| `layout` | graph-level layout hints present | `Graph.layoutHints()` is set (the `L` line) |
+
+**What it enables.**
+
+- **Fidelity known without a full scan.** A consumer reads one META line instead
+  of walking every `N` / `E` row to learn what detail survived.
+- **Honest under enrichment / projection.** When a graph is enriched (more facets
+  appear) or projected through a lossy PM adapter (facets drop), the `carries`
+  line of the *resulting* lockgraph re-derives to mirror exactly what is now
+  present — it can never overclaim.
+- **A cross-PM detail envelope in one line.** Two lockgraphs converted from
+  different package managers can be compared facet-for-facet at a glance
+  (e.g. a berry graph carrying `ck` that a pnpm graph lacks).
+- **Policy tools can require a facet.** A check like "this lockgraph MUST carry
+  `integrity`" or "MUST NOT carry `deprecated`" reads the line directly, without
+  re-deriving the envelope itself.
 
 ### R — registries (NORMATIVE)
 
@@ -854,6 +937,7 @@ integrity multiset** (`s`-marked `sha512-…` etc.). `generatedAt` is pinned.
 schema 1.0
 generatedAt 2026-06-09T12:00:00Z
 generator @antongolub/lockfile@0.0.0
+carries bin engines integrity peer resolution
 R 2
 npm        https://registry.npmjs.org
 workspace  -
@@ -896,7 +980,15 @@ E 20
 Decoding it:
 
 - **META** — generation `@lockgraph 1`, model `schema 1.0`, the pinned
-  `generatedAt`, and the `generator`. Nothing here is hashed.
+  `generatedAt`, the `generator`, and the `carries` fidelity envelope. Nothing
+  here is hashed. The `carries bin engines integrity peer resolution` line is
+  **auto-derived** from the graph: this `peers-multi` graph carries package
+  `integrity` (every registry node), `engines` (react / object-assign),
+  `bin` (loose-envify), peer-virtual instances (`peer` — the two `react-dom`
+  nodes), and a canonical tarball `resolution` (recomposed from `r0`). It has no
+  `alias` / `workspace` / `optional` edges, no `patch` / `src` / `ck`, and no
+  `layout` hints, so none of those tokens appear. Parse **ignores** the line; the
+  next `stringify` re-derives the identical set.
 - **R** (`r0`, `r1`): `r0` is the npm registry **base**
   `https://registry.npmjs.org` (the URL with the recomposable
   `/<name>/-/<basename>-<version>.tgz` suffix stripped); `r1` is the `workspace`

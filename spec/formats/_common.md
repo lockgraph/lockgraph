@@ -442,10 +442,30 @@ recipe.)
 
 ## §3 Integrity model
 
-Graph-canonical integrity is a structured, loss-free carrier — an ordered
-**hash multiset** with a per-hash **origin tag** — **not** a single
-sha512. Integrity is `TarballPayload` data; it is **identity-neutral** —
-NOT part of NodeId or TarballKey.
+> **Authoritative.** This section is the self-contained reference for the
+> integrity model: what a hash is, which algorithms exist, what each origin
+> is a hash *of* and how to verify it, the multi-hash case, and the
+> equivalence rule. It is the single source of truth that every per-PM
+> format spec defers to (each PM's "Integrity" subsection points here), and
+> it mirrors the implementation in
+> [`recipe/integrity.ts`](../../src/main/ts/recipe/integrity.ts) (ADR-0031,
+> amending ADR-0014 §4.F1). Where this prose and that module disagree, the
+> module wins — report the drift.
+
+**What integrity is.** A package's integrity is *one or more content hashes
+that certify the bytes of the package artefact* (its tarball, or — for
+Yarn Berry — its post-processed zip-cache). A consumer recomputes the named
+hash over the artefact it downloaded and refuses to install on mismatch.
+Different package managers carry this in different fields and encodings, and
+a single package may legitimately carry **several** hashes (multiple
+algorithms, and/or hashes of different artefacts). The graph-canonical model
+is therefore **not** a single sha512 string but a structured, loss-free
+**carrier**: an ordered **hash multiset**, every member tagged with its
+**origin** (what bytes it hashes and where it came from).
+
+Integrity is `TarballPayload` data; it is **identity-neutral** — NOT part of
+NodeId or TarballKey. Two nodes that differ only in their hashes are the same
+node.
 
 ```ts
 type HashOrigin = 'sri' | 'berry-zip' | 'url-fragment' | 'registry' | 'recomputed'
@@ -455,46 +475,111 @@ interface Integrity { hashes: Hash[] }   // verbatim multiset, source order
 //  hashes re-emit as a space-joined SRI — so no per-hash `sri-multi` tag is needed.)
 ```
 
+### 3.0 Algorithms and digest encoding
+
+The model recognises the four [Subresource Integrity](https://www.w3.org/TR/SRI/)
+(SRI) hash algorithms, plus any forward-compatible others:
+
+| Algorithm | Raw digest bytes | Hex length | Where it appears |
+| --- | --- | --- | --- |
+| `sha512` | 64 | 128 | **modern default** — npm SRI, pnpm SRI, bun SRI, yarn-classic SRI, yarn-berry `checksum` (zip-cache) |
+| `sha384` | 48 | 96 | SRI-supported (rare in lockfiles) |
+| `sha256` | 32 | 64 | SRI-supported (rare in lockfiles) |
+| `sha1` | 20 | 40 | **legacy** — older npm `integrity`, member of a space-joined yarn-classic SRI, yarn-classic `resolved#<40hex>` URL fragment |
+
+The byte lengths are the validation table `SRI_ALGO_BYTES` in
+[`integrity.ts`](../../src/main/ts/recipe/integrity.ts). An SRI member whose
+base64 decodes to the wrong byte length for a **known** algorithm is dropped
+as malformed; an **unknown** algorithm is kept forward-compatibly only above
+a 16-byte plausibility floor (so a typo'd token like `foo-AAAA`, 3 bytes,
+does not survive as a bogus hash).
+
+**Digest encoding — one canonical form.** A `Hash.digest` is ALWAYS stored
+as **lowercase hex of the raw digest bytes**, regardless of how the source
+format wrote it. SRI fields write the digest as **base64**
+(`sha512-<base64>`); a Yarn Berry `checksum` and a yarn-classic URL fragment
+write it as **hex**. The base64 ↔ hex translation happens **only at the
+parse/emit boundary** (`parseSri` decodes base64 → hex on the way in,
+`emitSri` re-encodes hex → base64 on the way out, via `hexToBase64` in
+`integrity.ts`), so that inside the model every algorithm and origin compares
+uniformly as lowercase hex. Comparisons (`integrityEquivalent`) are
+hex-on-hex; no base64 ever enters a comparison.
+
 ### 3.1 Preserve every algorithm verbatim
 
 On parse, every algorithm present on disk is preserved verbatim — `sha1`,
-`sha256`, `sha384`, `sha512`, **every** member of a space-joined
-multi-hash SRI, and the yarn-classic `resolved#<40hex>` sha1 fragment.
-Nothing is dropped; `sha1-` is accepted. (A space-joined `sha1-… sha512-…`
-SRI is preserved in full — including its recoverable sha512 — rather than
-collapsed to one member.)
+`sha256`, `sha384`, `sha512`, and **every** member of a space-joined
+multi-hash SRI. Nothing is dropped; `sha1-` is accepted. (A space-joined
+`sha1-… sha512-…` SRI is preserved in full — including its recoverable
+sha512 — rather than collapsed to one member.) The yarn-classic
+`resolved#<40hex>` sha1 fragment is also preserved, but on the **resolution
+sidecar** rather than in the integrity multiset (the `url-fragment` origin is
+reserved/unwired — [§3.2](#32-origin-tags--the-load-bearing-addition)).
 
 ### 3.2 Origin tags — the load-bearing addition
 
-`origin` distinguishes a **tarball** sha512 (`origin ∈ {sri, registry,
-recomputed}` — re-encodable into an SRI) from a **berry-zip** sha512
-(`origin = 'berry-zip'` — re-encodable only within the yarn family). This
-makes the derive-vs-fetch boundary *representable* instead of silently
-mis-converted (the boundary itself is stated in
-[§3.3](#33-the-berry-zip--tarball-sri-boundary)). The five origins:
+`origin` distinguishes a **tarball** digest (`origin ∈ {sri, registry,
+recomputed, url-fragment}` — re-encodable into an SRI) from a **berry-zip**
+digest (`origin = 'berry-zip'` — re-encodable only within the yarn family).
+This is the single load-bearing distinction (`isTarballOrigin(o)` in
+`integrity.ts` is literally `o !== 'berry-zip'`), and it makes the
+derive-vs-fetch boundary *representable* instead of silently mis-converted
+(the boundary itself is stated in
+[§3.3](#33-the-berry-zip--tarball-sri-boundary)).
 
-| Origin | Meaning |
-| --- | --- |
-| `sri` | digest parsed from a Subresource-Integrity field (npm / pnpm / bun / yarn-classic) |
-| `berry-zip` | sha512 over Yarn Berry's post-processed **zip-cache** representation (the `checksum:` field) — NOT a tarball digest |
-| `url-fragment` | sha1 from a yarn-classic `resolved#<sha1>` URL fragment (origin reserved; in current phasing this sha1 is carried on the resolution sidecar rather than folded into the multiset) |
-| `registry` | digest taken from registry metadata (e.g. `dist.integrity`) |
-| `recomputed` | digest recomputed from fetched tarball bytes |
+The five origins, with **what bytes each is a hash of, where it comes from,
+and how to verify it**:
+
+| Origin | Class | Hash OF | Comes FROM | How to VERIFY |
+| --- | --- | --- | --- | --- |
+| `sri` | tarball | the published **tarball** bytes | an SRI `integrity` field in a lockfile (npm / pnpm / bun / yarn-classic) | download the tarball, compute the named algorithm, compare to the digest ([§3.6](#36-how-to-verify)) |
+| `registry` | tarball | the published **tarball** bytes | registry metadata `dist.integrity` (an SRI), ingested with `parseSri(…, 'registry')` | same as `sri` — it is the registry's own SRI for the same tarball |
+| `recomputed` | tarball | the published **tarball** bytes | recomputed locally from fetched tarball bytes (Phase 2; not yet wired) | trivially valid — it *is* the computed hash |
+| `url-fragment` | tarball | the published **tarball** bytes (a sha1) | the `#<40-hex-sha1>` appended to a yarn-classic / codeload `resolved` URL | download the tarball, compute **sha1**, compare to the fragment hex. **Reserved/unwired in Phase 1** — the parser keeps this sha1 on the **resolution sidecar**, NOT in the integrity multiset (see note below) |
+| `berry-zip` | **zip** | Yarn Berry's **post-processed zip-cache**, NOT the tarball | the yarn-berry `checksum:` field | **cannot** be verified by hashing the tarball — you must reproduce yarn's zip transform first ([§3.3](#33-the-berry-zip--tarball-sri-boundary)) |
+
+> **`url-fragment` is reserved, not active.** The `HashOrigin` union
+> includes `'url-fragment'` and the model *defines* it as a tarball sha1, but
+> in the current phase no adapter folds it into the multiset. yarn-classic's
+> parser strips the `#<sha1>` from the `resolved` URL and records it as
+> forensic attribution on the **resolution sidecar** (see
+> `canonicalResolutionOfResolved` / `extractShaFromFragment` in the
+> yarn-classic + resolution recipe), never as a `Hash`. The lockgraph format
+> enforces this invariant: a multiset member with `origin: 'url-fragment'` is
+> **rejected at emit** ([lockgraph §Integrity](./lockgraph.md#integrity-multiset-encoding)).
+> `registry` is wired (registry ingestion); `recomputed` is defined but
+> Phase-2 and not yet produced. So in practice a parsed lockfile yields only
+> `sri` and `berry-zip` hashes today.
 
 ### 3.3 The berry-zip ≠ tarball-SRI boundary
 
-Yarn Berry's `checksum` is **not** the tarball's sha512; it is a digest of
+Yarn Berry's `checksum` is **not** the tarball's sha512; it is a sha512 of
 yarn's post-processed zip-cache. Verified on `lodash@4.17.21`: the pnpm
 SRI decodes to hex `bf690311…`, the berry checksum is `d8cbea07…` —
 **different digests of different byte streams.** They are therefore **not
 interchangeable**:
 
-- A **tarball-origin** sha512 MUST NOT be written into a berry `checksum`.
-- A **berry-zip** sha512 MUST NOT be written into an SRI field.
+- A **tarball-origin** sha512 MUST NOT be written into a berry `checksum`
+  (a value real yarn rejects on `yarn install --immutable`).
+- A **berry-zip** sha512 MUST NOT be written into an SRI field (it is not a
+  valid SRI — it does not certify the tarball).
+- A `berry-zip` digest is **NOT directly tarball-verifiable**: you cannot
+  confirm it by downloading the tarball and hashing the bytes. You must
+  first reproduce yarn's zip-cache transform (the conversion yarn applies to
+  the tarball before caching) and hash *that*. This is why, on a cross-family
+  conversion *into* yarn-berry, the `checksum:` line is **omitted** rather
+  than synthesised from a tarball sha512 ([§3.4](#34-omit-never-fabricate)).
 
 Within the yarn family, a berry checksum *does* round-trip (berry↔berry is
-a pure hex re-encode of the same zip-cache digest — raw hex pre-v8,
-`<cacheKey>/<hex>` v8+; the cacheKey prefix is sidecar attribution).
+a pure hex re-encode of the same zip-cache digest). The on-disk **body
+shape** varies by generation: bare `<128-hex>` in v4–v7
+(`checksumPrefix: false`), `<cacheKey>/<128-hex>` in v8+ (`checksumPrefix:
+true`). `parseBerryChecksum` accepts either — it splits on the first `/`,
+validates a 128-hex body (`HEX128_RE`), and returns the `cacheKey` prefix
+**separately** as sidecar attribution; the prefix never enters an SRI and is
+reproduced verbatim on emit. (Note: a real yarn-2.0 v4 lock writes the
+**prefixed** `2/<hex>` form despite the v4 default being bare, so per-node
+prefix capture round-trips that too.)
 
 ### 3.4 Omit, never fabricate
 
@@ -519,6 +604,70 @@ canonical compare digest; otherwise the strongest shared algorithm.
 Identity is unaffected (integrity is not in the NodeId / TarballKey), so a
 cross-family comparator MUST compare the multiset and respect `origin`
 rather than doing presence-gated string-equality over a single digest.
+
+### 3.5 The multi-hash case and the equivalence rule
+
+**A single package may carry multiple hashes.** Two distinct ways:
+
+1. **Multi-algorithm in one SRI field.** An SRI value is a *space-joined*
+   list of `<algo>-<base64>` members. A yarn-classic lock in particular
+   sometimes lists `integrity "sha1-… sha512-…"` (a sha1 *and* a sha512 of
+   the same tarball); an npm/pnpm/bun `integrity` can be space-joined too.
+   `parseSri` splits on whitespace and preserves **every** member in source
+   order — the recoverable sha512 is never collapsed away in favour of the
+   sha1. On emit, `emitSri` re-joins all tarball-origin members with a single
+   space.
+2. **Different artefacts.** A yarn-berry node carries a `berry-zip` sha512
+   *and* (after registry enrichment) a tarball `sri`/`registry` sha512 —
+   two hashes of two different byte streams, both retained.
+
+The carrier preserves the **full multiset** (source order, duplicates and
+all); `mergeIntegrity` folds in registry-fetched hashes de-duplicated by the
+`(algorithm, origin, digest)` triple, never inventing or reordering.
+
+**Equivalence rule** (`integrityEquivalent` in `integrity.ts`). Two carriers
+are equivalent **iff, within EACH origin class — tarball-scoped vs
+`berry-zip` — the per-algorithm digest multisets are IDENTICAL** (same
+algorithms present, same digests). Precisely:
+
+- Origin *provenance within the tarball class is ignored*: a `sri` sha512 and
+  a `registry` sha512 (or `recomputed`, or `url-fragment`) of the **same
+  tarball** are interchangeable and compare equal. The tarball origins
+  (`sri` / `registry` / `recomputed` / `url-fragment`) form one equivalence
+  pool.
+- The **tarball-vs-zip split is load-bearing**: a `berry-zip` digest is a
+  **distinct artefact**. A tarball sha512 mislabelled `berry-zip` is **NOT**
+  equivalent to the genuine tarball digest — the comparison projects the two
+  classes separately and they must match independently.
+- Strictness is deliberate: the check is "same multiset", not "agree on the
+  algorithms you happen to share". A lenient check would read *"B dropped
+  every hash"* as equivalent, masking exactly the integrity loss this model
+  exists to catch. Cross-family cells where the target cannot carry the
+  source's class (e.g. npm → berry) are *expected* non-equivalent and are
+  asserted via `RECIPE_INTEGRITY_INCOMPLETE`, not by this predicate.
+
+### 3.6 How to verify
+
+To verify a package against a carrier:
+
+1. **Pick a tarball-origin hash** — `tarballHashes(i)` is every member with
+   `origin !== 'berry-zip'`; `pickTarballSha512(i)` returns the preferred
+   one. (If the only hash is `berry-zip`, the tarball is *not* directly
+   verifiable — see step 4.)
+2. **Obtain the tarball bytes** — download the artefact named by the node's
+   resolution URL.
+3. **Compute and compare.** Run the member's `algorithm` (e.g. `sha512`) over
+   the tarball bytes. Compare to `Hash.digest`, accounting for the carrier
+   encoding: a lockfile SRI field is `<algo>-<base64>` (decode base64 to the
+   raw bytes, or hex-encode your computed digest to match the model's
+   lowercase-hex `digest`); a yarn-classic URL fragment / berry checksum is
+   already hex. A match certifies the bytes; a mismatch means refuse.
+4. **`berry-zip` is special.** A `berry-zip` sha512 hashes yarn's
+   post-processed **zip-cache**, not the tarball — hashing the tarball will
+   **not** reproduce it. To verify it you must reproduce yarn's zip transform
+   and hash the resulting cache entry. This is why a `berry-zip` digest is
+   never substituted into, or compared against, a tarball SRI
+   ([§3.3](#33-the-berry-zip--tarball-sri-boundary)).
 
 ---
 

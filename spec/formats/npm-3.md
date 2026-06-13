@@ -60,6 +60,16 @@ Same as [npm-2](./npm-2.md) — diff is on-disk size, not expressiveness.
 |---------|:---------:|-------|
 | Legacy v1 `dependencies` mirror | ✗ | dropped — npm 7 / 8 cannot read v3 |
 
+## Integrity
+
+Identical to [npm-2](./npm-2.md#integrity): each `packages` entry's
+`integrity` is an SRI (`origin: 'sri'`, normally `sha512`, legacy `sha1`
+accepted), parsed/emitted via the shared `_npm-core.ts`
+(`parseSri` / `emitSri`) under the
+[`_common.md` §3 model](./_common.md#3-integrity-model). v3 drops the legacy
+`dependencies` mirror, so each package's integrity appears **once**, in
+`packages`.
+
 ## Conversion inputs
 
 Same as [npm-2](./npm-2.md#conversion-inputs).

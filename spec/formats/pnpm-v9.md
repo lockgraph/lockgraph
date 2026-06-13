@@ -65,6 +65,16 @@ snapshots:
 Same as [pnpm-v6](./pnpm-v6.md#capabilities). The expressiveness ceiling is
 unchanged from the 6.x family; the v9 jump is structural, not capability-led.
 
+## Integrity
+
+Identical to [pnpm-v5](./pnpm-v5.md#integrity): each `packages` entry carries
+`resolution: { integrity: sha512-… }` (`origin: 'sri'`, tarball digest),
+parsed/emitted via the shared `_pnpm-flat-core.ts` (`parseSri` / `emitSri`)
+under the [`_common.md` §3 model](./_common.md#3-integrity-model). In v9 the
+`packages` block holds the version-keyed `resolution.integrity`, while
+`snapshots` holds the resolved dependency graph — integrity stays in
+`packages`.
+
 ## Conversion inputs
 
 Same as [pnpm-v6](./pnpm-v6.md#conversion-inputs).

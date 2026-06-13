@@ -250,6 +250,30 @@ miss drops with `<prefix>_RESOLUTION_PIN_UNRESOLVED` (info, e.g.
 `YARN_BERRY_V4_RESOLUTION_PIN_UNRESOLVED`). A Rung-3 max-satisfying tie emits
 `<prefix>_AMBIGUOUS_RESOLUTION` (warning) and drops without guessing.
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how yarn-berry v4 *carries* it.
+
+- Integrity is the per-entry `checksum:` field, parsed with
+  `parseBerryChecksum` (shared `_yarn-berry-core.ts`). A yarn-berry checksum
+  is a **sha512 of yarn's post-processed zip-cache, NOT the tarball**, so it
+  is tagged `origin: 'berry-zip'` and is **not** interchangeable with a
+  tarball SRI ([`_common.md` §3.3](./_common.md#33-the-berry-zip--tarball-sri-boundary)).
+  It is **not directly tarball-verifiable** — verifying it requires
+  reproducing yarn's zip transform.
+- **Body shape (v4, `checksumPrefix: false`).** The default v4 shape is bare
+  `<128-hex>`, but real yarn-2.0 v4 locks write the **prefixed**
+  `<cacheKey>/<128-hex>` form (e.g. `2/<hex>`). `parseBerryChecksum` accepts
+  both; the cacheKey prefix is captured per-node
+  (`TarballPayload.berryChecksumCacheKey`) and re-emitted verbatim — see
+  [Emit](#emit) and [Quirks](#quirks).
+- Converting **into** v4 from a tarball-only source (npm / pnpm / bun /
+  yarn-classic) yields **no** `berry-zip` digest, so `checksum:` is **omitted**
+  with `RECIPE_INTEGRITY_INCOMPLETE` rather than fabricated from a tarball
+  sha512 ([`_common.md` §3.4](./_common.md#34-omit-never-fabricate)); yarn
+  recomputes it on install.
+
 ## Emit
 
 Emit (`stringify(graph, options?)`) is governed by the shared,

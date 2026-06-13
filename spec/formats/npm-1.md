@@ -75,6 +75,21 @@
 | Bundled deps                              | ✓ | `bundled: true` |
 | Overrides / resolutions                   | ✗ | |
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how npm-1 *carries* it.
+
+- Each dependency entry's `integrity` field is a Subresource-Integrity
+  string parsed with `parseSri(…, 'sri')` and emitted with `emitSri`
+  (shared `_npm-core.ts`). The hash is of the **tarball** bytes
+  (`origin: 'sri'`).
+- This is the **legacy** lockfile: modern entries carry `sha512-<base64>`,
+  but older v1 locks commonly carry `sha1-<base64>` — both are preserved
+  verbatim ([`_common.md` §3.0](./_common.md#30-algorithms-and-digest-encoding)).
+- A space-joined multi-algorithm SRI is preserved in full as a multiset
+  ([`_common.md` §3.5](./_common.md#35-the-multi-hash-case-and-the-equivalence-rule)).
+
 ## Conversion inputs
 
 Mostly self-contained: the lockfile encodes the full hoisted tree.

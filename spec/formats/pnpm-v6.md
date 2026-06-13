@@ -55,6 +55,13 @@ packages:
 Same matrix as [pnpm-v5](./pnpm-v5.md#capabilities). Schema cleanup, not
 expressiveness change.
 
+## Integrity
+
+Identical to [pnpm-v5](./pnpm-v5.md#integrity): each `packages` entry carries
+`resolution: { integrity: sha512-… }` (`origin: 'sri'`, tarball digest),
+parsed/emitted via the shared `_pnpm-flat-core.ts` (`parseSri` / `emitSri`)
+under the [`_common.md` §3 model](./_common.md#3-integrity-model).
+
 ## Conversion inputs
 
 Same as [pnpm-v5](./pnpm-v5.md#conversion-inputs).

@@ -67,6 +67,19 @@
 | Bundled deps                              | ✓ | `inBundle: true` |
 | Overrides / resolutions                   | ~ | overrides applied at resolve time, not annotated |
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how npm-2 *carries* it.
+
+- Each `packages` entry's `integrity` field is a Subresource-Integrity
+  string parsed with `parseSri(…, 'sri')` and emitted with `emitSri`
+  (shared `_npm-core.ts`). The hash is of the **tarball** bytes
+  (`origin: 'sri'`), normally `sha512-<base64>`; legacy `sha1` entries are
+  accepted and preserved verbatim.
+- A space-joined multi-algorithm SRI is preserved in full as a multiset
+  ([`_common.md` §3.5](./_common.md#35-the-multi-hash-case-and-the-equivalence-rule)).
+
 ## Conversion inputs
 
 | Operation | Option       | Required? | Effect when omitted |

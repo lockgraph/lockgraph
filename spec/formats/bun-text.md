@@ -91,6 +91,23 @@ writer before relying on byte-exact same-PM round-trip of those two blocks.
 | Overrides / resolutions                   | ✓ | top-level `overrides` block (npm-shaped, flat `{name: target}` or nested); round-trips verbatim, accepts caller `StringifyOptions.overrides` (audit-fix write path), and surfaces canonically via `overridesOf(graph)` |
 | `trustedDependencies`                     | ✓ | top-level allowlist; round-trips verbatim (load-bearing for reproducibility) |
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how bun-text *carries* it.
+
+- Integrity is the **4th slot (index 3)** of a regular-package positional
+  tuple: `["<name>@<version>", "", <inner>, "<integrity>"]`. The slot is a
+  Subresource-Integrity string (normally `sha512-<base64>`), parsed with
+  `parseSri(…, 'sri')` and emitted with `emitSri` (`bun-text.ts`). The hash
+  is of the **tarball** bytes (`origin: 'sri'`).
+- The slot is **read only when present and non-empty** (`raw[3]` is a
+  string of length > 0); a workspace member is the degenerate 1-slot tuple
+  and carries no integrity. On emit, a node with no tarball-origin hash
+  writes `""` in slot 3 (the slot is positional and not freely omissible).
+- A space-joined multi-algorithm SRI is preserved in full as a multiset
+  ([`_common.md` §3.5](./_common.md#35-the-multi-hash-case-and-the-equivalence-rule)).
+
 ## Conversion inputs
 
 | Operation | Option       | Required?      | Effect when omitted |

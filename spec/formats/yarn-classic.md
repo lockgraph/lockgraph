@@ -77,6 +77,32 @@ Keys = comma-separated dep specs that share the same resolved version.
 | Bundled deps                              | ✗ | |
 | Overrides / resolutions                   | ~ | yarn applies them at resolve time, rewriting the affected entry key to the pinned descriptor; parse re-joins a forced consumer via the shared descriptor→node ladder ([`_common.md` §5](./_common.md#5-descriptornode-resolution-yarn-family-parse)) — the override map (from `manifests`) is **required** for a non-satisfying pin |
 
+## Integrity
+
+The model is the shared [`_common.md` §3 integrity model](./_common.md#3-integrity-model);
+this is only how yarn-classic *carries* it.
+
+- **`integrity` field (SRI, `origin: 'sri'`).** Each entry's `integrity`
+  value is a Subresource-Integrity string parsed with `parseSri(…, 'sri')`.
+  Modern locks carry `sha512-<base64>`; older locks carry `sha1-<base64>`.
+  The hash is of the **tarball** bytes.
+- **Space-joined multi-hash.** yarn 1 sometimes writes
+  `integrity "sha1-… sha512-…"` — a sha1 **and** a sha512 of the same
+  tarball. Both members are preserved in the multiset
+  ([`_common.md` §3.5](./_common.md#35-the-multi-hash-case-and-the-equivalence-rule));
+  the recoverable sha512 is never dropped in favour of the sha1.
+- **Quoting (F5, #92).** The value is written **bare** for a single hash
+  (`integrity sha512-…`) but **quoted** when it is a space-joined multi-hash
+  (`integrity "sha1-… sha512-…"`), because yarn 1 quotes any value containing
+  a space. Parse must strip the surrounding `"` before `parseSri`, or the `"`
+  glues onto the first/last members and every hash is silently lost — see
+  [Quirks](#quirks).
+- **`resolved#<sha1>` URL fragment (`url-fragment`, sidecar).** A
+  yarn-classic / codeload `resolved` URL may end in `#<40-hex-sha1>` — a sha1
+  of the tarball. Per the shared model this rides the **resolution sidecar**
+  as forensic attribution, **not** the integrity multiset (the `url-fragment`
+  origin is reserved/unwired — [`_common.md` §3.2](./_common.md#32-origin-tags--the-load-bearing-addition)).
+
 ## Conversion inputs
 
 Workspaces are not encoded in the lockfile. Without `manifests`, only the
