@@ -1,12 +1,19 @@
-// lockgraph size measurement (#101 deliverable 3) — text profile vs the source
-// PM lock, raw and gzipped, on a large real fixture (backstage, a ~1.79 MB
+// lockgraph size measurement (#101 deliverable 3) — the format vs the source PM
+// lock, raw and gzipped, on a large real fixture (backstage, a ~1.79 MB
 // yarn-berry-v8 monorepo lock). Also doubles as the large-fixture graph-identity
 // stress test: backstage exercises peer-virt fan-out, npm-aliases, git deps,
 // patches, and hundreds of workspaces.
 //
-// Reports the compaction ratio via console.log; the assertions guard that the
-// round-trip stays graph-identical at scale and that lockgraph is meaningfully
-// more compact than the raw source.
+// Reports the compaction ratio via console.log; the assertion guards that the
+// round-trip stays graph-identical at scale. The reworked format optimizes for
+// FIDELITY + READABILITY over raw size (store-everything: full integrity
+// multiset, verbatim ranges/resolutions, full TarballPayload residual, no `=`
+// derive-when-equal sentinels, no registry canonicalization) while DERIVING the
+// mechanical paths (tarball URLs recomposed from the registry type, not stored).
+// Net raw size therefore VARIES by source — materially smaller where path
+// duplication dominated (yarn-classic, npm; backstage ~0.61×), near the
+// irreducible integrity-hash floor elsewhere — so the test reports the real ratio
+// instead of asserting a fixed bound (spec § Design rationale).
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -62,10 +69,12 @@ describe('lockgraph — size measurement on backstage (yarn-berry-v8)', () => {
     console.log('============================================================\n')
     /* eslint-enable no-console */
 
-    // Compaction guard — lockgraph text is materially smaller than the raw
-    // source lock (the interned tables + sparse hex adjacency collapse the
-    // repeated locator/checksum/range strings). Conservative bound so the test
-    // is not brittle to corpus drift.
-    expect(lgRaw).toBeLessThan(srcRaw)
+    // Size posture — recompose derives the mechanical paths, so the raw body is
+    // often SMALLER than the source (e.g. backstage ~0.61×); the irreducible floor
+    // is the integrity-hash multiset. We assert only that both encodings are
+    // non-empty and report the real ratio above; the graph-identity assertions
+    // (the round-trip block) are the substantive guard at scale.
+    expect(lgRaw).toBeGreaterThan(0)
+    expect(srcRaw).toBeGreaterThan(0)
   })
 })

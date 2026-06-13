@@ -2,24 +2,25 @@
 //
 // The headline contract is GRAPH-IDENTITY: parse(serialize(g)) ≡ g, verified
 // via Graph.diff being empty on every axis (in BOTH directions), tarballs()
-// iterating byte-equal, and a re-serialize being byte-identical. Coverage:
+// iterating byte-equal, and a re-serialize being byte-identical (modulo META's
+// volatile generatedAt/generator). Coverage:
 //
 //   §A  hand-built 3-node graph (peer-virt + integrity + edge attrs)
 //   §B  real yarn-berry-v8 fixtures → graph-identity round-trip
 //   §C  real pnpm-v9 fixtures → graph-identity round-trip
-//   §D  HEADER/BODY/SEAL structural invariants (generatedAt outside seal;
-//       byte-stable body; seal tamper detection; schema/envelope versioning)
+//   §D  META + region structural invariants (META outside the canonical body;
+//       byte-stable body across generatedAt; no checksum/seal; CRLF; envelope
+//       versioning; detection)
 //   §E  every model element round-trips (integrity multi-hash + origins,
 //       berryChecksumCacheKey, peerContext, patch sentinel, EdgeAttrs incl.
 //       optional/alias/range/workspaceRange, workspaces, layout-hints,
-//       diagnostics)
+//       diagnostics-not-persisted)
 //   §F  public-surface dispatcher + detect integration
 
 import { describe, expect, it } from 'vitest'
 import {
   newBuilder,
   serializeNodeId,
-  toTarballKey,
   type Graph,
   type Node,
   type TarballPayload,
@@ -45,8 +46,8 @@ const PINNED = '2026-01-01T00:00:00Z'
  *      object spread), edges (+attrs), AND tarballs (every TarballPayload
  *      field), so it catches any payload/peerContext/resolution drift that a
  *      pure `diff` (which ignores integrity) would miss.
- *   4. re-serialize of `g2` is byte-identical to the first serialization
- *      (BODY canonical + seal stable + pinned generatedAt).
+ *   4. re-serialize of `g2` is byte-identical to the first serialization (the
+ *      three tables are canonical + pinned generatedAt makes META stable too).
  * Returns the serialized text for size/structure assertions.
  */
 function assertRoundTripIdentity(g: Graph): string {
@@ -63,18 +64,13 @@ function assertRoundTripIdentity(g: Graph): string {
   return text1
 }
 
-// Extract the canonical BODY region (between the two `---` markers) from a
-// lockgraph document — used to prove the body is generatedAt-independent.
+// Extract the canonical body region (everything from the first region header
+// `R <n>` onward) from a lockgraph document — used to prove the body is
+// generatedAt-independent. META is the four lines before it.
 function bodyOf(text: string): string {
   const lines = text.split(/\r?\n/)
-  const first = lines.indexOf('---')
-  const last = lines.lastIndexOf('---')
-  return lines.slice(first + 1, last).join('\n')
-}
-
-function sealOf(text: string): string {
-  const m = text.match(/seal sha256 ([0-9a-f]+)/)
-  return m![1]!
+  const first = lines.findIndex(l => /^R \d+$/.test(l))
+  return lines.slice(first).join('\n')
 }
 
 // =====================================================================================
@@ -126,13 +122,18 @@ describe('lockgraph §A — hand-built 3-node graph', () => {
     expect(text.startsWith('@lockgraph 1\n')).toBe(true)
   })
 
-  it('body is byte-identical regardless of generatedAt (seal stable)', () => {
+  it('body (the three tables) is byte-identical regardless of generatedAt', () => {
     const g = build3()
     const a = stringify(g, { generatedAt: '2020-01-01T00:00:00Z' })
     const b = stringify(g, { generatedAt: '2099-12-31T23:59:59Z' })
-    expect(a).not.toBe(b)               // headers differ
-    expect(bodyOf(a)).toBe(bodyOf(b))   // bodies identical
-    expect(sealOf(a)).toBe(sealOf(b))   // seal is over the body, not the header
+    expect(a).not.toBe(b)              // META differs (generatedAt)
+    expect(bodyOf(a)).toBe(bodyOf(b))  // canonical body identical
+  })
+
+  it('carries no checksum / seal line', () => {
+    const text = stringify(build3(), { generatedAt: PINNED })
+    expect(text).not.toMatch(/\bseal\b/)
+    expect(text).not.toMatch(/\bchecksum\b/)
   })
 })
 
@@ -184,42 +185,32 @@ describe('lockgraph §C — real pnpm-v9 fixture round-trip', () => {
 })
 
 // =====================================================================================
-// §D — HEADER / BODY / SEAL structural invariants
+// §D — META + region structural invariants
 // =====================================================================================
 
-describe('lockgraph §D — header/body/seal', () => {
+describe('lockgraph §D — META / regions', () => {
   const sample = (): Graph => parsePnpmV9(fixture('peers-multi/pnpm-v9.lock'))
 
-  it('emits magic + schema + generatedAt + generator header', () => {
+  it('emits magic + schema + generatedAt + generator META, then R/N/E regions', () => {
     const text = stringify(sample(), { generatedAt: PINNED })
     expect(text).toMatch(/^@lockgraph 1\n/)
     expect(text).toMatch(/\nschema 1\.0\n/)
     expect(text).toContain(`generatedAt ${PINNED}`)
     expect(text).toMatch(/\ngenerator @antongolub\/lockfile@/)
+    // the three region headers, space-separated framing, in order
+    expect(text).toMatch(/\nR \d+\n/)
+    expect(text).toMatch(/\nN \d+\n/)
+    expect(text).toMatch(/\nE \d+\n/)
+    const ri = text.indexOf('\nR '), ni = text.indexOf('\nN '), ei = text.indexOf('\nE ')
+    expect(ri).toBeLessThan(ni)
+    expect(ni).toBeLessThan(ei)
   })
 
-  it('writes the optional source provenance line when supplied', () => {
-    const text = stringify(sample(), { generatedAt: PINNED, source: { format: 'pnpm-v9', digest: 'abc123' } })
-    expect(text).toContain('source pnpm-v9 abc123')
+  it('ends with a trailing newline', () => {
+    expect(stringify(sample(), { generatedAt: PINNED }).endsWith('\n')).toBe(true)
   })
 
-  it('rejects a tampered body via the seal', () => {
-    const text = stringify(sample(), { generatedAt: PINNED })
-    // Flip one hex char of a long digest run anywhere in the BODY, leaving the
-    // recorded seal untouched — the seal recompute must then reject the body.
-    const lines = text.split('\n')
-    const bodyLineIdx = lines.findIndex(l => /[0-9a-f]{32,}/.test(l))
-    expect(bodyLineIdx).toBeGreaterThan(0)
-    lines[bodyLineIdx] = lines[bodyLineIdx]!.replace(
-      /([0-9a-f]{32,})/,
-      run => (run[0] === 'a' ? 'b' : 'a') + run.slice(1),
-    )
-    const tampered = lines.join('\n')
-    expect(() => parse(tampered)).toThrowError(LockfileError)
-    expect(() => parse(tampered)).toThrowError(/seal mismatch/)
-  })
-
-  it('refuses a newer envelope major with CAPABILITY_LACK', () => {
+  it('refuses a newer format generation with CAPABILITY_LACK', () => {
     const text = stringify(sample(), { generatedAt: PINNED }).replace('@lockgraph 1', '@lockgraph 2')
     try {
       parse(text)
@@ -230,7 +221,7 @@ describe('lockgraph §D — header/body/seal', () => {
     }
   })
 
-  it('round-trips through CRLF line endings (seal computed over LF body)', () => {
+  it('round-trips through CRLF line endings (body is a function of the LF model)', () => {
     const g = sample()
     const crlf = stringify(g, { generatedAt: PINNED, lineEnding: 'crlf' })
     expect(crlf).toContain('\r\n')
@@ -247,6 +238,14 @@ describe('lockgraph §D — header/body/seal', () => {
     expect(check(fixture('simple/pnpm-v9.lock'))).toBe(false)
     expect(check(fixture('simple/npm-3.lock'))).toBe(false)
   })
+
+  it('tolerates a leading UTF-8 BOM on detect and parse', () => {
+    const text = stringify(sample(), { generatedAt: PINNED })
+    const bom = '﻿' + text
+    expect(check(bom)).toBe(true)
+    const g2 = parse(bom)
+    expectEmptyGraphDiff(sample().diff(g2))
+  })
 })
 
 // =====================================================================================
@@ -259,8 +258,8 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const id = serializeNodeId('lodash', '4.17.21', [])
     b.addNode({ id, name: 'lodash', version: '4.17.21', peerContext: [] })
     const payload: TarballPayload = {
-      // space-joined SRI (sha1 + sha512), plus a berry-zip checksum digest, plus
-      // a registry-origin sha512 — three origin classes, multiple algorithms.
+      // sha1 + sha512 SRI, plus a berry-zip checksum digest, plus a
+      // registry-origin sha512 — three origin classes, multiple algorithms.
       integrity: {
         hashes: [
           { algorithm: 'sha1', digest: '1'.repeat(40), origin: 'sri' },
@@ -275,7 +274,14 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     }
     b.setTarball({ name: 'lodash', version: '4.17.21' }, payload)
     const g = b.seal()
-    assertRoundTripIdentity(g)
+    const text = assertRoundTripIdentity(g)
+    // the integrity column carries the FULL `;`-joined multiset with origin
+    // markers (s=sri, z=berry-zip, r=registry), in source order.
+    const row = text.split('\n').find(l => l.startsWith('lodash\t'))!
+    const integrityCol = row.split('\t')[3]!
+    expect(integrityCol).toBe(
+      `ssha1-${'1'.repeat(40)};ssha512-${'2'.repeat(128)};zsha512-${'3'.repeat(128)};rsha512-${'4'.repeat(128)}`,
+    )
     // explicit: the reconstructed payload equals the original verbatim
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     expect(g2.tarball({ name: 'lodash', version: '4.17.21' })).toEqual(payload)
@@ -284,32 +290,41 @@ describe('lockgraph §E — full fidelity of every model element', () => {
   it('preserves a +patch= sentinel slot + the canonical ResolutionCanonical union', () => {
     const b = newBuilder()
     const patch = 'unresolved-' + 'a'.repeat(64) // sentinel form
-    const id = serializeNodeId('left-pad', '1.3.0', [], patch)
-    b.addNode({ id, name: 'left-pad', version: '1.3.0', peerContext: [], patch })
+    // git resolution → a well-formed node carries a `source` discriminator (set by
+    // the adapter; ADR-0032). The format stores it VERBATIM in a `src=` slot.
+    const src = 'a26ae4a95234d808'
+    const id = serializeNodeId('left-pad', '1.3.0', [], patch, src)
+    b.addNode({ id, name: 'left-pad', version: '1.3.0', peerContext: [], patch, source: src })
     const payload: TarballPayload = {
       resolution: { type: 'git', url: 'https://github.com/foo/left-pad.git', sha: 'deadbeef', hostingProvider: 'github' },
     }
-    b.setTarball({ name: 'left-pad', version: '1.3.0', patch }, payload)
+    b.setTarball({ name: 'left-pad', version: '1.3.0', patch, source: src }, payload)
     const g = b.seal()
-    assertRoundTripIdentity(g)
+    const text = assertRoundTripIdentity(g)
+    // the patch sentinel rides the `patch=` node slot, verbatim; the `+src=` is
+    // stored verbatim in the `src=` slot (NOT re-derived), in patch-then-src order.
+    const row = text.split('\n').find(l => l.startsWith('left-pad\t'))!
+    expect(row).toContain(`\tpatch=${patch}`)
+    expect(row).toContain(`\tsrc=${src}`)
+    expect(row.indexOf('\tpatch=')).toBeLessThan(row.indexOf('\tsrc='))
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
-    expect(g2.tarball({ name: 'left-pad', version: '1.3.0', patch })).toEqual(payload)
+    expect(g2.tarball({ name: 'left-pad', version: '1.3.0', patch, source: src })).toEqual(payload)
   })
 
-  it('preserves a node carrying BOTH +patch= AND +src= slots (two-slot peel)', () => {
+  it('preserves a node carrying BOTH +patch= AND +src= slots (both stored verbatim)', () => {
     // The highest-risk codec path: a node that is yarn-patched AND resolved from
-    // a non-registry source, so its TarballKey is
+    // a non-registry (git) source. Its TarballKey is
     // `name@version+patch=<128hex>+src=<16hex>` — both disambiguator slots on one
-    // package row. Exercises (a) the canonical patch-then-src slot order on emit,
-    // (b) the TWO-slot peel on parse (`parseTarballKey` strips the trailing `+src=`
-    // first, then `+patch=`), and (c) that the package row carries the patch in the
-    // `patch` column and the discriminator in the dedicated `src` column (so two
-    // such siblings never collapse). No PM adapter emits a both-slots node today
-    // (pnpm patches but does not discriminate; yarn-classic/npm discriminate but
-    // drop patched siblings), so this is exclusively a hand-built regression guard.
+    // node. BOTH are stored explicitly as N-row slots (`patch=` and `src=`), in
+    // patch-then-src order, and folded back into the re-derived NodeId on parse —
+    // `src` is read verbatim from its slot, NOT re-derived from the resolution.
+    // This exercises (a) the explicit `patch=` slot on the N row, (b) the explicit
+    // `src=` slot, and (c) that the both-slots TarballKey re-keys the payload
+    // exactly. No PM adapter emits a both-slots node today, so this is a hand-built
+    // guard.
     const b = newBuilder()
     const patch = 'a'.repeat(128)        // canonical 128-hex patch token
-    const src = 'cd5b24a7a2d10325'        // a 16-hex source discriminator
+    const src = 'cd5b24a7a2d10325'        // the 16-hex discriminator for the git source below
     const id = serializeNodeId('is-git', '6.3.1', [], patch, src)
     // canonical slot order is patch-then-src ('patch' < 'src' under cmpStr)
     expect(id).toBe(`is-git@6.3.1+patch=${patch}+src=${src}`)
@@ -329,11 +344,13 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const g = b.seal()
 
     const text = assertRoundTripIdentity(g)
-    // the package row carries patch in col 3 and src in col 4, both non-`-`
-    const pRow = text.split('\n').find(l => l.startsWith('is-git:'))!
-    const cols = pRow.split(':')
-    expect(cols[2]).toBe(patch) // patch column
-    expect(cols[3]).toBe(src)   // src column
+    // the N row carries BOTH disambiguators as explicit slots — `patch=` then
+    // `src=` (both stored verbatim, src NOT re-derived) — followed by `payload=`.
+    const row = text.split('\n').find(l => l.startsWith('is-git\t'))!
+    expect(row).toContain(`\tpatch=${patch}`)
+    expect(row).toContain(`\tsrc=${src}`)
+    expect(row.indexOf('\tpatch=')).toBeLessThan(row.indexOf('\tsrc='))
+    expect(row).toContain('payload=')
     // the both-slots TarballKey re-keys the payload exactly on parse
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     expect(g2.tarball({ name: 'is-git', version: '6.3.1', patch, source: src })).toEqual(payload)
@@ -341,13 +358,13 @@ describe('lockgraph §E — full fidelity of every model element', () => {
 
   it('preserves a both-slots node WITH a peerContext (peer parens trail the +src= slot)', () => {
     // The peerContext suffix `(…)` must come AFTER both slots on the NodeId:
-    // `name@version+patch=…+src=…(<peerId>)`. Guards that the slot peel + the
-    // peer-suffix split compose for a both-slots peer-virtual node.
+    // `name@version+patch=…+src=…(<peerId>)`. Guards that the slot recovery + the
+    // peer-context parse compose for a both-slots peer-virtual node.
     const b = newBuilder()
     const peerId = serializeNodeId('react', '18.0.0', [])
     b.addNode({ id: peerId, name: 'react', version: '18.0.0', peerContext: [] })
     const patch = 'c'.repeat(128)
-    const src = '141e9bbe3f1bc01c'
+    const src = 'd2a64f79f21e9643' // stored verbatim in the `src=` slot (ADR-0032)
     const id = serializeNodeId('p', '2.0.0', [peerId], patch, src)
     expect(id).toBe(`p@2.0.0+patch=${patch}+src=${src}(${peerId})`)
     b.addNode({ id, name: 'p', version: '2.0.0', peerContext: [peerId], patch, source: src })
@@ -376,7 +393,19 @@ describe('lockgraph §E — full fidelity of every model element', () => {
       workspaceRange: { specifier: 'workspace:^', resolvedVersion: '1.0.0' },
     })
     const g = b.seal()
-    assertRoundTripIdentity(g)
+    const text = assertRoundTripIdentity(g)
+    // New slot-based E-row: descriptor is positional field 4 (NO `-` alias
+    // padding); trailing slots in fixed order = flag cluster, then alias=/rv=/sp=.
+    // The optional edge: `opt` kind word + descriptor `npm:^2.0.0` + `o` flag +
+    // `alias=pkg-alias` (NO trailing `-` padding).
+    const optRow = text.split('\n').find(l => /\topt\tnpm:\^2\.0\.0\t/.test(l))!
+    expect(optRow.split('\t')).toEqual(['0', expect.any(String), 'opt', 'npm:^2.0.0', 'o', 'alias=pkg-alias'])
+    // The workspace edge: `w` flag + `rv=1.0.0`. NO `sp=` slot, because the
+    // specifier (`workspace:^`) IS the descriptor — it is reconstructed from it,
+    // never stored twice (the old `workspaceRange` JSON is gone).
+    const wsRow = text.split('\n').find(l => /\tdep\tworkspace:\^\t/.test(l))!
+    expect(wsRow.split('\t')).toEqual(['0', expect.any(String), 'dep', 'workspace:^', 'w', 'rv=1.0.0'])
+    expect(wsRow).not.toContain('{') // no JSON, no specifier duplication
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     const optEdge = g2.out(root, 'optional')[0]!
     expect(optEdge.attrs).toEqual({ range: 'npm:^2.0.0', alias: 'pkg-alias', optional: true })
@@ -402,7 +431,7 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     expect(g.out(root, 'dep').length).toBe(2)
   })
 
-  it('preserves layout hints + diagnostics', () => {
+  it('preserves layout hints; diagnostics are NOT persisted (re-derived by seal)', () => {
     const b = newBuilder()
     const id = serializeNodeId('ms', '2.1.3', [])
     b.addNode({ id, name: 'ms', version: '2.1.3', peerContext: [] })
@@ -410,38 +439,57 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     b.layoutHints({ strategy: 'isolated' })
     b.diagnostic({ code: 'RECIPE_INTEGRITY_INCOMPLETE', subject: id, severity: 'warning', message: 'demo' })
     const g = b.seal()
-    // diagnostics are NOT part of diff identity, but the format preserves them.
     const text = stringify(g, { generatedAt: PINNED })
+    // layout hints ride the optional trailing L line as canonical JSON.
+    expect(text).toContain('\nL {"strategy":"isolated"}\n')
+    // diagnostics are NOT serialized (no slot/column/line for them).
+    expect(text).not.toContain('RECIPE_INTEGRITY_INCOMPLETE')
     const g2 = parse(text)
     expectEmptyGraphDiff(g.diff(g2))
     expect(g2.layoutHints()).toEqual({ strategy: 'isolated' })
-    expect(g2.diagnostics()).toEqual([
-      { code: 'RECIPE_INTEGRITY_INCOMPLETE', subject: id, severity: 'warning', message: 'demo' },
-    ])
+    // the round-tripped graph re-derives its own (adapter/seal) diagnostics; the
+    // hand-added RECIPE_* diagnostic is not part of identity and is not persisted.
+    expect(g2.diagnostics().some(d => d.code === 'RECIPE_INTEGRITY_INCOMPLETE')).toBe(false)
     expect(stringify(g2, { generatedAt: PINNED })).toBe(text)
   })
 
+  it('omits the L line entirely when the graph has no layout hints', () => {
+    const b = newBuilder()
+    const id = serializeNodeId('ms', '2.1.3', [])
+    b.addNode({ id, name: 'ms', version: '2.1.3', peerContext: [] })
+    const text = stringify(b.seal(), { generatedAt: PINNED })
+    expect(text).not.toMatch(/\nL /)
+  })
+
   it('preserves a version that is a `:`-containing locator (git/file/url)', () => {
-    // Regression: real pnpm/bun locks put a `github:`/`file:`/`https:` locator
-    // in the VERSION position for non-registry resolutions. The version is not a
-    // `:`-free simple token, so it must be ref-interned, not written inline.
+    // Real pnpm/bun locks put a `github:`/`file:`/`https:` locator in the VERSION
+    // position for non-registry resolutions. The version is an ordinary TSV value
+    // (`:` is not a delimiter), so it round-trips verbatim.
     const b = newBuilder()
     const gh = '@angular/domino'
     const ver = 'https://codeload.github.com/angular/domino/tar.gz/a9e9e17af7a54af8dde66f651bfde671c3a10444'
     const file = 'file:nx-dev/ui-blog'
-    const ghId = serializeNodeId(gh, ver, [])
+    // these nodes carry an explicit `source` (set as any well-behaved adapter
+    // would, per ADR-0032); it is stored verbatim in the `src=` slot and read back
+    // exactly on parse.
+    const ghSrc = '2cb51226d1722190'
+    const ghId = serializeNodeId(gh, ver, [], undefined, ghSrc)
     const fileId = serializeNodeId('@nx/ui-blog', file, [])
-    b.addNode({ id: ghId, name: gh, version: ver, peerContext: [] })
+    b.addNode({ id: ghId, name: gh, version: ver, peerContext: [], source: ghSrc })
     b.addNode({ id: fileId, name: '@nx/ui-blog', version: file, peerContext: [] })
-    b.setTarball({ name: gh, version: ver }, {
+    b.setTarball({ name: gh, version: ver, source: ghSrc }, {
       resolution: { type: 'git', url: 'https://github.com/angular/domino.git', sha: 'a9e9e17af7a54af8dde66f651bfde671c3a10444', hostingProvider: 'github' },
     })
     const g = b.seal()
+    // the `src=` slot is stored verbatim, so the round-trip reconstructs the
+    // +src= node exactly (see assertion below).
+    const g2 = parse(stringify(g, { generatedAt: PINNED }))
+    expect(g2.getNode(ghId)).toBeDefined()
     assertRoundTripIdentity(g)
   })
 
   it('preserves a version with semver build-metadata (`+build`) without false patch', () => {
-    // Regression: `+` in a version must not be mistaken for the `+patch=` slot.
+    // `+` in a version must not be mistaken for the `+patch=` slot.
     const b = newBuilder()
     const ver = '1.0.0+build.5'
     const id = serializeNodeId('pkg', ver, [])
@@ -453,9 +501,8 @@ describe('lockgraph §E — full fidelity of every model element', () => {
   })
 
   it('is idempotent under re-serialization when the seal re-derives diagnostics', () => {
-    // Regression: SEAL_* diagnostics are re-derived by the graph seal on every
-    // reconstruction. They must not be persisted, or the diagnostic list grows
-    // unboundedly across round-trips and the body stops being byte-stable. A
+    // SEAL_* diagnostics are re-derived by the graph seal on every reconstruction.
+    // They are not persisted, so the body stays byte-stable across round-trips. A
     // published self-link (a non-workspace node depending on a co-located
     // workspace via a registry range) triggers SEAL_PUBLISHED_SELF_LINK.
     const b = newBuilder()
@@ -473,7 +520,7 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const g2 = parse(t1)
     const t2 = stringify(g2, { generatedAt: PINNED })
     expect(t2).toBe(t1) // byte-stable across the round-trip
-    // diagnostic set is stable (no accumulation)
+    // diagnostic set is stable (the seal re-derives the same set; nothing accrued)
     expect(g2.diagnostics().map(d => d.code).sort()).toEqual(g.diagnostics().map(d => d.code).sort())
     // a THIRD pass stays stable too
     expect(stringify(parse(t2), { generatedAt: PINNED })).toBe(t1)
@@ -488,19 +535,25 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     }
     b.setTarball({ name: 'legacy-pkg', version: '0.1.0' }, payload)
     const g = b.seal()
-    assertRoundTripIdentity(g)
+    const text = assertRoundTripIdentity(g)
+    // the integrity column carries the algorithm verbatim (`sha1`), not an
+    // implied sha512.
+    const row = text.split('\n').find(l => l.startsWith('legacy-pkg\t'))!
+    expect(row.split('\t')[3]).toBe(`ssha1-${'f'.repeat(40)}`)
     expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'legacy-pkg', version: '0.1.0' })).toEqual(payload)
   })
 
-  it('escapes interned values containing newlines / backslashes / tabs', () => {
+  it('escapes values containing newlines / backslashes / tabs', () => {
     const b = newBuilder()
     const id = serializeNodeId('weird', '1.0.0', [])
-    // a resolution sidecar carrying control chars that would corrupt line framing
-    // if written raw — must be backslash-escaped in the strings table.
+    // a resolution sidecar carrying control chars that would corrupt the TSV row
+    // framing if written raw — must be escaped in the `res=` slot.
     const weirdRes = 'custom:line1\nline2\twith\\backslash'
     b.addNode({ id, name: 'weird', version: '1.0.0', peerContext: [], resolution: weirdRes })
     const g = b.seal()
-    assertRoundTripIdentity(g)
+    const text = assertRoundTripIdentity(g)
+    // the raw bytes contain the escaped forms, not literal control chars.
+    expect(text).toContain('res=custom:line1\\nline2\\twith\\\\backslash')
     expect(parse(stringify(g, { generatedAt: PINNED })).getNode(id)!.resolution).toBe(weirdRes)
   })
 
@@ -509,11 +562,465 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const ws = serializeNodeId('myapp', '0.0.0', [])
     b.addNode({ id: ws, name: 'myapp', version: '0.0.0', peerContext: [], workspacePath: '' })
     const g = b.seal()
-    assertRoundTripIdentity(g)
+    const text = assertRoundTripIdentity(g)
+    // the root workspace is pinned at node 0, carrying `ws=` with an empty path.
+    const firstNodeRow = text.split('\n')[text.split('\n').findIndex(l => /^N \d+$/.test(l)) + 1]!
+    expect(firstNodeRow.split('\t')).toEqual(['myapp', '0.0.0', 'r0', '-', 'ws='])
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     expect(g2.tarball({ name: 'myapp', version: '0.0.0' })).toBeUndefined()
   })
 })
+
+// =====================================================================================
+// §G — res=/payload recomposition + the confirmed-bug regressions
+// =====================================================================================
+
+describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () => {
+  // Find a node row by package name in a serialized doc.
+  const rowOf = (text: string, name: string): string =>
+    text.split('\n').find(l => l.startsWith(name + '\t'))!
+
+  // --- PART A: recomposition (store facts, derive mechanics) ----------------
+
+  it('yarn-classic-shape <url>#<sha1> resolution → usha1 in integrity, res= omitted, byte-exact round-trip', () => {
+    // The exact shape a yarn-classic node carries: Node.resolution is the
+    // canonical npm tarball URL + a `#<sha1>` fragment, and payload.resolution is
+    // the canonical {type:'tarball', url} (no fragment). Both collapse: the URL
+    // recomposes from the npm R base, the fragment rides the integrity u-member,
+    // and the canonical payload.resolution is omitted.
+    const b = newBuilder()
+    const url = 'https://registry.yarnpkg.com/JSV/-/JSV-4.0.2.tgz'
+    const sha1 = 'd077f6825571f82132f9dffaed587b4029feff57'
+    const id = serializeNodeId('JSV', '4.0.2', [])
+    b.addNode({ id, name: 'JSV', version: '4.0.2', peerContext: [], resolution: `${url}#${sha1}` })
+    b.setTarball({ name: 'JSV', version: '4.0.2' }, { resolution: { type: 'tarball', url } })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = rowOf(text, 'JSV')
+    // res= is omitted; the #<sha1> rides the integrity column's trailing u-member.
+    expect(row).not.toContain('res=')
+    expect(row.split('\t')[3]).toBe(`usha1-${sha1}`)
+    // the canonical {type:'tarball'} payload resolution is omitted from payload=.
+    expect(row).not.toContain('payload=')
+    // and it all reconstructs identity-exact (resolution sidecar + payload).
+    const g2 = parse(stringify(g, { generatedAt: PINNED }))
+    expect(g2.getNode(id)!.resolution).toBe(`${url}#${sha1}`)
+    expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.resolution).toEqual({ type: 'tarball', url })
+    // the u-member is TRANSPORT-ONLY: it is NOT added to the integrity multiset.
+    expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.integrity).toBeUndefined()
+  })
+
+  it('berry npm locator Node.resolution → bare `res` marker, recomposed on parse', () => {
+    const b = newBuilder()
+    const id = serializeNodeId('react', '18.0.0', [])
+    // Node.resolution byte-equals the recomposed berry locator `react@npm:18.0.0`.
+    b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [], resolution: 'react@npm:18.0.0' })
+    b.setTarball({ name: 'react', version: '18.0.0' }, { integrity: sri('sha512-' + 'a'.repeat(86) + '==') })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = rowOf(text, 'react')
+    // the slot is the valueless `res` marker (no `=`), NOT `res=react@npm:18.0.0`.
+    expect(row.split('\t')).toContain('res')
+    expect(row).not.toContain('res=')
+    expect(parse(stringify(g, { generatedAt: PINNED })).getNode(id)!.resolution).toBe('react@npm:18.0.0')
+  })
+
+  it('non-canonical resolution (git/codeload) → res= kept VERBATIM (exact-match-or-verbatim)', () => {
+    const b = newBuilder()
+    const id = serializeNodeId('left-pad', '1.3.0', [])
+    // a git+ssh locator with a #<sha> — NOT a canonical npm tarball URL, so it is
+    // kept verbatim in res= and the fragment is NOT moved to the integrity column.
+    const res = 'git+ssh://git@github.com/foo/left-pad.git#deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+    b.addNode({ id, name: 'left-pad', version: '1.3.0', peerContext: [], resolution: res })
+    b.setTarball({ name: 'left-pad', version: '1.3.0' }, {
+      resolution: { type: 'git', url: 'https://github.com/foo/left-pad.git', sha: 'deadbeef' },
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = rowOf(text, 'left-pad')
+    expect(row).toContain(`res=${res}`)
+    expect(row).not.toContain('usha1-')          // fragment NOT hijacked into integrity
+    expect(parse(stringify(g, { generatedAt: PINNED })).getNode(id)!.resolution).toBe(res)
+  })
+
+  it('a node with NO Node.resolution stays undefined on parse (never invented)', () => {
+    // The phantom-resolution failure class: the parse must NOT mint a resolution
+    // on a node that never had one, even though its payload.resolution recomposes.
+    const b = newBuilder()
+    const url = 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz'
+    const id = serializeNodeId('ms', '2.1.3', [])
+    // NO `resolution` on the Node — only a canonical payload.resolution.
+    b.addNode({ id, name: 'ms', version: '2.1.3', peerContext: [] })
+    b.setTarball({ name: 'ms', version: '2.1.3' }, {
+      integrity: sri('sha512-' + 'b'.repeat(86) + '=='),
+      resolution: { type: 'tarball', url },
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = rowOf(text, 'ms')
+    expect(row).not.toContain('res')   // no res= AND no bare res marker
+    const g2 = parse(stringify(g, { generatedAt: PINNED }))
+    expect(g2.getNode(id)!.resolution).toBeUndefined()       // stayed undefined
+    // payload.resolution WAS recomposed (it existed on the payload, not the node)
+    expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.resolution).toEqual({ type: 'tarball', url })
+  })
+
+  it('payload.resolution kept verbatim when NON-canonical (extra hostingProvider key)', () => {
+    const b = newBuilder()
+    const url = 'https://registry.npmjs.org/x/-/x-1.0.0.tgz'
+    const id = serializeNodeId('x', '1.0.0', [])
+    b.addNode({ id, name: 'x', version: '1.0.0', peerContext: [] })
+    // a `tarball` union carrying an EXTRA key (hostingProvider) is NOT the bare
+    // two-key {type,url} canonical shape, so it must stay verbatim in payload=.
+    const resolution = { type: 'tarball' as const, url, hostingProvider: 'github' as const }
+    b.setTarball({ name: 'x', version: '1.0.0' }, { resolution })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    expect(rowOf(text, 'x')).toContain('payload=')
+    expect(rowOf(text, 'x')).toContain('"resolution"')
+    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'x', version: '1.0.0' })!.resolution).toEqual(resolution)
+  })
+
+  it('berryChecksumCacheKey rides the dedicated ck= slot (out of payload JSON) and round-trips', () => {
+    const b = newBuilder()
+    const id = serializeNodeId('y', '2.0.0', [])
+    b.addNode({ id, name: 'y', version: '2.0.0', peerContext: [] })
+    b.setTarball({ name: 'y', version: '2.0.0' }, {
+      integrity: sri('sha512-' + 'c'.repeat(86) + '=='),
+      berryChecksumCacheKey: '10c0',
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = rowOf(text, 'y')
+    expect(row).toContain('\tck=10c0')
+    expect(row).not.toContain('berryChecksumCacheKey') // hoisted out of payload= JSON
+    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'y', version: '2.0.0' })!.berryChecksumCacheKey).toBe('10c0')
+  })
+
+  // --- PART B: the 8 confirmed bugs -----------------------------------------
+
+  it('B1: an R registry url containing a backslash / tab round-trips (R values are TSV-escaped)', () => {
+    // A url carrying control bytes must not split the R row. The R table is now
+    // normative, so the url must survive verbatim through escape→unescape. We use
+    // a tarball-type source (kept verbatim) so the literal url is the R url.
+    const b = newBuilder()
+    const weirdUrl = 'https://example.com/weird\tpath\\seg/pkg.tgz'
+    const id = serializeNodeId('weirdpkg', '1.0.0', [])
+    b.addNode({ id, name: 'weirdpkg', version: '1.0.0', peerContext: [] })
+    b.setTarball({ name: 'weirdpkg', version: '1.0.0' }, { resolution: { type: 'tarball', url: weirdUrl } })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    // the raw R row carries the ESCAPED forms, not literal control bytes.
+    const rRow = text.split('\n').find(l => l.startsWith('tarball\t'))!
+    expect(rRow).toContain('weird\\tpath\\\\seg')
+    expect(rRow.split('\t').length).toBe(2) // type + url — the tab inside the url did NOT split it
+    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'weirdpkg', version: '1.0.0' })!.resolution).toEqual({ type: 'tarball', url: weirdUrl })
+  })
+
+  it('B2: a literal `-` range AND a literal `-` alias round-trip (distinct from absent)', () => {
+    // '-' is a legal npm package name → alias '-' and range '-' are representable.
+    // They must NOT collapse to the absent sentinel.
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const dash = serializeNodeId('-', '1.0.0', [])
+    const dep = serializeNodeId('dep', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: dash, name: '-', version: '1.0.0', peerContext: [] })
+    b.addNode({ id: dep, name: 'dep', version: '1.0.0', peerContext: [] })
+    // edge with a literal '-' range
+    b.addEdge(root, dep, 'dep', { range: '-' })
+    // edge with a literal '-' alias (npm:-@1.0.0 style)
+    b.addEdge(root, dash, 'dep', { range: 'npm:-@1.0.0', alias: '-' })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    // the literal '-' value is escaped to `\-` so it never aliases the sentinel.
+    expect(text).toContain('\\-')
+    const g2 = parse(stringify(g, { generatedAt: PINNED }))
+    const rng = g2.out(root, 'dep').find(e => e.dst === dep)!
+    expect(rng.attrs!.range).toBe('-')
+    const ali = g2.out(root, 'dep').find(e => e.dst === dash)!
+    expect(ali.attrs!.alias).toBe('-')
+  })
+
+  it('B2: alias-distinct sibling edges where one alias is the literal `-` (edge identity)', () => {
+    // Two src→dst edges of the same kind, distinguished ONLY by alias, where one
+    // alias is the colliding literal '-'. If '-' collapsed to absent, this would
+    // either lose an edge or throw 'duplicate edge'.
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const tgt = serializeNodeId('pkg', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: tgt, name: 'pkg', version: '1.0.0', peerContext: [] })
+    b.addEdge(root, tgt, 'dep')                                  // canonical descriptor (no alias)
+    b.addEdge(root, tgt, 'dep', { range: 'npm:pkg@1', alias: '-' }) // alias = literal '-'
+    const g = b.seal()
+    assertRoundTripIdentity(g)
+    expect(g.out(root, 'dep').length).toBe(2)
+    const g2 = parse(stringify(g, { generatedAt: PINNED }))
+    expect(g2.out(root, 'dep').length).toBe(2)
+    expect(g2.out(root, 'dep').some(e => e.attrs?.alias === '-')).toBe(true)
+    expect(g2.out(root, 'dep').some(e => e.attrs?.alias === undefined)).toBe(true)
+  })
+
+  it('B2: an empty-string range/alias stays empty (distinct from absent and from `-`)', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const tgt = serializeNodeId('pkg', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: tgt, name: 'pkg', version: '1.0.0', peerContext: [] })
+    b.addEdge(root, tgt, 'dep', { range: '', alias: '' })
+    const g = b.seal()
+    assertRoundTripIdentity(g)
+    const e = parse(stringify(g, { generatedAt: PINNED })).out(root, 'dep')[0]!
+    expect(e.attrs!.range).toBe('')
+    expect(e.attrs!.alias).toBe('')
+  })
+
+  // --- E-row slot redesign regressions (#101) -------------------------------
+  // The E row dropped positional `-` alias padding and the workspaceRange JSON.
+  // descriptor = field 4 (EdgeAttrs.range); trailing slots = a flag cluster
+  // (o/w/ow), then alias=/rv=/sp=; workspaceRange.specifier IS the descriptor.
+
+  it('E-slot: a workspace edge with resolvedVersion round-trips via rv= (workspaceRange reconstructed, NO JSON)', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const ws = serializeNodeId('@ws/m', '1.2.2', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: ws, name: '@ws/m', version: '1.2.2', peerContext: [], workspacePath: 'packages/m' })
+    b.addEdge(root, ws, 'dev', {
+      range: 'workspace:*',
+      workspace: true,
+      workspaceRange: { specifier: 'workspace:*', resolvedVersion: '1.2.2' },
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdev\tworkspace:\*\t/.test(l))!
+    // descriptor `workspace:*` + `w` flag + `rv=1.2.2`; specifier NOT stored (it
+    // is the descriptor). No JSON, no `sp=`, no trailing `-`.
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dev', 'workspace:*', 'w', 'rv=1.2.2'])
+    const e = parse(text).out(root, 'dev')[0]!
+    expect(e.attrs!.workspaceRange).toEqual({ specifier: 'workspace:*', resolvedVersion: '1.2.2' })
+  })
+
+  it('E-slot: a w-edge with NO resolvedVersion reconstructs { specifier } from the descriptor', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const ws = serializeNodeId('@ws/m', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: ws, name: '@ws/m', version: '1.0.0', peerContext: [], workspacePath: 'packages/m' })
+    b.addEdge(root, ws, 'dep', {
+      range: 'workspace:^',
+      workspace: true,
+      workspaceRange: { specifier: 'workspace:^' },
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdep\tworkspace:\^\t/.test(l))!
+    // bare `w` flag only — specifier comes from the descriptor, no rv=/sp=.
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', 'workspace:^', 'w'])
+    const e = parse(text).out(root, 'dep')[0]!
+    expect(e.attrs!.workspaceRange).toEqual({ specifier: 'workspace:^' })
+  })
+
+  it('E-slot: a w-edge whose adapter canonicalised specifier ≠ descriptor stores sp= (the bun-text fallback)', () => {
+    // bun-text keeps a verbatim descriptor `workspace:` but a canonical specifier
+    // `workspace:*`. They differ, so the specifier rides the `sp=` fallback slot.
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const ws = serializeNodeId('@ws/m', '0.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: ws, name: '@ws/m', version: '0.0.0', peerContext: [], workspacePath: 'packages/m' })
+    b.addEdge(root, ws, 'dep', {
+      range: 'workspace:',
+      workspace: true,
+      workspaceRange: { specifier: 'workspace:*', resolvedVersion: '0.0.0' },
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdep\tworkspace:\t/.test(l))!
+    // descriptor `workspace:` + `w` + `rv=0.0.0` + `sp=workspace:*` (the rare
+    // fallback — specifier differs from the descriptor).
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', 'workspace:', 'w', 'rv=0.0.0', 'sp=workspace:*'])
+    const e = parse(text).out(root, 'dep')[0]!
+    expect(e.attrs!.range).toBe('workspace:')
+    expect(e.attrs!.workspaceRange).toEqual({ specifier: 'workspace:*', resolvedVersion: '0.0.0' })
+  })
+
+  it('E-slot: an optional edge emits just the `o` flag (no JSON, no padding)', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const dep = serializeNodeId('pkg', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: dep, name: 'pkg', version: '1.0.0', peerContext: [] })
+    b.addEdge(root, dep, 'dep', { range: '^1.0.0', optional: true })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdep\t\^1\.0\.0/.test(l))!
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', '^1.0.0', 'o'])
+  })
+
+  it('E-slot: an optional+workspace edge packs the flag cluster as `ow`', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const ws = serializeNodeId('@ws/m', '2.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: ws, name: '@ws/m', version: '2.0.0', peerContext: [], workspacePath: 'packages/m' })
+    b.addEdge(root, ws, 'dep', {
+      range: 'workspace:*',
+      optional: true,
+      workspace: true,
+      workspaceRange: { specifier: 'workspace:*', resolvedVersion: '2.0.0' },
+    })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdep\tworkspace:\*\t/.test(l))!
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', 'workspace:*', 'ow', 'rv=2.0.0'])
+    const e = parse(text).out(root, 'dep')[0]!
+    expect(e.attrs!.optional).toBe(true)
+    expect(e.attrs!.workspace).toBe(true)
+  })
+
+  it('E-slot: an npm-alias edge stores alias= (no positional padding)', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const dep = serializeNodeId('pm', '6.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: dep, name: 'pm', version: '6.0.0', peerContext: [] })
+    b.addEdge(root, dep, 'dep', { range: 'npm:pm@^1', alias: 'pm-npm-6' })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdep\tnpm:pm@\^1/.test(l))!
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', 'npm:pm@^1', 'alias=pm-npm-6'])
+  })
+
+  it('E-slot: a no-range edge emits the descriptor as `-` and stops (no slots)', () => {
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const dep = serializeNodeId('pkg', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: dep, name: 'pkg', version: '1.0.0', peerContext: [] })
+    b.addEdge(root, dep, 'dep') // no attrs → no declared range
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => /\tdep\t/.test(l) && l.startsWith('0\t'))!
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', '-'])
+    const e = parse(text).out(root, 'dep')[0]!
+    expect(e.attrs?.range).toBeUndefined()
+  })
+
+  it('E-slot: a descriptor that literally contains `=` (URL query) stays positional field 4 (unambiguous)', () => {
+    // The descriptor is positional field 4, BEFORE any slot, so an `=` inside it
+    // is never mistaken for a key=value slot. A git URL with a query is the case.
+    const b = newBuilder()
+    const root = serializeNodeId('root', '0.0.0', [])
+    const dep = serializeNodeId('pkg', '1.0.0', [])
+    b.addNode({ id: root, name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: dep, name: 'pkg', version: '1.0.0', peerContext: [] })
+    const weird = 'git+https://host/r.git?ref=main&token=x#deadbeef'
+    b.addEdge(root, dep, 'dep', { range: weird })
+    const g = b.seal()
+    const text = assertRoundTripIdentity(g)
+    const row = text.split('\n').find(l => l.includes(weird))!
+    expect(row.split('\t')).toEqual(['0', expect.any(String), 'dep', weird])
+    const e = parse(text).out(root, 'dep')[0]!
+    expect(e.attrs!.range).toBe(weird)
+  })
+
+  it('E-slot: NO edge emits trailing `-` padding anywhere in a real-world render', () => {
+    // The old format padded a bare `-` alias column onto ~99% of edges. The new
+    // format omits absent slots, so no E row ends with a `\t-` that is mere
+    // padding. (A descriptor of `-` is field 4 and legitimate; assert no SLOT is
+    // a bare `-`.)
+    const g = parsePnpmV9(fixture('peers-multi/pnpm-v9.lock'))
+    const text = stringify(g, { generatedAt: PINNED })
+    const lines = text.split('\n')
+    const eHeaderIdx = lines.findIndex(l => /^E \d+$/.test(l))
+    const eCount = Number(lines[eHeaderIdx]!.slice(2))
+    for (let i = eHeaderIdx + 1; i <= eHeaderIdx + eCount; i++) {
+      const fields = lines[i]!.split('\t')
+      // fields[4..] are the trailing SLOTS; none may be a bare `-` (padding).
+      for (let f = 4; f < fields.length; f++) {
+        expect(fields[f], `E row ${i}: a slot is bare '-' (padding): ${lines[i]}`).not.toBe('-')
+      }
+    }
+  })
+
+  it('B6: a kind word that names an Object.prototype member throws PARSE_FAILED', () => {
+    const base = stringify(buildMinimal(), { generatedAt: PINNED })
+    for (const evil of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      // forge an E row whose kind column is a prototype member name.
+      const forged = base.replace(/\nE 1\n.*$/s, `\nE 1\n0\t0\t${evil}\t-\n`)
+      expect(() => parse(forged), evil).toThrowError(LockfileError)
+      try { parse(forged) } catch (e) { expect((e as LockfileError).code).toBe('PARSE_FAILED') }
+    }
+  })
+
+  it('B7: malformed payload= / L JSON throws PARSE_FAILED (not raw SyntaxError)', () => {
+    // The E row carries NO JSON any more (the workspaceRange JSON was killed —
+    // specifier rides the descriptor + rv=/sp= slots), so only the node `payload=`
+    // slot and the `L` line remain JSON-bearing. Both must fail with a located
+    // LockfileError, never a raw SyntaxError.
+    const base = stringify(buildMinimal(), { generatedAt: PINNED })
+    // (a) a node payload= with broken JSON — append the bad slot to the pkg row.
+    const nodeRow = base.split('\n').find(l => l.startsWith('pkg\t'))!
+    const badPayload = base.replace(nodeRow, nodeRow + '\tpayload={not json')
+    expectParseFailed(badPayload)
+    // (b) an L line with broken JSON (append after the E region, before EOF)
+    const badL = base.replace(/\n$/, '\nL {bad json\n')
+    expectParseFailed(badL)
+  })
+
+  it('B8: an empty / non-integer / out-of-range edge src or dst throws PARSE_FAILED', () => {
+    const base = stringify(buildMinimal(), { generatedAt: PINNED })
+    const mk = (src: string, dst: string): string => base.replace(/\nE 1\n.*$/s, `\nE 1\n${src}\t${dst}\tdep\t-\n`)
+    expectParseFailed(mk('', '0'))     // empty src — Number('')===0 would silently attach to root
+    expectParseFailed(mk('0', ''))     // empty dst
+    expectParseFailed(mk('1.5', '0'))  // non-integer
+    expectParseFailed(mk('0x1', '0'))  // hex
+    expectParseFailed(mk('99', '0'))   // out of range (only 1 node)
+    expectParseFailed(mk('-1', '0'))   // negative
+  })
+
+  // --- PART C: the worthwhile nits ------------------------------------------
+
+  it('N2: an integrity hash with an out-of-alphabet origin is rejected at emit', () => {
+    const b = newBuilder()
+    const id = serializeNodeId('pkg', '1.0.0', [])
+    b.addNode({ id, name: 'pkg', version: '1.0.0', peerContext: [] })
+    // `bogus` is not a documented HashOrigin → no marker → must throw, not coerce.
+    b.setTarball({ name: 'pkg', version: '1.0.0' }, {
+      integrity: { hashes: [{ algorithm: 'sha512', digest: 'a'.repeat(128), origin: 'bogus' as unknown as 'sri' }] },
+    })
+    const g = b.seal()
+    expect(() => stringify(g, { generatedAt: PINNED })).toThrowError(LockfileError)
+  })
+
+  it('N9: a node r<idx> that does not resolve to a real R row throws PARSE_FAILED', () => {
+    const base = stringify(buildMinimal(), { generatedAt: PINNED })
+    expectParseFailed(base.replace('\tr0\t', '\tr999\t')) // out of range
+    expectParseFailed(base.replace('\tr0\t', '\tr-1\t'))  // negative / non-match
+    expectParseFailed(base.replace('\tr0\t', '\txyz\t'))  // not an r<idx> at all
+  })
+})
+
+// A minimal 1-node + 1-self-edge graph used as a forgeable base for the
+// malformed-input regressions. Node `pkg@1.0.0` with a registry integrity, plus
+// a single dep self-edge so the `E 1` region exists to mutate.
+function buildMinimal(): Graph {
+  const b = newBuilder()
+  const id = serializeNodeId('pkg', '1.0.0', [])
+  b.addNode({ id, name: 'pkg', version: '1.0.0', peerContext: [] })
+  b.setTarball({ name: 'pkg', version: '1.0.0' }, { integrity: sri('sha512-' + 'a'.repeat(86) + '==') })
+  b.addEdge(id, id, 'dep', { range: '1.0.0' })
+  return b.seal()
+}
+
+function expectParseFailed(text: string): void {
+  let threw: unknown
+  try { parse(text) } catch (e) { threw = e }
+  expect(threw).toBeInstanceOf(LockfileError)
+  expect((threw as LockfileError).code).toBe('PARSE_FAILED')
+}
 
 // =====================================================================================
 // §F — public-surface dispatcher + detect

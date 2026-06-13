@@ -1,7 +1,8 @@
 // lockgraph — native graph-serialization format (#101).
 //
-// A portable, versioned serialization of the L2 Graph as a COMPACT SPARSE
-// adjacency matrix + interned tables. Unlike the PM adapters (yarn-berry, npm,
+// A portable, versioned serialization of the L2 Graph as a provenance META block
+// followed by THREE tab-separated tables (registries, nodes, edges) plus an
+// optional trailing layout-hints line. Unlike the PM adapters (yarn-berry, npm,
 // pnpm, bun) — which serialize a Graph into a *foreign* package-manager schema
 // and therefore round-trip only up to that schema's expressivity — lockgraph
 // serializes the canonical model itself. Its defining property is
@@ -10,43 +11,60 @@
 //     parse(serialize(g)) ≡ g
 //
 // i.e. `g.diff(parse(serialize(g)))` is empty on EVERY axis (nodes, edges,
-// changed-nodes) AND `tarballs()` iterates byte-equal, because the format
-// stores the canonical model's inputs verbatim and lets `Builder.seal()`
-// re-derive the secondary indices. A re-serialize of the reconstructed graph is
-// byte-identical to the first (the BODY is canonical).
+// changed-nodes) AND `tarballs()` iterates byte-equal, because the format stores
+// the canonical model's inputs verbatim and lets `Builder.seal()` re-derive the
+// secondary indices. A re-serialize of the reconstructed graph is byte-identical
+// to the first (the three tables are canonical); only META's volatile
+// `generatedAt` / `generator` lines vary.
 //
-// THREE REGIONS (see spec/formats/lockgraph.md for the normative grammar):
+// DOCUMENT LAYOUT (see spec/formats/lockgraph.md for the normative grammar):
 //
-//   HEADER  — volatile provenance, NOT hashed. `@lockgraph` magic + envelope
-//             major, `schema major.minor`, `generatedAt` (RFC-3339 UTC), the
-//             generator id, and an optional `source {format,digest}` line. A
-//             reserved `registrySnapshot` slot is documented but unpopulated.
-//   BODY    — canonical, deterministic. Interned tables (strings, registries,
-//             packages, nodes) + the sparse hex adjacency (edges) + optional
-//             layout-hints / diagnostics. Byte-identical for structurally-equal
-//             graphs: every collection is content-sorted, every order is a pure
-//             function of the graph, never of input bytes or wall-clock.
-//   SEAL    — `seal sha256 <hex>` = sha256 over the canonical BODY ⊕ the schema
-//             major. The same graph serialized twice yields an identical BODY
-//             and an identical seal; only the header `generatedAt` differs (it
-//             lives OUTSIDE the seal, so it never perturbs the checksum).
+//   META       — provenance, NOT hashed. `@lockgraph 1`, `schema 1.0`,
+//                `generatedAt` (RFC-3339 UTC), the generator id. No checksum.
+//   R <n>      — registries/sources, one `<type>\t<url>` per distinct node
+//                source, content-sorted by (type, url), referenced as r0, r1, …
+//                NORMATIVE: parse reads R back to recompose canonical npm
+//                tarball URLs (hashes are DATA; the tarball path is a FUNCTION
+//                of the registry type).
+//   N <n>      — one row per node INSTANCE; line k IS node k. Root workspace
+//                pinned at index 0, the rest ascending by fully-reconstructed
+//                NodeId under cmpStr (= graph.nodes() order). Columns
+//                `name\tversion\tr<idx>\t<integrity>` then trailing optional
+//                slots ws=/patch=/src=/peer=/ck=/res=/payload= (present only
+//                when set). `src=` stores `Node.source` verbatim (NOT
+//                re-derived). A CANONICAL resolution is NOT stored: a
+//                yarn-classic `<canonical-url>#<sha1>` Node.resolution rides a
+//                trailing `u`-member in the integrity column (res= omitted), a
+//                berry `<name>@npm:<version>` locator collapses to the bare
+//                `res` marker, and a canonical {type:'tarball'} payload
+//                resolution is omitted and recomposed from the R row —
+//                EXACT-MATCH-OR-VERBATIM: anything else stays verbatim.
+//   E <n>      — one edge per row, `src\tdst\t<kind>\t<descriptor>` then
+//                optional omittable slots (a flag cluster `o`/`w`/`ow`, then
+//                `alias=` / `rv=` / `sp=`), sorted (src, dst, kind, alias). The
+//                `descriptor` is the declared `EdgeAttrs.range` verbatim (npm
+//                protocol implicit, every other protocol inline); there is NO
+//                positional `-` alias padding and NO `workspaceRange` JSON — a
+//                w-edge's `workspaceRange.specifier` IS the descriptor (the `sp=`
+//                slot is the rare fallback when an adapter canonicalised them
+//                apart), and `resolvedVersion` rides `rv=`.
+//   L <json>   — OPTIONAL single trailing line, the graph's one LayoutHints as
+//                canonical JSON; absent entirely when there are no hints.
 //
-// DELIMITER: `:` (the row field separator) is safe because every inline token
-// in a row is `:`-free — a `name`, a `version`, a hex digest, a small integer,
-// a registry index. ANY value that can contain `:` (git/file/patch locators,
-// ranges, the per-node verbatim resolution sidecar, peerContext NodeIds, the
-// JSON metadata blob) is stored in the `strings[]` pool and referenced by its
-// decimal index, never written inline.
+// There is NO checksum line and NO seal — integrity of the GRAPH is structural
+// (parse reconstructs + seals the model; a mangled body fails the seal coherence
+// invariants, not a byte hash). See the spec's "Integrity & authenticity".
 //
-// SCOPE (v1): the **text profile** + **L2 graph only**. The binary profile and
-// the optional L1-overrides / L3-layout body sections are RESERVED — the
-// version slots are present so a future reader can refuse or skip them, but v1
-// neither emits nor parses them. See the spec's "Reserved" section.
+// TSV ENCODING: region data rows are joined by a SINGLE `\t`, no padding/no
+// alignment. Only the four framing bytes are escaped inside a value
+// (`\`→`\\`, TAB→`\t`, LF→`\n`, CR→`\r`); `:` / `/` / `@` / `+` are ordinary
+// value bytes. Region headers (`R <n>` …) and META lines are SPACE-separated
+// framing.
 
 import {
   newBuilder,
+  serializeNodeId,
   toTarballKey,
-  stripPeerContextFromNodeId,
   type Diagnostic,
   type Edge,
   type EdgeAttrs,
@@ -59,67 +77,128 @@ import {
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
+import type { Hash, HashOrigin, Integrity } from '../recipe/integrity.ts'
+import type { ResolutionCanonical } from '../recipe/resolution.ts'
 import { LockfileError } from '../errors.ts'
-import { createHash } from 'node:crypto'
 
 export const version = '0.0.0'
 
 // === Format constants =======================================================
 
-/** Envelope/container major — the on-the-wire framing version (region layout,
- *  escaping, seal algorithm). Bumped only when the *container* shape changes,
- *  independently of the model `schema`. */
-const ENVELOPE_MAJOR = 1
+/** The format generation written in the magic line `@lockgraph <GENERATION>`.
+ *  In preview it is a detection discriminant, NOT a stability contract. */
+const GENERATION = 1
 
-/** Model schema version. Additive model changes bump the MINOR (older readers
- *  warn + ignore unknown trailing fields); breaking changes bump the MAJOR
- *  (older readers refuse with CAPABILITY_LACK). */
+/** The model generation, informational in preview (`schema <major>.<minor>`). */
 const SCHEMA_MAJOR = 1
 const SCHEMA_MINOR = 0
 
 const MAGIC = '@lockgraph'
-const HEADER_END = '---'
-const BODY_END = '---'
-
 const GENERATOR = `@antongolub/lockfile@${version}`
 
-// Edge-kind ↔ single-char enum. A tiny fixed alphabet keeps the adjacency rows
-// compact and `:`-free. `bundled` is in the model's EdgeKind union, so it gets
-// a slot even though the bundled-deps fact is normally carried on the parent's
-// TarballPayload.bundledDependencies (spec/02-graph.md#bundled-deps).
-const KIND_TO_CHAR: Record<EdgeKind, string> = {
-  dep:      'd',
-  dev:      'v',
-  optional: 'o',
-  peer:     'p',
-  bundled:  'b',
+// The `-` sentinel for an ABSENT (undefined) value in a column. A bare dash is
+// the only one-char value a column never legitimately holds, so it discriminates
+// `undefined` from every present value EXCEPT a literal one-char `-` — which is a
+// real value in the edge `descriptor` field (EdgeAttrs.range: '-' is a legal npm
+// package name, so a range may be '-'). For that field a present value is written
+// through `encodeOpt` (below), which escapes a literal `-` to `\-` so it never
+// aliases the sentinel; `''` stays `''` (a distinct present value). The integrity
+// / R-url columns can never structurally hold a one-char `-`, so they keep the
+// bare sentinel; the edge `alias` rides the `alias=` slot (value after `=`, no
+// collision) and the flag cluster is simply absent when empty (no `-` placeholder).
+const NONE = '-'
+
+// The edge `descriptor` carries a *tri-state* (undefined / '' / any string incl.
+// '-'), so it cannot use the bare NONE byte alone — a literal '-' value would
+// alias the absent sentinel and round-trip as `undefined`, changing the edge.
+// encodeOpt makes all three distinguishable: undefined → `-`; a present value →
+// TSV-escaped, with the single colliding form `-` escaped to `\-`. decodeOpt
+// inverts it.
+function encodeOpt(v: string | undefined): string {
+  if (v === undefined) return NONE
+  const esc = escapeTsv(v)
+  return esc === NONE ? '\\-' : esc // only the exact one-char '-' collides
 }
-const CHAR_TO_KIND: Record<string, EdgeKind> = {
-  d: 'dep',
-  v: 'dev',
-  o: 'optional',
-  p: 'peer',
-  b: 'bundled',
+function decodeOpt(raw: string): string | undefined {
+  if (raw === NONE) return undefined      // the absent sentinel
+  if (raw === '\\-') return NONE           // the escaped literal one-char '-'
+  return unescapeTsv(raw)
 }
 
-// Per-edge boolean flags, packed into one `:`-free token of flag letters (empty
-// token = no flags). `optional` and `workspace` are the two booleans on
-// EdgeAttrs; `range`, `alias`, `workspaceRange` are ref-encoded separately.
+// Edge-kind ⇄ full word. `optional` shortens to `opt` so the column never
+// collides with the `o` *flag* letter; the rest are the enum names. A full word
+// keeps the audit scope legible in the raw file and gzip collapses the repeats.
+const KIND_TO_WORD: Record<EdgeKind, string> = {
+  dep:      'dep',
+  dev:      'dev',
+  optional: 'opt',
+  peer:     'peer',
+  bundled:  'bundled',
+}
+// Null-prototype so a kind word that happens to name an Object.prototype member
+// (`constructor` / `toString` / `__proto__` / `hasOwnProperty`) resolves to
+// `undefined` and is REJECTED on parse, instead of inheriting a prototype
+// function and silently passing the `=== undefined` guard.
+const WORD_TO_KIND: Record<string, EdgeKind> = Object.assign(Object.create(null), {
+  dep:     'dep',
+  dev:     'dev',
+  opt:     'optional',
+  peer:    'peer',
+  bundled: 'bundled',
+})
+
+// Per-edge boolean flags, packed into ONE optional flag-cluster slot of flag
+// letters (`o`, `w`, or `ow`), present only when ≥1 holds. `optional` and
+// `workspace` are the two booleans on EdgeAttrs. The remaining EdgeAttrs ride
+// dedicated slots: `range` is the positional `descriptor` field; `alias` is the
+// `alias=` slot; `workspaceRange` is reconstructed from the descriptor + the
+// `rv=` (resolvedVersion) / `sp=` (specifier-fallback) slots — see the E emit/
+// parse below.
 const FLAG_OPTIONAL = 'o'
 const FLAG_WORKSPACE = 'w'
+
+// === Integrity origin ⇄ 1-char marker (the node `integrity` column) =========
+// Each multiset member is `<originMarker><algo>-<digest>`, `;`-joined. The
+// marker preserves the derive-vs-fetch boundary. `u` is TRANSPORT-ONLY: it
+// carries the `#<sha1hex>` fragment of a canonical-URL Node.resolution (always
+// the LAST member, at most one), and on parse it is put BACK into the
+// recomposed URL as the fragment — it is NEVER added to the integrity multiset
+// (per _common.md §3 the url-fragment sha1 lives on the resolution sidecar, not
+// the multiset; a multiset hash with origin 'url-fragment' violates that model
+// invariant and the emitter rejects it).
+const ORIGIN_TO_MARKER: Record<HashOrigin, string> = {
+  sri:            's',
+  'berry-zip':    'z',
+  'url-fragment': 'u', // transport-only; rejected as a multiset member (see above)
+  registry:       'r',
+  recomputed:     'c',
+}
+// Null-prototype so a marker that names an Object.prototype member can never
+// inherit a function and slip past the `=== undefined` reject on parse.
+const MARKER_TO_ORIGIN: Record<string, HashOrigin> = Object.assign(Object.create(null), {
+  s: 'sri',
+  z: 'berry-zip',
+  r: 'registry',
+  c: 'recomputed',
+  // 'u' deliberately absent: intercepted as the transport fragment, never an origin.
+})
 
 // === Determinism helpers ====================================================
 
 const cmpStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
-// Canonical JSON: object keys recursively sorted so structurally-equal values
-// serialize to byte-identical strings. Arrays keep order (order is meaningful
-// for the integrity multiset and peerContext). `undefined` object properties
-// are dropped (they are absent on the model, never JSON-null). This is the
-// single chokepoint that lets arbitrary TarballPayload shapes — including
-// `funding: unknown`, the `bin: string | Record`, the cpu/os/libc arrays, and
-// the ResolutionCanonical discriminated union — round-trip identity-exact
-// without a bespoke per-field encoder.
+// Canonical JSON: object keys recursively sorted (ascending UTF-16 code-unit
+// order, JavaScript's default `Array.prototype.sort` string order) so
+// structurally-equal values serialize to byte-identical strings. Arrays keep
+// order (order is meaningful for the integrity multiset, cpu/os lists, and
+// peerContext). `undefined` object properties are dropped (exactly
+// `JSON.stringify`'s behaviour); `null` is preserved. This is the single
+// chokepoint that lets arbitrary TarballPayload shapes — including
+// `funding: unknown`, the `bin: string | Record`, and the ResolutionCanonical
+// union — round-trip identity-exact without a bespoke per-field encoder. Used by
+// the node `payload=` slot and the `L` layout-hints line. (The edge
+// `workspaceRange` is NOT JSON any more — it decomposes onto the descriptor +
+// rv=/sp= slots; see the E emit/parse.)
 function canonicalJson(value: unknown): string {
   return JSON.stringify(sortDeep(value))
 }
@@ -137,15 +216,17 @@ function sortDeep(value: unknown): unknown {
   return value
 }
 
-// === Line escaping ==========================================================
+// === TSV value escaping =====================================================
 //
-// Interned strings are written one-per-line, so a literal newline inside a
-// value (possible in a `funding` blob or an exotic resolution) would corrupt
-// the line framing. Escape the four bytes that matter for line/field safety.
-// `:` is NOT escaped — interned strings are addressed by index, never split on
-// `:`, so a colon inside an interned value is harmless.
+// A value rides inside a tab-bounded, line-oriented region row, so the four
+// framing bytes — backslash, TAB, LF, CR — are escaped; nothing else is (a
+// value may legitimately contain spaces, `:`, `/`, `@`, `+`, `{`, `}`, `,`).
+// For a JSON-bearing slot the JSON string escaping (§ canonical JSON step 6) has
+// already run, so a `\t` *inside* a JSON string is already `\\t` here; only a
+// literal TAB byte that reaches the value is escaped to `\t` by this layer. The
+// two layers compose unambiguously because the JSON escape runs first.
 
-function escapeLine(s: string): string {
+function escapeTsv(s: string): string {
   let out = ''
   for (const ch of s) {
     if (ch === '\\') out += '\\\\'
@@ -157,7 +238,7 @@ function escapeLine(s: string): string {
   return out
 }
 
-function unescapeLine(s: string): string {
+function unescapeTsv(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; i++) {
     const ch = s[i]
@@ -175,64 +256,38 @@ function unescapeLine(s: string): string {
   return out
 }
 
-// === String interner ========================================================
+// === Hardened parse primitives ==============================================
 //
-// Two-phase: callers `intern()` every `:`-containing or repeated value during a
-// pre-pass; `finalize()` then content-sorts the pool and assigns each string
-// its final decimal index. Sorting is what makes the table byte-identical for
-// structurally-equal graphs regardless of insertion order. A second resolve
-// pass reads the final index for each value.
+// Every JSON-bearing slot (the node `payload=` slot, the `L` line) and every
+// node-index field (`E` src/dst) is parsed through these so a
+// malformed document fails with a `LockfileError` PARSE_FAILED carrying a clear
+// locus — NOT a raw `SyntaxError` from `JSON.parse`, nor a silent `Number('')
+// === 0` that grafts a corrupt edge onto the root node.
 
-class Interner {
-  private readonly set = new Set<string>()
-  private index?: Map<string, number>
-  private ordered?: string[]
-
-  intern(value: string): void {
-    this.set.add(value)
-  }
-
-  finalize(): void {
-    const ordered = Array.from(this.set).sort(cmpStr)
-    const index = new Map<string, number>()
-    for (let i = 0; i < ordered.length; i++) index.set(ordered[i]!, i)
-    this.ordered = ordered
-    this.index = index
-  }
-
-  ref(value: string): number {
-    const idx = this.index?.get(value)
-    if (idx === undefined) {
-      throw new LockfileError({
-        code: 'INVARIANT_VIOLATION',
-        message: `lockgraph: interned string not registered before finalize: ${JSON.stringify(value)}`,
-      })
-    }
-    return idx
-  }
-
-  table(): string[] {
-    return this.ordered ?? []
+function parseJson(raw: string, where: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    throw new LockfileError({
+      code: 'PARSE_FAILED',
+      message: `lockgraph: malformed JSON in ${where}: ${(e as Error).message}`,
+    })
   }
 }
 
-// Registry/source hosts get their OWN interned table (the concept's
-// `registries[]`): few distinct hosts, many references — interning them
-// separately from the general `strings[]` pool keeps package rows pointing at a
-// tiny dense index space and surfaces the host set as a first-class section.
-// Same two-phase content-sort discipline as `Interner`.
-class RegistryInterner {
-  private readonly inner = new Interner()
-  intern(value: string): void { this.inner.intern(value) }
-  finalize(): void { this.inner.finalize() }
-  ref(value: string): number { return this.inner.ref(value) }
-  table(): string[] { return this.inner.table() }
+// A node index is a decimal non-negative integer in `[0, nodeCount)`. `Number`
+// is too permissive (`Number('')` → 0, `Number('1.5')` → 1.5, `Number('0x1F')`
+// → 31, `Number(' 2 ')` → 2), so validate the raw token explicitly first.
+function parseNodeIndex(raw: string, nodeCount: number, where: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: ${where} must be a non-negative integer, got '${raw}'` })
+  }
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0 || n >= nodeCount) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: ${where} index ${raw} out of range [0, ${nodeCount})` })
+  }
+  return n
 }
-
-// === Hex helpers (sparse adjacency node indices) ============================
-
-const toHex = (n: number): string => n.toString(16)
-const fromHex = (s: string): number => parseInt(s, 16)
 
 // =====================================================================================
 // SERIALIZE
@@ -240,12 +295,9 @@ const fromHex = (s: string): number => parseInt(s, 16)
 
 export interface LockgraphStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
-  /** Provenance of the source the graph was parsed from — written verbatim into
-   *  the (un-hashed) header `source` line. Pure attribution. */
-  source?: { format: string; digest?: string }
-  /** Override the header `generatedAt` timestamp (RFC-3339 UTC, second
-   *  precision). Defaults to `new Date()`. Pinning it makes the WHOLE output
-   *  byte-stable (the BODY + seal already are); useful for golden tests. */
+  /** Override the META `generatedAt` timestamp (RFC-3339 UTC, second precision).
+   *  Defaults to `new Date()`. Pinning it makes the WHOLE output byte-stable (the
+   *  three tables are already canonical); useful for golden tests. */
   generatedAt?: string
   onDiagnostic?: (d: Diagnostic) => void
 }
@@ -254,286 +306,163 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
   const eol = options.lineEnding === 'crlf' ? '\r\n' : '\n'
 
   // ---- Collect the canonical model in deterministic order ------------------
-  // graph.nodes() / graph.tarballs() already iterate content-sorted
-  // (spec/02-graph.md#iteration-order); we lean on that for determinism and
-  // assign the dense node index from that order.
-  const nodes = Array.from(graph.nodes())
+  // graph.nodes() iterates ascending by the fully-reconstructed NodeId under
+  // cmpStr (spec § N — nodes); we then pin the root (the empty-path workspace)
+  // at index 0 and keep the rest in that order. Edges address nodes by this
+  // positional index.
+  const rawNodes = Array.from(graph.nodes())
+  const nodes = pinRootFirst(rawNodes)
   const nodeIndex = new Map<NodeId, number>()
   for (let i = 0; i < nodes.length; i++) nodeIndex.set(nodes[i]!.id, i)
 
-  const tarballs = Array.from(graph.tarballs()) // [TarballKey, payload], key-sorted
+  // ---- R table — registries/sources, content-sorted, indexed r0, r1, … -----
+  // Each node maps to a {type, url} source descriptor derived from its workspace
+  // status + canonical TarballPayload.resolution. The set is content-sorted by
+  // (type, url); the index is a pure function of that set. R is NORMATIVE:
+  // parse reads a node's R row back to recompose its canonical npm tarball URL
+  // (Node.resolution fragment form + payload.resolution), so the descriptor is
+  // part of round-trip identity, not just readability.
+  const payloads = nodes.map(node => graph.tarball(tarballKeyInputsOf(node)))
+  const regs = nodes.map((node, i) => registrySourceOf(node, payloads[i]))
+  const regKeyOf = (r: { type: string; url: string }): string =>
+    `${escapeTsv(r.type)}\t${escapeTsv(r.url)}`
+  const regKeys = Array.from(new Set(regs.map(regKeyOf))).sort(cmpStr)
+  const regIndexByKey = new Map<string, number>()
+  for (let i = 0; i < regKeys.length; i++) regIndexByKey.set(regKeys[i]!, i)
 
-  // ---- Build the package table (one row per TarballKey) --------------------
-  // Each node maps to a package row via its TarballKey. A package row owns the
-  // common-case integrity digest + cacheKey + resolution columns, with a JSON
-  // residual blob for anything those columns do not capture.
-  const pkgKeys = tarballs.map(([k]) => k)
-  const pkgIndexByKey = new Map<TarballKey, number>()
-  for (let i = 0; i < pkgKeys.length; i++) pkgIndexByKey.set(pkgKeys[i]!, i)
-
-  // A node may reference a TarballKey that has no tarball payload (workspace
-  // nodes carry none; pre-enrich graphs may lack one). Such keys still need a
-  // package row so the node can point at name/version. Append them after the
-  // payload-bearing keys, key-sorted, so the table stays a pure function of the
-  // graph.
-  const extraKeys: TarballKey[] = []
-  for (const node of nodes) {
-    const key = toTarballKey(tarballKeyInputsOf(node))
-    if (!pkgIndexByKey.has(key)) {
-      pkgIndexByKey.set(key, -1) // placeholder; real index assigned below
-      extraKeys.push(key)
-    }
-  }
-  extraKeys.sort(cmpStr)
-  for (const key of extraKeys) {
-    pkgIndexByKey.set(key, pkgKeys.length)
-    pkgKeys.push(key)
-  }
-  const payloadByKey = new Map<TarballKey, TarballPayload>(tarballs)
-
-  // ---- Phase 1: intern every `:`-containing / repeated value ---------------
-  const strings = new Interner()
-  const registries = new RegistryInterner()
-
-  // Package-row derived fields, computed once and reused in phase 2.
-  //
-  // COMPACTION — the package row factors the *common* payload shape into typed
-  // inline columns so the dominant case (a single integrity hash + a berry
-  // cacheKey + a derivable npmjs registry URL) costs a bare hex digest and two
-  // one-char codes, NOT a verbose JSON blob. Only the residual — fields not
-  // captured by a dedicated column, OR a multi-hash integrity — falls back to
-  // the interned `metaJson`. This is the "integrity/hash lives in the row ONCE"
-  // rule taken to its compact conclusion.
-  interface PkgFields {
-    name: string
-    version: string
-    patchToken?: string  // the `+patch=…` slot value (canonical hex or sentinel)
-    srcToken?: string    // the `+src=…` slot value (16-hex source discriminator,
-                         // ADR-0032) — distinguishes non-registry nodes sharing
-                         // name@version; `undefined` for the registry/ws majority
-    digest?: string      // single integrity hash, inline hex (the "hash" column)
-    originCode?: string  // 1-char origin of `digest` (see ORIGIN_TO_CODE)
-    cacheKey?: string    // berryChecksumCacheKey (interned in `registries` — it
-                         // is a tiny, hugely-repeated token like "10" / "10c0")
-    resInline: string    // resolution-canonical code: '-' none | '=' derived
-                         // npmjs tarball URL | the canonical-JSON (interned)
-    metaJson?: string    // canonical JSON of the RESIDUAL payload, '-' when empty
-  }
-  const pkgFields: PkgFields[] = pkgKeys.map(key => {
-    const { name, version, patch, src } = parseTarballKey(key)
-    const payload = payloadByKey.get(key)
-    const fields: PkgFields = { name, version, resInline: '-' }
-    if (patch !== undefined) fields.patchToken = patch
-    if (src !== undefined) fields.srcToken = src
-    if (payload !== undefined) {
-      // Residual = a shallow copy of the payload minus the fields the dedicated
-      // columns capture. We mutate a copy, never the source payload.
-      const residual: Record<string, unknown> = { ...payload }
-
-      // --- integrity: single hash → inline columns; multi-hash → residual ---
-      const integrity = payload.integrity
-      if (integrity !== undefined && integrity.hashes.length === 1) {
-        const h = integrity.hashes[0]!
-        fields.digest = h.digest
-        fields.originCode = ORIGIN_TO_CODE[h.origin] ?? CODE_ORIGIN_OTHER
-        if (fields.originCode === CODE_ORIGIN_OTHER) {
-          // Unknown/forward-compat origin — keep the full integrity in residual
-          // so the exact origin string survives, and drop the inline columns.
-          delete fields.digest
-          delete fields.originCode
-        } else if (h.algorithm === 'sha512') {
-          delete residual.integrity // fully captured by digest+origin (algo implied sha512)
-        } else {
-          // A non-sha512 single hash: the inline column implies sha512, so it
-          // cannot carry this algorithm. Drop the inline columns and keep the
-          // whole hash in the residual blob so the algorithm round-trips exactly.
-          residual.integrity = { hashes: [{ algorithm: h.algorithm, digest: h.digest, origin: h.origin }] }
-          delete fields.digest
-          delete fields.originCode
-        }
-      }
-
-      // --- berryChecksumCacheKey: dedicated interned column ---
-      if (payload.berryChecksumCacheKey !== undefined) {
-        fields.cacheKey = payload.berryChecksumCacheKey
-        delete residual.berryChecksumCacheKey
-      }
-
-      // --- resolution canonical: derived-URL sentinel or interned JSON ---
-      const res = payload.resolution
-      if (res !== undefined) {
-        if (res.type === 'tarball' && res.hostingProvider === undefined &&
-            res.url === derivedRegistryUrl(name, version)) {
-          fields.resInline = RES_DERIVED // '=' — reconstruct from name+version
-          delete residual.resolution
-        } else {
-          fields.resInline = canonicalJson(res)
-          delete residual.resolution
-        }
-      }
-
-      // --- residual meta blob (everything else) ---
-      const meta = pruneUndefined(residual)
-      if (Object.keys(meta).length > 0) fields.metaJson = canonicalJson(meta)
-    }
-    return fields
-  })
-
-  for (const f of pkgFields) {
-    // `version` is interned (ref-encoded) because it is NOT a `:`-free simple
-    // token in real locks — a `file:` / `github:` / `https:` locator lands in
-    // the version position for non-registry resolutions and would otherwise
-    // shatter the `:`-delimited row. `name` stays inline (npm/yarn/pnpm names
-    // are `:`-free + `+`-free by the registry name grammar). Interning also
-    // dedups versions shared across peer-virt siblings.
-    strings.intern(f.version)
-    if (f.metaJson !== undefined) strings.intern(f.metaJson)
-    if (f.cacheKey !== undefined) registries.intern(f.cacheKey)
-    if (f.resInline !== '-' && f.resInline !== RES_DERIVED) strings.intern(f.resInline)
-  }
-
-  // Node-row fields: peerContext (list of NodeId strings), the verbatim
-  // resolution sidecar, the workspacePath. All can contain `:` / `@`.
-  // The per-node verbatim `resolution` sidecar is the berry locator
-  // `<name>@npm:<version>` for the registry common case — fully derivable from
-  // (name, version), so it gets the `=` sentinel instead of an interned string
-  // (reclaims ~125 KB on backstage). Any other shape (workspace/git/patch
-  // locator) is interned verbatim.
-  for (const node of nodes) {
-    for (const p of node.peerContext) strings.intern(p)
-    if (node.resolution !== undefined && node.resolution !== derivedNodeResolution(node.name, node.version)) {
-      strings.intern(node.resolution)
-    }
-    if (node.workspacePath !== undefined) strings.intern(node.workspacePath)
-    if (node.peerContext.length > 0) strings.intern(canonicalJson(node.peerContext))
-  }
-
-  // Edge attrs: range, alias, and the workspaceRange canonical pair.
-  const edges = collectEdges(graph, nodes)
-  for (const e of edges) {
-    if (e.attrs?.range !== undefined) strings.intern(e.attrs.range)
-    if (e.attrs?.alias !== undefined) strings.intern(e.attrs.alias)
-    if (e.attrs?.workspaceRange !== undefined) strings.intern(canonicalJson(e.attrs.workspaceRange))
-  }
-
-  // Layout hints + diagnostics — interned as canonical JSON blobs.
-  const hints = graph.layoutHints()
-  const hintsJson = hints !== undefined ? canonicalJson(hints) : undefined
-  if (hintsJson !== undefined) strings.intern(hintsJson)
-
-  // Diagnostics are NOT part of graph identity (diff ignores them) but the
-  // format preserves the ADAPTER-emitted ones for fidelity. We EXCLUDE the
-  // seal-re-derived family (`SEAL_*`, emitted by the graph's own `validate()`
-  // on every `seal()` — e.g. `SEAL_PUBLISHED_SELF_LINK`): persisting them would
-  // double-count, because reconstruction re-seals and the seal regenerates them.
-  // Filtering them out keeps the round-trip diagnostic set IDENTICAL (adapter
-  // diags replayed pre-seal, then the seal re-appends the `SEAL_*` ones in the
-  // same trailing position) and makes the body byte-stable. The `SEAL_` prefix
-  // is the convention for seal-derived diagnostics (see graph.ts `validate`).
-  const diagnostics = Array.from(graph.diagnostics()).filter(d => !isSealDerivedDiagnostic(d.code))
-  const diagJsons = diagnostics.map(d => canonicalJson(d))
-  for (const dj of diagJsons) strings.intern(dj)
-
-  strings.finalize()
-  registries.finalize()
-
-  // ---- Phase 2: emit the BODY ----------------------------------------------
+  // ---- N table — one row per node instance ---------------------------------
   const body: string[] = []
 
-  // strings[] table
-  const strTable = strings.table()
-  body.push(`S ${strTable.length}`)
-  for (const s of strTable) body.push(escapeLine(s))
+  body.push(`R ${regKeys.length}`)
+  for (const k of regKeys) body.push(k) // already `<type>\t<url>`, TSV-escaped at regKeyOf
 
-  // registries[] table
-  const regTable = registries.table()
-  body.push(`R ${regTable.length}`)
-  for (const r of regTable) body.push(escapeLine(r))
-
-  // packages[] table — name:verref:patch:src:digest:origin:ckref:res:metaref
-  // `name` is inline (`:`-free by the registry name grammar); `verref` is a
-  // `strings` index (versions may be `file:`/`github:`/`https:` locators). Empty
-  // slots are the literal `-` sentinel. digest is inline hex; origin is a 1-char
-  // code; ckref is a `registries` index (the cacheKey pool); patch is the inline
-  // `+patch=` slot token (canonical hex or `unresolved-…` sentinel — both
-  // `:`-free); src is the inline `+src=` slot token (16-hex source discriminator,
-  // ADR-0032 — `:`-free; `-` for the registry/workspace majority); res is `-` |
-  // `=` (derived URL) | a `strings` index; metaref is a `strings` index. Every
-  // inline token is `:`-free.
-  body.push(`P ${pkgKeys.length}`)
-  for (const f of pkgFields) {
-    const verRef = String(strings.ref(f.version))
-    const patchRef = f.patchToken ?? '-'
-    const srcRef = f.srcToken ?? '-'
-    const digest = f.digest ?? '-'
-    const origin = f.originCode ?? '-'
-    const ckRef = f.cacheKey !== undefined ? String(registries.ref(f.cacheKey)) : '-'
-    const resTok = f.resInline === '-' || f.resInline === RES_DERIVED
-      ? f.resInline
-      : String(strings.ref(f.resInline))
-    const metaRef = f.metaJson !== undefined ? String(strings.ref(f.metaJson)) : '-'
-    body.push(`${f.name}:${verRef}:${patchRef}:${srcRef}:${digest}:${origin}:${ckRef}:${resTok}:${metaRef}`)
-  }
-
-  // nodes[] table — pkgref:peerctxref:wsref:res
-  // pkgref is the package-row index (decimal). peerctxref points at the
-  // canonical-JSON peerContext array (or `-`). wsref is a strings index (or `-`).
-  // res is `-` (none) | `=` (equals the derived `<name>@npm:<version>` locator)
-  // | a strings index. name/version/patch live on the package row (join via
-  // pkgref) and are not repeated here.
   body.push(`N ${nodes.length}`)
-  for (const node of nodes) {
-    const key = toTarballKey(tarballKeyInputsOf(node))
-    const pkgRef = pkgIndexByKey.get(key)!
-    const peerRef = node.peerContext.length > 0
-      ? String(strings.ref(canonicalJson(node.peerContext)))
-      : '-'
-    const wsRef = node.workspacePath !== undefined ? String(strings.ref(node.workspacePath)) : '-'
-    let resTok = '-'
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!
+    const payload = payloads[i]
+    const reg = regs[i]!
+    // The node's npm-registry base, when its R row is a HOSTED npm row. A hosted
+    // row only ever arises from a canonical-shape tarball resolution, so its
+    // presence is the parse-side signal that payload.resolution existed.
+    const hostedBase = reg.type === 'npm' && reg.url !== NONE ? reg.url : undefined
+
+    // --- Node.resolution: exact-match-or-verbatim ---------------------------
+    // Recompose the canonical candidate(s) and compare BYTE-EXACT:
+    //   berry npm locator  → the bare `res` marker (recomposed on parse);
+    //   canonical URL + #<sha1hex> fragment → res= omitted, the fragment rides
+    //     the trailing `u`-member of the integrity column;
+    //   anything else → res= verbatim, exactly as before.
+    // A node with NO Node.resolution emits nothing — and parse keeps it
+    // undefined (undefined stays undefined; the markers are the only recompose
+    // triggers).
+    let resToken: string | undefined
+    let fragment: string | undefined
     if (node.resolution !== undefined) {
-      resTok = node.resolution === derivedNodeResolution(node.name, node.version)
-        ? RES_DERIVED
-        : String(strings.ref(node.resolution))
+      const nr = node.resolution
+      const candidate = hostedBase !== undefined
+        ? recomposeNpmTarballUrl(hostedBase, node.name, node.version)
+        : undefined
+      if (nr === recomposeBerryLocator(node.name, node.version)) {
+        resToken = 'res' // bare marker — canonical berry npm locator
+      } else if (candidate !== undefined && nr.startsWith(candidate + '#')
+          && SHA1_HEX_RE.test(nr.slice(candidate.length + 1))) {
+        fragment = nr.slice(candidate.length + 1) // → u-member; res= omitted
+      } else {
+        resToken = `res=${escapeTsv(nr)}` // verbatim fallback
+      }
     }
-    body.push(`${pkgRef}:${peerRef}:${wsRef}:${resTok}`)
+
+    // --- payload.resolution omission -----------------------------------------
+    // Omitted iff the canonical union is EXACTLY {type:'tarball', url} with the
+    // recomposable canonical URL — which a hosted R row already certifies (the
+    // base was derived from that very url), so only the exact-shape check
+    // remains. Extra keys (hostingProvider, …) keep it verbatim in payload=.
+    const pr = payload?.resolution as ResolutionCanonical | undefined
+    const omitResolution = hostedBase !== undefined && pr !== undefined
+      && pr.type === 'tarball' && Object.keys(pr).length === 2
+
+    const cols: string[] = [
+      escapeTsv(node.name),
+      escapeTsv(node.version),
+      `r${regIndexByKey.get(regKeyOf(reg))!}`,
+      encodeIntegrityColumn(payload?.integrity, fragment),
+    ]
+    // trailing optional slots, fixed order: ws= patch= src= peer= ck= res payload=
+    if (node.workspacePath !== undefined) cols.push(`ws=${escapeTsv(node.workspacePath)}`)
+    if (node.patch !== undefined) cols.push(`patch=${escapeTsv(node.patch)}`)
+    if (node.source !== undefined) cols.push(`src=${escapeTsv(node.source)}`)
+    if (node.peerContext.length > 0) cols.push(`peer=${escapeTsv(node.peerContext.map(p => `(${p})`).join(''))}`)
+    if (payload?.berryChecksumCacheKey !== undefined) cols.push(`ck=${escapeTsv(payload.berryChecksumCacheKey)}`)
+    if (resToken !== undefined) cols.push(resToken)
+    const residual = residualPayload(payload, omitResolution)
+    if (residual !== undefined) cols.push(`payload=${escapeTsv(canonicalJson(residual))}`)
+    body.push(cols.join('\t'))
   }
 
-  // edges — SPARSE hex adjacency. One line per source node that HAS outgoing
-  // edges: `<srcHex>:<dstHex>/<kind>/<rangeref>/<aliasref>/<flags>/<wsrangeref>,…`
-  // Sources with no out-edges emit no line (sparse). Neighbor groups are
-  // comma-joined; each neighbor's fields are `/`-joined. Refs are `-` when
-  // absent. This is the adjacency-matrix-as-sparse-rows the concept fixes.
-  const adjacency = buildAdjacency(edges, nodeIndex, strings)
-  body.push(`E ${adjacency.length}`)
-  for (const line of adjacency) body.push(line)
+  // ---- E table — one edge per row, sorted (src, dst, kind, alias) ----------
+  // 4 positional fields + omittable key=value/flag slots (mirroring the N-row
+  // slot design — NO positional `-` padding):
+  //
+  //   <src>\t<dst>\t<kind>\t<descriptor>[\t<slot>…]
+  //
+  // descriptor = `EdgeAttrs.range` verbatim through encodeOpt — tri-state
+  // (undefined / '' / any string incl. '-'), so a literal '-' never aliases the
+  // absent sentinel (B2). The npm protocol is implicit (bare ^1.2.3) and every
+  // other protocol stays inline (workspace:*, github:…, file:…, npm:…).
+  //
+  // slots, FIXED order for determinism (each omitted when absent/false):
+  //   1. flag-cluster — `o` (optional) / `w` (workspace), packed as `o`/`w`/`ow`,
+  //      present only when ≥1 holds (NO `-` placeholder);
+  //   2. `alias=<EdgeAttrs.alias>` — present iff alias is set (alias is part of
+  //      edge identity);
+  //   3. `rv=<workspaceRange.resolvedVersion>` — the concrete target version;
+  //   4. `sp=<workspaceRange.specifier>` — ONLY when specifier ≠ descriptor (a
+  //      fallback for adapters — e.g. bun-text — that canonicalise the specifier
+  //      to `workspace:*` while keeping a verbatim descriptor like `workspace:`).
+  //      The common case (specifier === descriptor) stores nothing: parse
+  //      reconstructs the specifier FROM the descriptor.
+  //
+  // KILL the old `workspaceRange` JSON: its `specifier` was byte-identical to the
+  // descriptor on every edge but the rare canonicalised one, and the whole JSON
+  // existed for one extra value (resolvedVersion) now in `rv=`.
+  const edges = collectEdges(graph, nodes, nodeIndex)
+  body.push(`E ${edges.length}`)
+  for (const e of edges) {
+    const descriptor = encodeOpt(e.attrs?.range)
+    const cols: string[] = [String(e.src), String(e.dst), KIND_TO_WORD[e.kind], descriptor]
+    // 1 — flag cluster (omitted entirely when no flag is set)
+    let flags = ''
+    if (e.attrs?.optional === true) flags += FLAG_OPTIONAL
+    if (e.attrs?.workspace === true) flags += FLAG_WORKSPACE
+    if (flags !== '') cols.push(flags)
+    // 2 — alias= (alias participates in edge identity)
+    if (e.attrs?.alias !== undefined) cols.push(`alias=${escapeTsv(e.attrs.alias)}`)
+    // 3/4 — workspaceRange decomposed onto rv= / sp=. specifier IS the
+    // descriptor (the round-trip oracle proves this on the corpus); store sp=
+    // only when an adapter canonicalised them apart, so the common w-edge carries
+    // just `w` (+ rv= when resolved).
+    const wr = e.attrs?.workspaceRange
+    if (wr !== undefined) {
+      if (wr.resolvedVersion !== undefined) cols.push(`rv=${escapeTsv(wr.resolvedVersion)}`)
+      if (wr.specifier !== (e.attrs?.range ?? '')) cols.push(`sp=${escapeTsv(wr.specifier)}`)
+    }
+    body.push(cols.join('\t'))
+  }
 
-  // layout-hints — single optional line `H <ref>` (`-` when absent).
-  body.push(`H ${hintsJson !== undefined ? String(strings.ref(hintsJson)) : '-'}`)
+  // ---- L line — optional graph-level layout hints --------------------------
+  const hints = graph.layoutHints()
+  if (hints !== undefined) body.push(`L ${escapeTsv(canonicalJson(hints))}`)
 
-  // diagnostics — `D <count>` then one strings-ref per diagnostic.
-  body.push(`D ${diagJsons.length}`)
-  for (const dj of diagJsons) body.push(String(strings.ref(dj)))
-
-  const bodyText = body.join('\n')
-
-  // ---- SEAL: sha256 over canonical BODY ⊕ schema-major ---------------------
-  const seal = sealOf(bodyText)
-
-  // ---- HEADER (volatile, NOT hashed) ---------------------------------------
+  // ---- META (volatile provenance, NOT hashed) ------------------------------
   const generatedAt = options.generatedAt ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  const header: string[] = []
-  header.push(`${MAGIC} ${ENVELOPE_MAJOR}`)
-  header.push(`schema ${SCHEMA_MAJOR}.${SCHEMA_MINOR}`)
-  header.push(`generatedAt ${generatedAt}`)
-  header.push(`generator ${GENERATOR}`)
-  if (options.source !== undefined) {
-    const digest = options.source.digest ?? '-'
-    header.push(`source ${options.source.format} ${digest}`)
-  }
-  // RESERVED (documented, unpopulated): `resolution registrySnapshot …`.
+  const meta: string[] = [
+    `${MAGIC} ${GENERATION}`,
+    `schema ${SCHEMA_MAJOR}.${SCHEMA_MINOR}`,
+    `generatedAt ${generatedAt}`,
+    `generator ${GENERATOR}`,
+  ]
 
-  const out = [...header, HEADER_END, bodyText, BODY_END, `seal sha256 ${seal}`].join(eol)
-  return out + eol
+  return [...meta, ...body].join(eol) + eol
 }
 
 // =====================================================================================
@@ -546,9 +475,10 @@ export interface LockgraphParseOptions {
 
 export function parse(input: string, options: LockgraphParseOptions = {}): Graph {
   const onDiagnostic = options.onDiagnostic
-  // Normalise CRLF → LF so a CRLF-round-tripped file parses identically; the
-  // seal was computed over the LF-joined BODY regardless of the emitted EOL.
-  const lines = input.replace(/\r\n/g, '\n').split('\n')
+  // Normalise CRLF → LF so a CRLF-round-tripped file parses identically — the
+  // three tables are a function of the LF-normalized model.
+  const head = input.charCodeAt(0) === 0xFEFF ? input.slice(1) : input
+  const lines = head.replace(/\r\n/g, '\n').split('\n')
 
   let i = 0
   const peek = (): string | undefined => lines[i]
@@ -561,291 +491,262 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
     return l
   }
 
-  // ---- HEADER --------------------------------------------------------------
+  // ---- META ----------------------------------------------------------------
   const magicLine = next()
   const magicParts = magicLine.split(' ')
   if (magicParts[0] !== MAGIC) {
     throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: missing ${MAGIC} magic` })
   }
-  const envelopeMajor = Number(magicParts[1])
-  if (!Number.isFinite(envelopeMajor) || envelopeMajor > ENVELOPE_MAJOR) {
+  const generation = Number(magicParts[1])
+  if (!Number.isFinite(generation) || generation > GENERATION) {
     throw new LockfileError({
       code: 'CAPABILITY_LACK',
-      message: `lockgraph: envelope major ${magicParts[1]} newer than supported ${ENVELOPE_MAJOR}`,
+      message: `lockgraph: format generation ${magicParts[1]} newer than supported ${GENERATION}`,
     })
   }
-
-  let schemaMajor = SCHEMA_MAJOR
-  // Walk the rest of the header until the HEADER_END marker.
-  while (peek() !== undefined && peek() !== HEADER_END) {
+  // Walk the remaining META lines until the first region header (`R <n>`).
+  // META lines are pure provenance — `schema` / `generatedAt` / `generator` and
+  // any unknown line — and are ignored (they are not graph facts). The META
+  // block ends at the first line whose first token is a region letter.
+  while (peek() !== undefined && !isRegionHeader(peek()!, 'R')) {
     const line = next()
-    const sp = line.indexOf(' ')
-    const key = sp === -1 ? line : line.slice(0, sp)
-    const rest = sp === -1 ? '' : line.slice(sp + 1)
+    const key = line.split(' ')[0]
     if (key === 'schema') {
-      const major = Number(rest.split('.')[0])
-      if (Number.isFinite(major)) schemaMajor = major
+      const major = Number(line.split(' ')[1]?.split('.')[0])
       if (Number.isFinite(major) && major > SCHEMA_MAJOR) {
         throw new LockfileError({
           code: 'CAPABILITY_LACK',
-          message: `lockgraph: schema major ${rest} newer than supported ${SCHEMA_MAJOR}`,
+          message: `lockgraph: schema major ${line.split(' ')[1]} newer than supported ${SCHEMA_MAJOR}`,
         })
       }
     }
-    // generatedAt / generator / source / reserved slots: provenance only,
-    // ignored on parse (they are not graph facts).
-  }
-  if (next() !== HEADER_END) {
-    throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: missing header terminator' })
+    // generatedAt / generator / unknown: provenance only, ignored.
   }
 
-  // ---- BODY ----------------------------------------------------------------
-  const bodyStart = i
-  const expectSection = (letter: string): number => {
+  const expectHeader = (letter: string): number => {
     const line = next()
     const sp = line.indexOf(' ')
     const key = sp === -1 ? line : line.slice(0, sp)
     const count = sp === -1 ? NaN : Number(line.slice(sp + 1))
-    if (key !== letter || !Number.isFinite(count)) {
+    if (key !== letter || !Number.isInteger(count) || count < 0) {
       throw new LockfileError({
         code: 'PARSE_FAILED',
-        message: `lockgraph: expected '${letter} <count>' section, got: ${line}`,
+        message: `lockgraph: expected '${letter} <count>' region header, got: ${line}`,
       })
     }
     return count
   }
 
-  // strings[]
-  const sCount = expectSection('S')
-  const strTable: string[] = []
-  for (let k = 0; k < sCount; k++) strTable.push(unescapeLine(next()))
-  const str = (ref: string): string => {
-    const idx = Number(ref)
-    const v = strTable[idx]
-    if (v === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: string ref ${ref} out of range` })
+  // ---- R — registries (NORMATIVE — retained for recomposition) -------------
+  // A node's R row is read back to recompose its canonical npm tarball URL:
+  // the omitted payload.resolution union and the fragment-form Node.resolution
+  // are pure functions of (R base, name, version). Node IDENTITY is still
+  // re-derived from name/version/peer/patch/src, never from the R index.
+  const rCount = expectHeader('R')
+  const regs: Array<{ type: string; url: string }> = []
+  for (let k = 0; k < rCount; k++) {
+    const fields = next().split('\t')
+    const [typeRaw, urlRaw] = fields
+    if (typeRaw === undefined || urlRaw === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed registry row: ${fields.join('\t')}` })
     }
-    return v
-  }
-  const strOpt = (ref: string): string | undefined => (ref === '-' ? undefined : str(ref))
-
-  // registries[]
-  const rCount = expectSection('R')
-  const regTable: string[] = []
-  for (let k = 0; k < rCount; k++) regTable.push(unescapeLine(next()))
-  const regOpt = (ref: string): string | undefined => {
-    if (ref === '-') return undefined
-    const v = regTable[Number(ref)]
-    if (v === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: registry ref ${ref} out of range` })
-    }
-    return v
+    regs.push({ type: unescapeTsv(typeRaw), url: unescapeTsv(urlRaw) })
   }
 
-  // packages[]
-  const pCount = expectSection('P')
-  interface PkgRow {
-    name: string
-    version: string
-    patchToken?: string
-    srcToken?: string
-    digest?: string
-    originCode?: string
-    cacheKey?: string
-    resInline?: string // '-' | '=' | canonical JSON
-    metaJson?: string
+  // ---- N — nodes -----------------------------------------------------------
+  const nCount = expectHeader('N')
+  interface ParsedNode {
+    node: Node
+    inputs: TarballKeyInputs
+    payload?: TarballPayload
   }
-  const pkgRows: PkgRow[] = []
-  for (let k = 0; k < pCount; k++) {
-    // name:verref:patch:src:digest:origin:ckref:res:metaref — `name` is the only
-    // inline `:`-free field, so split into exactly 9 fields (the name cannot
-    // contain `:`; every other column is a ref/code/hex/sentinel, all `:`-free).
-    const parts = next().split(':')
-    const [name, verRef, patchRef, srcRef, digest, origin, ckRef, resTok, metaRef] = parts
-    if (name === undefined || verRef === undefined || patchRef === undefined || srcRef === undefined ||
-        digest === undefined || origin === undefined || ckRef === undefined || resTok === undefined ||
-        metaRef === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed package row: ${parts.join(':')}` })
-    }
-    const row: PkgRow = { name, version: str(verRef) }
-    if (patchRef !== '-') row.patchToken = patchRef
-    if (srcRef !== '-') row.srcToken = srcRef
-    if (digest !== '-') row.digest = digest
-    if (origin !== '-') row.originCode = origin
-    const ck = regOpt(ckRef)
-    if (ck !== undefined) row.cacheKey = ck
-    // res token: '-' none | '=' derived | strings-ref → canonical JSON
-    if (resTok === RES_DERIVED) row.resInline = RES_DERIVED
-    else if (resTok !== '-') row.resInline = str(resTok)
-    const meta = strOpt(metaRef)
-    if (meta !== undefined) row.metaJson = meta
-    pkgRows.push(row)
-  }
-
-  // nodes[]
-  const nCount = expectSection('N')
-  interface NodeRow {
-    pkgRef: number
-    peerContext: NodeId[]
-    workspacePath?: string
-    resolution?: string
-    resDerived?: boolean // res token was '=' → expand from (name, version)
-  }
-  const nodeRows: NodeRow[] = []
+  const parsedNodes: ParsedNode[] = []
+  const nodeIdByIndex: NodeId[] = []
   for (let k = 0; k < nCount; k++) {
-    const parts = next().split(':')
-    const [pkgRef, peerRef, wsRef, resTok] = parts
-    if (pkgRef === undefined || peerRef === undefined || wsRef === undefined || resTok === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node row: ${parts.join(':')}` })
+    const fields = next().split('\t')
+    const [nameRaw, versionRaw, regRef, integrityRaw] = fields
+    if (nameRaw === undefined || versionRaw === undefined || regRef === undefined || integrityRaw === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node row: ${fields.join('\t')}` })
     }
-    const row: NodeRow = {
-      pkgRef: Number(pkgRef),
-      peerContext: peerRef === '-' ? [] : (JSON.parse(str(peerRef)) as NodeId[]),
+    const name = unescapeTsv(nameRaw)
+    const nodeVersion = unescapeTsv(versionRaw)
+    const { integrity, fragment } = decodeIntegrityColumn(integrityRaw)
+
+    // the node's R row — normative input to the recomposition below
+    const regMatch = /^r(\d+)$/.exec(regRef)
+    const reg = regMatch === null ? undefined : regs[Number(regMatch[1])]
+    if (reg === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: bad registry reference '${regRef}'` })
     }
-    const ws = strOpt(wsRef)
-    if (ws !== undefined) row.workspacePath = ws
-    if (resTok === RES_DERIVED) row.resDerived = true
-    else if (resTok !== '-') row.resolution = str(resTok)
-    nodeRows.push(row)
+    const hostedBase = reg.type === 'npm' && reg.url !== NONE ? reg.url : undefined
+
+    // trailing optional slots (self-describing `key=value`; the single bare
+    // `res` marker is the one valueless form)
+    let workspacePath: string | undefined
+    let patch: string | undefined
+    let source: string | undefined
+    let peerContext: NodeId[] = []
+    let resVerbatim: string | undefined
+    let resMarker = false
+    let cacheKey: string | undefined
+    let residual: Record<string, unknown> | undefined
+    for (let f = 4; f < fields.length; f++) {
+      const slot = fields[f]!
+      const eq = slot.indexOf('=')
+      if (eq === -1) {
+        if (slot === 'res') { resMarker = true; continue } // bare marker — canonical locator
+        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node slot (no '='): ${slot}` })
+      }
+      const skey = slot.slice(0, eq)
+      const sval = unescapeTsv(slot.slice(eq + 1))
+      if (skey === 'ws') workspacePath = sval
+      else if (skey === 'patch') patch = sval
+      else if (skey === 'src') source = sval
+      else if (skey === 'peer') peerContext = parsePeerContext(sval)
+      else if (skey === 'ck') cacheKey = sval
+      else if (skey === 'res') resVerbatim = sval
+      else if (skey === 'payload') residual = parseJson(sval, `node payload= (${name}@${nodeVersion})`) as Record<string, unknown>
+      // unknown slots are ignored (forward-compat)
+    }
+
+    // Reconstruct Node.resolution — verbatim wins; the bare marker recomposes
+    // the berry npm locator; a u-member recomposes the canonical URL + fragment.
+    // NO marker and NO u-member means the node never had one: undefined stays
+    // undefined (the parse never invents a resolution).
+    if ((resVerbatim !== undefined || resMarker) && fragment !== undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: u-member and res slot are mutually exclusive (${name}@${nodeVersion})` })
+    }
+    if (resVerbatim !== undefined && resMarker) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: duplicate res slot (${name}@${nodeVersion})` })
+    }
+    let resolution: string | undefined
+    if (resVerbatim !== undefined) {
+      resolution = resVerbatim
+    } else if (resMarker) {
+      resolution = recomposeBerryLocator(name, nodeVersion)
+    } else if (fragment !== undefined) {
+      if (hostedBase === undefined) {
+        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: u-member requires a hosted npm registry row (${name}@${nodeVersion})` })
+      }
+      resolution = `${recomposeNpmTarballUrl(hostedBase, name, nodeVersion)}#${fragment}`
+    }
+
+    // Reconstruct the TarballPayload: residual + the recomposed canonical
+    // resolution + the ck= cache key + the integrity column. The canonical
+    // {type:'tarball'} resolution is recomposed iff the node references a
+    // HOSTED npm row and the payload= JSON carries no verbatim `resolution` —
+    // a hosted row only ever arises from a canonical tarball resolution, so
+    // this can never mint a resolution on a node that had none.
+    const recomposePR = hostedBase !== undefined
+      && (residual === undefined || !('resolution' in residual))
+    let payload: TarballPayload | undefined
+    if (residual !== undefined || integrity !== undefined || cacheKey !== undefined || recomposePR) {
+      const p: Record<string, unknown> = residual !== undefined ? { ...residual } : {}
+      if (recomposePR) p.resolution = { type: 'tarball', url: recomposeNpmTarballUrl(hostedBase!, name, nodeVersion) }
+      if (cacheKey !== undefined) p.berryChecksumCacheKey = cacheKey
+      if (integrity !== undefined) p.integrity = integrity
+      payload = p as TarballPayload
+    }
+
+    // Re-derive the NodeId from the STORED (name, version, peerContext, patch,
+    // src) slots exactly as the model does — so seal() re-validates the
+    // id↔peerContext coherence and we never trust a stored id blindly. `src` is
+    // read VERBATIM from the `src=` slot (not re-derived from the canonical
+    // resolution): an adapter may leave `node.source` undefined even when the
+    // resolution would discriminate (pnpm-v9 jsr / codeload-github), so deriving
+    // it would mint a phantom `+src=` and break round-trip identity. Stored
+    // verbatim, `undefined` stays absent.
+    const id = serializeNodeId(name, nodeVersion, peerContext, patch, source)
+    const node = assembleNode(id, name, nodeVersion, peerContext, resolution, patch, source, workspacePath)
+
+    const inputs: TarballKeyInputs = { name, version: nodeVersion }
+    if (patch !== undefined) inputs.patch = patch
+    if (source !== undefined) inputs.source = source
+
+    parsedNodes.push({ node, inputs, payload })
+    nodeIdByIndex.push(id)
   }
 
-  // edges — sparse hex adjacency
-  const eCount = expectSection('E')
+  // ---- E — edges -----------------------------------------------------------
+  const eCount = expectHeader('E')
   interface EdgeRow { src: number; dst: number; kind: EdgeKind; attrs?: EdgeAttrs }
   const edgeRows: EdgeRow[] = []
   for (let k = 0; k < eCount; k++) {
-    const line = next()
-    const colon = line.indexOf(':')
-    if (colon === -1) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed edge line: ${line}` })
+    const fields = next().split('\t')
+    const [srcRaw, dstRaw, kindRaw, descriptorRaw] = fields
+    if (srcRaw === undefined || dstRaw === undefined || kindRaw === undefined ||
+        descriptorRaw === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed edge row: ${fields.join('\t')}` })
     }
-    const srcHex = line.slice(0, colon)
-    const src = fromHex(srcHex)
-    const neighbors = line.slice(colon + 1).split(',')
-    for (const nb of neighbors) {
-      // dstHex/kind/rangeref/aliasref/flags/wsrangeref
-      const f = nb.split('/')
-      const [dstHex, kindChar, rangeRef, aliasRef, flags, wsRangeRef] = f
-      if (dstHex === undefined || kindChar === undefined) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed neighbor: ${nb}` })
-      }
-      const kind = CHAR_TO_KIND[kindChar]
-      if (kind === undefined) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown edge-kind char '${kindChar}'` })
-      }
-      const attrs: EdgeAttrs = {}
-      const range = rangeRef !== undefined ? strOpt(rangeRef) : undefined
-      if (range !== undefined) attrs.range = range
-      const alias = aliasRef !== undefined ? strOpt(aliasRef) : undefined
-      if (alias !== undefined) attrs.alias = alias
-      if (flags !== undefined) {
-        if (flags.includes(FLAG_OPTIONAL)) attrs.optional = true
-        if (flags.includes(FLAG_WORKSPACE)) attrs.workspace = true
-      }
-      const wsRange = wsRangeRef !== undefined ? strOpt(wsRangeRef) : undefined
-      if (wsRange !== undefined) {
-        attrs.workspaceRange = JSON.parse(wsRange) as EdgeAttrs['workspaceRange']
-      }
-      const row: EdgeRow = { src, dst: fromHex(dstHex), kind }
-      if (Object.keys(attrs).length > 0) row.attrs = attrs
-      edgeRows.push(row)
+    const kind = WORD_TO_KIND[kindRaw]
+    if (kind === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown edge kind '${kindRaw}'` })
     }
+    const attrs: EdgeAttrs = {}
+    // Field 4 is the positional descriptor (EdgeAttrs.range). decodeOpt inverts
+    // encodeOpt: `-` → undefined (absent), `\-` → the literal one-char '-',
+    // anything else → the value verbatim (B2). A descriptor containing '=' (a URL
+    // query) is unambiguous: it is positional field 4, BEFORE any slot.
+    const range = decodeOpt(descriptorRaw)
+    if (range !== undefined) attrs.range = range
+    // Trailing slots (fields ≥ 5), each self-describing: a field containing '='
+    // is a key=value slot (alias= / rv= / sp=); a field of only flag letters is
+    // the flag cluster (o / w / ow). FIXED emit order, but parse is
+    // order-independent (keyed), so a forward-compatible reorder still reads.
+    let rv: string | undefined
+    let sp: string | undefined
+    let isWorkspaceEdge = false
+    for (let f = 4; f < fields.length; f++) {
+      const slot = fields[f]!
+      const eq = slot.indexOf('=')
+      if (eq === -1) {
+        // flag cluster — only `o` / `w` letters are defined; unknown letters are
+        // ignored (forward-compat) but a present cluster is the only valueless slot.
+        if (slot.includes(FLAG_OPTIONAL)) attrs.optional = true
+        if (slot.includes(FLAG_WORKSPACE)) { attrs.workspace = true; isWorkspaceEdge = true }
+        continue
+      }
+      const skey = slot.slice(0, eq)
+      const sval = unescapeTsv(slot.slice(eq + 1))
+      if (skey === 'alias') attrs.alias = sval
+      else if (skey === 'rv') rv = sval
+      else if (skey === 'sp') sp = sval
+      // unknown slots are ignored (forward-compat)
+    }
+    // Reconstruct workspaceRange for a w-edge (or any edge carrying rv=/sp=):
+    // specifier IS the descriptor unless sp= overrode it; resolvedVersion rides
+    // rv=. A bare w-edge with no rv=/sp= reconstructs { specifier: <descriptor> }.
+    if (isWorkspaceEdge || rv !== undefined || sp !== undefined) {
+      const specifier = sp !== undefined ? sp : (range ?? '')
+      attrs.workspaceRange = rv !== undefined ? { specifier, resolvedVersion: rv } : { specifier }
+    }
+    // src / dst index a node row each; a bare `Number('')` is 0 and would
+    // silently graft a corrupt empty-field edge onto the root node (B8). Require
+    // a non-negative integer in range; reject empty / non-integer / out-of-range.
+    const src = parseNodeIndex(srcRaw, nCount, 'edge src')
+    const dst = parseNodeIndex(dstRaw, nCount, 'edge dst')
+    const row: EdgeRow = { src, dst, kind }
+    if (Object.keys(attrs).length > 0) row.attrs = attrs
+    edgeRows.push(row)
   }
 
-  // layout hints
-  const hLine = next()
-  if (!hLine.startsWith('H ')) {
-    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: expected 'H <ref>', got: ${hLine}` })
-  }
-  const hRef = hLine.slice(2)
-  const hints: LayoutHints | undefined =
-    hRef === '-' ? undefined : (JSON.parse(str(hRef)) as LayoutHints)
-
-  // diagnostics
-  const dCount = expectSection('D')
-  const parsedDiagnostics: Diagnostic[] = []
-  for (let k = 0; k < dCount; k++) {
-    parsedDiagnostics.push(JSON.parse(str(next())) as Diagnostic)
-  }
-
-  const bodyEndIdx = i
-  if (next() !== BODY_END) {
-    throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: missing body terminator' })
-  }
-
-  // ---- SEAL verification ---------------------------------------------------
-  const sealLine = next()
-  const sealParts = sealLine.split(' ')
-  if (sealParts[0] !== 'seal' || sealParts[1] !== 'sha256' || sealParts[2] === undefined) {
-    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed seal line: ${sealLine}` })
-  }
-  const bodyText = lines.slice(bodyStart, bodyEndIdx).join('\n')
-  const expectedSeal = sealOf(bodyText, schemaMajor)
-  if (sealParts[2] !== expectedSeal) {
-    throw new LockfileError({
-      code: 'PARSE_FAILED',
-      message: `lockgraph: seal mismatch — body checksum ${expectedSeal} ≠ recorded ${sealParts[2]} (corrupt or tampered body)`,
-    })
+  // ---- L — optional layout-hints line --------------------------------------
+  let hints: LayoutHints | undefined
+  if (peek() !== undefined && peek() !== '' && peek()!.startsWith('L ')) {
+    hints = parseJson(unescapeTsv(next().slice(2)), 'L layout-hints line') as LayoutHints
   }
 
   // ---- Rebuild the Graph via the Builder -----------------------------------
   const builder = newBuilder()
 
-  // Reconstruct each TarballPayload from its package row, keyed by TarballKey.
-  // setTarball is fed only for rows that carry a payload (a digest, a meta
-  // blob) — workspace / payload-less rows produce no tarball entry, matching
-  // the source graph where `graph.tarball(...)` was undefined.
-  for (const row of pkgRows) {
-    const payload = rebuildPayload(row)
-    if (payload === undefined) continue
-    const inputs: TarballKeyInputs = { name: row.name, version: row.version }
-    if (row.patchToken !== undefined) inputs.patch = row.patchToken
-    if (row.srcToken !== undefined) inputs.source = row.srcToken
-    builder.setTarball(inputs, payload)
+  for (const { inputs, payload } of parsedNodes) {
+    if (payload !== undefined) builder.setTarball(inputs, payload)
   }
+  for (const { node } of parsedNodes) builder.addNode(node)
 
-  // Reconstruct nodes. The NodeId is re-derived from (name, version,
-  // peerContext, patch) exactly as the model does — so seal() re-validates the
-  // id↔peerContext coherence and we never trust a stored id blindly.
-  //
-  // KEY-ORDER NOTE — graph-identity requires the reconstructed Node to be
-  // byte-equal under `Graph.diff`, whose `nodeEqual` is `JSON.stringify`-based
-  // and therefore KEY-ORDER-SENSITIVE. We assemble the optional fields in the
-  // canonical order the library's adapters emit — `resolution`, then `patch`,
-  // then `source`, then `workspacePath` — via `assembleNode`. _yarn-berry-core
-  // is the adapter that co-occurs the most optional Node fields and fixes this
-  // order: a non-registry node carries `resolution` then `source` (ADR-0032), a
-  // patched node `resolution` then `patch`, a workspace node `resolution` then
-  // `workspacePath`. Matching it makes `g.diff(parse(serialize(g)))` empty for
-  // graphs produced by ANY of this library's parsers. (pnpm / npm / bun never
-  // co-occur these fields, so their order is order-insensitive.)
-  const nodeIdByDense: NodeId[] = []
-  for (const nr of nodeRows) {
-    const pkg = pkgRows[nr.pkgRef]
-    if (pkg === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: node pkgRef ${nr.pkgRef} out of range` })
-    }
-    const resolution = nr.resDerived === true
-      ? derivedNodeResolution(pkg.name, pkg.version)
-      : nr.resolution
-    const node = assembleNode(
-      deriveNodeId(pkg.name, pkg.version, nr.peerContext, pkg.patchToken, pkg.srcToken),
-      pkg.name,
-      pkg.version,
-      nr.peerContext,
-      resolution,
-      pkg.patchToken,
-      pkg.srcToken,
-      nr.workspacePath,
-    )
-    builder.addNode(node)
-    nodeIdByDense.push(node.id)
-  }
-
-  // Reconstruct edges from the dense indices.
   for (const er of edgeRows) {
-    const srcId = nodeIdByDense[er.src]
-    const dstId = nodeIdByDense[er.dst]
+    const srcId = nodeIdByIndex[er.src]
+    const dstId = nodeIdByIndex[er.dst]
     if (srcId === undefined || dstId === undefined) {
       throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: edge index out of range (${er.src}→${er.dst})` })
     }
@@ -853,8 +754,8 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
   }
 
   if (hints !== undefined) builder.layoutHints(hints)
-  for (const d of parsedDiagnostics) builder.diagnostic(d)
 
+  // Diagnostics are NOT read — they are re-derived by the seal and adapters.
   const graph = builder.seal()
   if (onDiagnostic !== undefined) {
     for (const d of graph.diagnostics()) onDiagnostic(d)
@@ -867,12 +768,12 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
 // =====================================================================================
 
 /** True iff `input` is a lockgraph document — the `@lockgraph` magic is the
- *  first token of the first line. Cheap, allocation-light: only the head is
- *  inspected, so this sits at the top of the format detect order. */
+ *  first token of the document (a leading UTF-8 BOM is tolerated). Cheap,
+ *  allocation-light: only the head is inspected, so this sits at the top of the
+ *  format detect order. */
 export function check(input: string): boolean {
-  // Skip a leading BOM if present, then test the first token.
-  const head = input.charCodeAt(0) === 0xFEFF ? input.slice(1) : input
-  return head.startsWith(MAGIC + ' ') || head.startsWith(MAGIC + '\n') || head.startsWith(MAGIC + '\r')
+  const text = input.charCodeAt(0) === 0xFEFF ? input.slice(1) : input
+  return text.startsWith(MAGIC + ' ') || text.startsWith(MAGIC + '\n') || text.startsWith(MAGIC + '\r')
 }
 
 // =====================================================================================
@@ -890,30 +791,49 @@ function tarballKeyInputsOf(node: Node): TarballKeyInputs {
   return inputs
 }
 
-// A diagnostic the graph's own `seal()` re-derives (the `SEAL_*` family emitted
-// by `validate()`). These are NOT persisted in the lockgraph body — the seal
-// regenerates them on reconstruction, so persisting them would double-count.
-function isSealDerivedDiagnostic(code: string): boolean {
-  return code.startsWith('SEAL_')
+// Pin the root workspace (the empty-`workspacePath` member) at index 0, keeping
+// every other node in the incoming order (already ascending by fully-
+// reconstructed NodeId under cmpStr). The root is uniquely identifiable, so this
+// stays a pure function of the graph. A graph with no empty-path workspace (a
+// bare dependency set with no importer) leaves the order untouched.
+function pinRootFirst(nodes: Node[]): Node[] {
+  const rootIdx = nodes.findIndex(n => n.workspacePath === '')
+  if (rootIdx <= 0) return nodes // already first, or no root present
+  const root = nodes[rootIdx]!
+  return [root, ...nodes.slice(0, rootIdx), ...nodes.slice(rootIdx + 1)]
+}
+
+// True iff `line`'s first space-separated token is the region letter `letter`
+// AND it is followed by a non-negative integer count — the shape of a region
+// header (`R 2`, `N 12`, `E 20`). Used to find the META → region boundary
+// without consuming META lines that merely start with a letter (e.g. `generator
+// …` does not match `R`/`N`/`E`).
+function isRegionHeader(line: string, letter: string): boolean {
+  const sp = line.indexOf(' ')
+  if (sp === -1) return false
+  if (line.slice(0, sp) !== letter) return false
+  const count = Number(line.slice(sp + 1))
+  return Number.isInteger(count) && count >= 0
 }
 
 // Assemble a Node with the canonical key insertion order the library's adapters
-// emit (`…, resolution, patch, source, workspacePath`). See the KEY-ORDER NOTE
-// at the reconstruction call site for why this exact order matters for
-// graph-identity. ADR-0032 places `source` AFTER `patch` and BEFORE
-// `workspacePath` — matching _yarn-berry-core's node construction (the only
+// emit (`…, resolution, patch, source, workspacePath`). `Graph.diff`'s
+// `nodeEqual` is `JSON.stringify`-based and therefore KEY-ORDER-SENSITIVE, so
+// matching the adapters' order makes `g.diff(parse(serialize(g)))` empty for
+// graphs produced by ANY of this library's parsers. ADR-0032 places `source`
+// AFTER `patch` and BEFORE `workspacePath`, matching _yarn-berry-core (the only
 // adapter where `resolution` + `source` co-occur on the same node).
 function assembleNode(
   id: NodeId,
   name: string,
-  version: string,
+  nodeVersion: string,
   peerContext: NodeId[],
   resolution: string | undefined,
   patch: string | undefined,
   source: string | undefined,
   workspacePath: string | undefined,
 ): Node {
-  const node: Node = { id, name, version, peerContext }
+  const node: Node = { id, name, version: nodeVersion, peerContext }
   if (resolution !== undefined) node.resolution = resolution
   if (patch !== undefined) node.patch = patch
   if (source !== undefined) node.source = source
@@ -921,211 +841,235 @@ function assembleNode(
   return node
 }
 
-// Decompose a TarballKey `<name>@<version>[+patch=<token>][+src=<token>]` back
-// into parts. There are two slots today — `patch` and `src` (ADR-0032) — and
-// `toTarballKey` emits them `cmpStr`-sorted; since `'patch' < 'src'` the
-// canonical order is `…+patch=…+src=…` (patch-then-src). Either, both, or
-// neither may be present.
-//
-// Split on the literal `+patch=` / `+src=` MARKERS, not the first `+`: a version
-// is NOT `+`-free (semver build-metadata, e.g. `1.0.0+build.1`), but it can never
-// contain `+patch=` / `+src=` (`=` is illegal in semver build metadata), so each
-// marker is an unambiguous slot boundary. The version is ALSO not `:`-free (a
-// `file:` / `github:` / `https:` git-or-url locator lands in the version position
-// for non-registry resolutions), but `:` does not affect THIS decomposition —
-// only the row encoding, where the version is ref-interned rather than written
-// inline.
-//
-// Because of the canonical patch-then-src order, `+src=` (when present) is always
-// the trailing slot; we peel it off FIRST, then `+patch=` from what remains, so
-// both tokens are recovered cleanly even when both slots are present.
-function parseTarballKey(key: TarballKey): { name: string; version: string; patch?: string; src?: string } {
-  let core = key
-  let patch: string | undefined
-  let src: string | undefined
-  // `+src=` is the trailing slot (sorts after `+patch=`) — peel it first.
-  const srcMarker = core.indexOf('+src=')
-  if (srcMarker !== -1) {
-    src = core.slice(srcMarker + '+src='.length)
-    core = core.slice(0, srcMarker)
+// Parse a `peer=` slot value — a `(<nodeId>)(<nodeId>)…` concatenation of
+// parenthesised NodeIds — back into the peerContext array. The NodeIds may
+// themselves contain balanced parens (nested peer contexts), so we split on
+// DEPTH-0 `(`/`)` boundaries, not the first `)`.
+function parsePeerContext(s: string): NodeId[] {
+  const out: NodeId[] = []
+  let depth = 0
+  let start = -1
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '(') {
+      if (depth === 0) start = i + 1
+      depth++
+    } else if (c === ')') {
+      depth--
+      if (depth === 0 && start !== -1) {
+        out.push(s.slice(start, i))
+        start = -1
+      }
+    }
   }
-  // `+patch=` is now the trailing slot of what remains.
-  const patchMarker = core.indexOf('+patch=')
-  if (patchMarker !== -1) {
-    patch = core.slice(patchMarker + '+patch='.length)
-    core = core.slice(0, patchMarker)
-  }
-  // version is what follows the last `@` (depth-0; scoped names keep leading @).
-  const at = core.lastIndexOf('@')
-  const out: { name: string; version: string; patch?: string; src?: string } =
-    at <= 0
-      ? { name: core, version: '' }
-      : { name: core.slice(0, at), version: core.slice(at + 1) }
-  if (patch !== undefined) out.patch = patch
-  if (src !== undefined) out.src = src
   return out
 }
 
-// Re-derive a NodeId from its inputs, mirroring graph.serializeNodeId. We do not
-// import serializeNodeId because it re-runs toTarballKey (which re-validates the
-// patch token) — that is exactly what we want, so reuse it via toTarballKey here
-// to stay single-source on the base-key shape. ADR-0032 — the `+src=` source
-// discriminator (`src`) is threaded alongside `patch`; toTarballKey orders the
-// slots (`…+patch=…+src=…`).
-function deriveNodeId(name: string, version: string, peerContext: NodeId[], patch?: string, src?: string): NodeId {
-  const inputs: TarballKeyInputs = { name, version }
-  if (patch !== undefined) inputs.patch = patch
-  if (src !== undefined) inputs.source = src
-  const base = toTarballKey(inputs)
-  if (peerContext.length === 0) return base
-  return base + peerContext.map(p => `(${p})`).join('')
+// === npm-registry recomposition — store FACTS, derive MECHANICS ==============
+//
+// Hashes/names/versions are DATA; the tarball path is a FUNCTION of the
+// registry type. For an npm-class registry the tarball URL is
+//
+//     <base>/<name>/-/<basename>-<version>.tgz
+//
+// (basename = name with any @scope/ prefix stripped: @vue/shared → shared), and
+// the yarn-berry npm locator is `<name>@npm:<version>`. The format derives both
+// from the R table + the node's (name, version) facts instead of storing the
+// same URL three times (R host + res= + payload.resolution.url), under an
+// EXACT-MATCH-OR-VERBATIM guard: at emit a candidate is recomposed and compared
+// BYTE-EXACT to the stored value; any mismatch (git, codeload, jsr, aliased,
+// url-encoded, re-pathed, …) keeps the verbatim encoding, so fidelity is never
+// at risk.
+
+const SHA1_HEX_RE = /^[0-9a-f]{40}$/
+
+function tarballBasename(name: string): string {
+  return name.startsWith('@') ? name.slice(name.indexOf('/') + 1) : name
 }
 
-// --- Integrity origin ⇄ 1-char code (the package-row `origin` column) ---
-// A single-hash integrity is stored as `digest` (inline hex) + this code. The
-// code's algorithm is sha512 by convention (the overwhelmingly common case); a
-// non-sha512 single hash falls back to the residual meta blob (see Phase 1), so
-// the code space need only cover the five HashOrigin values. An unknown /
-// forward-compat origin also routes to the residual blob (CODE_ORIGIN_OTHER is
-// never emitted — it is an internal sentinel meaning "use the blob instead").
-const ORIGIN_TO_CODE: Record<string, string> = {
-  sri:            's',
-  'berry-zip':    'z',
-  'url-fragment': 'u',
-  registry:       'r',
-  recomputed:     'c',
-}
-const CODE_TO_ORIGIN: Record<string, string> = {
-  s: 'sri',
-  z: 'berry-zip',
-  u: 'url-fragment',
-  r: 'registry',
-  c: 'recomputed',
-}
-const CODE_ORIGIN_OTHER = '?' // internal sentinel — never written to the wire
-
-// The `=` sentinel for the "derived" common case — a resolution-canonical
-// tarball at the conventional npmjs URL (package row), or a `Node.resolution`
-// equal to the `<name>@npm:<version>` berry locator (node row). Both are pure
-// functions of (name, version), so the `=` reclaims them at zero storage.
-const RES_DERIVED = '='
-
-// The conventional npmjs registry tarball URL for (name, version) — the exact
-// shape `recipe/resolution.deriveRegistryUrl` produces for a berry `npm:`
-// locator. Replicated here (not imported — it is a private helper there) and
-// guarded by an EXACT string compare at emit, so any future divergence simply
-// falls back to verbatim storage with zero fidelity risk.
-function derivedRegistryUrl(name: string, version: string): string {
-  const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
-  return `https://registry.npmjs.org/${name}/-/${tail}-${version}.tgz`
+function npmTarballSuffix(name: string, version: string): string {
+  return `/${name}/-/${tarballBasename(name)}-${version}.tgz`
 }
 
-// The conventional berry `npm:` locator for (name, version) — the `=` sentinel's
-// expansion for the per-node verbatim `resolution` sidecar.
-function derivedNodeResolution(name: string, version: string): string {
+// The npm-class registry base of a canonical tarball URL for (name, version) —
+// the prefix left after stripping the canonical suffix — or `undefined` when
+// the URL is not the canonical registry shape. By construction
+// `base + npmTarballSuffix(name, version) === url`, so a successful derivation
+// guarantees the recomposition is byte-exact.
+function npmRegistryBaseOf(url: string, name: string, version: string): string | undefined {
+  const suffix = npmTarballSuffix(name, version)
+  if (!url.endsWith(suffix)) return undefined
+  const base = url.slice(0, url.length - suffix.length)
+  return /^https?:\/\/./.test(base) ? base : undefined
+}
+
+function recomposeNpmTarballUrl(base: string, name: string, version: string): string {
+  return base + npmTarballSuffix(name, version)
+}
+
+function recomposeBerryLocator(name: string, version: string): string {
   return `${name}@npm:${version}`
 }
 
-// Drop keys whose value is `undefined`, returning a fresh shallow object. (The
-// TarballPayload model carries `undefined` for absent fields; canonicalJson also
-// strips them, but we need the pruned key-set to decide whether a residual blob
-// is needed at all.)
-function pruneUndefined(obj: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const k of Object.keys(obj)) if (obj[k] !== undefined) out[k] = obj[k]
-  return out
-}
-
-// Reconstruct a TarballPayload from a parsed package row. The residual meta blob
-// is folded FIRST (it carries any field the dedicated columns did not capture,
-// including a multi-hash or non-sha512 integrity), then the dedicated columns
-// overlay the common-case integrity / cacheKey / resolution. Order matters:
-// the columns are only ever populated when the residual did NOT carry the same
-// field, so there is no conflict — but overlaying last keeps the intent explicit.
-function rebuildPayload(row: {
-  metaJson?: string
-  digest?: string
-  originCode?: string
-  cacheKey?: string
-  resInline?: string // '-' | '=' | canonical JSON
-  name: string
-  version: string
-}): TarballPayload | undefined {
-  const payload: Record<string, unknown> = row.metaJson !== undefined
-    ? (JSON.parse(row.metaJson) as Record<string, unknown>)
-    : {}
-
-  // integrity from the inline columns (single sha512 hash of a known origin)
-  if (row.digest !== undefined && row.originCode !== undefined) {
-    const origin = CODE_TO_ORIGIN[row.originCode]
-    if (origin === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown integrity origin code '${row.originCode}'` })
+// Derive the {type, url} R-table source descriptor for a node. Workspace members
+// are the `workspace` pseudo-source (no external URL → `-`); otherwise the class
+// is read off the node's canonical TarballPayload.resolution union. The R table
+// is NORMATIVE: parse reads the node's R row back to recompose the canonical
+// npm tarball URL, so the descriptor must be exact:
+//
+//   - a canonical-shape registry tarball URL → `npm` + the derived base (the
+//     URL minus the recomposable `/<name>/-/<basename>-<version>.tgz` suffix);
+//   - NO canonical resolution at all (bun-text registry nodes, hand-built
+//     graphs before enrichment) → `npm` + `-` ("npm-class source, host
+//     unrecorded") — deliberately NOT a fabricated default host, because a
+//     hosted row existentially implies the node HAD a canonical tarball
+//     resolution (that is what the parse-side payload.resolution recomposition
+//     keys on);
+//   - everything else verbatim, exactly as before (git/tarball/directory/
+//     unknown).
+function registrySourceOf(node: Node, payload: TarballPayload | undefined): { type: string; url: string } {
+  if (node.workspacePath !== undefined) return { type: 'workspace', url: NONE }
+  const res = payload?.resolution as ResolutionCanonical | undefined
+  if (res === undefined) return { type: 'npm', url: NONE }
+  switch (res.type) {
+    case 'tarball': {
+      const base = npmRegistryBaseOf(res.url, node.name, node.version)
+      if (base !== undefined) return { type: 'npm', url: base }
+      return { type: 'tarball', url: res.url }
     }
-    payload.integrity = { hashes: [{ algorithm: 'sha512', digest: row.digest, origin }] }
+    case 'git':
+      return { type: res.hostingProvider ?? 'git', url: res.url }
+    case 'directory':
+      return { type: 'directory', url: res.path }
+    case 'unknown':
+      return { type: 'unknown', url: res.raw }
   }
-
-  if (row.cacheKey !== undefined) payload.berryChecksumCacheKey = row.cacheKey
-
-  if (row.resInline !== undefined && row.resInline !== '-') {
-    payload.resolution = row.resInline === RES_DERIVED
-      ? { type: 'tarball', url: derivedRegistryUrl(row.name, row.version) }
-      : (JSON.parse(row.resInline) as unknown)
-  }
-
-  return Object.keys(payload).length > 0 ? (payload as TarballPayload) : undefined
 }
 
-// Collect every edge in the graph, content-sorted by (srcDenseIndex, then the
-// graph's own out-edge order which is already (dst, kind, alias)-sorted).
-function collectEdges(graph: Graph, nodes: Node[]): Edge[] {
-  const out: Edge[] = []
+// === Integrity multiset column ⇄ Integrity (+ the transport `u`-member) =====
+//
+// The `integrity` column carries the ENTIRE integrity multiset with origin tags
+// (never a truncated single hash). Each member is `<originMarker><algo>-<digest>`
+// (digest = lowercase hex), members `;`-joined in their canonical (source)
+// order. `;` separates members and `-` separates algo from digest; neither
+// occurs inside a hex digest or an algorithm token, so the sub-field is
+// self-delimiting within the tab-bounded column. A bare `-` means NO integrity.
+//
+// The `u`-member (`usha1-<40hex>`) is TRANSPORT-ONLY, always LAST, at most one:
+// it is the `#<sha1hex>` fragment of a canonical-URL Node.resolution
+// (yarn-classic `resolved`), moved here so the URL itself can be recomposed
+// from the R row. On decode it is returned as `fragment`, NOT folded into the
+// multiset — the model keeps the url-fragment sha1 on the resolution sidecar
+// (_common.md §3). Symmetrically, a multiset hash carrying origin
+// 'url-fragment' violates that invariant and is REJECTED at emit (it would be
+// indistinguishable from the transport member and could not round-trip).
+
+function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: string | undefined): string {
+  const members: string[] = []
+  for (const h of integrity?.hashes ?? []) {
+    if (h.origin === 'url-fragment') {
+      throw new LockfileError({
+        code: 'INVARIANT_VIOLATION',
+        message: 'lockgraph: a url-fragment-origin hash must ride the resolution sidecar, not the integrity multiset (_common.md §3)',
+      })
+    }
+    // An origin outside the documented alphabet {s,z,r,c,u} has no marker; emit
+    // ↔ parse must stay symmetric, so reject it rather than coercing to
+    // `"undefined"` (or any out-of-alphabet letter) that the decoder would
+    // never accept back.
+    const marker = ORIGIN_TO_MARKER[h.origin]
+    if (marker === undefined) {
+      throw new LockfileError({
+        code: 'INVARIANT_VIOLATION',
+        message: `lockgraph: unknown integrity hash origin '${h.origin}' (no marker in {s,z,r,c,u})`,
+      })
+    }
+    members.push(`${marker}${h.algorithm}-${h.digest}`)
+  }
+  if (fragment !== undefined) members.push(`usha1-${fragment}`)
+  return members.length > 0 ? members.join(';') : NONE
+}
+
+function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?: string } {
+  if (raw === NONE) return {}
+  const hashes: Hash[] = []
+  let fragment: string | undefined
+  for (const member of raw.split(';')) {
+    const marker = member[0]!
+    const rest = member.slice(1)
+    const dash = rest.indexOf('-')
+    if (dash === -1) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed integrity member: ${member}` })
+    }
+    const algorithm = rest.slice(0, dash)
+    const digest = rest.slice(dash + 1)
+    if (marker === 'u') {
+      // transport member — restored into the recomposed URL, never the multiset
+      if (fragment !== undefined) {
+        throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: duplicate u (url-fragment) integrity member' })
+      }
+      if (algorithm !== 'sha1') {
+        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: u (url-fragment) member must be sha1, got '${algorithm}'` })
+      }
+      fragment = digest
+      continue
+    }
+    const origin = MARKER_TO_ORIGIN[marker]
+    if (origin === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown integrity origin marker '${marker}'` })
+    }
+    hashes.push({ algorithm, digest, origin })
+  }
+  return { integrity: hashes.length > 0 ? { hashes } : undefined, fragment }
+}
+
+// The residual TarballPayload to carry in `payload=` — every field NOT captured
+// by a dedicated column or slot. `integrity` rides the dedicated integrity
+// column; `berryChecksumCacheKey` rides the `ck=` slot; `Node.resolution` (the
+// verbatim sidecar) has its own `res` slot and is a Node field, not a
+// TarballPayload field, so it is not here. The canonical resolution union is
+// OMITTED when `omitResolution` holds (it is exactly {type:'tarball', url:
+// <recomposable canonical URL>} — parse rebuilds it from the node's R row);
+// any other shape stays in verbatim. Everything else in the payload that is
+// set — bin/engines/license/cpu/os/libc/funding/deprecated/
+// bundledDependencies/peerDependenciesMeta/conditions — goes in. Returns
+// `undefined` when the residual is empty (the common registry node, whose only
+// artefact facts are its hashes and its recomposable resolution).
+function residualPayload(payload: TarballPayload | undefined, omitResolution: boolean): Record<string, unknown> | undefined {
+  if (payload === undefined) return undefined
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(payload)) {
+    if (k === 'integrity') continue              // dedicated column
+    if (k === 'berryChecksumCacheKey') continue  // dedicated ck= slot
+    if (k === 'resolution' && omitResolution) continue // recomposed from the R row
+    const v = (payload as Record<string, unknown>)[k]
+    if (v !== undefined) out[k] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+// Collect every edge in the graph, sorted by (src, dst, kind, alias) with src
+// and dst as their positional NODE INDICES. The graph's own out() order is
+// already (dst, kind, alias)-sorted within a source, and we iterate sources in
+// node-index order, so an explicit re-sort by the full numeric key restores the
+// exact (src, dst, kind, alias) total order the spec mandates (src/dst sort
+// NUMERICALLY, not lexically, after pinning the root at 0 reshuffles indices).
+interface IndexedEdge { src: number; dst: number; kind: EdgeKind; attrs?: EdgeAttrs }
+function collectEdges(graph: Graph, nodes: Node[], nodeIndex: Map<NodeId, number>): IndexedEdge[] {
+  const out: IndexedEdge[] = []
   for (const node of nodes) {
-    for (const e of graph.out(node.id)) out.push(e)
+    for (const e of graph.out(node.id)) {
+      const src = nodeIndex.get(e.src)
+      const dst = nodeIndex.get(e.dst)
+      if (src === undefined || dst === undefined) continue
+      out.push({ src, dst, kind: e.kind, attrs: e.attrs })
+    }
   }
+  out.sort((a, b) =>
+    a.src - b.src ||
+    a.dst - b.dst ||
+    cmpStr(KIND_TO_WORD[a.kind], KIND_TO_WORD[b.kind]) ||
+    cmpStr(a.attrs?.alias ?? '', b.attrs?.alias ?? ''),
+  )
   return out
-}
-
-// Build the sparse hex-adjacency lines. Groups edges by source dense index;
-// within a source, neighbors keep the graph's out() order (already canonical).
-// Sources are emitted in ascending dense index (= the node table order), so the
-// adjacency block is a pure function of the graph.
-function buildAdjacency(
-  edges: Edge[],
-  nodeIndex: Map<NodeId, number>,
-  strings: Interner,
-): string[] {
-  const bySrc = new Map<number, Edge[]>()
-  for (const e of edges) {
-    const src = nodeIndex.get(e.src)
-    if (src === undefined) continue
-    const arr = bySrc.get(src)
-    if (arr) arr.push(e); else bySrc.set(src, [e])
-  }
-  const lines: string[] = []
-  for (const src of Array.from(bySrc.keys()).sort((a, b) => a - b)) {
-    const group = bySrc.get(src)!
-    const neighbors = group.map(e => {
-      const dst = nodeIndex.get(e.dst)!
-      const kindChar = KIND_TO_CHAR[e.kind]
-      const rangeRef = e.attrs?.range !== undefined ? String(strings.ref(e.attrs.range)) : '-'
-      const aliasRef = e.attrs?.alias !== undefined ? String(strings.ref(e.attrs.alias)) : '-'
-      let flags = ''
-      if (e.attrs?.optional === true) flags += FLAG_OPTIONAL
-      if (e.attrs?.workspace === true) flags += FLAG_WORKSPACE
-      const flagsTok = flags === '' ? '-' : flags
-      const wsRangeRef = e.attrs?.workspaceRange !== undefined
-        ? String(strings.ref(canonicalJson(e.attrs.workspaceRange)))
-        : '-'
-      return `${toHex(dst)}/${kindChar}/${rangeRef}/${aliasRef}/${flagsTok}/${wsRangeRef}`
-    })
-    lines.push(`${toHex(src)}:${neighbors.join(',')}`)
-  }
-  return lines
-}
-
-// sha256 over `<schemaMajor>\n<bodyText>` — the schema-major is folded into the
-// seal so a body re-interpreted under a different model major fails the check
-// (the "⊕ schema-major" the concept fixes). Lowercase hex.
-function sealOf(bodyText: string, schemaMajor: number = SCHEMA_MAJOR): string {
-  return createHash('sha256').update(`${schemaMajor}\n${bodyText}`, 'utf8').digest('hex')
 }
