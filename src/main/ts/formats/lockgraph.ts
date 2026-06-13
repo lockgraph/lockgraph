@@ -461,6 +461,13 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
     `generatedAt ${generatedAt}`,
     `generator ${GENERATOR}`,
   ]
+  // `carries` — the self-describing fidelity envelope: the SORTED union of the
+  // variable detail-facets actually emitted across this graph's nodes/edges/
+  // payloads (see deriveCarries). Auto-derived from the graph → byte-stable for
+  // structurally-equal graphs; provenance-class (NOT part of identity), so parse
+  // ignores it and re-derives it on every emit. Omitted when the set is empty.
+  const carries = deriveCarries(nodes, payloads, edges, hints)
+  if (carries.length > 0) meta.push(`carries ${carries.join(' ')}`)
 
   return [...meta, ...body].join(eol) + eol
 }
@@ -520,7 +527,10 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
         })
       }
     }
-    // generatedAt / generator / unknown: provenance only, ignored.
+    // generatedAt / generator / carries / unknown: provenance only, ignored.
+    // `carries` (the fidelity envelope) is informational and AUTO-DERIVED at
+    // emit, so parse never reads it to drive parsing — it is re-derived
+    // identically on the next stringify (see § deriveCarries).
   }
 
   const expectHeader = (letter: string): number => {
@@ -1072,4 +1082,84 @@ function collectEdges(graph: Graph, nodes: Node[], nodeIndex: Map<NodeId, number
     cmpStr(a.attrs?.alias ?? '', b.attrs?.alias ?? ''),
   )
   return out
+}
+
+// === `carries` — the fidelity envelope ======================================
+//
+// The META `carries` line is a self-describing declaration of WHICH variable
+// detail-facets this particular lockgraph actually holds — an honest mirror of
+// content, NOT a promise. It is AUTO-DERIVED at stringify as the sorted union of
+// the facet tokens for which ≥1 element in the graph carries that detail, so a
+// reader knows the fidelity envelope without scanning every node. Like
+// `generatedAt` / `generator` it is provenance-class: NOT part of graph identity,
+// so parse IGNORES it (it is re-derived identically on every emit), and a
+// re-serialize of a structurally-equal graph reproduces the identical line —
+// round-trip stays byte-stable.
+//
+// The vocabulary is the set of VARIABLE detail facets whose presence is
+// informative; trivially-always-present structure (nodes exist, edges exist) is
+// deliberately excluded because it carries no signal. Tokens are lowercase,
+// stable, and documented in spec/formats/lockgraph.md § carries. A token appears
+// iff at least one element carries it.
+
+/** The canonical `carries` facet tokens, listed for documentation/reference.
+ *  The emitted set is the subset of these for which the graph carries detail. */
+export const CARRIES_FACETS = [
+  // payload facets (TarballPayload fields)
+  'bin', 'bundled', 'cpu', 'deprecated', 'engines', 'funding', 'libc', 'license', 'os',
+  // integrity / identity facets
+  'ck', 'integrity', 'patch', 'peer', 'resolution', 'src',
+  // edge facets
+  'alias', 'optional', 'workspace',
+  // graph-level
+  'layout',
+] as const
+
+function deriveCarries(
+  nodes: Node[],
+  payloads: Array<TarballPayload | undefined>,
+  edges: IndexedEdge[],
+  hints: LayoutHints | undefined,
+): string[] {
+  const set = new Set<string>()
+
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!
+    const payload = payloads[i]
+    // identity facets carried by the Node itself
+    if (node.patch !== undefined) set.add('patch')
+    if (node.source !== undefined) set.add('src')
+    if (node.peerContext.length > 0) set.add('peer')
+    // `resolution` = ANY resolution detail survives: the Node.resolution sidecar
+    // (res= / bare res marker / recomposed u-member) OR the canonical
+    // TarballPayload.resolution union. Either is "this graph preserves where the
+    // source pointed", so one token covers both.
+    if (node.resolution !== undefined) set.add('resolution')
+    if (payload === undefined) continue
+    if (payload.resolution !== undefined) set.add('resolution')
+    if (payload.integrity?.hashes.length) set.add('integrity')
+    if (payload.berryChecksumCacheKey !== undefined) set.add('ck')
+    // payload artefact metadata facets — one token per TarballPayload field whose
+    // presence is informative. `bundled` is the token for `bundledDependencies`
+    // (the short, stable spelling — see the spec table).
+    if (payload.bin !== undefined) set.add('bin')
+    if (payload.engines !== undefined) set.add('engines')
+    if (payload.license !== undefined) set.add('license')
+    if (payload.cpu !== undefined) set.add('cpu')
+    if (payload.os !== undefined) set.add('os')
+    if (payload.libc !== undefined) set.add('libc')
+    if (payload.funding !== undefined) set.add('funding')
+    if (payload.deprecated !== undefined) set.add('deprecated')
+    if (payload.bundledDependencies !== undefined) set.add('bundled')
+  }
+
+  for (const e of edges) {
+    if (e.attrs?.alias !== undefined) set.add('alias')
+    if (e.attrs?.workspace === true) set.add('workspace')
+    if (e.attrs?.optional === true) set.add('optional')
+  }
+
+  if (hints !== undefined) set.add('layout')
+
+  return Array.from(set).sort(cmpStr)
 }
