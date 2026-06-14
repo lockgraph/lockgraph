@@ -904,12 +904,6 @@ function addPackageNode(
     version,
     peerContext,
   }
-  if (isPlainObject(pkgEntry)) {
-    const resolution = pkgEntry.resolution
-    if (isPlainObject(resolution) && typeof resolution.tarball === 'string') {
-      node.resolution = resolution.tarball
-    }
-  }
   builder.addNode(node)
 
   const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics)
@@ -1135,9 +1129,10 @@ function buildPackageEntry(
   // ADR-0014 §4.F3 — see pnpm-flat-core for the field semantics. Suppress
   // registry-default URLs (pnpm's implicit convention) and emit verbatim
   // URL only for non-registry shapes.
-  const nativeIsPnpmUrl = representative.resolution !== undefined
-    && (representative.resolution.startsWith('http://')
-      || representative.resolution.startsWith('https://'))
+  const nativeResolution = tarball?.nativeResolution
+  const nativeIsPnpmUrl = nativeResolution !== undefined
+    && (nativeResolution.startsWith('http://')
+      || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
   const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
     && tarball.resolution.url === `https://registry.npmjs.org/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
@@ -1147,12 +1142,12 @@ function buildPackageEntry(
       const integ = emitSri(tarball.integrity)
       if (integ !== undefined) resolution.integrity = integ
     }
-    if (nativeIsPnpmUrl) resolution.tarball = representative.resolution!
+    if (nativeIsPnpmUrl) resolution.tarball = nativeResolution!
     else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)
   } else if (nativeIsPnpmUrl) {
-    entry.resolution = flowMap({ tarball: representative.resolution! })
+    entry.resolution = flowMap({ tarball: nativeResolution! })
   } else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
     entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
   } else if (derivedPnpm?.directory !== undefined) {

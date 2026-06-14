@@ -449,7 +449,6 @@ export function parseFamily(
       version,
       peerContext: [],
     }
-    if (resolution !== undefined) node.resolution = resolution
     if (effectivePatch !== undefined) node.patch = effectivePatch
     // ADR-0032 — carry the `+src=` discriminator on the Node so the seal can
     // re-derive the NodeId from the Node alone (parallels `node.patch`).
@@ -569,6 +568,15 @@ export function parseFamily(
     if (canonicalResolution !== undefined) {
       payload.resolution = canonicalResolution
     }
+    // ADR-0013 — PM-native verbatim resolution locator, per-tarball (siblings
+    // sharing this TarballKey carry the same base locator). Replayed at
+    // same-format stringify for byte-exact round-trip + patch/file/link-locator
+    // retrieval. Lands on the payload so a node whose ONLY fact is its resolution
+    // still gets a tarball row (the guard below fires). EXCLUDE workspace nodes:
+    // their `<name>@workspace:<path>` locator is recomposed from
+    // `Node.workspacePath` at stringify, and a workspace member is a local
+    // project, NOT a downloadable artifact — it carries no TarballPayload.
+    if (resolution !== undefined && workspaceSpec === undefined) payload.nativeResolution = resolution
     if (Object.keys(payload).length > 0) {
       // Key MUST match the NodeId built above: authoritativeName (Bug #3
       // canonical-name) + effectivePatch (Bug #2 link/portal locator slot) +
@@ -1301,10 +1309,11 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // descriptor — so the exact `<name>@npm:<version>` is used only as a LAST-RESORT
   // anchor when the node has no incoming-edge descriptor (keeping reparse bindable),
   // never prepended alongside real ranges (the B-EXACT synthesis bug).
-  const self = selfDescriptorOfNode(node)
+  const native = graph.tarballOf(node.id)?.nativeResolution
+  const self = selfDescriptorOfNode(node, native)
   const specs = new Set<string>()
   if (self !== undefined) specs.add(self)
-  const patchBase = baseSpecOfPatchedNode(node)
+  const patchBase = baseSpecOfPatchedNode(node, native)
   if (patchBase !== undefined) specs.add(patchBase)
 
   for (const edge of graph.in(node.id)) {
@@ -1386,23 +1395,23 @@ function isLocatorQualifiedPrefix(primary: string, secondary: string): boolean {
 //     must not be force-added (the resolved version lives in `version:`/
 //     `resolution:`). `entryKeyOfNode` falls back to the exact locator ONLY when
 //     no incoming-edge descriptor exists (a bindable last-resort anchor).
-function selfDescriptorOfNode(node: Node): string | undefined {
+function selfDescriptorOfNode(node: Node, native: string | undefined): string | undefined {
   if (node.workspacePath !== undefined) {
     return `${node.name}@workspace:${node.workspacePath === '' ? '.' : node.workspacePath}`
   }
-  if (node.resolution === undefined) return undefined
-  if (node.resolution.startsWith(`${node.name}@patch:`)) return node.resolution
+  if (native === undefined) return undefined
+  if (native.startsWith(`${node.name}@patch:`)) return native
   // A plain `npm:` registry resolution is the resolved version, NOT a key
   // descriptor — exclude it so it is never synthesized into the key.
-  if (node.resolution.startsWith(`${node.name}@npm:`)) return undefined
+  if (native.startsWith(`${node.name}@npm:`)) return undefined
   // Any other locator-shaped resolution (git / file / http / portal / link) IS
   // the exact key descriptor yarn writes for the entry.
-  return node.resolution.startsWith(`${node.name}@`) ? node.resolution : undefined
+  return native.startsWith(`${node.name}@`) ? native : undefined
 }
 
-function baseSpecOfPatchedNode(node: Node): string | undefined {
-  if (node.resolution === undefined || !node.resolution.startsWith(`${node.name}@patch:`)) return undefined
-  const locator = patchLocatorOfResolution(node.resolution)
+function baseSpecOfPatchedNode(node: Node, native: string | undefined): string | undefined {
+  if (native === undefined || !native.startsWith(`${node.name}@patch:`)) return undefined
+  const locator = patchLocatorOfResolution(native)
   if (locator === undefined) return undefined
   return baseSpecOfPatchLocator(locator)
 }
@@ -1471,7 +1480,7 @@ function entryOfNode(
   const payload = graph.tarballOf(node.id)
   const entry: SymlMap = {
     version: node.version,
-    resolution: resolutionOfNode(node, payload?.resolution, emitDiagnostic),
+    resolution: resolutionOfNode(node, payload?.resolution, payload?.nativeResolution, emitDiagnostic),
   }
 
   // yarn-berry's on-disk format has a single `dependencies:` block per entry —
@@ -1551,9 +1560,9 @@ function entryOfNode(
   // lives at its original location and is symlinked) and `hard` for everything
   // yarn copies/extracts into its cache (registry tarball, git, local tarball,
   // patch). Derived from the EMITTED resolution locator so it is correct for
-  // both same-format sentinels (`node.resolution` carries the verbatim
-  // `link:`/`portal:` locator) AND a cross-PM directory→`portal:` convert (no
-  // `node.resolution`, but `entry.resolution` is the `portal:` locator we just
+  // both same-format sentinels (the per-tarball `nativeResolution` carries the
+  // verbatim `link:`/`portal:` locator) AND a cross-PM directory→`portal:`
+  // convert (no `nativeResolution`, but `entry.resolution` is the `portal:` locator we just
   // emitted). See `linkTypeOfResolution` for the exact soft set (verified
   // byte-for-byte against babel/backstage/storybook/yarnpkg-berry real locks).
   entry['linkType'] = node.workspacePath !== undefined
@@ -1575,15 +1584,17 @@ function entryOfNode(
 function resolutionOfNode(
   node: Node,
   canonical: ResolutionCanonical | undefined,
+  native: string | undefined,
   emitDiagnostic: (diagnostic: Diagnostic) => void,
 ): string {
   if (node.patch !== undefined) {
     // Intra-family path: parse-side carries the verbatim `@patch:` locator
-    // on `node.resolution`. If it survived to emit, stringify it directly —
-    // patch identity round-trips losslessly regardless of whether `node.patch`
-    // is canonical (128-hex sha512) or sentinel (`unresolved-<sha256>`).
-    if (node.resolution !== undefined && patchLocatorOfResolution(node.resolution) !== undefined) {
-      return node.resolution
+    // on the per-tarball `nativeResolution`. If it survived to emit, stringify
+    // it directly — patch identity round-trips losslessly regardless of whether
+    // `node.patch` is canonical (128-hex sha512) or sentinel
+    // (`unresolved-<sha256>`).
+    if (native !== undefined && patchLocatorOfResolution(native) !== undefined) {
+      return native
     }
     // Local-artefact locator-disambiguator path: the patch slot is a sentinel
     // keyed off the locator string (parse-side disambiguation per ADR-0011),
@@ -1591,8 +1602,8 @@ function resolutionOfNode(
     // `::locator=`-qualified `file:` local-tarball alias (Bug #76). The
     // verbatim resolution carries the locator + `::locator=` qualifier intact,
     // so round-trip is lossless — no `RECIPE_FEATURE_DROPPED` to emit.
-    if (node.resolution !== undefined && isLocalLocatorDisambiguatedResolution(node.resolution, node.name)) {
-      return node.resolution
+    if (native !== undefined && isLocalLocatorDisambiguatedResolution(native, node.name)) {
+      return native
     }
     // Cross-family / mutate path: no reconstructable yarn `patch:` locator
     // is available on the Graph. Two cases collapse here:
@@ -1619,7 +1630,7 @@ function resolutionOfNode(
   // through verbatim. Re-parse populates the canonical from the verbatim
   // string per ADR-0014 §4.F3, so identity survives the conversion even
   // when the source-side adapter's sidecar leaks through.
-  if (node.resolution !== undefined) return node.resolution
+  if (native !== undefined) return native
   if (node.workspacePath !== undefined) {
     return `${node.name}@workspace:${node.workspacePath === '' ? '.' : node.workspacePath}`
   }

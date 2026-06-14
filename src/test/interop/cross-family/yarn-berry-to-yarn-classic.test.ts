@@ -99,15 +99,15 @@ describe('interop: yarn-berry -> yarn-classic targeted loss classes', () => {
         name: 'peer',
         version: '2.0.0',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/peer/-/peer-2.0.0.tgz#1111111111111111111111111111111111111111',
       })
       graph.addNode({
         id: 'consumer@1.0.0(peer@2.0.0)',
         name: 'consumer',
         version: '1.0.0',
         peerContext: ['peer@2.0.0'],
-        resolution: 'https://registry.yarnpkg.com/consumer/-/consumer-1.0.0.tgz#2222222222222222222222222222222222222222',
       })
+      graph.setTarball({ name: 'peer', version: '2.0.0' }, { nativeResolution: 'https://registry.yarnpkg.com/peer/-/peer-2.0.0.tgz#1111111111111111111111111111111111111111' })
+      graph.setTarball({ name: 'consumer', version: '1.0.0' }, { nativeResolution: 'https://registry.yarnpkg.com/consumer/-/consumer-1.0.0.tgz#2222222222222222222222222222222222222222' })
       graph.addNode({
         id: toTarballKey({
           name: 'pkg',

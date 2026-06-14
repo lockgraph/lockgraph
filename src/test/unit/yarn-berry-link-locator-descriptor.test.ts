@@ -191,7 +191,7 @@ describe('yarn-berry link:/portal: ::locator= descriptor round-trip (Bug #90)', 
     // and its single consumer edge — across the full round-trip.
     const link2 = Array.from(g2.nodes()).find(n => n.name === '@grafana/release-cli')!
     expect(link2.patch?.startsWith('unresolved-')).toBe(true)
-    expect(link2.resolution).toBe(
+    expect(g2.tarballOf(link2.id)?.nativeResolution).toBe(
       '@grafana/release-cli@link:packages/release-cli::locator=grafana%40workspace%3A.')
     expect(g2.in(link2.id).length).toBe(1)
     expect(g2.diagnostics().filter(d => d.code === 'YARN_BERRY_UNRESOLVED_DEP').length).toBe(0)

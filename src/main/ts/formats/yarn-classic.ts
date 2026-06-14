@@ -318,9 +318,13 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
         version: entry.version,
         peerContext: [],
       }
-      if (entry.resolved !== undefined) {
-        node.resolution = parseResolution(entry.resolved)
-      }
+      // ADR-0013 — PM-native verbatim resolution sidecar. Validated +
+      // captured verbatim; lands on the per-tarball payload (below), NOT the
+      // Node. `entry.resolved !== undefined` ⟺ `canonicalResolution !== undefined`,
+      // so a resolved node always gets a tarball row via one of the branches.
+      const nativeResolution = entry.resolved !== undefined
+        ? parseResolution(entry.resolved)
+        : undefined
       // ADR-0032 — carry the `+src=` slot on the Node so the seal re-derives the
       // NodeId from the Node alone.
       if (effectiveSource !== undefined) node.source = effectiveSource
@@ -347,12 +351,13 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
         if (isEmptyIntegrity(integrity)) {
           diagnostics.push(invalidIntegrityDiagnostic('YARN_CLASSIC', id, entry.integrity))
         } else {
-          const payload: { integrity: Integrity; resolution?: typeof canonicalResolution } = { integrity }
+          const payload: { integrity: Integrity; resolution?: typeof canonicalResolution; nativeResolution?: string } = { integrity }
           if (canonicalResolution !== undefined) payload.resolution = canonicalResolution
+          if (nativeResolution !== undefined) payload.nativeResolution = nativeResolution
           builder.setTarball({ name, version: entry.version, source: effectiveSource }, payload)
         }
       } else if (canonicalResolution !== undefined) {
-        builder.setTarball({ name, version: entry.version, source: effectiveSource }, { resolution: canonicalResolution })
+        builder.setTarball({ name, version: entry.version, source: effectiveSource }, { resolution: canonicalResolution, nativeResolution })
       }
 
       sidecar.set(id, descriptors.slice())
@@ -469,7 +474,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     ]
 
     const payload = graph.tarballOf(node.id)
-    const resolved = formatResolution(node.resolution)
+    const resolved = formatResolution(payload?.nativeResolution)
       ?? deriveResolvedFromCanonical(payload?.resolution)
     if (resolved !== undefined) {
       lines.push(`  resolved "${escapeQuoted(resolved)}"`)

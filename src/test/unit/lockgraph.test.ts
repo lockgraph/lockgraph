@@ -94,7 +94,6 @@ describe('lockgraph §A — hand-built 3-node graph', () => {
       name: 'react-dom',
       version: '18.0.0',
       peerContext: [reactId],
-      resolution: 'react-dom@npm:18.0.0',
     }
     b.addNode(react)
     b.addNode(loose)
@@ -112,6 +111,7 @@ describe('lockgraph §A — hand-built 3-node graph', () => {
     })
     b.setTarball({ name: 'react-dom', version: '18.0.0' }, {
       integrity: sri('sha512-' + 'c'.repeat(86) + '=='),
+      nativeResolution: 'react-dom@npm:18.0.0',
     })
     return b.seal()
   }
@@ -329,28 +329,34 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     // canonical slot order is patch-then-src ('patch' < 'src' under cmpStr)
     expect(id).toBe(`is-git@6.3.1+patch=${patch}+src=${src}`)
     expect(id.indexOf('+patch=')).toBeLessThan(id.indexOf('+src='))
-    // assemble the node in the canonical adapter key-order (resolution, patch,
-    // source) so `Graph.diff`'s JSON.stringify-based node equality is byte-exact.
+    // assemble the node in the canonical adapter key-order (patch, source) so
+    // `Graph.diff`'s JSON.stringify-based node equality is byte-exact. The
+    // PM-native resolution sidecar now rides the per-tarball payload.
     const node: Node = { id, name: 'is-git', version: '6.3.1', peerContext: [] }
-    node.resolution = 'is-git@npm:6.3.1'
     node.patch = patch
     node.source = src
     b.addNode(node)
     const payload: TarballPayload = {
       integrity: { hashes: [{ algorithm: 'sha512', digest: 'd'.repeat(128), origin: 'sri' }] },
       resolution: { type: 'git', url: 'https://github.com/foo/is-git.git', sha: 'abc123' },
+      nativeResolution: 'is-git@npm:6.3.1',
     }
     b.setTarball({ name: 'is-git', version: '6.3.1', patch, source: src }, payload)
     const g = b.seal()
 
     const text = assertRoundTripIdentity(g)
     // the N row carries BOTH disambiguators as explicit slots — `patch=` then
-    // `src=` (both stored verbatim, src NOT re-derived) — followed by `payload=`.
+    // `src=` (both stored verbatim, src NOT re-derived). The residual artifact
+    // metadata now lives in the severable F section, keyed by the full TarballKey.
     const row = text.split('\n').find(l => l.startsWith('is-git\t'))!
     expect(row).toContain(`\tpatch=${patch}`)
     expect(row).toContain(`\tsrc=${src}`)
     expect(row.indexOf('\tpatch=')).toBeLessThan(row.indexOf('\tsrc='))
-    expect(row).toContain('payload=')
+    // the F row is keyed by the FULL TarballKey (both discriminators) and flattens
+    // the non-canonical git resolution union under `resolution.*` dot-path slots.
+    const fRow = text.split('\n').find(l => l.startsWith(`is-git@6.3.1+patch=${patch}+src=${src}\t`))!
+    expect(fRow).toBeDefined()
+    expect(fRow).toContain('\tresolution.type=git')
     // the both-slots TarballKey re-keys the payload exactly on parse
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     expect(g2.tarball({ name: 'is-git', version: '6.3.1', patch, source: src })).toEqual(payload)
@@ -546,15 +552,17 @@ describe('lockgraph §E — full fidelity of every model element', () => {
   it('escapes values containing newlines / backslashes / tabs', () => {
     const b = newBuilder()
     const id = serializeNodeId('weird', '1.0.0', [])
-    // a resolution sidecar carrying control chars that would corrupt the TSV row
-    // framing if written raw — must be escaped in the `res=` slot.
+    // a nativeResolution sidecar carrying control chars that would corrupt the
+    // TSV row framing if written raw — must be escaped in the F `nativeResolution=`
+    // slot.
     const weirdRes = 'custom:line1\nline2\twith\\backslash'
-    b.addNode({ id, name: 'weird', version: '1.0.0', peerContext: [], resolution: weirdRes })
+    b.addNode({ id, name: 'weird', version: '1.0.0', peerContext: [] })
+    b.setTarball({ name: 'weird', version: '1.0.0' }, { nativeResolution: weirdRes })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
     // the raw bytes contain the escaped forms, not literal control chars.
-    expect(text).toContain('res=custom:line1\\nline2\\twith\\\\backslash')
-    expect(parse(stringify(g, { generatedAt: PINNED })).getNode(id)!.resolution).toBe(weirdRes)
+    expect(text).toContain('nativeResolution=custom:line1\\nline2\\twith\\\\backslash')
+    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'weird', version: '1.0.0' })!.nativeResolution).toBe(weirdRes)
   })
 
   it('handles a node whose TarballKey has no payload (workspace / pre-enrich)', () => {
@@ -582,74 +590,86 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
 
   // --- PART A: recomposition (store facts, derive mechanics) ----------------
 
-  it('yarn-classic-shape <url>#<sha1> resolution → usha1 in integrity, res= omitted, byte-exact round-trip', () => {
-    // The exact shape a yarn-classic node carries: Node.resolution is the
+  it('yarn-classic-shape <url>#<sha1> resolution → usha1 in integrity, nativeResolution F slot omitted, byte-exact round-trip', () => {
+    // The exact shape a yarn-classic node carries: payload.nativeResolution is the
     // canonical npm tarball URL + a `#<sha1>` fragment, and payload.resolution is
     // the canonical {type:'tarball', url} (no fragment). Both collapse: the URL
-    // recomposes from the npm R base, the fragment rides the integrity u-member,
-    // and the canonical payload.resolution is omitted.
+    // recomposes from the npm R base, the fragment rides the N-row integrity
+    // u-member, and the canonical payload.resolution is omitted.
     const b = newBuilder()
     const url = 'https://registry.yarnpkg.com/JSV/-/JSV-4.0.2.tgz'
     const sha1 = 'd077f6825571f82132f9dffaed587b4029feff57'
     const id = serializeNodeId('JSV', '4.0.2', [])
-    b.addNode({ id, name: 'JSV', version: '4.0.2', peerContext: [], resolution: `${url}#${sha1}` })
-    b.setTarball({ name: 'JSV', version: '4.0.2' }, { resolution: { type: 'tarball', url } })
+    b.addNode({ id, name: 'JSV', version: '4.0.2', peerContext: [] })
+    b.setTarball({ name: 'JSV', version: '4.0.2' }, { resolution: { type: 'tarball', url }, nativeResolution: `${url}#${sha1}` })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
     const row = rowOf(text, 'JSV')
-    // res= is omitted; the #<sha1> rides the integrity column's trailing u-member.
-    expect(row).not.toContain('res=')
+    // the #<sha1> rides the integrity column's trailing u-member.
     expect(row.split('\t')[3]).toBe(`usha1-${sha1}`)
-    // the canonical {type:'tarball'} payload resolution is omitted from payload=.
-    expect(row).not.toContain('payload=')
-    // and it all reconstructs identity-exact (resolution sidecar + payload).
+    // both the canonical bare {type:'tarball'} payload resolution AND the
+    // nativeResolution (it rides the u-member) are omitted from F, so this
+    // tarball's residual is empty → NO F row.
+    expect(text.split('\n').some(l => l.startsWith('JSV@4.0.2\t'))).toBe(false)
+    // and it all reconstructs identity-exact (native sidecar + payload).
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
-    expect(g2.getNode(id)!.resolution).toBe(`${url}#${sha1}`)
+    expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.nativeResolution).toBe(`${url}#${sha1}`)
     expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.resolution).toEqual({ type: 'tarball', url })
     // the u-member is TRANSPORT-ONLY: it is NOT added to the integrity multiset.
     expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.integrity).toBeUndefined()
   })
 
-  it('berry npm locator Node.resolution → bare `res` marker, recomposed on parse', () => {
+  it('berry npm locator nativeResolution → `nativeResolution.berry=` F marker, recomposed on parse', () => {
     const b = newBuilder()
     const id = serializeNodeId('react', '18.0.0', [])
-    // Node.resolution byte-equals the recomposed berry locator `react@npm:18.0.0`.
-    b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [], resolution: 'react@npm:18.0.0' })
-    b.setTarball({ name: 'react', version: '18.0.0' }, { integrity: sri('sha512-' + 'a'.repeat(86) + '==') })
+    // payload.nativeResolution byte-equals the recomposed berry locator `react@npm:18.0.0`.
+    b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [] })
+    b.setTarball({ name: 'react', version: '18.0.0' }, {
+      integrity: sri('sha512-' + 'a'.repeat(86) + '=='),
+      nativeResolution: 'react@npm:18.0.0',
+    })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
+    // the F row carries the valueless berry MARKER `nativeResolution.berry=`,
+    // NOT the verbatim `nativeResolution=react@npm:18.0.0`.
+    const fRow = text.split('\n').find(l => l.startsWith('react@18.0.0\t'))!
+    expect(fRow).toContain('\tnativeResolution.berry=')
+    expect(fRow).not.toContain('nativeResolution=react@npm')
+    // the N row no longer carries any res token.
     const row = rowOf(text, 'react')
-    // the slot is the valueless `res` marker (no `=`), NOT `res=react@npm:18.0.0`.
-    expect(row.split('\t')).toContain('res')
-    expect(row).not.toContain('res=')
-    expect(parse(stringify(g, { generatedAt: PINNED })).getNode(id)!.resolution).toBe('react@npm:18.0.0')
+    expect(row.split('\t')).not.toContain('res')
+    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'react', version: '18.0.0' })!.nativeResolution).toBe('react@npm:18.0.0')
   })
 
-  it('non-canonical resolution (git/codeload) → res= kept VERBATIM (exact-match-or-verbatim)', () => {
+  it('non-canonical resolution (git/codeload) → nativeResolution= kept VERBATIM (exact-match-or-verbatim)', () => {
     const b = newBuilder()
     const id = serializeNodeId('left-pad', '1.3.0', [])
     // a git+ssh locator with a #<sha> — NOT a canonical npm tarball URL, so it is
-    // kept verbatim in res= and the fragment is NOT moved to the integrity column.
+    // kept verbatim in the F `nativeResolution=` slot and the fragment is NOT
+    // moved to the integrity column.
     const res = 'git+ssh://git@github.com/foo/left-pad.git#deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
-    b.addNode({ id, name: 'left-pad', version: '1.3.0', peerContext: [], resolution: res })
+    b.addNode({ id, name: 'left-pad', version: '1.3.0', peerContext: [] })
     b.setTarball({ name: 'left-pad', version: '1.3.0' }, {
       resolution: { type: 'git', url: 'https://github.com/foo/left-pad.git', sha: 'deadbeef' },
+      nativeResolution: res,
     })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
     const row = rowOf(text, 'left-pad')
-    expect(row).toContain(`res=${res}`)
     expect(row).not.toContain('usha1-')          // fragment NOT hijacked into integrity
-    expect(parse(stringify(g, { generatedAt: PINNED })).getNode(id)!.resolution).toBe(res)
+    const fRow = text.split('\n').find(l => l.startsWith('left-pad@1.3.0\t'))!
+    expect(fRow).toContain(`\tnativeResolution=${res}`)
+    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'left-pad', version: '1.3.0' })!.nativeResolution).toBe(res)
   })
 
-  it('a node with NO Node.resolution stays undefined on parse (never invented)', () => {
-    // The phantom-resolution failure class: the parse must NOT mint a resolution
-    // on a node that never had one, even though its payload.resolution recomposes.
+  it('a node with NO nativeResolution stays undefined on parse (never invented)', () => {
+    // The phantom-resolution failure class: the parse must NOT mint a native
+    // resolution on a tarball that never had one, even though its
+    // payload.resolution recomposes.
     const b = newBuilder()
     const url = 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz'
     const id = serializeNodeId('ms', '2.1.3', [])
-    // NO `resolution` on the Node — only a canonical payload.resolution.
+    // NO `nativeResolution` — only a canonical payload.resolution.
     b.addNode({ id, name: 'ms', version: '2.1.3', peerContext: [] })
     b.setTarball({ name: 'ms', version: '2.1.3' }, {
       integrity: sri('sha512-' + 'b'.repeat(86) + '=='),
@@ -658,10 +678,10 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
     const row = rowOf(text, 'ms')
-    expect(row).not.toContain('res')   // no res= AND no bare res marker
+    expect(row).not.toContain('res')   // no res= AND no bare res marker on N row
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
-    expect(g2.getNode(id)!.resolution).toBeUndefined()       // stayed undefined
-    // payload.resolution WAS recomposed (it existed on the payload, not the node)
+    expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.nativeResolution).toBeUndefined() // stayed undefined
+    // payload.resolution WAS recomposed (it existed on the payload)
     expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.resolution).toEqual({ type: 'tarball', url })
   })
 
@@ -671,17 +691,21 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     const id = serializeNodeId('x', '1.0.0', [])
     b.addNode({ id, name: 'x', version: '1.0.0', peerContext: [] })
     // a `tarball` union carrying an EXTRA key (hostingProvider) is NOT the bare
-    // two-key {type,url} canonical shape, so it must stay verbatim in payload=.
+    // two-key {type,url} canonical shape, so the WHOLE union flattens under the
+    // F row's `resolution.*` dot-path slots (no partial split, no recomposition).
     const resolution = { type: 'tarball' as const, url, hostingProvider: 'github' as const }
     b.setTarball({ name: 'x', version: '1.0.0' }, { resolution })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
-    expect(rowOf(text, 'x')).toContain('payload=')
-    expect(rowOf(text, 'x')).toContain('"resolution"')
+    // the F row (keyed by the bare TarballKey `x@1.0.0`) flattens the union.
+    const fRow = text.split('\n').find(l => l.startsWith('x@1.0.0\t'))!
+    expect(fRow).toBeDefined()
+    expect(fRow).toContain('\tresolution.type=tarball')
+    expect(fRow).toContain('\tresolution.hostingProvider=github')
     expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'x', version: '1.0.0' })!.resolution).toEqual(resolution)
   })
 
-  it('berryChecksumCacheKey rides the dedicated ck= slot (out of payload JSON) and round-trips', () => {
+  it('berryChecksumCacheKey rides the dedicated F ck= slot (out of payload JSON) and round-trips', () => {
     const b = newBuilder()
     const id = serializeNodeId('y', '2.0.0', [])
     b.addNode({ id, name: 'y', version: '2.0.0', peerContext: [] })
@@ -691,9 +715,12 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
+    // `ck` rides the severable F section now, NOT the N row.
     const row = rowOf(text, 'y')
-    expect(row).toContain('\tck=10c0')
-    expect(row).not.toContain('berryChecksumCacheKey') // hoisted out of payload= JSON
+    expect(row).not.toContain('ck=')
+    const fRow = text.split('\n').find(l => l.startsWith('y@2.0.0\t'))!
+    expect(fRow).toContain('\tck=10c0')
+    expect(fRow).not.toContain('berryChecksumCacheKey') // rides the dedicated ck= slot, never a field slot
     expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'y', version: '2.0.0' })!.berryChecksumCacheKey).toBe('10c0')
   })
 
@@ -955,18 +982,19 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     }
   })
 
-  it('B7: malformed payload= / L JSON throws PARSE_FAILED (not raw SyntaxError)', () => {
-    // The E row carries NO JSON any more (the workspaceRange JSON was killed —
-    // specifier rides the descriptor + rv=/sp= slots), so only the node `payload=`
-    // slot and the `L` line remain JSON-bearing. Both must fail with a located
-    // LockfileError, never a raw SyntaxError.
+  it('B7: a malformed F slot / broken L JSON throws PARSE_FAILED (not raw SyntaxError)', () => {
+    // The body is JSON-free except the optional `L` line: the residual artifact
+    // metadata is now FLAT dot-path slots in the F section (no `payload=` JSON),
+    // and the E row carries no JSON either. A malformed F slot (no `=`) and a
+    // broken `L` line must both fail with a located LockfileError, never a raw
+    // SyntaxError.
     const base = stringify(buildMinimal(), { generatedAt: PINNED })
-    // (a) a node payload= with broken JSON — append the bad slot to the pkg row.
-    const nodeRow = base.split('\n').find(l => l.startsWith('pkg\t'))!
-    const badPayload = base.replace(nodeRow, nodeRow + '\tpayload={not json')
-    expectParseFailed(badPayload)
-    // (b) an L line with broken JSON (append after the E region, before EOF)
-    const badL = base.replace(/\n$/, '\nL {bad json\n')
+    // (a) inject an F section with a malformed slot (no `=`) before EOF.
+    const badF = base.replace(/F 0\n$/, 'F 1\npkg@1.0.0\tnotaslot\n')
+    expect(badF).not.toBe(base) // guard: the F 0 region header was present and rewritten
+    expectParseFailed(badF)
+    // (b) an L line with broken JSON (append after the E region, before the F region)
+    const badL = base.replace(/\nF 0\n$/, '\nL {bad json\nF 0\n')
     expectParseFailed(badL)
   })
 

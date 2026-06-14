@@ -14,8 +14,11 @@ function stripVolatile(payload: TarballPayload | undefined): TarballPayload | un
   // `berryChecksumCacheKey` is the yarn-berry `checksum:` cacheKey prefix — a
   // format-scoped companion of the berry-zip integrity, so it legitimately
   // diverges (v4 `2` ↔ v8 `10c0`) or vanishes (berry → npm) across conversions;
-  // exclude it for the same reason as integrity.
-  const { resolution: _resolution, integrity: _integrity, berryChecksumCacheKey: _ck, ...rest } = payload
+  // exclude it for the same reason as integrity. `nativeResolution` is the
+  // ADR-0013 PM-native verbatim sidecar — host-attribution that diverges by
+  // adapter (berry locator vs yarn-classic URL vs pnpm tarball URL), so exclude
+  // it for the same reason as `resolution`.
+  const { resolution: _resolution, integrity: _integrity, berryChecksumCacheKey: _ck, nativeResolution: _native, ...rest } = payload
   return rest
 }
 
@@ -42,7 +45,7 @@ export function featurePresence(graph: Graph, feature: GraphFeature): boolean {
     case 'integrity':
       return Array.from(graph.nodes()).some(node => graph.tarballOf(node.id)?.integrity !== undefined)
     case 'resolved-url':
-      return Array.from(graph.nodes()).some(node => node.resolution !== undefined)
+      return Array.from(graph.nodes()).some(node => graph.tarballOf(node.id)?.nativeResolution !== undefined)
     case 'tarballs':
       return Array.from(graph.tarballs()).length > 0
     case 'workspace-membership':
@@ -132,18 +135,17 @@ export function graphSubset(
         }
         break
       case 'resolved-url':
-        // ADR-0014 §4.F3 — PM-native `node.resolution` is sidecar attribution
+        // ADR-0014 §4.F3 — PM-native `nativeResolution` is sidecar attribution
         // (yarn-berry locator vs yarn-classic URL vs pnpm tarball URL, all
         // shape-different by design). Preservation across formats is at the
         // canonical level: both source and destination must carry resolution
         // information of the SAME canonical type (the URL host is attribution
         // and may diverge per stringify-table convention).
         for (const node of needle.nodes()) {
-          const needleHasNative = node.resolution !== undefined
+          const needleHasNative = needle.tarballOf(node.id)?.nativeResolution !== undefined
           const needleCanonical = needle.tarballOf(node.id)?.resolution
           if (!needleHasNative && needleCanonical === undefined) continue
-          const haystackNode = haystack.getNode(node.id)
-          const haystackHasNative = haystackNode?.resolution !== undefined
+          const haystackHasNative = haystack.tarballOf(node.id)?.nativeResolution !== undefined
           const haystackCanonical = haystack.tarballOf(node.id)?.resolution
           if (!haystackHasNative && haystackCanonical === undefined) return false
           if (needleCanonical !== undefined && haystackCanonical !== undefined

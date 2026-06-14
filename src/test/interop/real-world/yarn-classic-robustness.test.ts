@@ -50,11 +50,12 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
   it('magento-pwa-studio-localdep round-trips the link:/file:/portal: resolved values verbatim', () => {
     const content = lock('magento-pwa-studio-localdep')
     const g = parse('yarn-classic', content)
-    // The three local-dep nodes carry their bare specifier on Node.resolution
-    // and canonicalise to a `directory` resolution (NOT a registry tarball).
-    expect(g.getNode('@magento/peregrine@0.0.0')?.resolution).toBe('link:packages/peregrine')
-    expect(g.getNode('@magento/pwa-buildpack@0.0.0')?.resolution).toBe('file:packages/pwa-buildpack')
-    expect(g.getNode('@magento/venia-ui@0.0.0')?.resolution).toBe('portal:packages/venia-ui')
+    // The three local-dep nodes carry their bare specifier on the per-tarball
+    // nativeResolution and canonicalise to a `directory` resolution (NOT a
+    // registry tarball).
+    expect(g.tarballOf('@magento/peregrine@0.0.0')?.nativeResolution).toBe('link:packages/peregrine')
+    expect(g.tarballOf('@magento/pwa-buildpack@0.0.0')?.nativeResolution).toBe('file:packages/pwa-buildpack')
+    expect(g.tarballOf('@magento/venia-ui@0.0.0')?.nativeResolution).toBe('portal:packages/venia-ui')
     expect(g.tarballOf('@magento/peregrine@0.0.0')?.resolution?.type).toBe('directory')
     // No spurious RECIPE_RESOLUTION_UNKNOWN for the recognised local specifiers.
     expect(g.diagnostics().some(d => d.code === 'RECIPE_RESOLUTION_UNKNOWN')).toBe(false)
@@ -69,8 +70,8 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
   it('hahazexia-scan2findimgs-localdep round-trips file:/link: resolved + legacy uid', () => {
     const content = lock('hahazexia-scan2findimgs-localdep')
     const g = parse('yarn-classic', content)
-    expect(g.getNode('my-local-scanner@1.0.0')?.resolution).toBe('file:../my-local-scanner')
-    expect(g.getNode('vendored-utils@0.0.0')?.resolution).toBe('link:./vendor/utils')
+    expect(g.tarballOf('my-local-scanner@1.0.0')?.nativeResolution).toBe('file:../my-local-scanner')
+    expect(g.tarballOf('vendored-utils@0.0.0')?.nativeResolution).toBe('link:./vendor/utils')
     const out = stringify('yarn-classic', g)
     expect(out).toContain('resolved "file:../my-local-scanner"')
     expect(out).toContain('resolved "link:./vendor/utils"')
@@ -103,8 +104,8 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
     expect(unpatched.length).toBe(1)
     // The sentinel node round-trips its verbatim `file:` locator (incl. the
     // `::locator=` qualifier); the registry node keeps its `npm:` resolution.
-    expect(patched[0]!.resolution).toMatch(/@file:.*::(hash=[0-9a-f]+&)?locator=/)
-    expect(unpatched[0]!.resolution).toBe('@k8ts/sample-interfaces@npm:0.6.3')
+    expect(g.tarballOf(patched[0]!.id)?.nativeResolution).toMatch(/@file:.*::(hash=[0-9a-f]+&)?locator=/)
+    expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBe('@k8ts/sample-interfaces@npm:0.6.3')
 
     // Faithful round-trip: stringify → reparse yields the same two distinct nodes.
     const out = stringify('yarn-berry-v8', g)

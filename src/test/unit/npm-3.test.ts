@@ -19,11 +19,14 @@ registerFlatFamilySuite(SPEC)
 // --- npm-3-only deltas -----------------------------------------------------
 
 describe('npm-3 — parse deltas', () => {
-  it('records resolution URL on node for tarball entries (npm-3 leaves resolution undefined)', () => {
+  it('records resolution URL on node for tarball entries (npm-3 leaves nativeResolution undefined)', () => {
     const graph = parseFixtureGraph(SPEC, 'simple')
     const ms = graph.getNode('ms@2.1.3')
-    // resolution is not synced from `resolved` to Node; lives in sidecar / tarball flow.
-    expect(ms?.resolution).toBeUndefined()
+    expect(ms).toBeDefined()
+    // npm-core does NOT sync `resolved` to the per-tarball nativeResolution
+    // sidecar; the `resolved` URL is recovered from the canonical resolution at
+    // stringify time instead.
+    expect(graph.tarballOf('ms@2.1.3')?.nativeResolution).toBeUndefined()
   })
 
   it('emits NPM_V3_UNEXPECTED_LEGACY_MIRROR when input carries top-level dependencies', () => {

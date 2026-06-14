@@ -43,7 +43,6 @@ export interface Node {
   // ResolutionCanonical)` at construction.
   source?:        SourceDiscriminator
   workspacePath?: string
-  resolution?:    string
 }
 
 /** Cross-format artefact metadata, shared across peer-virt siblings. Per ADR-0010 + 11-enrich.md. */
@@ -70,13 +69,21 @@ export interface TarballPayload {
   os?:                  string[]
   libc?:                string[]
   bundledDependencies?: string[]
-  // ADR-0014 §4.F3 — typed canonical resolution. Distinct from `Node.resolution`
-  // (PM-native verbatim string sidecar per ADR-0013): this carrier holds the
-  // 5-case discriminated union populated at adapter parse via `recipe/
-  // resolution.parse()`. Adapter stringify projects back to PM-native via
-  // `recipe/resolution.stringifyFor*`. `Node.resolution` retains its role as
-  // verbatim sidecar for same-format round-trip and patch-locator retrieval.
+  // ADR-0014 §4.F3 — typed canonical resolution. Distinct from
+  // `nativeResolution` (PM-native verbatim string sidecar per ADR-0013): this
+  // carrier holds the 5-case discriminated union populated at adapter parse via
+  // `recipe/resolution.parse()`. Adapter stringify projects back to PM-native
+  // via `recipe/resolution.stringifyFor*`.
+  // (4-case discriminated union: tarball | git | directory | unknown.)
   resolution?:          ResolutionCanonical
+  // ADR-0013 — PM-native verbatim resolution string sidecar. Captured at
+  // adapter parse verbatim (e.g. yarn-classic `resolved`, npm `resolved`,
+  // yarn-berry/pnpm resolution locators) and replayed at same-format stringify
+  // for byte-exact round-trip + patch/file/link-locator retrieval. Per-tarball
+  // (NOT node identity — it is invariant across peer-virtual siblings sharing a
+  // TarballKey): yarn-berry siblings copy the base locator, pnpm sources it from
+  // the shared bare key, npm/yarn-classic are flat, bun-text never sets it.
+  nativeResolution?:    string
 }
 
 export type EdgeAttrs = {

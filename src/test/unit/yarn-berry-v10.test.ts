@@ -180,7 +180,6 @@ describe('yarn-berry-v10 — enrich / optimize delegate to family core', () => {
         name: 'orphan',
         version: '9.9.9',
         peerContext: [],
-        resolution: 'orphan@npm:9.9.9',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
       m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('orphan') })

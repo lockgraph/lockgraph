@@ -26,12 +26,13 @@ describe('adversary probe — recompose fidelity', () => {
     const url = 'https://registry.npmjs.org/@vue/shared/-/shared-3.4.0.tgz'
     const sha1 = 'a'.repeat(40)
     const id = serializeNodeId('@vue/shared', '3.4.0', [])
-    b.addNode({ id, name: '@vue/shared', version: '3.4.0', peerContext: [], resolution: `${url}#${sha1}` })
-    b.setTarball({ name: '@vue/shared', version: '3.4.0' }, { resolution: { type: 'tarball', url } })
+    b.addNode({ id, name: '@vue/shared', version: '3.4.0', peerContext: [] })
+    b.setTarball({ name: '@vue/shared', version: '3.4.0' }, { resolution: { type: 'tarball', url }, nativeResolution: `${url}#${sha1}` })
     const text = rt(b.seal())
     const row = rowOf(text, '@vue/shared')
     expect(row.split('\t')[3]).toBe(`usha1-${sha1}`)
-    expect(row).not.toContain('res=')
+    // the native rides the u-member, so no F nativeResolution slot for this tarball.
+    expect(text.split('\n').some(l => l.startsWith('@vue/shared@3.4.0\t'))).toBe(false)
   })
 
   it('V2 name with dots and dashes', () => {
@@ -39,8 +40,8 @@ describe('adversary probe — recompose fidelity', () => {
     const url = 'https://registry.npmjs.org/lodash.merge/-/lodash.merge-4.6.2.tgz'
     const sha1 = 'b'.repeat(40)
     const id = serializeNodeId('lodash.merge', '4.6.2', [])
-    b.addNode({ id, name: 'lodash.merge', version: '4.6.2', peerContext: [], resolution: `${url}#${sha1}` })
-    b.setTarball({ name: 'lodash.merge', version: '4.6.2' }, { resolution: { type: 'tarball', url } })
+    b.addNode({ id, name: 'lodash.merge', version: '4.6.2', peerContext: [] })
+    b.setTarball({ name: 'lodash.merge', version: '4.6.2' }, { resolution: { type: 'tarball', url }, nativeResolution: `${url}#${sha1}` })
     const text = rt(b.seal())
     expect(rowOf(text, 'lodash.merge').split('\t')[3]).toBe(`usha1-${sha1}`)
   })
@@ -51,11 +52,11 @@ describe('adversary probe — recompose fidelity', () => {
     const url = 'https://registry.npmjs.org/@babel%2fcore/-/core-7.0.0.tgz'
     const sha1 = 'c'.repeat(40)
     const id = serializeNodeId('@babel/core', '7.0.0', [])
-    b.addNode({ id, name: '@babel/core', version: '7.0.0', peerContext: [], resolution: `${url}#${sha1}` })
-    b.setTarball({ name: '@babel/core', version: '7.0.0' }, { resolution: { type: 'tarball', url } })
+    b.addNode({ id, name: '@babel/core', version: '7.0.0', peerContext: [] })
+    b.setTarball({ name: '@babel/core', version: '7.0.0' }, { resolution: { type: 'tarball', url }, nativeResolution: `${url}#${sha1}` })
     const text = rt(b.seal())
     const row = rowOf(text, '@babel/core')
-    // exact-match should FAIL (url has %2f, recompose uses /), so res= verbatim.
+    // exact-match should FAIL (url has %2f, recompose uses /), so nativeResolution= verbatim.
     // Either outcome must round-trip — assertion is identity (rt already checks).
     expect(row).toBeTruthy()
   })
@@ -65,8 +66,8 @@ describe('adversary probe — recompose fidelity', () => {
     const url = 'https://registry.yarnpkg.com/JSV/-/JSV-4.0.2.tgz'
     const sha1 = 'd'.repeat(40)
     const id = serializeNodeId('JSV', '4.0.2', [])
-    b.addNode({ id, name: 'JSV', version: '4.0.2', peerContext: [], resolution: `${url}#${sha1}` })
-    b.setTarball({ name: 'JSV', version: '4.0.2' }, { resolution: { type: 'tarball', url } })
+    b.addNode({ id, name: 'JSV', version: '4.0.2', peerContext: [] })
+    b.setTarball({ name: 'JSV', version: '4.0.2' }, { resolution: { type: 'tarball', url }, nativeResolution: `${url}#${sha1}` })
     const text = rt(b.seal())
     expect(rowOf(text, 'JSV').split('\t')[3]).toBe(`usha1-${sha1}`)
   })
@@ -74,11 +75,11 @@ describe('adversary probe — recompose fidelity', () => {
   it('V5 berry locator for npm-ALIASED package (node.name == target)', () => {
     const b = newBuilder()
     const id = serializeNodeId('string-width', '4.2.3', [])
-    b.addNode({ id, name: 'string-width', version: '4.2.3', peerContext: [], resolution: 'string-width@npm:4.2.3' })
-    b.setTarball({ name: 'string-width', version: '4.2.3' }, { resolution: { type: 'tarball', url: 'https://registry.yarnpkg.com/string-width/-/string-width-4.2.3.tgz' } })
+    b.addNode({ id, name: 'string-width', version: '4.2.3', peerContext: [] })
+    b.setTarball({ name: 'string-width', version: '4.2.3' }, { resolution: { type: 'tarball', url: 'https://registry.yarnpkg.com/string-width/-/string-width-4.2.3.tgz' }, nativeResolution: 'string-width@npm:4.2.3' })
     const text = rt(b.seal())
-    const row = rowOf(text, 'string-width')
-    expect(row.split('\t')).toContain('res')
+    const fRow = text.split('\n').find(l => l.startsWith('string-width@4.2.3\t'))!
+    expect(fRow).toContain('\tnativeResolution.berry=')
   })
 
   it('V6 payload.resolution with EXTRA keys (hostingProvider on tarball)', () => {
@@ -86,13 +87,17 @@ describe('adversary probe — recompose fidelity', () => {
     const url = 'https://registry.npmjs.org/x/-/x-1.0.0.tgz'
     const id = serializeNodeId('x', '1.0.0', [])
     b.addNode({ id, name: 'x', version: '1.0.0', peerContext: [] })
-    // Artificially attach hostingProvider to a registry tarball (3 keys).
+    // Artificially attach hostingProvider to a registry tarball (3 keys). The
+    // extra key means it is NOT the bare recomposable 2-key shape, so the WHOLE
+    // union flattens under the F row's `resolution.*` dot-path slots (no JSON).
     b.setTarball({ name: 'x', version: '1.0.0' }, { resolution: { type: 'tarball', url, hostingProvider: 'github' } })
     const text = rt(b.seal())
-    expect(rowOf(text, 'x')).toContain('payload=')
+    const fRow = text.split('\n').find(l => l.startsWith('x@1.0.0\t'))!
+    expect(fRow).toBeDefined()
+    expect(fRow).toContain('\tresolution.hostingProvider=github')
   })
 
-  it('V7 node with NO Node.resolution but hosted npm payload — stays undefined', () => {
+  it('V7 tarball with NO nativeResolution but hosted npm payload — stays undefined', () => {
     const b = newBuilder()
     const url = 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz'
     const id = serializeNodeId('ms', '2.1.3', [])
@@ -100,10 +105,10 @@ describe('adversary probe — recompose fidelity', () => {
     b.setTarball({ name: 'ms', version: '2.1.3' }, { resolution: { type: 'tarball', url } })
     const text = rt(b.seal())
     const g2 = parse(text)
-    expect(g2.getNode(id)!.resolution).toBeUndefined()
+    expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.nativeResolution).toBeUndefined()
   })
 
-  it('V8 HARDEST: undefined Node.resolution + hosted payload + payload has OTHER fields', () => {
+  it('V8 HARDEST: undefined nativeResolution + hosted payload + payload has OTHER fields', () => {
     // Does the recompose mint a phantom resolution? And does the omitted
     // payload.resolution survive next to residual fields?
     const b = newBuilder()
@@ -117,20 +122,21 @@ describe('adversary probe — recompose fidelity', () => {
     })
     const text = rt(b.seal())
     const g2 = parse(text)
-    expect(g2.getNode(id)!.resolution).toBeUndefined()
+    expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.nativeResolution).toBeUndefined()
     expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.resolution).toEqual({ type: 'tarball', url })
     expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.license).toBe('MIT')
   })
 
   it('V9 berry locator BUT no payload.resolution at all (hostedBase undefined)', () => {
-    // A bare berry node with NO payload.resolution: R row is npm + `-`.
+    // A bare berry node with NO payload.resolution: R row is npm + `-`. The
+    // native rides the F berry-marker, recomposed from the TarballKey.
     const b = newBuilder()
     const id = serializeNodeId('react', '18.0.0', [])
-    b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [], resolution: 'react@npm:18.0.0' })
-    // no setTarball
+    b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [] })
+    b.setTarball({ name: 'react', version: '18.0.0' }, { nativeResolution: 'react@npm:18.0.0' })
     const text = rt(b.seal())
-    const row = rowOf(text, 'react')
-    expect(row.split('\t')).toContain('res')
+    const fRow = text.split('\n').find(l => l.startsWith('react@18.0.0\t'))!
+    expect(fRow).toContain('\tnativeResolution.berry=')
   })
 
   it('V10 undefined resolution + NO payload at all (R = npm + dash) stays undefined', () => {
@@ -139,7 +145,7 @@ describe('adversary probe — recompose fidelity', () => {
     b.addNode({ id, name: 'bare', version: '1.0.0', peerContext: [] })
     const text = rt(b.seal())
     const g2 = parse(text)
-    expect(g2.getNode(id)!.resolution).toBeUndefined()
+    expect(g2.tarball({ name: 'bare', version: '1.0.0' })?.nativeResolution).toBeUndefined()
     // R row should be npm \t -, and parse must NOT recompose a payload.resolution
     // because there was no payload (recomposePR requires hostedBase, which is
     // undefined for url === '-').
@@ -156,8 +162,8 @@ describe('adversary probe — recompose fidelity', () => {
     b.setTarball({ name: 'nores', version: '1.0.0' }, { license: 'ISC' })
     const text = rt(b.seal())
     const g2 = parse(text)
-    expect(g2.getNode(id)!.resolution).toBeUndefined()
     const p = g2.tarball({ name: 'nores', version: '1.0.0' })!
+    expect(p.nativeResolution).toBeUndefined()
     expect(p.resolution).toBeUndefined()  // must NOT be invented
     expect(p.license).toBe('ISC')
   })

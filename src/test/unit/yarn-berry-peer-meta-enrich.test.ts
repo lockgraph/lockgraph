@@ -23,14 +23,12 @@ function npmLikeGraph(): Graph {
     name: 'peerpkg',
     version: '2.0.0',
     peerContext: [],
-    resolution: 'peerpkg@npm:2.0.0',
   })
   builder.addNode({
     id: 'consumer@1.0.0(peerpkg@2.0.0)',
     name: 'consumer',
     version: '1.0.0',
     peerContext: ['peerpkg@2.0.0'],
-    resolution: 'consumer@npm:1.0.0',
   })
   builder.addEdge('consumer@1.0.0(peerpkg@2.0.0)', 'peerpkg@2.0.0', 'peer', { range: '^2.0.0' })
   return builder.seal()
@@ -151,8 +149,8 @@ describe('yarn-berry peerDependenciesMeta reconstruction (task #86)', () => {
 
   it('monotone-additive: an already-optional edge is never cleared and yields no diagnostic', () => {
     const builder = newBuilder()
-    builder.addNode({ id: 'peerpkg@2.0.0', name: 'peerpkg', version: '2.0.0', peerContext: [], resolution: 'peerpkg@npm:2.0.0' })
-    builder.addNode({ id: 'consumer@1.0.0(peerpkg@2.0.0)', name: 'consumer', version: '1.0.0', peerContext: ['peerpkg@2.0.0'], resolution: 'consumer@npm:1.0.0' })
+    builder.addNode({ id: 'peerpkg@2.0.0', name: 'peerpkg', version: '2.0.0', peerContext: [] })
+    builder.addNode({ id: 'consumer@1.0.0(peerpkg@2.0.0)', name: 'consumer', version: '1.0.0', peerContext: ['peerpkg@2.0.0'] })
     builder.addEdge('consumer@1.0.0(peerpkg@2.0.0)', 'peerpkg@2.0.0', 'peer', { range: '^2.0.0', optional: true })
     // workspaceRoot supplied but no manifest: rung-1 already says optional, so
     // the ladder must short-circuit and NOT warn.

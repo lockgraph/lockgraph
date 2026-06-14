@@ -20,27 +20,24 @@ describe('interop adversarial §8.6 — cycle pruning interaction', () => {
       name: 'root',
       version: '1.0.0',
       peerContext: [],
-      resolution: 'https://registry.yarnpkg.com/root/-/root-1.0.0.tgz#0000000000000000000000000000000000000000',
     })
     builder.addNode({
       id: 'cycle-a@1.0.0',
       name: 'cycle-a',
       version: '1.0.0',
       peerContext: [],
-      resolution: 'https://registry.yarnpkg.com/cycle-a/-/cycle-a-1.0.0.tgz#1111111111111111111111111111111111111111',
     })
     builder.addNode({
       id: 'cycle-b@1.0.0',
       name: 'cycle-b',
       version: '1.0.0',
       peerContext: [],
-      resolution: 'https://registry.yarnpkg.com/cycle-b/-/cycle-b-1.0.0.tgz#2222222222222222222222222222222222222222',
     })
     builder.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: 'npm:1.0.0' })
     builder.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: 'npm:1.0.0' })
-    builder.setTarball({ name: 'root', version: '1.0.0' }, { integrity: berryChecksum('root') })
-    builder.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: berryChecksum('cycle-a') })
-    builder.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: berryChecksum('cycle-b') })
+    builder.setTarball({ name: 'root', version: '1.0.0' }, { integrity: berryChecksum('root'), nativeResolution: 'https://registry.yarnpkg.com/root/-/root-1.0.0.tgz#0000000000000000000000000000000000000000' })
+    builder.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: berryChecksum('cycle-a'), nativeResolution: 'https://registry.yarnpkg.com/cycle-a/-/cycle-a-1.0.0.tgz#1111111111111111111111111111111111111111' })
+    builder.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: berryChecksum('cycle-b'), nativeResolution: 'https://registry.yarnpkg.com/cycle-b/-/cycle-b-1.0.0.tgz#2222222222222222222222222222222222222222' })
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-berry-v9', sourceGraph)
     const destinationGraph = parseFormat('yarn-berry-v9', emitted.lockfile)

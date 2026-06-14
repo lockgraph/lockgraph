@@ -533,12 +533,12 @@ describe('subgraph', () => {
 describe('diff', () => {
   it('detects added, removed, and changed nodes', () => {
     const b1 = newBuilder()
-    b1.addNode(n('a@1.0.0', 'a', '1.0.0', [], { resolution: 'https://x/a-1.0.0.tgz' }))
+    b1.addNode(n('a@1.0.0', 'a', '1.0.0', [], { workspacePath: 'packages/a' }))
     b1.addNode(n('b@1.0.0', 'b', '1.0.0'))
     const g1 = b1.seal()
 
     const b2 = newBuilder()
-    b2.addNode(n('a@1.0.0', 'a', '1.0.0', [], { resolution: 'https://y/a-1.0.0.tgz' }))   // changed
+    b2.addNode(n('a@1.0.0', 'a', '1.0.0', [], { workspacePath: 'libs/a' }))   // changed
     b2.addNode(n('c@1.0.0', 'c', '1.0.0'))                                  // added
     const g2 = b2.seal()
 
@@ -592,9 +592,9 @@ describe('mutate', () => {
   it('replaceNode same id swaps node fields', () => {
     const g = seed()
     const { graph: g2 } = g.mutate(m => {
-      m.replaceNode('a@1.0.0', n('a@1.0.0', 'a', '1.0.0', [], { resolution: 'https://x/a-1.0.0.tgz' }))
+      m.replaceNode('a@1.0.0', n('a@1.0.0', 'a', '1.0.0', [], { workspacePath: 'packages/a' }))
     })
-    expect(g2.getNode('a@1.0.0')?.resolution).toBe('https://x/a-1.0.0.tgz')
+    expect(g2.getNode('a@1.0.0')?.workspacePath).toBe('packages/a')
     // edges preserved
     expect(g2.out('a@1.0.0').map(e => e.dst)).toEqual(['b@1.0.0'])
     expect(g2.in('a@1.0.0').map(e => e.src)).toEqual(['app@1.0.0'])

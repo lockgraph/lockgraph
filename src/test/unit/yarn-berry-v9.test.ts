@@ -124,7 +124,11 @@ describe('yarn-berry-v9 — simple fixture', () => {
   it('workspace node carries workspacePath = empty (root)', () => {
     const ws = g.getNode('case-simple@0.0.0-use.local')
     expect(ws?.workspacePath).toBe('')
-    expect(ws?.resolution).toBe('case-simple@workspace:.')
+    // The `<name>@workspace:<path>` locator is recomposed from workspacePath at
+    // stringify — a workspace member is a local project, NOT a downloadable
+    // artifact, so it carries no per-tarball nativeResolution sidecar.
+    expect(g.tarballOf(ws!.id)?.nativeResolution).toBeUndefined()
+    expect(stringify(g)).toContain('resolution: "case-simple@workspace:."')
   })
 
   it('workspace dep edges to lodash and ms', () => {
@@ -270,7 +274,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
       const g = parse(lock, { workspaceRoot: tempRoot })
       const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
-      const resolution = node.resolution
+      const resolution = g.tarballOf(node.id)?.nativeResolution
       expect(resolution).toBeDefined()
       const locator = patchLocatorOfResolution(resolution!)
       const sentinel = sentinelHashOfLocator(locator)
@@ -364,7 +368,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
     const g = parse(input)
     const node = uniqueNodeByNameVersion(g, 'typescript', '5.4.5')
-    const resolution = node.resolution
+    const resolution = g.tarballOf(node.id)?.nativeResolution
     expect(resolution).toBeDefined()
     const locator = patchLocatorOfResolution(resolution!)
     const sentinel = sentinelHashOfLocator(locator)
@@ -386,7 +390,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
       const g = parse(lock, { workspaceRoot: tempRoot })
       const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
-      const resolution = node.resolution
+      const resolution = g.tarballOf(node.id)?.nativeResolution
       expect(resolution).toBeDefined()
       const locator = patchLocatorOfResolution(resolution!)
       const sentinel = sentinelHashOfLocator(locator)
@@ -423,7 +427,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
   it('parse() without workspaceRoot falls through to sentinel for file-backed patches', () => {
     const g = parse(lock)
     const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
-    const resolution = node.resolution
+    const resolution = g.tarballOf(node.id)?.nativeResolution
     expect(resolution).toBeDefined()
     const locator = patchLocatorOfResolution(resolution!)
     const sentinel = sentinelHashOfLocator(locator)
@@ -444,7 +448,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
     const g = parse(input, { workspaceRoot })
     const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
-    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.tarballOf(nodeId)?.nativeResolution).toBe(patchResolution(locator))
     expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
@@ -460,7 +464,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
     const g = parse(input, { workspaceRoot })
     const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
-    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.tarballOf(nodeId)?.nativeResolution).toBe(patchResolution(locator))
     expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
@@ -477,7 +481,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
     const g = parse(input, { workspaceRoot })
     const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
-    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.tarballOf(nodeId)?.nativeResolution).toBe(patchResolution(locator))
     expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')).toEqual([
       expect.objectContaining({
@@ -497,7 +501,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const diagnostics = g.diagnostics().filter(d => d.code === 'YARN_BERRY_PATCH_UNRESOLVED')
     const nodeId = patchedNodeId('foo', '1.0.0', unresolvedSentinel(locator))
 
-    expect(g.getNode(nodeId)?.resolution).toBe(patchResolution(locator))
+    expect(g.tarballOf(nodeId)?.nativeResolution).toBe(patchResolution(locator))
     expect(g.getNode(nodeId)?.patch).toBe(unresolvedSentinel(locator))
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]).toEqual(expect.objectContaining({
@@ -552,10 +556,10 @@ describe('yarn-berry-v9 — alias collision rejection (ADR-0010)', () => {
 
     const graph = parse(input)
     const patchNode = Array.from(graph.nodes()).find(
-      node => node.name === 'typescript' && node.version === '5.4.5' && node.resolution?.includes('@patch:') === true,
+      node => node.name === 'typescript' && node.version === '5.4.5' && graph.tarballOf(node.id)?.nativeResolution?.includes('@patch:') === true,
     )
     expect(patchNode).toBeDefined()
-    const locator = patchLocatorOfResolution(patchNode!.resolution!)
+    const locator = patchLocatorOfResolution(graph.tarballOf(patchNode!.id)?.nativeResolution!)
     const sentinel = sentinelHashOfLocator(locator)
 
     expect([...graph.nodes()].map(node => node.id).sort()).toEqual([
@@ -610,11 +614,18 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation', () => {
   it('preserves both resolution: strings verbatim across the two entries', () => {
     const graph = parse(backstageInput)
     const nodes = graph.byName('example-app').map(id => graph.getNode(id)!)
-    const resolutions = nodes.map(n => n.resolution).sort()
-    expect(resolutions).toEqual([
+    // The link entry's verbatim locator rides the per-tarball nativeResolution;
+    // the workspace entry's `@workspace:` locator is recomposed from
+    // workspacePath (workspace members carry no nativeResolution sidecar).
+    const natives = nodes.map(n => graph.tarballOf(n.id)?.nativeResolution).sort()
+    expect(natives).toEqual([
       'example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend',
-      'example-app@workspace:packages/app',
+      undefined,
     ])
+    // Both resolution strings still emit verbatim across the round-trip.
+    const out = stringify(graph)
+    expect(out).toContain('resolution: "example-app@link:../app::locator=example-backend%40workspace%3Apackages%2Fbackend"')
+    expect(out).toContain('resolution: "example-app@workspace:packages/app"')
   })
 
   it('workspace entry still carries workspacePath; link entry does not', () => {
@@ -849,42 +860,36 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '0.0.0-use.local',
       peerContext: [],
       workspacePath: '',
-      resolution: 'case-stringify@workspace:.',
     })
     builder.addNode({
       id: 'true@1.0.0',
       name: 'true',
       version: '1.0.0',
       peerContext: [],
-      resolution: 'true@npm:1.0.0',
     })
     builder.addNode({
       id: '@scope/name@2.0.0',
       name: '@scope/name',
       version: '2.0.0',
       peerContext: [],
-      resolution: '@scope/name@npm:2.0.0',
     })
     builder.addNode({
       id: 'pkg#hash@3.0.0',
       name: 'pkg#hash',
       version: '3.0.0',
       peerContext: [],
-      resolution: 'pkg#hash@npm:3.0.0',
     })
     builder.addNode({
       id: 'pkg:colon@4.0.0',
       name: 'pkg:colon',
       version: '4.0.0',
       peerContext: [],
-      resolution: 'pkg:colon@npm:4.0.0',
     })
     builder.addNode({
       id: 'dash-version@-1.0.0',
       name: 'dash-version',
       version: '-1.0.0',
       peerContext: [],
-      resolution: 'dash-version@npm:-1.0.0',
     })
     builder.addEdge('case-stringify@0.0.0-use.local', 'true@1.0.0', 'dep', { range: 'npm:1.0.0' })
     builder.addEdge('case-stringify@0.0.0-use.local', '@scope/name@2.0.0', 'dep', { range: 'npm:2.0.0' })
@@ -917,7 +922,6 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'pkg',
       version: '1.0.0',
       peerContext: [],
-      resolution: 'pkg@npm:1.0.0',
       peerDependencies: { react: '^18.2.0' },
       peerDependenciesMeta: { react: { optional: true } },
       dependenciesMeta: { lodash: { unplugged: true } },
@@ -950,14 +954,12 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'react',
       version: '18.2.0',
       peerContext: [],
-      resolution: 'react@npm:18.2.0',
     })
     builder.addNode({
       id: 'react-dom@18.2.0(react@18.2.0)',
       name: 'react-dom',
       version: '18.2.0',
       peerContext: ['react@18.2.0'],
-      resolution: 'react-dom@npm:18.2.0',
     })
     // EdgeAttrs.optional is the model carrier; no raw entry hint present.
     builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0', optional: true })
@@ -977,14 +979,12 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'react',
       version: '18.2.0',
       peerContext: [],
-      resolution: 'react@npm:18.2.0',
     })
     builder.addNode({
       id: 'react-dom@18.2.0(react@18.2.0)',
       name: 'react-dom',
       version: '18.2.0',
       peerContext: ['react@18.2.0'],
-      resolution: 'react-dom@npm:18.2.0',
     })
     builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0' })
     const graph = builder.seal()
@@ -999,14 +999,12 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'react',
       version: '18.2.0',
       peerContext: [],
-      resolution: 'react@npm:18.2.0',
     })
     builder.addNode({
       id: 'consumer@1.0.0(react@18.2.0)',
       name: 'consumer',
       version: '1.0.0',
       peerContext: ['react@18.2.0'],
-      resolution: 'consumer@npm:1.0.0',
     })
     builder.addEdge('consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: 'npm:react@^18', optional: true, alias: 'react-aliased' })
     const graph = builder.seal()
@@ -1022,14 +1020,12 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'react',
       version: '18.2.0',
       peerContext: [],
-      resolution: 'react@npm:18.2.0',
     })
     builder.addNode({
       id: 'react-dom@18.2.0(react@18.2.0)',
       name: 'react-dom',
       version: '18.2.0',
       peerContext: ['react@18.2.0'],
-      resolution: 'react-dom@npm:18.2.0',
     })
     builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0' })
     const graph = builder.seal()
@@ -1044,14 +1040,12 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'react',
       version: '18.2.0',
       peerContext: [],
-      resolution: 'react@npm:18.2.0',
     })
     builder.addNode({
       id: 'react-dom@18.2.0(react@18.2.0)',
       name: 'react-dom',
       version: '18.2.0',
       peerContext: ['react@18.2.0'],
-      resolution: 'react-dom@npm:18.2.0',
     })
     builder.addEdge('react-dom@18.2.0(react@18.2.0)', 'react@18.2.0', 'peer')
     const graph = builder.seal()
@@ -1083,14 +1077,12 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '1.0.0',
       peerContext: [],
       workspacePath: '',
-      resolution: 'app@workspace:.',
     })
     builder.addNode({
       id: 'lodash@4.17.21',
       name: 'lodash',
       version: '4.17.21',
       peerContext: [],
-      resolution: 'lodash@npm:4.17.21',
     })
     builder.addEdge('app@1.0.0', 'lodash@4.17.21', 'dep', { range: '^4.17.0' })
     const graph = builder.seal()
@@ -1120,14 +1112,12 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '1.0.0',
       peerContext: [],
       workspacePath: '',
-      resolution: 'app@workspace:.',
     })
     builder.addNode({
       id: 'lodash@4.17.21',
       name: 'lodash',
       version: '4.17.21',
       peerContext: [],
-      resolution: 'lodash@npm:4.17.21',
     })
     builder.addEdge('app@1.0.0', 'lodash@4.17.21', 'dep', { range: 'npm:^4.17.0' })
     const graph = builder.seal()
@@ -1157,7 +1147,6 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '1.0.0',
       peerContext: [],
       workspacePath: '',
-      resolution: 'app@workspace:.',
     })
     builder.addNode({
       id: patchedNodeId('lodash', '4.17.21', SENTINEL),
@@ -1165,7 +1154,6 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '4.17.21',
       peerContext: [],
       patch: SENTINEL,
-      resolution: 'lodash@npm:4.17.21',
     })
     builder.addEdge('app@1.0.0', patchedNodeId('lodash', '4.17.21', SENTINEL), 'dep', { range: 'npm:^4.17.0' })
     const graph = builder.seal()
@@ -1200,7 +1188,6 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '1.0.0',
       peerContext: [],
       workspacePath: '',
-      resolution: 'app@workspace:.',
     })
     builder.addNode({
       id: patchedNodeId('lodash', '4.17.21', CANONICAL_PATCH),
@@ -1208,7 +1195,6 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '4.17.21',
       peerContext: [],
       patch: CANONICAL_PATCH,
-      resolution: 'lodash@npm:4.17.21',
     })
     builder.addEdge('app@1.0.0', patchedNodeId('lodash', '4.17.21', CANONICAL_PATCH), 'dep', { range: 'npm:^4.17.0' })
     const graph = builder.seal()
@@ -1272,28 +1258,24 @@ describe('yarn-berry-v9 — stringify', () => {
       name: 'react',
       version: '17.0.0',
       peerContext: [],
-      resolution: 'react@npm:17.0.0',
     })
     builder.addNode({
       id: 'react@18.0.0',
       name: 'react',
       version: '18.0.0',
       peerContext: [],
-      resolution: 'react@npm:18.0.0',
     })
     builder.addNode({
       id: 'lib@1.0.0(react@17.0.0)',
       name: 'lib',
       version: '1.0.0',
       peerContext: ['react@17.0.0'],
-      resolution: 'lib@npm:1.0.0',
     })
     builder.addNode({
       id: 'lib@1.0.0(react@18.0.0)',
       name: 'lib',
       version: '1.0.0',
       peerContext: ['react@18.0.0'],
-      resolution: 'lib@npm:1.0.0',
     })
     builder.addEdge('lib@1.0.0(react@17.0.0)', 'react@17.0.0', 'peer', { range: '^17' })
     builder.addEdge('lib@1.0.0(react@18.0.0)', 'react@18.0.0', 'peer', { range: '^18' })
@@ -1317,7 +1299,6 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '1.0.0',
       peerContext: [],
       workspacePath: 'packages/app-a',
-      resolution: 'app-a@workspace:packages/app-a',
     })
     builder.addNode({
       id: 'app-b@1.0.0',
@@ -1325,35 +1306,30 @@ describe('yarn-berry-v9 — stringify', () => {
       version: '1.0.0',
       peerContext: [],
       workspacePath: 'packages/app-b',
-      resolution: 'app-b@workspace:packages/app-b',
     })
     builder.addNode({
       id: 'react@17.0.0',
       name: 'react',
       version: '17.0.0',
       peerContext: [],
-      resolution: 'react@npm:17.0.0',
     })
     builder.addNode({
       id: 'react@18.0.0',
       name: 'react',
       version: '18.0.0',
       peerContext: [],
-      resolution: 'react@npm:18.0.0',
     })
     builder.addNode({
       id: 'lib@1.0.0(react@17.0.0)',
       name: 'lib',
       version: '1.0.0',
       peerContext: ['react@17.0.0'],
-      resolution: 'lib@npm:1.0.0',
     })
     builder.addNode({
       id: 'lib@1.0.0(react@18.0.0)',
       name: 'lib',
       version: '1.0.0',
       peerContext: ['react@18.0.0'],
-      resolution: 'lib@npm:1.0.0',
     })
     builder.addEdge('app-a@1.0.0', 'lib@1.0.0(react@17.0.0)', 'dep', { range: '^1.0.0' })
     builder.addEdge('app-b@1.0.0', 'lib@1.0.0(react@18.0.0)', 'dep', { range: '~1.0.0' })
@@ -1407,7 +1383,6 @@ describe('yarn-berry-v9 — modify', () => {
         name: 'peer-consumer',
         version: '1.0.0',
         peerContext: ['react@18.2.0'],
-        resolution: 'peer-consumer@npm:1.0.0',
       })
       m.addEdge('peer-consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: 'npm:18.2.0' })
     })
@@ -1417,7 +1392,6 @@ describe('yarn-berry-v9 — modify', () => {
         name: 'peer-consumer',
         version: '1.0.0',
         peerContext: [],
-        resolution: 'peer-consumer@npm:1.0.0',
       })
     }).graph
     const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
@@ -1445,14 +1419,12 @@ describe('yarn-berry-v9 — modify', () => {
       name: 'react',
       version: '18.2.0',
       peerContext: [],
-      resolution: 'react@npm:18.2.0',
     })
     builder.addNode({
       id: 'peer-consumer@1.0.0(react@18.2.0)',
       name: 'peer-consumer',
       version: '1.0.0',
       peerContext: ['react@18.2.0'],
-      resolution: 'peer-consumer@npm:1.0.0',
     })
     builder.addEdge('peer-consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18' })
     const graph = builder.seal()
@@ -1485,7 +1457,6 @@ describe('yarn-berry-v9 — modify', () => {
         name: 'debug',
         version: '1.0.0',
         peerContext: [],
-        resolution: 'debug@npm:1.0.0',
       })
     })
     const reparsed = parse(stringify(result.graph))
@@ -1521,7 +1492,6 @@ describe('yarn-berry-v9 — modify', () => {
         ...current!,
         id: 'ms@2.1.4',
         version: '2.1.4',
-        resolution: 'ms@npm:2.1.4',
       })
     })
     const reparsed = parse(stringify(result.graph))
@@ -1597,7 +1567,6 @@ describe('yarn-berry-v9 — modify', () => {
         ...current!,
         id: patchedNodeId('lodash', '4.17.22', current!.patch!),
         version: '4.17.22',
-        resolution: 'lodash@npm:4.17.22',
       })
     })).toThrow(LockfileError)
 
@@ -1607,7 +1576,6 @@ describe('yarn-berry-v9 — modify', () => {
           ...current!,
           id: patchedNodeId('lodash', '4.17.22', current!.patch!),
           version: '4.17.22',
-          resolution: 'lodash@npm:4.17.22',
         })
       })
     } catch (error) {
@@ -1675,7 +1643,6 @@ describe('yarn-berry-v9 — modify', () => {
         ...current,
         id: 'react-dom@18.3.0',
         version: '18.3.0',
-        resolution: 'react-dom@npm:18.3.0',
       })
     })
     expect(result.applied).toEqual([
@@ -1979,7 +1946,6 @@ describe('yarn-berry-v9 — optimize', () => {
         name: 'orphan',
         version: '9.9.9',
         peerContext: [],
-        resolution: 'orphan@npm:9.9.9',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
       m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('10c0/orphan') })

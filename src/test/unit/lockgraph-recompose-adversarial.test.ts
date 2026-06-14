@@ -21,7 +21,9 @@ function rt(g: Graph): { text1: string; g2: Graph } {
   return { text1, g2 }
 }
 
-// Build a graph with a root workspace + one registry node carrying a given payload.
+// Build a graph with a root workspace + one registry node carrying a given
+// payload. The PM-native `resolution` sidecar (ADR-0013) now rides the
+// per-tarball payload as `nativeResolution`.
 function single(name: string, version: string, payload: TarballPayload, resolution?: string): Graph {
   const b = newBuilder()
   const rootId = serializeNodeId('root', '0.0.0', [])
@@ -29,9 +31,9 @@ function single(name: string, version: string, payload: TarballPayload, resoluti
   b.addNode(root)
   const id = serializeNodeId(name, version, [])
   const node: Node = { id, name, version, peerContext: [] }
-  if (resolution !== undefined) node.resolution = resolution
   b.addNode(node)
-  b.setTarball({ name, version }, payload)
+  const fullPayload = resolution !== undefined ? { ...payload, nativeResolution: resolution } : payload
+  b.setTarball({ name, version }, fullPayload)
   return b.seal()
 }
 
@@ -78,9 +80,8 @@ describe('recompose adversarial', () => {
       resolution: { type: 'tarball', url: canon(NPMJS, '@scope/x', '1.0.0') },
     })
     const { g2 } = rt(g)
-    // The reconstructed node MUST NOT have invented a Node.resolution string.
-    const n = Array.from(g2.nodes()).find(n => n.name === '@scope/x')!
-    expect(n.resolution).toBeUndefined()
+    // The reconstructed tarball MUST NOT have invented a nativeResolution string.
+    expect(g2.tarball({ name: '@scope/x', version: '1.0.0' })!.nativeResolution).toBeUndefined()
   })
 
   it('S6 payload.resolution with EXTRA key hostingProvider — stays verbatim', () => {
@@ -100,8 +101,7 @@ describe('recompose adversarial', () => {
   it('S8 registry node with NO payload.resolution at all (npm + - row), Node.resolution undefined', () => {
     const g = single('bare', '1.0.0', { integrity: realSri() })
     const { g2, text1 } = rt(g)
-    const n = Array.from(g2.nodes()).find(n => n.name === 'bare')!
-    expect(n.resolution).toBeUndefined()
+    expect(g2.tarball({ name: 'bare', version: '1.0.0' })!.nativeResolution).toBeUndefined()
     // payload.resolution must STAY undefined — no hosted base existed.
     expect(g2.tarball({ name: 'bare', version: '1.0.0' })?.resolution).toBeUndefined()
     // sanity: the R row is `npm\t-`

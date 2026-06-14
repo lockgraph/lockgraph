@@ -170,7 +170,7 @@ describe('yarn-berry patch: descriptor edge resolution (Bug #88)', () => {
     // Resolves to the sentinel patch node, NOT the plain npm: node.
     expect(target.patch).toBeDefined()
     expect(target.patch!.startsWith('unresolved-')).toBe(true)
-    expect(target.resolution).toBe(
+    expect(g.tarballOf(target.id)?.nativeResolution).toBe(
       'lodash@patch:lodash@npm%3A4.17.15#~/.yarn/patches/lodash.patch::version=4.17.15&hash=abc123')
 
     // The plain npm: node exists but has ZERO incoming edges (it is the patch's
@@ -226,7 +226,7 @@ describe('yarn-berry patch: descriptor edge resolution (Bug #88)', () => {
     expect(out.length).toBe(1)
     const target = g.getNode(out[0]!.dst)!
     expect(target.patch!.startsWith('unresolved-')).toBe(true)
-    expect(target.resolution).toBe(
+    expect(g.tarballOf(target.id)?.nativeResolution).toBe(
       'lodash@patch:lodash@npm%3A4.17.15#~/.yarn/patches/lodash.patch::version=4.17.15&hash=abc123')
     // The plain npm: base stays a distinct node with zero incoming edges.
     const npmNode = nodes.find(n => n.name === 'lodash' && n.patch === undefined)!
@@ -344,7 +344,7 @@ __metadata:
     const target = g.getNode(out[0]!.dst)!
     expect(target.patch!.startsWith('unresolved-')).toBe(true)
     // Links to the patch node, not the plain npm: base.
-    expect(g.getNode(out[0]!.dst)!.resolution).toContain('#~/.yarn/patches/outer.patch')
+    expect(g.tarballOf(out[0]!.dst)?.nativeResolution).toContain('#~/.yarn/patches/outer.patch')
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_UNRESOLVED_DEP').length).toBe(0)
   })
 
@@ -361,8 +361,8 @@ __metadata:
 
     // Distinct patch nodes, each carrying its consumer's `&locator=`.
     expect(aTarget.id).not.toBe(bTarget.id)
-    expect(aTarget.resolution).toContain('locator=a%40workspace%3Apackages%2Fa')
-    expect(bTarget.resolution).toContain('locator=b%40workspace%3Apackages%2Fb')
+    expect(g.tarballOf(aTarget.id)?.nativeResolution).toContain('locator=a%40workspace%3Apackages%2Fa')
+    expect(g.tarballOf(bTarget.id)?.nativeResolution).toContain('locator=b%40workspace%3Apackages%2Fb')
     expect(aTarget.patch!.startsWith('unresolved-')).toBe(true)
     expect(bTarget.patch!.startsWith('unresolved-')).toBe(true)
 

@@ -26,7 +26,7 @@ describe('yarn-classic robustness — git-protocol resolved URLs', () => {
     const id = g.byName('from-git')[0]!
     expect(g.getNode(id)).toBeDefined()
     expect(id).toContain('+src=')
-    expect(g.getNode(id)?.resolution).toBe('git+ssh://git@github.com/example/from-git.git#0123456789abcdef0123456789abcdef01234567')
+    expect(g.tarballOf(id)?.nativeResolution).toBe('git+ssh://git@github.com/example/from-git.git#0123456789abcdef0123456789abcdef01234567')
     expect(g.tarballOf(id)?.resolution?.type).toBe('git')
   })
 
@@ -39,7 +39,7 @@ describe('yarn-classic robustness — git-protocol resolved URLs', () => {
     const g = parse('yarn-classic', lf)
     // ADR-0032 — a git source carries a `+src=` discriminator; address by name.
     const id = g.byName('ws')[0]!
-    expect(g.getNode(id)?.resolution).toMatch(/^git:\/\//)
+    expect(g.tarballOf(id)?.nativeResolution).toMatch(/^git:\/\//)
     expect(g.tarballOf(id)?.resolution?.type).toBe('git')
   })
 
@@ -173,7 +173,7 @@ describe('yarn-classic robustness — relative file:/link:/portal: resolved', ()
       const g = parse('yarn-classic', localBlock(protocol, '../my-lib'))
       const node = g.getNode('my-lib@0.0.0')
       expect(node).toBeDefined()
-      expect(node?.resolution).toBe(`${protocol}:../my-lib`)
+      expect(g.tarballOf('my-lib@0.0.0')?.nativeResolution).toBe(`${protocol}:../my-lib`)
       expect(g.tarballOf('my-lib@0.0.0')?.resolution).toEqual({ type: 'directory', path: '../my-lib' })
       // A recognised local specifier is NOT an unknown resolution.
       expect(g.diagnostics().some(d => d.code === 'RECIPE_RESOLUTION_UNKNOWN')).toBe(false)
@@ -199,7 +199,7 @@ describe('yarn-classic robustness — relative file:/link:/portal: resolved', ()
       '  version "4.17.21"\n' +
       '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#679591c564c3bffaae8454cf0b3df370c3d6911c"\n'
     const g = parse('yarn-classic', lf)
-    expect(g.getNode('@scope/local@2.3.4')?.resolution).toBe('file:./packages/local')
+    expect(g.tarballOf('@scope/local@2.3.4')?.nativeResolution).toBe('file:./packages/local')
     // the file: dep's dependency edge resolves to the registry lodash node.
     expect(g.out('@scope/local@2.3.4').map(e => e.dst)).toContain('lodash@4.17.21')
     const out = stringify('yarn-classic', g)

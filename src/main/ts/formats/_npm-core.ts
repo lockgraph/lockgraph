@@ -1203,12 +1203,12 @@ function buildNodeModulesEntry(
   body.version = node.version
 
   const tarball = graph.tarballOf(node.id)
-  // `resolved` URL: prefer `node.resolution`. Adapter-specific recovery
-  // (e.g. npm-2 legacy-mirror sidecar that stashes the on-disk URL when
-  // the parser does not sync it to `node.resolution`) is delegated via
+  // `resolved` URL: prefer the per-tarball `nativeResolution`. Adapter-specific
+  // recovery (e.g. npm-2 legacy-mirror sidecar that stashes the on-disk URL when
+  // the parser does not sync it to `nativeResolution`) is delegated via
   // `hooks.recoverResolvedForNode`. ADR-0014 §4.F3 cross-format fallback:
   // when neither carrier is present, derive from canonical resolution.
-  const resolved = node.resolution
+  const resolved = tarball?.nativeResolution
     ?? config.hooks?.recoverResolvedForNode?.(graph, node)
     ?? deriveResolvedFromCanonical(tarball?.resolution)
   if (resolved !== undefined) body.resolved = resolved

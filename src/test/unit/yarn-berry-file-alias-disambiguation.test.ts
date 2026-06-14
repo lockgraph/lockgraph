@@ -61,9 +61,9 @@ describe('yarn-berry file: local-tarball alias disambiguation (Bug #76)', () => 
 
     // The `file:` alias round-trips its verbatim locator (incl. `locator=`);
     // the registry entry keeps a plain `npm:` resolution.
-    expect(patched[0]!.resolution).toBe(
+    expect(g.tarballOf(patched[0]!.id)?.nativeResolution).toBe(
       'demo@file:.lib/demo.tgz#.lib/demo.tgz::hash=abc123&locator=root%40workspace%3A.')
-    expect(unpatched[0]!.resolution).toBe('demo@npm:1.0.0')
+    expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBe('demo@npm:1.0.0')
 
     // Distinct TarballKeys: the two checksums land on separate payloads keyed
     // off the sentinel patch, so the differing integrity no longer fights over
@@ -84,7 +84,7 @@ describe('yarn-berry file: local-tarball alias disambiguation (Bug #76)', () => 
     expect(demos.filter(n => n.patch === undefined).length).toBe(1)
     // The `file:` locator survived the round-trip byte-faithfully.
     const reAlias = demos.find(n => n.patch?.startsWith('unresolved-'))
-    expect(reAlias!.resolution).toBe(
+    expect(g2.tarballOf(reAlias!.id)?.nativeResolution).toBe(
       'demo@file:.lib/demo.tgz#.lib/demo.tgz::hash=abc123&locator=root%40workspace%3A.')
   })
 
@@ -109,6 +109,6 @@ __metadata:
     const node = Array.from(g.nodes()).find(n => n.name === 'plain')
     expect(node).toBeDefined()
     expect(node!.patch).toBeUndefined()
-    expect(node!.resolution).toBe('plain@file:../plain')
+    expect(g.tarballOf(node!.id)?.nativeResolution).toBe('plain@file:../plain')
   })
 })

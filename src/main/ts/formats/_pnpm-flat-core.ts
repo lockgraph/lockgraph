@@ -1349,12 +1349,6 @@ function addPackageNode(
     version,
     peerContext,
   }
-  if (isPlainObject(pkgEntry)) {
-    const resolution = pkgEntry.resolution
-    if (isPlainObject(resolution) && typeof resolution.tarball === 'string') {
-      node.resolution = resolution.tarball
-    }
-  }
   if (patch !== undefined) node.patch = patch
   builder.addNode(node)
 
@@ -1763,6 +1757,9 @@ export function tarballPayloadOf(
   // Workspace canonical lives on Node.workspacePath; not on TarballPayload.
   if (isPlainObject(resolution)) {
     if (typeof resolution.tarball === 'string') {
+      // ADR-0013 — PM-native verbatim sidecar, per-tarball. Replayed at
+      // same-format stringify + patch-path retrieval.
+      payload.nativeResolution = resolution.tarball
       const canonical = parseResolutionRecipe(resolution.tarball, { sourceKind: 'pnpm-tarball' })
       if (canonical.type === 'unknown') {
         diagnostics.push(unknownResolutionDiagnostic(subject, resolution.tarball))
@@ -1990,12 +1987,13 @@ function buildPackageEntry(
   // ADR-0014 §4.F3 — pnpm emits `tarball:` only for non-registry shapes
   // (git codeload, explicit external URL). Registry tarballs derive their
   // URL by convention from name@version and emit `integrity:` alone.
-  // PM-native sidecar `node.resolution` is honoured when URL-shaped (same-
-  // format round-trip preserves the cross-format-carried URL); for tarball
-  // canonical from a registry-derived URL we suppress the field.
-  const nativeIsPnpmUrl = representative.resolution !== undefined
-    && (representative.resolution.startsWith('http://')
-      || representative.resolution.startsWith('https://'))
+  // PM-native sidecar `tarball.nativeResolution` is honoured when URL-shaped
+  // (same-format round-trip preserves the cross-format-carried URL); for
+  // tarball canonical from a registry-derived URL we suppress the field.
+  const nativeResolution = tarball?.nativeResolution
+  const nativeIsPnpmUrl = nativeResolution !== undefined
+    && (nativeResolution.startsWith('http://')
+      || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
   // For tarball canonical: only emit the URL when the source explicitly
   // supplied one (non-registry-default origin). The registry-default URL is
@@ -2009,12 +2007,12 @@ function buildPackageEntry(
       const sri = emitSri(tarball.integrity)
       if (sri !== undefined) resolution.integrity = sri
     }
-    if (nativeIsPnpmUrl) resolution.tarball = representative.resolution!
+    if (nativeIsPnpmUrl) resolution.tarball = nativeResolution!
     else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)
   } else if (nativeIsPnpmUrl) {
-    entry.resolution = flowMap({ tarball: representative.resolution! })
+    entry.resolution = flowMap({ tarball: nativeResolution! })
   } else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
     entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
   } else if (derivedPnpm?.directory !== undefined) {
@@ -2331,7 +2329,7 @@ function synthesiseOverridePatches(
       return m !== undefined && matcherMatches(m, node.name, node.version)
     })) continue
     const overrideKey = `${node.name}@npm:${node.version}`
-    const sourcePath = patchPathOfResolution(node.resolution) ?? `./.lockfile-patches/${node.patch}.patch`
+    const sourcePath = patchPathOfResolution(graph.tarballOf(node.id)?.nativeResolution) ?? `./.lockfile-patches/${node.patch}.patch`
     const encodedSpec = `${encodeURIComponent(node.name)}@npm%3A${encodeURIComponent(node.version)}`
     out[overrideKey] = `patch:${encodedSpec}#${sourcePath}`
   }
@@ -2340,9 +2338,9 @@ function synthesiseOverridePatches(
 
 // Extract the workspace-relative patch path из a yarn-berry-style
 // `@patch:<spec>#<path>::version=…` resolution string. Cross-format
-// conversion path: yarn-berry parse populates node.resolution с the
-// patch locator; pnpm stringify reuses the same workspace path so the
-// emitted lockfile round-trips к the source patch bytes.
+// conversion path: yarn-berry parse populates the per-tarball
+// `nativeResolution` с the patch locator; pnpm stringify reuses the same
+// workspace path so the emitted lockfile round-trips к the source patch bytes.
 function patchPathOfResolution(resolution: string | undefined): string | undefined {
   if (resolution === undefined) return undefined
   const patchIdx = resolution.indexOf('@patch:')

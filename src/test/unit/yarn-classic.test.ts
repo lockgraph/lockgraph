@@ -322,14 +322,15 @@ describe('yarn-classic — modify', () => {
         name: 'debug',
         version: '4.4.1',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/debug/-/debug-4.4.1.tgz#0000000000000000000000000000000000000000',
       })
+      m.setTarball({ name: 'debug', version: '4.4.1' }, { nativeResolution: 'https://registry.yarnpkg.com/debug/-/debug-4.4.1.tgz#0000000000000000000000000000000000000000' })
     })
     const reparsed = parse(stringify(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(result.applied).toEqual([
       { kind: 'node-added', subject: 'debug@4.4.1' },
+      { kind: 'tarball-set', subject: 'debug@4.4.1' },
     ])
   })
 
@@ -426,9 +427,9 @@ describe('yarn-classic — modify', () => {
         name: 'peer-consumer',
         version: '1.0.0',
         peerContext: ['react@18.2.0'],
-        resolution: 'https://registry.yarnpkg.com/peer-consumer/-/peer-consumer-1.0.0.tgz#1111111111111111111111111111111111111111',
       })
       m.addEdge('peer-consumer@1.0.0(react@18.2.0)', 'react@18.2.0', 'peer', { range: '^18.2.0' })
+      m.setTarball({ name: 'peer-consumer', version: '1.0.0' }, { nativeResolution: 'https://registry.yarnpkg.com/peer-consumer/-/peer-consumer-1.0.0.tgz#1111111111111111111111111111111111111111' })
     })
     const flattened = original.mutate(m => {
       m.addNode({
@@ -436,8 +437,8 @@ describe('yarn-classic — modify', () => {
         name: 'peer-consumer',
         version: '1.0.0',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/peer-consumer/-/peer-consumer-1.0.0.tgz#1111111111111111111111111111111111111111',
       })
+      m.setTarball({ name: 'peer-consumer', version: '1.0.0' }, { nativeResolution: 'https://registry.yarnpkg.com/peer-consumer/-/peer-consumer-1.0.0.tgz#1111111111111111111111111111111111111111' })
     }).graph
     const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
     const reparsed = parse(lockfile)
@@ -459,6 +460,7 @@ describe('yarn-classic — modify', () => {
     expect(result.applied).toEqual([
       { kind: 'node-added', subject: 'peer-consumer@1.0.0(react@18.2.0)' },
       { kind: 'edge-added', subject: { src: 'peer-consumer@1.0.0(react@18.2.0)', dst: 'react@18.2.0', kind: 'peer' } },
+      { kind: 'tarball-set', subject: 'peer-consumer@1.0.0' },
     ])
   })
 
@@ -541,18 +543,16 @@ describe('yarn-classic — modify', () => {
         name: 'typescript',
         version: '5.4.5',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000',
       })
-      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: sri(sriOf('typescript-bare')) })
+      m.setTarball({ name: 'typescript', version: '5.4.5' }, { integrity: sri(sriOf('typescript-bare')), nativeResolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000' })
       m.addNode({
         id: patchedId,
         name: 'typescript',
         version: '5.4.5',
         peerContext: [],
         patch,
-        resolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000',
       })
-      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: sri(sriOf('typescript-patched')) })
+      m.setTarball({ name: 'typescript', version: '5.4.5', patch }, { integrity: sri(sriOf('typescript-patched')), nativeResolution: 'https://registry.yarnpkg.com/typescript/-/typescript-5.4.5.tgz#0000000000000000000000000000000000000000' })
     })
 
     const { lockfile, diagnostics } = stringifyWithDiagnostics(result.graph)
@@ -675,10 +675,9 @@ describe('yarn-classic — optimize', () => {
         name: 'orphan',
         version: '9.9.9',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/orphan/-/orphan-9.9.9.tgz#0000000000000000000000000000000000000000',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
-      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('sha512-orphan') })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('sha512-orphan'), nativeResolution: 'https://registry.yarnpkg.com/orphan/-/orphan-9.9.9.tgz#0000000000000000000000000000000000000000' })
     }).graph
   }
 
@@ -690,19 +689,17 @@ describe('yarn-classic — optimize', () => {
         name: 'cycle-a',
         version: '1.0.0',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/cycle-a/-/cycle-a-1.0.0.tgz#1111111111111111111111111111111111111111',
       })
       m.addNode({
         id: 'cycle-b@1.0.0',
         name: 'cycle-b',
         version: '1.0.0',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/cycle-b/-/cycle-b-1.0.0.tgz#2222222222222222222222222222222222222222',
       })
       m.addEdge('cycle-a@1.0.0', 'cycle-b@1.0.0', 'dep', { range: '1.0.0' })
       m.addEdge('cycle-b@1.0.0', 'cycle-a@1.0.0', 'dep', { range: '1.0.0' })
-      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-a') })
-      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-b') })
+      m.setTarball({ name: 'cycle-a', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-a'), nativeResolution: 'https://registry.yarnpkg.com/cycle-a/-/cycle-a-1.0.0.tgz#1111111111111111111111111111111111111111' })
+      m.setTarball({ name: 'cycle-b', version: '1.0.0' }, { integrity: mkIntegrity('sha512-cycle-b'), nativeResolution: 'https://registry.yarnpkg.com/cycle-b/-/cycle-b-1.0.0.tgz#2222222222222222222222222222222222222222' })
     }).graph
   }
 
@@ -768,7 +765,6 @@ describe('yarn-classic — optimize', () => {
         name: 'orphan-no-tarball',
         version: '9.9.9',
         peerContext: [],
-        resolution: 'https://registry.yarnpkg.com/orphan-no-tarball/-/orphan-no-tarball-9.9.9.tgz#3333333333333333333333333333333333333333',
       })
       m.addEdge('orphan-no-tarball@9.9.9', 'orphan-no-tarball@9.9.9', 'dep', { range: '9.9.9' })
     }).graph

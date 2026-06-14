@@ -306,25 +306,26 @@ function buildLegacyNodeEntry(
   if (node.version !== undefined) entry.version = node.version
 
   const tarball = ctx.graph.tarballOf(node.id)
+  const native = tarball?.nativeResolution
   // npm-2 stores the package URL in the `packages` block's `resolved` field
   // and mirrors it in the legacy `dependencies` block too. The graph holds
-  // the URL via `node.resolution`; the npm-N parser sometimes leaves it
-  // unset (URL lives only on the on-disk `resolved` slot). Recover via the
-  // npm-2 mirror sidecar when available. ADR-0014 §4.F3 cross-format
+  // the URL via the per-tarball `nativeResolution`; the npm-N parser sometimes
+  // leaves it unset (URL lives only on the on-disk `resolved` slot). Recover via
+  // the npm-2 mirror sidecar when available. ADR-0014 §4.F3 cross-format
   // fallback: derive from canonical resolution as last resort.
   const sourceResolved = sidecarResolvedFor(ctx, node)
     ?? deriveLegacyResolvedFromCanonical(tarball?.resolution)
-  if (node.resolution !== undefined) {
+  if (native !== undefined) {
     // For git entries the resolution itself becomes the `version` field
     // (per the npm-2 legacy mirror fixture) and `from:` records the original
     // request spec.
-    const looksLikeGit = /^git[+@]/.test(node.resolution)
+    const looksLikeGit = /^git[+@]/.test(native)
     if (looksLikeGit) {
-      entry.version = node.resolution
+      entry.version = native
       const fromSpec = synthesizeFromSpec(ctx, node)
       if (fromSpec !== undefined) entry.from = fromSpec
     } else {
-      entry.resolved = node.resolution
+      entry.resolved = native
     }
   } else if (sourceResolved !== undefined) {
     // Same git-vs-tarball discrimination on the recovered URL.

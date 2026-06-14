@@ -217,7 +217,6 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
           version,
           peerContext: [],
         }
-        if (resolved !== undefined) node.resolution = resolved
         // ADR-0032 — carry the slot on the Node so the seal re-derives the id.
         if (source !== undefined) node.source = source
         builder.addNode(node)
@@ -226,8 +225,10 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
           const integrity = parseSri(entry.integrity, 'sri')
           if (!isEmptyIntegrity(integrity)) payload.integrity = integrity
         }
-        // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL.
+        // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL +
+        // ADR-0013 PM-native verbatim sidecar (per-tarball).
         if (resolved !== undefined) {
+          payload.nativeResolution = resolved
           const canonical = parseResolutionRecipe(resolved, { sourceKind: 'npm-resolved' })
           if (canonical.type === 'unknown') {
             diagnostics.push({
@@ -861,9 +862,9 @@ function buildEntry(
   // parsed as a URL (preserving the parse-time shape per ADR-0021 §A.npm-1);
   // otherwise the URL goes under `resolved`.
   const tarball = graph.tarballOf(node.id)
-  // ADR-0014 §4.F3 cross-format fallback: when PM-native `node.resolution`
+  // ADR-0014 §4.F3 cross-format fallback: when PM-native `nativeResolution`
   // is absent (cross-format input), derive from canonical.
-  const resolutionStr = node.resolution ?? deriveResolvedFromCanonical(tarball?.resolution)
+  const resolutionStr = tarball?.nativeResolution ?? deriveResolvedFromCanonical(tarball?.resolution)
   if (resolutionStr !== undefined) {
     if (/^(git[+:]|github:)/.test(resolutionStr)) {
       entry.version = resolutionStr

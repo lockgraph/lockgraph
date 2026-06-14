@@ -30,7 +30,6 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
       version: '1.0.0',
       peerContext: [],
       patch,
-      resolution: 'https://registry.yarnpkg.com/pkg/-/pkg-1.0.0.tgz#0000000000000000000000000000000000000000',
     })
     builder.setTarball(
       {
@@ -38,7 +37,7 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
         version: '1.0.0',
         patch,
       },
-      { integrity: PKG_SRI },
+      { integrity: PKG_SRI, nativeResolution: 'https://registry.yarnpkg.com/pkg/-/pkg-1.0.0.tgz#0000000000000000000000000000000000000000' },
     )
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-classic', sourceGraph)
@@ -68,7 +67,6 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
       version: '1.0.0',
       peerContext: [],
       patch,
-      resolution: 'https://registry.yarnpkg.com/pkg/-/pkg-1.0.0.tgz#0000000000000000000000000000000000000000',
     })
     builder.setTarball(
       {
@@ -76,7 +74,7 @@ describe('interop adversarial §8.2 — sentinel propagation', () => {
         version: '1.0.0',
         patch,
       },
-      { integrity: PKG_SRI },
+      { integrity: PKG_SRI, nativeResolution: 'https://registry.yarnpkg.com/pkg/-/pkg-1.0.0.tgz#0000000000000000000000000000000000000000' },
     )
     const sourceGraph = builder.seal()
     const emitted = stringifyFormat('yarn-classic', sourceGraph)

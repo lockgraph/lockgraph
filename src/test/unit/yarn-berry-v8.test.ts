@@ -308,7 +308,6 @@ describe('yarn-berry-v8 — modify', () => {
         name: 'debug',
         version: '1.0.0',
         peerContext: [],
-        resolution: 'debug@npm:1.0.0',
       })
     })
     const reparsed = parseV8(stringifyV8(result.graph))
@@ -336,7 +335,6 @@ describe('yarn-berry-v8 — modify', () => {
         ...current!,
         id: 'ms@2.1.4',
         version: '2.1.4',
-        resolution: 'ms@npm:2.1.4',
       })
     })
     const reparsed = parseV8(stringifyV8(result.graph))
@@ -512,7 +510,6 @@ describe('yarn-berry-v8 — optimize', () => {
         name: 'orphan',
         version: '9.9.9',
         peerContext: [],
-        resolution: 'orphan@npm:9.9.9',
       })
       m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: 'npm:9.9.9' })
       m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: mkIntegrity('10c0/orphan') })
