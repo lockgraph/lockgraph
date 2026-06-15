@@ -1,4 +1,4 @@
-// Phase D-B — `fsCache` (yarn-berry filesystem CacheAdapter) unit suite.
+// Phase D-B — `yarnBerryCache` (yarn-berry filesystem CacheAdapter) unit suite.
 //
 // All tests construct a temp directory and populate it with empty
 // `.zip` files matching the yarn-berry cache filename convention. No
@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { fsCache } from '../../main/ts/index.ts'
+import { yarnBerryCache } from '../../main/ts/index.ts'
 
 function fixtureCache(setup: (cacheDir: string) => void): string {
   const cacheDir = mkdtempSync(resolve(tmpdir(), 'lockfile-fscache-'))
@@ -34,12 +34,12 @@ function freshCache(setup: (cacheDir: string) => void = () => {}): string {
   return cacheDir
 }
 
-describe('registry/cache — fsCache packument()', () => {
+describe('registry/cache — yarnBerryCache packument()', () => {
   it('returns a Packument for a single matched zip', async () => {
     const cacheDir = freshCache(dir => {
       touchZip(dir, 'lodash-npm-4.17.21-c8c0e3a1bc-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('lodash')
     expect(packument).toBeDefined()
@@ -59,7 +59,7 @@ describe('registry/cache — fsCache packument()', () => {
       touchZip(dir, 'lodash-npm-4.17.20-bbbbbbbbbb-10c0.zip')
       touchZip(dir, 'lodash-npm-4.17.21-cccccccccc-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('lodash')
     expect(packument).toBeDefined()
@@ -75,7 +75,7 @@ describe('registry/cache — fsCache packument()', () => {
       touchZip(dir, '@types-node-npm-20.0.0-abcdef1234-10c0.zip')
       touchZip(dir, '@types-node-npm-22.0.0-aaaaaaaaaa-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('@types/node')
     expect(packument).toBeDefined()
@@ -91,14 +91,14 @@ describe('registry/cache — fsCache packument()', () => {
     const cacheDir = freshCache(dir => {
       touchZip(dir, 'react-npm-18.0.0-abcdef1234-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('lodash')
     expect(packument).toBeUndefined()
   })
 
   it('returns undefined when the cache folder does not exist', async () => {
-    const cache = fsCache({ cacheFolder: resolve(tmpdir(), 'lockfile-fscache-missing-' + Date.now()) })
+    const cache = yarnBerryCache({ cacheFolder: resolve(tmpdir(), 'lockfile-fscache-missing-' + Date.now()) })
     const packument = await cache.packument('lodash')
     expect(packument).toBeUndefined()
   })
@@ -108,7 +108,7 @@ describe('registry/cache — fsCache packument()', () => {
     const cacheDir = freshCache(dir => {
       touchZip(dir, 'lodash-npm-4.17.21-abcdef1234.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('lodash')
     expect(packument).toBeDefined()
@@ -119,7 +119,7 @@ describe('registry/cache — fsCache packument()', () => {
     const cacheDir = freshCache(dir => {
       touchZip(dir, 'somepkg-npm-1.0.0-beta.1-abcdef1234-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('somepkg')
     expect(packument).toBeDefined()
@@ -134,7 +134,7 @@ describe('registry/cache — fsCache packument()', () => {
       touchZip(dir, 'lodash.txt')                              // bad: not zip
       writeFileSync(resolve(dir, 'random.zip'), Buffer.alloc(0)) // bad: no slug
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const packument = await cache.packument('lodash')
     expect(packument).toBeDefined()
@@ -146,7 +146,7 @@ describe('registry/cache — fsCache packument()', () => {
       touchZip(dir, 'lodash-npm-4.17.21-cccccccccc-10c0.zip')
       touchZip(dir, 'lodash-es-npm-4.17.21-dddddddddd-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const lodash = await cache.packument('lodash')
     expect(Object.keys(lodash!.versions)).toEqual(['4.17.21'])
@@ -156,7 +156,7 @@ describe('registry/cache — fsCache packument()', () => {
   })
 })
 
-describe('registry/cache — fsCache tarball()', () => {
+describe('registry/cache — yarnBerryCache tarball()', () => {
   it('returns the zip bytes on cache hit', async () => {
     const cacheDir = freshCache(dir => {
       writeFileSync(
@@ -164,7 +164,7 @@ describe('registry/cache — fsCache tarball()', () => {
         Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xde, 0xad, 0xbe, 0xef]),
       )
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const bytes = await cache.tarball!('lodash', '4.17.21')
     expect(bytes).toBeDefined()
@@ -179,7 +179,7 @@ describe('registry/cache — fsCache tarball()', () => {
     const cacheDir = freshCache(dir => {
       touchZip(dir, 'react-npm-18.0.0-abcdef1234-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const bytes = await cache.tarball!('lodash', '4.17.21')
     expect(bytes).toBeUndefined()
@@ -189,7 +189,7 @@ describe('registry/cache — fsCache tarball()', () => {
     const cacheDir = freshCache(dir => {
       touchZip(dir, 'lodash-npm-4.16.0-aaaaaaaaaa-10c0.zip')
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const bytes = await cache.tarball!('lodash', '4.17.21')
     expect(bytes).toBeUndefined()
@@ -202,7 +202,7 @@ describe('registry/cache — fsCache tarball()', () => {
         Buffer.from([0xca, 0xfe]),
       )
     })
-    const cache = fsCache({ cacheFolder: cacheDir })
+    const cache = yarnBerryCache({ cacheFolder: cacheDir })
 
     const bytes = await cache.tarball!('@types/node', '20.0.0')
     expect(bytes).toBeDefined()
@@ -231,7 +231,7 @@ describe('registry/cache — cache-folder probe order', () => {
     })
     process.env.YARN_CACHE_FOLDER = envDir
 
-    const cache = fsCache({ cacheFolder: explicitDir })
+    const cache = yarnBerryCache({ cacheFolder: explicitDir })
     const packument = await cache.packument('lodash')
     expect(Object.keys(packument!.versions)).toEqual(['1.0.0'])
   })
@@ -244,7 +244,7 @@ describe('registry/cache — cache-folder probe order', () => {
     // Simulate a stale workspace-root cache that should be ignored.
     process.env.YARN_CACHE_FOLDER = envDir
 
-    const cache = fsCache({ workspaceRoot })
+    const cache = yarnBerryCache({ workspaceRoot })
     const packument = await cache.packument('lodash')
     expect(Object.keys(packument!.versions)).toEqual(['2.0.0'])
   })
@@ -260,7 +260,7 @@ describe('registry/cache — cache-folder probe order', () => {
     mkdirSync(cacheDir, { recursive: true })
     touchZip(cacheDir, 'lodash-npm-3.0.0-cccccccccc-10c0.zip')
 
-    const cache = fsCache({ workspaceRoot })
+    const cache = yarnBerryCache({ workspaceRoot })
     const packument = await cache.packument('lodash')
     expect(Object.keys(packument!.versions)).toEqual(['3.0.0'])
   })
@@ -279,7 +279,7 @@ describe('registry/cache — cache-folder probe order', () => {
       process.env.HOME = fakeHome
       delete process.env.USERPROFILE
 
-      const cache = fsCache()
+      const cache = yarnBerryCache()
       const packument = await cache.packument('lodash')
       expect(Object.keys(packument!.versions)).toEqual(['4.0.0'])
     } finally {

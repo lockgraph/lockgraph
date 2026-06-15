@@ -151,11 +151,14 @@ const KIND_TO_WORD: Record<EdgeKind, string> = {
   peer:     'peer',
   bundled:  'bundled',
 }
-// Null-prototype so a kind word that happens to name an Object.prototype member
-// (`constructor` / `toString` / `__proto__` / `hasOwnProperty`) resolves to
-// `undefined` and is REJECTED on parse, instead of inheriting a prototype
+// Null-prototype lookup map: a key that happens to name an Object.prototype
+// member (`constructor` / `toString` / `__proto__` / `hasOwnProperty`) resolves
+// to `undefined` and is REJECTED on parse, instead of inheriting a prototype
 // function and silently passing the `=== undefined` guard.
-const WORD_TO_KIND: Record<string, EdgeKind> = Object.assign(Object.create(null), {
+const nullProtoMap = <V>(entries: Record<string, V>): Record<string, V> =>
+  Object.assign(Object.create(null), entries)
+
+const WORD_TO_KIND: Record<string, EdgeKind> = nullProtoMap<EdgeKind>({
   dep:     'dep',
   dev:     'dev',
   opt:     'optional',
@@ -189,9 +192,7 @@ const ORIGIN_TO_MARKER: Record<HashOrigin, string> = {
   registry:       'r',
   recomputed:     'c',
 }
-// Null-prototype so a marker that names an Object.prototype member can never
-// inherit a function and slip past the `=== undefined` reject on parse.
-const MARKER_TO_ORIGIN: Record<string, HashOrigin> = Object.assign(Object.create(null), {
+const MARKER_TO_ORIGIN: Record<string, HashOrigin> = nullProtoMap<HashOrigin>({
   s: 'sri',
   z: 'berry-zip',
   r: 'registry',

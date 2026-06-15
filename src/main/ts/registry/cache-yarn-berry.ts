@@ -1,4 +1,4 @@
-// Filesystem CacheAdapter — Phase D-B (yarn-berry only; v1).
+// yarn-berry `.yarn/cache/` CacheAdapter — Phase D-B (v1).
 //
 // Reads a yarn-berry `.yarn/cache/` folder and synthesises thin
 // `Packument`s purely from the on-disk zip filenames. No zip unpacking,
@@ -30,7 +30,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { CacheAdapter, Packument, PackumentVersion } from './types.ts'
 
-export interface FsCacheOptions {
+export interface YarnBerryCacheOptions {
   /**
    * Cache folder. If absent, probe in order:
    *   1. process.env.YARN_CACHE_FOLDER
@@ -56,7 +56,7 @@ export interface FsCacheOptions {
 const CACHE_ENTRY_RE =
   /^(?<rest>.+)-(?<hash>[a-f0-9]{10})(?:-(?<cacheKey>[a-z0-9]+))?\.zip$/
 
-export function fsCache(opts: FsCacheOptions = {}): CacheAdapter {
+export function yarnBerryCache(opts: YarnBerryCacheOptions = {}): CacheAdapter {
   const cacheFolder = resolveCacheFolder(opts)
 
   return {
@@ -110,7 +110,7 @@ interface CacheEntry {
   readonly version:  string
 }
 
-function resolveCacheFolder(opts: FsCacheOptions): string {
+function resolveCacheFolder(opts: YarnBerryCacheOptions): string {
   if (opts.cacheFolder !== undefined) return opts.cacheFolder
 
   const envFolder = process.env.YARN_CACHE_FOLDER
