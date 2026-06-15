@@ -276,13 +276,16 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
     // the integrity column carries the FULL `;`-joined multiset with origin
-    // markers (s=sri, z=berry-zip, r=registry), in source order.
+    // markers (s=sri, z=berry-zip, r=registry), in source order. The berry
+    // checksum-cache-key (`10c0`) folds INTO the berry-zip z-member as
+    // `z<cacheKey>/<algo>-<digest>` (ADR-0031) — NOT a separate F slot.
     const row = text.split('\n').find(l => l.startsWith('lodash\t'))!
     const integrityCol = row.split('\t')[3]!
     expect(integrityCol).toBe(
-      `ssha1-${'1'.repeat(40)};ssha512-${'2'.repeat(128)};zsha512-${'3'.repeat(128)};rsha512-${'4'.repeat(128)}`,
+      `ssha1-${'1'.repeat(40)};ssha512-${'2'.repeat(128)};z10c0/sha512-${'3'.repeat(128)};rsha512-${'4'.repeat(128)}`,
     )
-    // explicit: the reconstructed payload equals the original verbatim
+    // explicit: the reconstructed payload equals the original verbatim (the
+    // cacheKey reattaches from the z-member into berryChecksumCacheKey).
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     expect(g2.tarball({ name: 'lodash', version: '4.17.21' })).toEqual(payload)
   })
@@ -352,9 +355,11 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     expect(row).toContain(`\tpatch=${patch}`)
     expect(row).toContain(`\tsrc=${src}`)
     expect(row.indexOf('\tpatch=')).toBeLessThan(row.indexOf('\tsrc='))
-    // the F row is keyed by the FULL TarballKey (both discriminators) and flattens
-    // the non-canonical git resolution union under `resolution.*` dot-path slots.
-    const fRow = text.split('\n').find(l => l.startsWith(`is-git@6.3.1+patch=${patch}+src=${src}\t`))!
+    // the F row is keyed by the representative NODE INDEX (the sole is-git node,
+    // idx 0) and flattens the non-canonical git resolution union under
+    // `resolution.*` dot-path slots. The full TarballKey (both discriminators) is
+    // re-derived from that node's name/version/patch/src on parse.
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
     expect(fRow).toBeDefined()
     expect(fRow).toContain('\tresolution.type=git')
     // the both-slots TarballKey re-keys the payload exactly on parse
@@ -609,8 +614,8 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     expect(row.split('\t')[3]).toBe(`usha1-${sha1}`)
     // both the canonical bare {type:'tarball'} payload resolution AND the
     // nativeResolution (it rides the u-member) are omitted from F, so this
-    // tarball's residual is empty → NO F row.
-    expect(text.split('\n').some(l => l.startsWith('JSV@4.0.2\t'))).toBe(false)
+    // tarball's residual is empty → the F section has zero rows (`F 0`).
+    expect(text).toContain('\nF 0\n')
     // and it all reconstructs identity-exact (native sidecar + payload).
     const g2 = parse(stringify(g, { generatedAt: PINNED }))
     expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.nativeResolution).toBe(`${url}#${sha1}`)
@@ -619,10 +624,16 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     expect(g2.tarball({ name: 'JSV', version: '4.0.2' })!.integrity).toBeUndefined()
   })
 
-  it('berry npm locator nativeResolution → `nativeResolution.berry=` F marker, recomposed on parse', () => {
+  it('canonical berry npm locator nativeResolution stored VERBATIM by lockgraph (recompose moved to the berry adapter)', () => {
     const b = newBuilder()
     const id = serializeNodeId('react', '18.0.0', [])
-    // payload.nativeResolution byte-equals the recomposed berry locator `react@npm:18.0.0`.
+    // payload.nativeResolution byte-equals the canonical berry locator
+    // `react@npm:18.0.0`. The lockgraph layer NO LONGER special-cases this
+    // (the old valueless `nativeResolution.berry=` marker is gone): a native
+    // present on the model is stored VERBATIM. The OMISSION of a canonical
+    // berry native is the berry ADAPTER's job (it never puts one on the model),
+    // verified in the yarn-berry suites — so a native that DOES reach lockgraph
+    // round-trips byte-faithfully as a verbatim F slot.
     b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [] })
     b.setTarball({ name: 'react', version: '18.0.0' }, {
       integrity: sri('sha512-' + 'a'.repeat(86) + '=='),
@@ -630,12 +641,13 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
-    // the F row carries the valueless berry MARKER `nativeResolution.berry=`,
-    // NOT the verbatim `nativeResolution=react@npm:18.0.0`.
-    const fRow = text.split('\n').find(l => l.startsWith('react@18.0.0\t'))!
-    expect(fRow).toContain('\tnativeResolution.berry=')
-    expect(fRow).not.toContain('nativeResolution=react@npm')
-    // the N row no longer carries any res token.
+    // the F row (keyed by the representative NODE INDEX — the sole node, idx 0)
+    // carries the VERBATIM `nativeResolution=react@npm:18.0.0`, and there is NO
+    // berry marker slot anywhere.
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
+    expect(fRow).toContain('\tnativeResolution=react@npm:18.0.0')
+    expect(fRow).not.toContain('nativeResolution.berry')
+    // the N row carries no res token.
     const row = rowOf(text, 'react')
     expect(row.split('\t')).not.toContain('res')
     expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'react', version: '18.0.0' })!.nativeResolution).toBe('react@npm:18.0.0')
@@ -657,7 +669,8 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     const text = assertRoundTripIdentity(g)
     const row = rowOf(text, 'left-pad')
     expect(row).not.toContain('usha1-')          // fragment NOT hijacked into integrity
-    const fRow = text.split('\n').find(l => l.startsWith('left-pad@1.3.0\t'))!
+    // F row keyed by the representative NODE INDEX (the sole node, idx 0).
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
     expect(fRow).toContain(`\tnativeResolution=${res}`)
     expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'left-pad', version: '1.3.0' })!.nativeResolution).toBe(res)
   })
@@ -697,31 +710,43 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     b.setTarball({ name: 'x', version: '1.0.0' }, { resolution })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
-    // the F row (keyed by the bare TarballKey `x@1.0.0`) flattens the union.
-    const fRow = text.split('\n').find(l => l.startsWith('x@1.0.0\t'))!
+    // the F row (keyed by the representative NODE INDEX — the sole node, idx 0)
+    // flattens the union.
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
     expect(fRow).toBeDefined()
     expect(fRow).toContain('\tresolution.type=tarball')
     expect(fRow).toContain('\tresolution.hostingProvider=github')
     expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'x', version: '1.0.0' })!.resolution).toEqual(resolution)
   })
 
-  it('berryChecksumCacheKey rides the dedicated F ck= slot (out of payload JSON) and round-trips', () => {
+  it('berryChecksumCacheKey folds INTO the berry-zip integrity z-member (z<cacheKey>/…) and round-trips', () => {
     const b = newBuilder()
     const id = serializeNodeId('y', '2.0.0', [])
     b.addNode({ id, name: 'y', version: '2.0.0', peerContext: [] })
+    // The realistic combination: a berry zip-cache checksum (berry-zip origin)
+    // ALWAYS accompanies its `<cacheKey>/` prefix — they are one value. The
+    // cacheKey now folds into that hash's z-member as `z<cacheKey>/<algo>-<digest>`
+    // (ADR-0031); there is NO separate `ck=` F slot anymore. (A cacheKey present
+    // with NO berry-zip member is a model anomaly that does not occur in the
+    // corpus — `parseBerryChecksum` only sets the cacheKey alongside a berry-zip
+    // digest — and the removed `ck=` slot no longer carries it.)
+    const digest = 'c'.repeat(128)
     b.setTarball({ name: 'y', version: '2.0.0' }, {
-      integrity: sri('sha512-' + 'c'.repeat(86) + '=='),
+      integrity: { hashes: [{ algorithm: 'sha512', digest, origin: 'berry-zip' }] },
       berryChecksumCacheKey: '10c0',
     })
     const g = b.seal()
     const text = assertRoundTripIdentity(g)
-    // `ck` rides the severable F section now, NOT the N row.
+    // the cacheKey rides the N-row integrity column's z-member, NOT a slot.
     const row = rowOf(text, 'y')
+    expect(row.split('\t')[3]).toBe(`z10c0/sha512-${digest}`)
     expect(row).not.toContain('ck=')
-    const fRow = text.split('\n').find(l => l.startsWith('y@2.0.0\t'))!
-    expect(fRow).toContain('\tck=10c0')
-    expect(fRow).not.toContain('berryChecksumCacheKey') // rides the dedicated ck= slot, never a field slot
-    expect(parse(stringify(g, { generatedAt: PINNED })).tarball({ name: 'y', version: '2.0.0' })!.berryChecksumCacheKey).toBe('10c0')
+    // no F row at all: the only facts (berry-zip integrity + cacheKey) both
+    // ride the N row, so the residual is empty → the F section has zero rows.
+    expect(text).toContain('\nF 0\n')
+    const g2 = parse(stringify(g, { generatedAt: PINNED }))
+    expect(g2.tarball({ name: 'y', version: '2.0.0' })!.berryChecksumCacheKey).toBe('10c0')
+    expect(g2.tarball({ name: 'y', version: '2.0.0' })!.integrity).toEqual({ hashes: [{ algorithm: 'sha512', digest, origin: 'berry-zip' }] })
   })
 
   // --- PART B: the 8 confirmed bugs -----------------------------------------
@@ -989,8 +1014,10 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     // broken `L` line must both fail with a located LockfileError, never a raw
     // SyntaxError.
     const base = stringify(buildMinimal(), { generatedAt: PINNED })
-    // (a) inject an F section with a malformed slot (no `=`) before EOF.
-    const badF = base.replace(/F 0\n$/, 'F 1\npkg@1.0.0\tnotaslot\n')
+    // (a) inject an F section with a malformed slot (no `=`) before EOF. Field 1 is
+    // the representative node index (0 — a valid ref so parse reaches the slot),
+    // then the malformed slot `notaslot`.
+    const badF = base.replace(/F 0\n$/, 'F 1\n0\tnotaslot\n')
     expect(badF).not.toBe(base) // guard: the F 0 region header was present and rewritten
     expectParseFailed(badF)
     // (b) an L line with broken JSON (append after the E region, before the F region)

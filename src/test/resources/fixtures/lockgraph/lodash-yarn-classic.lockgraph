@@ -2,7 +2,6 @@
 schema 1.0
 generatedAt 2026-01-01T00:00:00Z
 generator @antongolub/lockfile@0.0.0
-carries resolution
 R 1
 npm	https://registry.yarnpkg.com
 N 544

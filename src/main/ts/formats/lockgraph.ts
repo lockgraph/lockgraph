@@ -21,7 +21,7 @@
 // DOCUMENT LAYOUT (see spec/formats/lockgraph.draft.md for the normative grammar):
 //
 //   META       — provenance, NOT hashed. `@lockgraph 1`, `schema 1.0`,
-//                `generatedAt` (RFC-3339 UTC), the generator id, `carries`. No checksum.
+//                `generatedAt` (RFC-3339 UTC), the generator id. No checksum.
 //   R <n>      — registries/sources, one `<type>\t<url>` per distinct node
 //                source, content-sorted by (type, url), referenced as r0, r1, …
 //                NORMATIVE: parse reads R back to recompose canonical npm
@@ -34,13 +34,18 @@
 //                slots ws=/patch=/src=/peer= (present only when set; NO
 //                `payload=` — the residual artifact metadata moved to the F
 //                section). `src=` stores `Node.source` verbatim (NOT re-derived).
-//                The PM-native resolution sidecar is NO LONGER on the N row — it
-//                moved to the F section (`nativeResolution`). The ONLY native
-//                fragment that still rides the N row is the `#<sha1>` of a
-//                yarn-classic `<canonical-url>#<sha1>` native: it is split into a
-//                trailing `u`-member of the integrity column so the URL itself
-//                recomposes from the R row. A canonical {type:'tarball'} payload
-//                resolution is likewise omitted and recomposed from R.
+//                The PM-native resolution sidecar is NO LONGER on the N row — a
+//                verbatim native moved to the F section (`nativeResolution`),
+//                while a canonical berry npm locator is recomposed by the berry
+//                adapter (never stored). The ONLY native fragment that still
+//                rides the N row is the `#<sha1>` of a yarn-classic
+//                `<canonical-url>#<sha1>` native: it is split into a trailing
+//                `u`-member of the integrity column so the URL itself recomposes
+//                from the R row. The berry checksum-cache-key (ADR-0031) likewise
+//                rides the integrity column, folded into its `berry-zip`
+//                z-member as `z<cacheKey>/<algo>-<digest>`. A canonical
+//                {type:'tarball'} payload resolution is omitted and recomposed
+//                from R.
 //   E <n>      — one edge per row, `src\tdst\t<kind>\t<descriptor>` then
 //                optional omittable slots (a flag cluster `o`/`w`/`ow`, then
 //                `alias=` / `rv=` / `sp=`), sorted (src, dst, kind, alias). The
@@ -57,9 +62,10 @@
 //                whose residual TarballPayload carries ≥1 artifact facet, keyed by
 //                the FULL TarballKey (positional field 1) then fully-flat dot-path
 //                `key=value` slots (license/deprecated/cpu/os/libc/bundled/engines/
-//                bin/funding + any non-recomposable resolution union +
-//                nativeResolution + ck). NO JSON. Cut it → identity still
-//                round-trips (only fidelity degrades).
+//                bin/funding + any non-recomposable resolution union + a verbatim
+//                nativeResolution). NO JSON. (`berryChecksumCacheKey` is NOT an F
+//                slot — it folds into the N-row integrity column's z-member.) Cut
+//                it → identity still round-trips (only fidelity degrades).
 //
 // There is NO checksum line and NO seal — integrity of the GRAPH is structural
 // (parse reconstructs + seals the model; a mangled body fails the seal coherence
@@ -365,8 +371,9 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
     // trailing `u`-member so the URL itself recomposes from R, and the F-row
     // omits the verbatim string entirely (case decided in flattenToSlots). When
     // the native is the canonical URL + `#<sha1>` shape, peel the fragment here;
-    // EVERYTHING ELSE (berry locator → F berry-marker, verbatim → F verbatim)
-    // is handled in the F section. A node with NO native emits no fragment.
+    // EVERYTHING ELSE (a verbatim native → F verbatim) is handled in the F
+    // section. (Canonical berry npm locators are never stored — the berry adapter
+    // recomposes them at emit.) A node with NO native emits no fragment.
     let fragment: string | undefined
     const native = payload?.nativeResolution
     if (native !== undefined && hostedBase !== undefined) {
@@ -380,13 +387,14 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
       escapeTsv(node.name),
       escapeTsv(node.version),
       `r${regIndexByKey.get(regKeyOf(reg))!}`,
-      encodeIntegrityColumn(payload?.integrity, fragment),
+      encodeIntegrityColumn(payload?.integrity, fragment, payload?.berryChecksumCacheKey),
     ]
     // trailing optional slots, fixed order: ws= patch= src= peer=
-    // (the residual TarballPayload artifact metadata — including ck and
-    // nativeResolution — now lives in the severable F section, keyed by
-    // TarballKey; the N row carries only identity columns + the integrity column,
-    // whose u-member is the sole per-node native fragment).
+    // (the residual TarballPayload artifact metadata — incl. a verbatim
+    // nativeResolution — lives in the severable F section, keyed by TarballKey;
+    // the N row carries only identity columns + the integrity column, whose
+    // u-member is the sole per-node native fragment and whose berry-zip z-member
+    // carries the folded berryChecksumCacheKey).
     if (node.workspacePath !== undefined) cols.push(`ws=${escapeTsv(node.workspacePath)}`)
     if (node.patch !== undefined) cols.push(`patch=${escapeTsv(node.patch)}`)
     if (node.source !== undefined) cols.push(`src=${escapeTsv(node.source)}`)
@@ -451,19 +459,41 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
   // ---- F section — the SEVERABLE per-tarball fidelity region ----------------
   // One row per DISTINCT TarballKey that carries ≥1 residual artifact-metadata
   // facet. The residual is the TarballPayload MINUS the fields that live on the
-  // N row (integrity, berryChecksumCacheKey) and minus the canonical resolution
-  // when it is the bare recomposable 2-key {type:'tarball', url} shape (omitted
-  // and recomposed from R). Everything else is flattened to dot-path key=value
+  // N row (integrity, and berryChecksumCacheKey — folded into the integrity
+  // column's z-member) and minus the canonical resolution when it is the bare
+  // recomposable 2-key {type:'tarball', url} shape (omitted and recomposed from
+  // R), and minus a canonical berry npm locator nativeResolution (recomposed by
+  // the berry adapter). Everything else is flattened to dot-path key=value
   // slots — NO nested JSON. graph.tarballs() already yields keys cmpStr-sorted.
-  const fRows: string[] = []
-  for (const [tarballKey, payload] of graph.tarballs()) {
-    const { name, version } = parseTarballKey(tarballKey)
-    const slots = flattenToSlots(payload, name, version)
-    if (slots.length === 0) continue // empty residual → no row, not counted
-    fRows.push([escapeTsv(tarballKey), ...slots].join('\t'))
+  //
+  // The row is keyed by the REPRESENTATIVE NODE INDEX, not the TarballKey string
+  // (mirrors how edges reference nodes by index): a numeric ref that the N row's
+  // name/version/patch/src already pin, with no redundant key restatement. The
+  // representative of a tarball = the MINIMUM node index among the nodes sharing
+  // its TarballKey (node order is deterministic, so this is byte-stable). Rows are
+  // sorted by that index ascending. NB: a tarball with NO node (a setTarball with
+  // no addNode — only reachable in hand-built graphs, never adapter parsing) has
+  // no representative index and is therefore dropped; the F section stores per-
+  // node fidelity, so a node-less tarball is unrepresentable by design.
+  const minNodeIndexByKey = new Map<TarballKey, number>()
+  for (let i = 0; i < nodes.length; i++) {
+    const key = toTarballKey(tarballKeyInputsOf(nodes[i]!))
+    if (!minNodeIndexByKey.has(key)) minNodeIndexByKey.set(key, i) // nodes already ascending → first = min
   }
+  const fRows: Array<{ repr: number; row: string }> = []
+  for (const [tarballKey, payload] of graph.tarballs()) {
+    const repr = minNodeIndexByKey.get(tarballKey)
+    if (repr === undefined) continue // node-less tarball: no representative index → unrepresentable, dropped
+    // name/version come from the representative node — its inputs DEFINE the key
+    // (toTarballKey of its name/version/patch/src), so they match by construction.
+    const reprNode = nodes[repr]!
+    const slots = flattenToSlots(payload, reprNode.name, reprNode.version)
+    if (slots.length === 0) continue // empty residual → no row, not counted
+    fRows.push({ repr, row: [String(repr), ...slots].join('\t') })
+  }
+  fRows.sort((a, b) => a.repr - b.repr)
   body.push(`F ${fRows.length}`)
-  for (const r of fRows) body.push(r)
+  for (const r of fRows) body.push(r.row)
 
   // ---- META (volatile provenance, NOT hashed) ------------------------------
   const generatedAt = options.generatedAt ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
@@ -473,13 +503,6 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
     `generatedAt ${generatedAt}`,
     `generator ${GENERATOR}`,
   ]
-  // `carries` — the self-describing fidelity envelope: the SORTED union of the
-  // variable detail-facets actually emitted across this graph's nodes/edges/
-  // payloads (see deriveCarries). Auto-derived from the graph → byte-stable for
-  // structurally-equal graphs; provenance-class (NOT part of identity), so parse
-  // ignores it and re-derives it on every emit. Omitted when the set is empty.
-  const carries = deriveCarries(nodes, payloads, edges, hints)
-  if (carries.length > 0) meta.push(`carries ${carries.join(' ')}`)
 
   return [...meta, ...body].join(eol) + eol
 }
@@ -539,10 +562,9 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
         })
       }
     }
-    // generatedAt / generator / carries / unknown: provenance only, ignored.
-    // `carries` (the fidelity envelope) is informational and AUTO-DERIVED at
-    // emit, so parse never reads it to drive parsing — it is re-derived
-    // identically on the next stringify (see § deriveCarries).
+    // generatedAt / generator / unknown: provenance only, ignored. Any unknown or
+    // absent META line is tolerated — META holds no graph facts, so parse never
+    // reads it to drive parsing.
   }
 
   const expectHeader = (letter: string): number => {
@@ -588,6 +610,9 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
     // the `#<sha1hex>` integrity u-member — the per-node native-resolution
     // fragment (canonical-URL native), recomposed into nativeResolution at reattach.
     fragment?: string
+    // the berry checksum-cache-key folded into the integrity column's z-member
+    // (`z<cacheKey>/…`, ADR-0031), reattached as `berryChecksumCacheKey`.
+    cacheKey?: string
     hostedBase?: string
   }
   const parsedNodes: ParsedNode[] = []
@@ -600,7 +625,7 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
     }
     const name = unescapeTsv(nameRaw)
     const nodeVersion = unescapeTsv(versionRaw)
-    const { integrity, fragment } = decodeIntegrityColumn(integrityRaw)
+    const { integrity, fragment, cacheKey } = decodeIntegrityColumn(integrityRaw)
 
     // the node's R row — normative input to the recomposition below
     const regMatch = /^r(\d+)$/.exec(regRef)
@@ -635,13 +660,14 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
     }
 
     // The TarballPayload is assembled in the REATTACH phase (after the F section
-    // is parsed): the F-residual (artifact metadata + nativeResolution + ck,
+    // is parsed): the F-residual (artifact metadata + verbatim nativeResolution,
     // keyed by TarballKey) is merged with this node's N-row-derived part —
-    // integrity and (when present) the integrity u-member `fragment`. The
-    // canonical {type:'tarball'} resolution is recomposed iff the node references
-    // a HOSTED npm row AND the merged residual carries no verbatim `resolution`;
-    // the PM-native `nativeResolution` is recomposed from the F berry-marker / the
-    // N-row `fragment` / the F verbatim slot there too (see assemblePayload).
+    // integrity, the integrity u-member `fragment`, and the integrity z-member
+    // `cacheKey` (→ berryChecksumCacheKey). The canonical {type:'tarball'}
+    // resolution is recomposed iff the node references a HOSTED npm row AND the
+    // merged residual carries no verbatim `resolution`; the PM-native
+    // `nativeResolution` is recomposed from the N-row `fragment` / the F verbatim
+    // slot (see assemblePayload).
 
     // Re-derive the NodeId from the STORED (name, version, peerContext, patch,
     // src) slots exactly as the model does — so seal() re-validates the
@@ -658,7 +684,7 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
     if (patch !== undefined) inputs.patch = patch
     if (source !== undefined) inputs.source = source
 
-    parsedNodes.push({ node, inputs, name, version: nodeVersion, integrity, fragment, hostedBase })
+    parsedNodes.push({ node, inputs, name, version: nodeVersion, integrity, fragment, cacheKey, hostedBase })
     nodeIdByIndex.push(id)
   }
 
@@ -732,21 +758,27 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
   }
 
   // ---- F — the SEVERABLE per-tarball fidelity section ----------------------
-  // `F <n>` then n rows; each row's field 1 is the TarballKey (POSITIONAL, NOT
-  // `=`-split — its `+patch=`/`+src=` are part of the key), the rest are dot-path
-  // slots reconstructed SCHEMA-DRIVEN. No F section at all → every residual is
-  // empty (severability: identity still round-trips). The F map is keyed
-  // independently of nodes, so an orphan F row (no matching node) is tolerated.
+  // `F <n>` then n rows; each row's field 1 is the REPRESENTATIVE NODE INDEX (a
+  // non-negative integer, parsed POSITIONALLY — not `=`-split), the rest are
+  // dot-path slots reconstructed SCHEMA-DRIVEN. The index resolves to a real node
+  // whose computed TarballKey (name/version/patch/source) is the key under which
+  // this row's residual attaches; non-representative peer-virtual siblings find it
+  // via their OWN computed key in the reattach loop below. No F section at all →
+  // every residual is empty (severability: identity still round-trips). With an
+  // index ref the row ALWAYS points to a real node, so orphan F rows cannot exist.
   const fResiduals = new Map<TarballKey, TarballPayload>()
   if (peek() !== undefined && isRegionHeader(peek()!, 'F')) {
     const fCount = expectHeader('F')
     for (let k = 0; k < fCount; k++) {
       const fields = next().split('\t')
-      const keyRaw = fields[0]
-      if (keyRaw === undefined) {
+      const idxRaw = fields[0]
+      if (idxRaw === undefined) {
         throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed F row: ${fields.join('\t')}` })
       }
-      const tarballKey = unescapeTsv(keyRaw) as TarballKey
+      const reprIdx = parseNodeIndex(idxRaw, nCount, 'F row representative')
+      // Resolve the index → that node's COMPUTED TarballKey (the reattach loop
+      // keys residuals by each node's own computed key, so this is the join key).
+      const tarballKey = toTarballKey(parsedNodes[reprIdx]!.inputs)
       const residual = parseSlots(fields.slice(1), tarballKey)
       fResiduals.set(tarballKey, residual)
     }
@@ -758,27 +790,15 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
   // For each node, merge its F-residual (artifact metadata) with the N-row part
   // (integrity, berryChecksumCacheKey, recomposed canonical resolution). The
   // canonical {type:'tarball'} resolution is recomposed iff the node references a
-  // HOSTED npm row AND the merged residual carries no verbatim `resolution`.
-  const claimedKeys = new Set<TarballKey>()
+  // HOSTED npm row AND the merged residual carries no verbatim `resolution`. Each
+  // F residual is keyed by the COMPUTED TarballKey of a real node (the F row
+  // carries a node INDEX, resolved above), so every residual is consumed here —
+  // there are no orphan F rows to load independently.
   for (const pn of parsedNodes) {
     const tarballKey = toTarballKey(pn.inputs)
-    claimedKeys.add(tarballKey)
     const residual = fResiduals.get(tarballKey)
     const payload = assemblePayload(residual, pn)
     if (payload !== undefined) builder.setTarball(pn.inputs, payload)
-  }
-  // Orphan F rows (no referencing node) load verbatim — the tarball map is keyed
-  // independently of the node set, so an entry without a node is valid. With no
-  // node there is no N-row integrity u-member fragment, so the only native shape
-  // that needs resolving is the berry-locator MARKER (recomposed from the
-  // TarballKey's own name@version).
-  for (const [tarballKey, residual] of fResiduals) {
-    if (claimedKeys.has(tarballKey)) continue
-    if (residual.nativeResolution === BERRY_NATIVE_MARKER) {
-      const { name, version } = parseTarballKey(tarballKey)
-      residual.nativeResolution = recomposeBerryLocator(name, version)
-    }
-    builder.setTarball(parseTarballKey(tarballKey), residual)
   }
 
   for (const { node } of parsedNodes) builder.addNode(node)
@@ -802,35 +822,41 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
   return graph
 }
 
-// Merge a node's F-residual (artifact metadata, including ck + nativeResolution)
-// with its N-row-derived part (integrity + the integrity u-member `fragment`)
-// into the final TarballPayload. Insertion order follows the spec: the
-// F-residual fields first (already typed by parseSlots), then the recomposed
-// canonical resolution, then the resolved nativeResolution, then integrity
-// overlaid LAST. Returns `undefined` when nothing was carried (no residual, no
-// integrity, no recomposable resolution, no native). The canonical
-// {type:'tarball'} resolution is recomposed iff the node references a HOSTED npm
-// row AND the residual carries no verbatim `resolution` — a hosted row only ever
-// arises from a canonical tarball resolution, so this can never mint a resolution
-// on a node that had none. The nativeResolution is resolved from the F
-// berry-marker / verbatim slot OR the N-row `fragment` (canonical-URL native).
+// Merge a node's F-residual (artifact metadata, including a verbatim
+// nativeResolution) with its N-row-derived part (integrity, the integrity
+// u-member `fragment`, the integrity z-member `cacheKey`) into the final
+// TarballPayload. Insertion order follows the spec: the F-residual fields first
+// (already typed by parseSlots), then the recomposed canonical resolution, then
+// the resolved nativeResolution, then integrity overlaid LAST, then the folded
+// berryChecksumCacheKey. Returns `undefined` when nothing was carried (no
+// residual, no integrity, no cacheKey, no recomposable resolution, no native).
+// The canonical {type:'tarball'} resolution is recomposed iff the node
+// references a HOSTED npm row AND the residual carries no verbatim `resolution`
+// — a hosted row only ever arises from a canonical tarball resolution, so this
+// can never mint a resolution on a node that had none. The nativeResolution is
+// resolved from the F verbatim slot OR the N-row `fragment` (canonical-URL
+// native).
 function assemblePayload(
   residual: TarballPayload | undefined,
-  pn: { name: string; version: string; integrity?: Integrity; fragment?: string; hostedBase?: string },
+  pn: { name: string; version: string; integrity?: Integrity; fragment?: string; cacheKey?: string; hostedBase?: string },
 ): TarballPayload | undefined {
   const hasResidualResolution = residual !== undefined && residual.resolution !== undefined
   const recomposePR = pn.hostedBase !== undefined && !hasResidualResolution
   const native = resolveNativeResolution(residual?.nativeResolution, pn.name, pn.version, pn.fragment, pn.hostedBase)
-  if (residual === undefined && pn.integrity === undefined && !recomposePR && native === undefined) {
+  if (residual === undefined && pn.integrity === undefined && pn.cacheKey === undefined && !recomposePR && native === undefined) {
     return undefined
   }
   const p: Record<string, unknown> = residual !== undefined ? { ...residual } : {}
   if (recomposePR) p.resolution = { type: 'tarball', url: recomposeNpmTarballUrl(pn.hostedBase!, pn.name, pn.version) }
-  // `native` is the resolved string (berry-marker → recomposed locator, F
-  // verbatim slot passed through, or N-row fragment → recomposed URL); when set
-  // it overwrites the residual's raw marker/verbatim with the final value.
+  // `native` is the resolved string (F verbatim slot passed through, or N-row
+  // fragment → recomposed URL); when set it overwrites the residual's raw
+  // verbatim with the final value. (Canonical berry npm locators are no longer
+  // stored — the berry adapter recomposes `<name>@npm:<version>` at emit.)
   if (native !== undefined) p.nativeResolution = native
   if (pn.integrity !== undefined) p.integrity = pn.integrity
+  // The berry checksum-cache-key folded into the integrity column's z-member
+  // (ADR-0031) reattaches here as `berryChecksumCacheKey` (no separate F slot).
+  if (pn.cacheKey !== undefined) p.berryChecksumCacheKey = pn.cacheKey
   return p as TarballPayload
 }
 
@@ -953,20 +979,13 @@ function parsePeerContext(s: string): NodeId[] {
 
 const SHA1_HEX_RE = /^[0-9a-f]{40}$/
 
-// Intra-parse sentinel for a `nativeResolution.berry=` F slot: parseSlots cannot
-// recompose `<name>@npm:<version>` (it lacks the TarballKey's name/version in a
-// typed form), so it stores this marker and the reattach phase (assemblePayload /
-// the orphan-row resolve) recomposes the real berry locator. The leading NUL
-// guarantees it never collides with a real verbatim native (URLs/locators are
-// NUL-free), and it never escapes the parser — every load path resolves it.
-const BERRY_NATIVE_MARKER = ' berry'
-
-// Resolve the `nativeResolution` carrier of an assembled payload: turn the
-// berry-locator MARKER into the recomposed `<name>@npm:<version>`, and recompose
-// the canonical-URL native from the N-row integrity `fragment` when present. A
-// plain verbatim string (and `undefined`) passes through untouched. Applied on
-// BOTH the node-reattach path (fragment available) and the orphan-F-row path
-// (no node → no fragment, only the berry marker can occur).
+// Resolve the `nativeResolution` carrier of an assembled payload: recompose the
+// canonical-URL native from the N-row integrity `fragment` when present. A plain
+// verbatim string (and `undefined`) passes through untouched. Applied on BOTH the
+// node-reattach path (fragment available) and the orphan-F-row path (no node → no
+// fragment, so only a verbatim slot can occur). NOTE: the canonical berry npm
+// locator `<name>@npm:<version>` is NOT a lockgraph concern — the berry adapter
+// recomposes it at emit, so it never appears here as a stored native.
 function resolveNativeResolution(
   current: string | undefined,
   name: string,
@@ -974,7 +993,6 @@ function resolveNativeResolution(
   fragment: string | undefined,
   hostedBase: string | undefined,
 ): string | undefined {
-  if (current === BERRY_NATIVE_MARKER) return recomposeBerryLocator(name, version)
   if (current !== undefined) return current
   // No F slot for the native, but the N row carried a `#<sha1>` integrity
   // u-member → the canonical-URL native. Recompose `<url>#<fragment>`.
@@ -1009,10 +1027,6 @@ function npmRegistryBaseOf(url: string, name: string, version: string): string |
 
 function recomposeNpmTarballUrl(base: string, name: string, version: string): string {
   return base + npmTarballSuffix(name, version)
-}
-
-function recomposeBerryLocator(name: string, version: string): string {
-  return `${name}@npm:${version}`
 }
 
 // Derive the {type, url} R-table source descriptor for a node. Workspace members
@@ -1059,6 +1073,16 @@ function registrySourceOf(node: Node, payload: TarballPayload | undefined): { ty
 // occurs inside a hex digest or an algorithm token, so the sub-field is
 // self-delimiting within the tab-bounded column. A bare `-` means NO integrity.
 //
+// The `berry-zip` member (marker `z`) optionally carries the yarn-berry checksum
+// CACHE-KEY prefix (ADR-0031) folded into the member itself:
+// `z<cacheKey>/<algo>-<digest>` (e.g. `z10c0/sha512-<hex>`). The cacheKey is
+// literally that checksum's `<cacheKey>/` prefix, so it belongs on the z-member
+// rather than a separate F slot. A cacheKey (`10c0`/`8`/`2`) contains no `/` and
+// `<algo>-<digest>` contains no `/`, so on decode the FIRST `/` unambiguously
+// separates the cacheKey from the hash; a bare `z<algo>-<digest>` (no `/`) means
+// no cacheKey. On decode it is returned as `cacheKey` and reattached as
+// TarballPayload.berryChecksumCacheKey.
+//
 // The `u`-member (`usha1-<40hex>`) is TRANSPORT-ONLY, always LAST, at most one:
 // it is the `#<sha1hex>` fragment of a canonical-URL native resolution
 // (yarn-classic `resolved`, now on TarballPayload.nativeResolution), moved here
@@ -1070,8 +1094,13 @@ function registrySourceOf(node: Node, payload: TarballPayload | undefined): { ty
 // 'url-fragment' violates that invariant and is REJECTED at emit (it would be
 // indistinguishable from the transport member and could not round-trip).
 
-function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: string | undefined): string {
+function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: string | undefined, cacheKey: string | undefined): string {
   const members: string[] = []
+  // The cacheKey folds onto the FIRST berry-zip member only — decode lifts a
+  // single cacheKey (and rejects a second `/`-bearing z-member), so emitting it
+  // on at most one member keeps encode⇄decode provably symmetric even in the
+  // (non-occurring) case of >1 berry-zip hash sharing one cacheKey scalar.
+  let cacheKeyEmitted = false
   for (const h of integrity?.hashes ?? []) {
     if (h.origin === 'url-fragment') {
       throw new LockfileError({
@@ -1090,19 +1119,51 @@ function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: strin
         message: `lockgraph: unknown integrity hash origin '${h.origin}' (no marker in {s,z,r,c,u})`,
       })
     }
-    members.push(`${marker}${h.algorithm}-${h.digest}`)
+    // The berry checksum's `<cacheKey>/` prefix (ADR-0031) folds INTO its own
+    // z-member: the cacheKey is literally that hash's prefix, so it belongs on
+    // the `berry-zip` member rather than a separate F slot. Emit
+    // `z<cacheKey>/<algo>-<digest>` when a cacheKey is present; bare `z<algo>-<digest>`
+    // otherwise. cacheKey values (`10c0`/`8`/`2`) carry no `/` and `<algo>-<digest>`
+    // carries no `/`, so the `/` is an unambiguous separator on decode.
+    if (h.origin === 'berry-zip' && cacheKey !== undefined && !cacheKeyEmitted) {
+      members.push(`${marker}${cacheKey}/${h.algorithm}-${h.digest}`)
+      cacheKeyEmitted = true
+    } else {
+      members.push(`${marker}${h.algorithm}-${h.digest}`)
+    }
   }
   if (fragment !== undefined) members.push(`usha1-${fragment}`)
+  // NOTE: a cacheKey with NO berry-zip member to carry it (cacheKeyEmitted ===
+  // false) is a model anomaly that cannot occur in practice — an adapter only
+  // sets berryChecksumCacheKey alongside a parsed berry-zip digest (the cacheKey
+  // IS that digest's prefix). It has no home in the integrity column and is not
+  // re-emitted; were such a payload hand-built, the cacheKey would not round-trip.
   return members.length > 0 ? members.join(';') : NONE
 }
 
-function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?: string } {
+function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?: string; cacheKey?: string } {
   if (raw === NONE) return {}
   const hashes: Hash[] = []
   let fragment: string | undefined
+  let cacheKey: string | undefined
   for (const member of raw.split(';')) {
     const marker = member[0]!
-    const rest = member.slice(1)
+    let rest = member.slice(1)
+    // berry-zip member may carry the folded checksum-cache-key prefix
+    // `z<cacheKey>/<algo>-<digest>` (ADR-0031). The cacheKey precedes the FIRST
+    // `/`, and neither a cacheKey nor an `<algo>-<digest>` contains a `/`, so
+    // splitting on the first `/` recovers it unambiguously. A bare
+    // `z<algo>-<digest>` (no `/`) leaves cacheKey undefined.
+    if (marker === 'z') {
+      const slash = rest.indexOf('/')
+      if (slash !== -1) {
+        if (cacheKey !== undefined) {
+          throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: duplicate berry checksum-cache-key in integrity column' })
+        }
+        cacheKey = rest.slice(0, slash)
+        rest = rest.slice(slash + 1)
+      }
+    }
     const dash = rest.indexOf('-')
     if (dash === -1) {
       throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed integrity member: ${member}` })
@@ -1126,58 +1187,9 @@ function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?:
     }
     hashes.push({ algorithm, digest, origin })
   }
-  return { integrity: hashes.length > 0 ? { hashes } : undefined, fragment }
+  return { integrity: hashes.length > 0 ? { hashes } : undefined, fragment, cacheKey }
 }
 
-// Parse a TarballKey `name@version[+patch=<token>][+src=<16hex>]` back into its
-// TarballKeyInputs. The `+patch=` / `+src=` discriminator block (canonical order
-// `+patch=` before `+src=`, cmpStr-sorted) begins at the FIRST `+patch=` / `+src=`
-// marker — patch tokens contain no `+` (validatePatchToken) and src is 16-hex,
-// so the markers are unambiguous; everything before is `name@version`, and the
-// `@` separating name from version is the LAST `@` before that boundary (a scoped
-// `@scope/pkg` keeps its leading `@`, a `file:`/`github:` version keeps any `@`).
-// Inverse of graph.ts `toTarballKey`.
-function parseTarballKey(key: TarballKey): TarballKeyInputs {
-  // Locate the discriminator block (the first `+patch=` or `+src=`).
-  let boundary = key.length
-  const patchAt = key.indexOf('+patch=')
-  const srcAt = key.indexOf('+src=')
-  if (patchAt !== -1) boundary = Math.min(boundary, patchAt)
-  if (srcAt !== -1) boundary = Math.min(boundary, srcAt)
-  const head = key.slice(0, boundary)       // name@version
-  const tail = key.slice(boundary)          // [+patch=…][+src=…] (or '')
-
-  // Split name@version on the LAST `@` (scoped names carry a leading `@`).
-  const at = head.lastIndexOf('@')
-  if (at <= 0) {
-    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed TarballKey (no name@version): ${key}` })
-  }
-  const name = head.slice(0, at)
-  const version = head.slice(at + 1)
-  const inputs: TarballKeyInputs = { name, version }
-
-  // Parse the discriminator slots. Each is `+patch=<token>` / `+src=<token>`;
-  // patch tokens never contain `+`, so a following `+src=` is the slot boundary.
-  let rest = tail
-  while (rest.length > 0) {
-    if (rest.startsWith('+patch=')) {
-      const after = rest.slice('+patch='.length)
-      const end = after.indexOf('+')
-      const value = end === -1 ? after : after.slice(0, end)
-      inputs.patch = value
-      rest = end === -1 ? '' : after.slice(end)
-    } else if (rest.startsWith('+src=')) {
-      const after = rest.slice('+src='.length)
-      const end = after.indexOf('+')
-      const value = end === -1 ? after : after.slice(0, end)
-      inputs.source = value
-      rest = end === -1 ? '' : after.slice(end)
-    } else {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed TarballKey discriminator in: ${key}` })
-    }
-  }
-  return inputs
-}
 
 // === F section parse — reconstruct the residual TarballPayload (schema-driven) =
 //
@@ -1416,30 +1428,20 @@ function parseSlots(fields: string[], tarballKey: TarballKey): TarballPayload {
       out.resolution = rebuildResolution(slots, tarballKey)
     } else if (root === 'nativeResolution') {
       // EXACT-MATCH-OR-VERBATIM, mirror of flattenToSlots:
-      //   `nativeResolution=<v>`     → verbatim string;
-      //   `nativeResolution.berry=`  → the berry-locator MARKER sentinel,
-      //      recomposed from the TarballKey's name@version in assemblePayload /
-      //      the orphan-row resolve below.
+      //   `nativeResolution=<v>` → verbatim string, stored as-is.
       // (The canonical-URL + `#<sha1>` shape has NO F slot — the fragment rides
-      // the N-row integrity u-member, recomposed at reattach.)
+      // the N-row integrity u-member, recomposed at reattach. The canonical berry
+      // npm locator `<name>@npm:<version>` is NOT stored at all — the berry
+      // adapter recomposes it at emit.)
       if (slots.length !== 1) {
         throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: duplicate nativeResolution slot(s) (${tarballKey})` })
       }
       const s = slots[0]!
       if (s.path.length === 1) {
         out.nativeResolution = s.value
-      } else if (s.path.length === 2 && s.path[1] === 'berry') {
-        out.nativeResolution = BERRY_NATIVE_MARKER
       } else {
         throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed nativeResolution slot (${tarballKey})` })
       }
-    } else if (root === 'ck') {
-      // scalar — the yarn-berry zip-cache checksum cacheKey (ADR-0031).
-      const s = slots[0]!
-      if (slots.length !== 1 || s.path.length !== 1) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed ck slot(s) (${tarballKey})` })
-      }
-      out.berryChecksumCacheKey = s.value
     } else {
       throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown F slot root '${root}' (${tarballKey})` })
     }
@@ -1464,10 +1466,11 @@ function rebuildResolution(slots: DecodedSlot[], tarballKey: TarballKey): Resolu
 // === F section — flatten the residual TarballPayload to dot-path slots ======
 //
 // The residual TarballPayload is every artifact-metadata field NOT captured by
-// the GRAPH section: `integrity` (the N-row integrity column), `ck=`
-// (berryChecksumCacheKey), and the canonical resolution when it is the bare
-// recomposable 2-key {type:'tarball', url} shape (omitted, recomposed from R)
-// all stay out. Everything else — license / deprecated / cpu / os / libc /
+// the GRAPH section: `integrity` (the N-row integrity column, whose `berry-zip`
+// z-member also carries the folded `berryChecksumCacheKey` prefix), and the
+// canonical resolution when it is the bare recomposable 2-key {type:'tarball',
+// url} shape (omitted, recomposed from R) all stay out. Everything else —
+// license / deprecated / cpu / os / libc /
 // bundledDependencies / engines / bin / funding, and ANY non-recomposable
 // resolution union — is flattened to dot-path `key=value` slots, NO JSON.
 //
@@ -1588,29 +1591,25 @@ function flattenToSlots(payload: TarballPayload, name: string, version: string):
 
   // nativeResolution: the PM-native verbatim resolution sidecar (ADR-0013),
   // EXACT-MATCH-OR-VERBATIM, exactly as the N row used to encode it:
-  //   - the canonical berry npm locator `<name>@npm:<version>` → the valueless
-  //     berry MARKER `nativeResolution.berry=` (recomposed on parse from the
-  //     TarballKey's name@version);
   //   - the canonical-URL + `#<sha1hex>` shape → OMITTED here, the `#<sha1>`
   //     fragment rides the N-row integrity column's `u`-member and the URL
   //     recomposes from R (same EXACT-MATCH the N row decided);
   //   - anything else → `nativeResolution=<verbatim>`.
-  // The empty residual (no native) emits nothing.
+  // The canonical berry npm locator `<name>@npm:<version>` is NEVER stored here:
+  // the berry ADAPTER omits it at parse (it is fully derivable from the node's
+  // (name, version) at emit), so the lockgraph layer stores `nativeResolution`
+  // verbatim when present and nothing when absent.
   if (payload.nativeResolution !== undefined) {
     const native = payload.nativeResolution
-    if (native === recomposeBerryLocator(name, version)) {
-      out.push(emitSlot(['nativeResolution', 'berry'], ''))
-    } else if (!nativeRidesIntegrityUMember(native, res, name, version)) {
+    if (!nativeRidesIntegrityUMember(native, res, name, version)) {
       out.push(emitSlot(['nativeResolution'], native))
     }
     // else: the `#<sha1>` fragment is on the N row's integrity u-member; omit.
   }
 
-  // ck: the yarn-berry zip-cache checksum cacheKey prefix (ADR-0031 round-trip
-  // sidecar). A scalar slot — matches the `ck` carries token.
-  if (payload.berryChecksumCacheKey !== undefined) {
-    out.push(emitSlot(['ck'], payload.berryChecksumCacheKey))
-  }
+  // berryChecksumCacheKey (ADR-0031): NOT a separate F slot — it is folded into
+  // the N-row integrity column's `berry-zip` z-member (`z<cacheKey>/<algo>-<digest>`),
+  // since the cacheKey is literally that checksum's prefix.
 
   return out
 }
@@ -1656,83 +1655,3 @@ function collectEdges(graph: Graph, nodes: Node[], nodeIndex: Map<NodeId, number
   return out
 }
 
-// === `carries` — the fidelity envelope ======================================
-//
-// The META `carries` line is a self-describing declaration of WHICH variable
-// detail-facets this particular lockgraph actually holds — an honest mirror of
-// content, NOT a promise. It is AUTO-DERIVED at stringify as the sorted union of
-// the facet tokens for which ≥1 element in the graph carries that detail, so a
-// reader knows the fidelity envelope without scanning every node. Like
-// `generatedAt` / `generator` it is provenance-class: NOT part of graph identity,
-// so parse IGNORES it (it is re-derived identically on every emit), and a
-// re-serialize of a structurally-equal graph reproduces the identical line —
-// round-trip stays byte-stable.
-//
-// The vocabulary is the set of VARIABLE detail facets whose presence is
-// informative; trivially-always-present structure (nodes exist, edges exist) is
-// deliberately excluded because it carries no signal. Tokens are lowercase,
-// stable, and documented in spec/formats/lockgraph.md § carries. A token appears
-// iff at least one element carries it.
-
-/** The canonical `carries` facet tokens, listed for documentation/reference.
- *  The emitted set is the subset of these for which the graph carries detail. */
-export const CARRIES_FACETS = [
-  // payload facets (TarballPayload fields)
-  'bin', 'bundled', 'cpu', 'deprecated', 'engines', 'funding', 'libc', 'license', 'os',
-  // integrity / identity facets
-  'ck', 'integrity', 'patch', 'peer', 'resolution', 'src',
-  // edge facets
-  'alias', 'optional', 'workspace',
-  // graph-level
-  'layout',
-] as const
-
-function deriveCarries(
-  nodes: Node[],
-  payloads: Array<TarballPayload | undefined>,
-  edges: IndexedEdge[],
-  hints: LayoutHints | undefined,
-): string[] {
-  const set = new Set<string>()
-
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i]!
-    const payload = payloads[i]
-    // identity facets carried by the Node itself
-    if (node.patch !== undefined) set.add('patch')
-    if (node.source !== undefined) set.add('src')
-    if (node.peerContext.length > 0) set.add('peer')
-    if (payload === undefined) continue
-    // `resolution` = ANY resolution detail survives: the per-tarball
-    // `nativeResolution` verbatim sidecar (F nativeResolution slot / berry marker
-    // / recomposed u-member) OR the canonical TarballPayload.resolution union.
-    // Either is "this graph preserves where the source pointed", so one token
-    // covers both — and it must fire on a native-only tarball (no canonical).
-    if (payload.nativeResolution !== undefined) set.add('resolution')
-    if (payload.resolution !== undefined) set.add('resolution')
-    if (payload.integrity?.hashes.length) set.add('integrity')
-    if (payload.berryChecksumCacheKey !== undefined) set.add('ck')
-    // payload artefact metadata facets — one token per TarballPayload field whose
-    // presence is informative. `bundled` is the token for `bundledDependencies`
-    // (the short, stable spelling — see the spec table).
-    if (payload.bin !== undefined) set.add('bin')
-    if (payload.engines !== undefined) set.add('engines')
-    if (payload.license !== undefined) set.add('license')
-    if (payload.cpu !== undefined) set.add('cpu')
-    if (payload.os !== undefined) set.add('os')
-    if (payload.libc !== undefined) set.add('libc')
-    if (payload.funding !== undefined) set.add('funding')
-    if (payload.deprecated !== undefined) set.add('deprecated')
-    if (payload.bundledDependencies !== undefined) set.add('bundled')
-  }
-
-  for (const e of edges) {
-    if (e.attrs?.alias !== undefined) set.add('alias')
-    if (e.attrs?.workspace === true) set.add('workspace')
-    if (e.attrs?.optional === true) set.add('optional')
-  }
-
-  if (hints !== undefined) set.add('layout')
-
-  return Array.from(set).sort(cmpStr)
-}

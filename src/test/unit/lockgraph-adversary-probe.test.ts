@@ -31,8 +31,9 @@ describe('adversary probe — recompose fidelity', () => {
     const text = rt(b.seal())
     const row = rowOf(text, '@vue/shared')
     expect(row.split('\t')[3]).toBe(`usha1-${sha1}`)
-    // the native rides the u-member, so no F nativeResolution slot for this tarball.
-    expect(text.split('\n').some(l => l.startsWith('@vue/shared@3.4.0\t'))).toBe(false)
+    // the native rides the u-member, so this tarball's residual is empty → the F
+    // section has zero rows (`F 0`, the sole node carries no F facet).
+    expect(text).toContain('\nF 0\n')
   })
 
   it('V2 name with dots and dashes', () => {
@@ -72,14 +73,20 @@ describe('adversary probe — recompose fidelity', () => {
     expect(rowOf(text, 'JSV').split('\t')[3]).toBe(`usha1-${sha1}`)
   })
 
-  it('V5 berry locator for npm-ALIASED package (node.name == target)', () => {
+  it('V5 berry locator on the model is stored VERBATIM by lockgraph (adapter owns the canonical-native omission)', () => {
     const b = newBuilder()
     const id = serializeNodeId('string-width', '4.2.3', [])
     b.addNode({ id, name: 'string-width', version: '4.2.3', peerContext: [] })
     b.setTarball({ name: 'string-width', version: '4.2.3' }, { resolution: { type: 'tarball', url: 'https://registry.yarnpkg.com/string-width/-/string-width-4.2.3.tgz' }, nativeResolution: 'string-width@npm:4.2.3' })
     const text = rt(b.seal())
-    const fRow = text.split('\n').find(l => l.startsWith('string-width@4.2.3\t'))!
-    expect(fRow).toContain('\tnativeResolution.berry=')
+    // No berry MARKER: the lockgraph layer no longer recomposes canonical berry
+    // natives (the berry adapter omits them at parse). A native that DOES reach
+    // the model is stored verbatim in the F `nativeResolution=` slot, and `rt`
+    // confirms byte-stable round-trip.
+    // F rows lead with the representative NODE INDEX (here the sole node, idx 0).
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
+    expect(fRow).toContain('\tnativeResolution=string-width@npm:4.2.3')
+    expect(fRow).not.toContain('nativeResolution.berry')
   })
 
   it('V6 payload.resolution with EXTRA keys (hostingProvider on tarball)', () => {
@@ -92,7 +99,8 @@ describe('adversary probe — recompose fidelity', () => {
     // union flattens under the F row's `resolution.*` dot-path slots (no JSON).
     b.setTarball({ name: 'x', version: '1.0.0' }, { resolution: { type: 'tarball', url, hostingProvider: 'github' } })
     const text = rt(b.seal())
-    const fRow = text.split('\n').find(l => l.startsWith('x@1.0.0\t'))!
+    // F rows lead with the representative NODE INDEX (here the sole node, idx 0).
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
     expect(fRow).toBeDefined()
     expect(fRow).toContain('\tresolution.hostingProvider=github')
   })
@@ -127,16 +135,20 @@ describe('adversary probe — recompose fidelity', () => {
     expect(g2.tarball({ name: 'ms', version: '2.1.3' })!.license).toBe('MIT')
   })
 
-  it('V9 berry locator BUT no payload.resolution at all (hostedBase undefined)', () => {
-    // A bare berry node with NO payload.resolution: R row is npm + `-`. The
-    // native rides the F berry-marker, recomposed from the TarballKey.
+  it('V9 berry locator on the model BUT no payload.resolution (hostedBase undefined) → stored VERBATIM', () => {
+    // A bare berry node with NO payload.resolution: R row is npm + `-`. A native
+    // that reaches the model is stored verbatim in the F `nativeResolution=`
+    // slot (the lockgraph layer no longer recomposes berry locators — that is the
+    // berry adapter's job at parse). `rt` confirms byte-stable round-trip.
     const b = newBuilder()
     const id = serializeNodeId('react', '18.0.0', [])
     b.addNode({ id, name: 'react', version: '18.0.0', peerContext: [] })
     b.setTarball({ name: 'react', version: '18.0.0' }, { nativeResolution: 'react@npm:18.0.0' })
     const text = rt(b.seal())
-    const fRow = text.split('\n').find(l => l.startsWith('react@18.0.0\t'))!
-    expect(fRow).toContain('\tnativeResolution.berry=')
+    // F rows lead with the representative NODE INDEX (here the sole node, idx 0).
+    const fRow = text.split('\n').find(l => l.startsWith('0\t'))!
+    expect(fRow).toContain('\tnativeResolution=react@npm:18.0.0')
+    expect(fRow).not.toContain('nativeResolution.berry')
   })
 
   it('V10 undefined resolution + NO payload at all (R = npm + dash) stays undefined', () => {

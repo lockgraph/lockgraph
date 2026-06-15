@@ -59,11 +59,18 @@ describe('yarn-berry file: local-tarball alias disambiguation (Bug #76)', () => 
     expect(patched.length).toBe(1)
     expect(unpatched.length).toBe(1)
 
-    // The `file:` alias round-trips its verbatim locator (incl. `locator=`);
-    // the registry entry keeps a plain `npm:` resolution.
+    // The `file:` alias round-trips its verbatim locator (incl. `locator=`) — a
+    // NON-canonical native, so it is stored. The registry entry's resolution is
+    // the canonical `demo@npm:1.0.0`, which the adapter NO LONGER stores (it is
+    // recomposed from the node's (name, version) at emit), so its stored native
+    // is undefined while its canonical resolution survives.
     expect(g.tarballOf(patched[0]!.id)?.nativeResolution).toBe(
       'demo@file:.lib/demo.tgz#.lib/demo.tgz::hash=abc123&locator=root%40workspace%3A.')
-    expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBe('demo@npm:1.0.0')
+    expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBeUndefined()
+    expect(g.tarballOf(unpatched[0]!.id)?.resolution).toEqual({
+      type: 'tarball',
+      url:  'https://registry.npmjs.org/demo/-/demo-1.0.0.tgz',
+    })
 
     // Distinct TarballKeys: the two checksums land on separate payloads keyed
     // off the sentinel patch, so the differing integrity no longer fights over

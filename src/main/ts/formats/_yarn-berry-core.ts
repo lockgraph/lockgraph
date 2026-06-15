@@ -576,7 +576,23 @@ export function parseFamily(
     // their `<name>@workspace:<path>` locator is recomposed from
     // `Node.workspacePath` at stringify, and a workspace member is a local
     // project, NOT a downloadable artifact — it carries no TarballPayload.
-    if (resolution !== undefined && workspaceSpec === undefined) payload.nativeResolution = resolution
+    //
+    // CANONICAL-NATIVE OMISSION: the canonical npm-registry locator
+    // `<name>@npm:<version>` is FULLY DERIVABLE from the node's (name, version)
+    // — `resolutionOfNode` recomposes it at emit (registry resolution is ALWAYS
+    // `name@npm:version` in yarn-berry). Storing it would just repeat the node's
+    // identity, so SKIP it and store `nativeResolution` ONLY for non-canonical
+    // shapes (git/patch/file/portal/link/verbatim, or an npm ALIAS whose locator
+    // differs from `name@npm:version`). The key is `authoritativeName@npm:version`
+    // because emit recomposes from `node.name` (= authoritativeName) — an alias
+    // entry's locator `foo@npm:bar@1` then correctly stays stored.
+    if (
+      resolution !== undefined &&
+      workspaceSpec === undefined &&
+      resolution !== `${authoritativeName}@npm:${version}`
+    ) {
+      payload.nativeResolution = resolution
+    }
     if (Object.keys(payload).length > 0) {
       // Key MUST match the NodeId built above: authoritativeName (Bug #3
       // canonical-name) + effectivePatch (Bug #2 link/portal locator slot) +
@@ -1630,6 +1646,15 @@ function resolutionOfNode(
   // through verbatim. Re-parse populates the canonical from the verbatim
   // string per ADR-0014 §4.F3, so identity survives the conversion even
   // when the source-side adapter's sidecar leaks through.
+  //
+  // CANONICAL-NATIVE RECOMPOSE (load-bearing): a canonical npm-registry node
+  // stores NO `nativeResolution` (the parse-side OMISSION above), so `native`
+  // is undefined here. Its canonical resolution is `{type:'tarball', url}`
+  // (the registry tarball), and `stringifyForYarnBerry` maps a `tarball`
+  // canonical for an npm node back to `<name>@npm:<version>` — NOT the tarball
+  // URL — so the round-trip reproduces the exact `name@npm:version` line. The
+  // bare-`npm:` fallback at the end covers a node with neither native nor
+  // canonical (a hand-built graph), keeping the prior behaviour.
   if (native !== undefined) return native
   if (node.workspacePath !== undefined) {
     return `${node.name}@workspace:${node.workspacePath === '' ? '.' : node.workspacePath}`

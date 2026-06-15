@@ -24,8 +24,11 @@ than graph-*equivalence-up-to-target*.
 > residual artifact metadata is now **fully flattened** into the `F` region as
 > dot-path `key=value` slots — **no nested JSON anywhere in the `F` section**,
 > not even an escape hatch (only the optional `L` line still uses canonical
-> JSON). The `F` region is keyed by [TarballKey](#vocabulary) — a property of the
-> **tarball**, shared across peer-virtual siblings, not a property of the node.
+> JSON). The `F` region is **per-[TarballKey](#vocabulary)** — one row per distinct
+> tarball, a property shared across peer-virtual siblings, not a property of the
+> node — but each row is **identified by the representative (minimum) node index**
+> that shares that key, not by the key string (which the node's `N` row already
+> pins). The index ref mirrors how edges address nodes.
 > The format is still
 > **`@lockgraph 1`** and **preview**: it is published only as
 > `0.0.0-snapshot.*`, has **no external readers or writers** (only this library
@@ -122,22 +125,22 @@ section (three tab-separated identity regions plus the optional `L` line) and
 then the **FIDELITY** section (the `F` region), in this fixed order:
 
 ```
-META          # provenance — magic, versions, generatedAt, generator, carries
+META          # provenance — magic, versions, generatedAt, generator
 R   <n>       # registries — every external source, content-sorted
 N   <n>       # nodes      — one row per node INSTANCE; root workspace pinned at index 0 when one exists, else node 0 is just the canonical-sort first node
 E   <n>       # edges      — one row per edge
 L   <json>    # OPTIONAL single line — graph-level LayoutHints; absent when none
-F   <n>       # fidelity — one row per distinct TarballKey; the SEVERABLE fidelity section, fully-flat dot-path slots
+F   <n>       # fidelity — one row per distinct TarballKey, keyed by representative node index; the SEVERABLE fidelity section, fully-flat dot-path slots
 ```
 
 | Region | Section | Deterministic? | Role |
 |--------|---------|:--------------:|------|
-| META | — | no  | volatile provenance — magic, schema, `generatedAt`, generator, `carries`. Nothing here is hashed. |
+| META | — | no  | volatile provenance — magic, schema, `generatedAt`, generator. Nothing here is hashed. |
 | R    | GRAPH | yes | the registry/source table — all external origins in one place, content-sorted, referenced by index `r0`, `r1`, … |
 | N    | GRAPH | yes | one row per node instance; line `k` **is** node `k`. The root workspace is pinned at index 0 **when one exists**; a rootless graph leaves node 0 as the canonical-sort first node (see [§ N — nodes](#n--nodes)). |
 | E    | GRAPH | yes | one edge per row, sorted by `(src, dst, kind, alias)`. |
 | L    | GRAPH | yes | **optional single line** carrying the graph's one `LayoutHints` as canonical JSON; **absent entirely** when the graph has no layout hints (see [§ L — layout hints](#l--layout-hints)). Not a counted region. |
-| F    | FIDELITY | yes | one row per distinct `TarballKey`, sorted by key; carries the artifact metadata of that tarball as **fully-flat dot-path `key=value` slots** — no nested JSON. **Severable** — see [§ F — fidelity](#f--fidelity) and [§ Two-tier degradation](#two-tier-degradation). |
+| F    | FIDELITY | yes | one row per distinct `TarballKey`, **keyed by the representative (minimum) node index** and sorted by it; carries the artifact metadata of that tarball as **fully-flat dot-path `key=value` slots** — no nested JSON. **Severable** — see [§ F — fidelity](#f--fidelity) and [§ Two-tier degradation](#two-tier-degradation). |
 
 The `L` line, when present, appears **after** the `E` region and **before** the
 `F` region — it is the last line of the GRAPH section, not the last line of the
@@ -235,7 +238,6 @@ graph identity**:
 schema 1.0
 generatedAt <RFC-3339 UTC, second precision, 'Z'>
 generator @antongolub/lockfile@<version>
-carries <token> <token> …
 ```
 
 - **`@lockgraph 1`** — the magic discriminant; MUST be the first token of the
@@ -249,119 +251,14 @@ carries <token> <token> …
   whole document byte-stable, useful for golden tests).
 - **`generator`** — the producing library id
   (`@antongolub/lockfile@<version>`). Provenance only.
-- **`carries`** — the **fidelity envelope** (see [§ carries](#carries--the-fidelity-envelope)).
-  A **sorted, space-joined** set of facet tokens declaring which variable detail
-  facets this lockgraph actually holds. Auto-derived; provenance-class, **not**
-  part of graph identity; **omitted entirely** when the derived set is empty.
 
-Unknown META lines are ignored on parse (they are provenance, not graph facts).
-There is deliberately **no** `checksum` / `seal` line.
-
-#### `carries` — the fidelity envelope
-
-The `carries` line is a self-describing declaration of **which variable detail
-facets this particular lockgraph holds** — an honest **mirror of content**, not
-a promise. It lets a reader know the lockgraph's fidelity *without scanning every
-node or tarball row*: one line answers "does this graph preserve engines? bin?
-license? peer contexts? aliases?".
-
-**Grammar.** A single META line, emitted **after `generator`**:
-
-```
-carries := 'carries' ( ' ' <token> )+
-```
-
-The tokens are a **sorted** (ascending UTF-16 code-unit order, the same `cmpStr`
-the tables use), space-joined **set** — no duplicates, no trailing space. The
-line is **omitted entirely** when the derived set is empty (a graph carrying no
-variable detail at all). The position is **after `generator`**.
-
-**Auto-derived — a mirror, not a promise.** The set is **computed at
-`stringify`** as the **union of the variable detail facets actually emitted**
-across the graph's nodes / edges / tarball payloads: a token appears **iff ≥1
-element in the graph carries that detail**. It is therefore an honest description
-of *this serialization's content*, never an aspiration or a capability claim — if
-the line says `engines`, at least one tarball row carries `engines`; if it does
-not, none do.
-
-**Not part of identity — parse ignores it, it is re-derived.** Like
-`generatedAt` / `generator`, `carries` is **provenance-class**: it is **not**
-part of [graph identity](#defining-property--graph-identity) and is **not
-hashed**. On parse it is **accepted and ignored** — it never drives parsing — and
-on the next `stringify` it is **re-derived from scratch** from the reconstructed
-graph. Because it is a pure function of the graph, a structurally-equal graph
-reproduces the **identical** line, so round-trip stays **byte-stable**:
-`parse(serialize(g))` drops the read line and recomputes a byte-identical one.
-
-**Canonical facet vocabulary.** The tokens are the **variable** detail facets
-whose presence is informative. Always-trivially-present structure (that nodes
-exist, that edges exist) is deliberately **excluded** — it carries no signal.
-Tokens are lowercase and stable. The **artifact-metadata tokens are now sourced
-from the `F` section** (a token is present iff ≥1 `F` row carries that facet),
-but the line is still re-derived, not a column schema (see
-[§ carries is re-derived, not the F column schema](#carries-is-re-derived-not-the-f-column-schema)):
-
-| token | meaning | derived-from (token present iff ≥1 element has it) |
-|---|---|---|
-| `bin` | package executables present | a tarball's `TarballPayload.bin` is set (an `F` row carries a `bin=` scalar or `bin.<k>=` map slots) |
-| `engines` | engine constraints present | `TarballPayload.engines` is set (an `F` row carries `engines.<k>=` slots) |
-| `license` | license metadata present | `TarballPayload.license` is set (an `F` row carries `license=`) |
-| `cpu` | cpu platform constraints present | `TarballPayload.cpu` is set (an `F` row carries `cpu.<i>=` slots) |
-| `os` | os platform constraints present | `TarballPayload.os` is set (an `F` row carries `os.<i>=` slots) |
-| `libc` | libc constraints present | `TarballPayload.libc` is set (an `F` row carries `libc.<i>=` slots) |
-| `funding` | funding metadata present | `TarballPayload.funding` is set — derived **per-field** by field-presence: the `funding` token is present iff ≥1 `F` row carries a `funding`-rooted slot (a slot whose first key segment is `funding`). |
-| `deprecated` | a deprecation notice present | `TarballPayload.deprecated` is set (an `F` row carries `deprecated=`) |
-| `bundled` | bundled-dependency lists present | `TarballPayload.bundledDependencies` is set (an `F` row carries `bundled.<i>=` slots; the token is `bundled`, **not** `bundledDependencies` — short and stable) |
-| `integrity` | integrity hashes present | a node's `TarballPayload.integrity` has ≥1 hash member (the N-row integrity column) |
-| `ck` | a yarn-berry checksum-cache-key present | `TarballPayload.berryChecksumCacheKey` is set (an `F` row carries a `ck=` slot) |
-| `resolution` | a resolution detail is preserved | a tarball carries **either** a `TarballPayload.nativeResolution` PM-native sidecar (the `F` `nativeResolution=` / `nativeResolution.berry=` / recomposed-`u`-member forms) **or** a canonical `TarballPayload.resolution` union (which, when non-recomposable, flattens under `resolution.*` `F` slots) — one token covers both, since both mean "this graph preserves where the source pointed" |
-| `patch` | a yarn-patched node present | a node's `Node.patch` is set (a `+patch=` node) |
-| `src` | a `+src=` source discriminator present | a node's `Node.source` is set (an ADR-0032 `+src=` node) |
-| `peer` | peer-virtualised instances present | a node's `peerContext` is non-empty (a peer-virtual node) |
-| `alias` | npm-alias edges present | an edge's `EdgeAttrs.alias` is set |
-| `workspace` | `workspace:`-resolved edges present | an edge's `EdgeAttrs.workspace` flag is `true` |
-| `optional` | optional edges present | an edge's `EdgeAttrs.optional` flag is `true` |
-| `layout` | graph-level layout hints present | `Graph.layoutHints()` is set (the `L` line) |
-
-**Every `F`-sourced token is derived from field-presence, by root key segment.**
-Because the `F` section is **fully flat**, a multi-slot field (`engines`, `bin`
-as a map, `cpu`/`os`/`libc`/`bundled`, `funding`) emits **one or more** slots
-whose **first key segment** is the field name (`engines.node=…`, `cpu.0=…`,
-`funding.0.url=…`, `bin.eslint=…`). A token is present **iff** ≥1 `F` row
-carries ≥1 slot rooted at that field — e.g. the `funding` token is present iff
-some `F` row has a `funding`-rooted slot. The "carries `engines.<k>=`/`cpu.<i>=`/…"
-phrasings in the table above name the *root key segment*; the token's truth is
-the **model field's presence**, read off the slot root, never off a position or a
-`json=` blob (there is no `json=` slot). Like every other token, these stay
-**inert**: re-derived on emit, ignored on parse.
-
-**What it enables.**
-
-- **Fidelity known without a full scan.** A consumer reads one META line instead
-  of walking every `N` / `E` / `F` row to learn what detail survived.
-- **Honest under enrichment / projection.** When a graph is enriched (more facets
-  appear) or projected through a lossy PM adapter (facets drop), the `carries`
-  line of the *resulting* lockgraph re-derives to mirror exactly what is now
-  present — it can never overclaim. **Severing the `F` section** drops every
-  artifact-metadata facet from the line on the next emit, an honest mirror of
-  the now-degraded fidelity.
-- **A cross-PM detail envelope in one line.** Two lockgraphs converted from
-  different package managers can be compared facet-for-facet at a glance.
-- **Policy tools can require a facet.** A check like "this lockgraph MUST carry
-  `integrity`" or "MUST NOT carry `deprecated`" reads the line directly.
-
-##### `carries` is re-derived, not the F column schema
-
-The `carries` line is **inert** with respect to the `F` section: it is
-**re-derived on emit** from the actual `F` rows and **ignored on parse**, exactly
-as it has always been for the GRAPH-section facets. It MUST **not** become a
-load-bearing column schema for `F` — a reader never consults `carries` to learn
-which slots an `F` row will contain. The `F` rows are **self-describing**
-(dot-path `key=value` slots — see [§ F-row slot grammar](#f-row-slot-grammar));
-`carries` is a *summary* of their union, not a *header* for them. (This mirrors
-the old inert `carries` posture, and the reason is the same: a load-bearing
-envelope line would couple two independently-evolving things and create a
-phantom-mismatch class when one drifts from the other.)
+META is **pure provenance** — magic, `schema`, `generatedAt`, `generator`, and
+nothing else. Unknown or absent META lines are **ignored on parse** (they are
+provenance, not graph facts), so a forward-compatible producer may add lines here
+without breaking older readers. There is deliberately **no** `checksum` / `seal`
+line, and **no fidelity-envelope line** — the fidelity a lockgraph holds is read
+directly off the `F` section (which cleanly stores the artifact metadata), not
+re-summarized in META.
 
 ### R — registries (NORMATIVE)
 
@@ -435,9 +332,12 @@ TarballKey discriminators (`+patch=` / `+src=`) folded into the node's identity.
 > metadata is a property of the **tarball**, not the node (it is shared across
 > peer-virtual siblings), so it has moved to the
 > [§ F — fidelity](#f--fidelity) section, keyed by `TarballKey` and **fully
-> flattened** to dot-path slots — including `berryChecksumCacheKey` (the `ck=`
-> slot) and the PM-native `nativeResolution`. The N row keeps **only** the
-> identity columns and the identity slots below; it carries **no JSON**.
+> flattened** to dot-path slots — including the PM-native `nativeResolution`. The
+> one exception is `berryChecksumCacheKey`: it is **not** an `F` slot at all but
+> **folds into the N-row integrity column's `berry-zip` z-member** (`z<cacheKey>/…`),
+> since the cache-key is literally that checksum's prefix. The N row keeps **only**
+> the identity columns, the integrity column, and the identity slots below; it
+> carries **no JSON**.
 
 | Slot | When present | Meaning |
 |------|--------------|---------|
@@ -458,10 +358,13 @@ TarballKey discriminators (`+patch=` / `+src=`) folded into the node's identity.
 >   (It is a `TarballPayload` field in the model, but the format pins it to the
 >   node because its `u`-member is entangled with `nativeResolution`.)
 >
-> `berryChecksumCacheKey` (the F `ck=` slot) and the PM-native `nativeResolution`
-> (the F `nativeResolution=` / `nativeResolution.berry=` slots, or the integrity
-> `u`-member for the canonical-URL shape) are **per-tarball** facets and live in
-> the severable `F` section. The canonical `TarballPayload.resolution` union: a
+> `berryChecksumCacheKey` rides the N-row integrity column's `berry-zip` z-member
+> (`z<cacheKey>/…`, see [§ Integrity multiset encoding](#integrity-multiset-encoding)).
+> The PM-native `nativeResolution` (the `F` `nativeResolution=` slot for a
+> non-canonical native, or the integrity `u`-member for the canonical-URL shape;
+> a canonical berry npm locator is recomposed by the adapter and never stored) is
+> a **per-tarball** facet and lives in the severable `F` section. The canonical
+> `TarballPayload.resolution` union: a
 > bare 2-key `{type:'tarball', url}` union is omitted and recomposed from the R
 > row, while **any** other union (a `hostingProvider`-bearing tarball, or any
 > `git` / `directory` / `unknown`) flattens under the `F` row's `resolution.*`
@@ -550,8 +453,10 @@ partial split**.
 
 **`TarballPayload.nativeResolution` (the PM-native sidecar string)** — model type
 `string`, a **per-tarball** field (invariant across peer-virtual siblings sharing
-a TarballKey). It rides the `F` `nativeResolution=` / `nativeResolution.berry=`
-slot, or the integrity `u`-member, or is recomposed from R when canonical (see
+a TarballKey). A non-canonical native rides the `F` `nativeResolution=` slot; a
+canonical-URL native's `#<sha1>` fragment rides the integrity `u`-member (the URL
+recomposing from R); and a canonical **berry** npm locator is recomposed by the
+**berry adapter** (never stored — see
 [§ nativeResolution omission](#res-omission--exact-match-or-verbatim)). It is
 **distinct** from the `TarballPayload.resolution` union below; both survive.
 Workspace members carry **no** `nativeResolution` — their `<name>@workspace:<path>`
@@ -594,36 +499,37 @@ and [§ The resolution union under `resolution.*`](#the-resolution-union-under-r
 #### `nativeResolution` omission — exact-match-or-verbatim {#res-omission--exact-match-or-verbatim}
 
 `TarballPayload.nativeResolution` (the verbatim PM-native resolution **sidecar
-string**) is encoded under the exact-match-or-verbatim guard, with **three**
+string**) is encoded under the exact-match-or-verbatim guard, with **two**
 mutually exclusive outcomes plus the "never existed" case:
 
-1. **Berry marker `nativeResolution.berry=`** — when `nativeResolution`
-   **byte-equals** the recomposed berry npm locator `<name>@npm:<version>`, the
-   `F` row carries the **valueless berry marker** slot `nativeResolution.berry=`
-   (empty value). On parse the locator is recomposed from the TarballKey's
-   `(name, version)`.
-2. **`u`-member, no `F` slot** — when `nativeResolution` byte-equals
+1. **`u`-member, no `F` slot** — when `nativeResolution` byte-equals
    `<recomposed canonical npm tarball URL>#<sha1hex>`, the `F` `nativeResolution`
    slot is **omitted entirely** and the `#<sha1hex>` fragment rides the **N-row
    integrity column's `u`-member**. On parse (in the reattach phase, after both
    the N row and the `F` section are read) the URL is recomposed from the R row
    and the fragment is re-appended.
-3. **`nativeResolution=<string>` verbatim** — any other `nativeResolution` (git
+2. **`nativeResolution=<string>` verbatim** — any other `nativeResolution` (git
    locator, non-canonical URL, `file:`/`link:`/`portal:` locator, `@patch:`
    locator) is stored **verbatim** as the `F` slot `nativeResolution=<string>`
    (TSV-escaped).
-4. **Absent — never existed** — a tarball whose `nativeResolution` was
-   **undefined** emits **nothing**. On parse, the absence of *all three* triggers
+3. **Absent — never existed** — a tarball whose `nativeResolution` was
+   **undefined** emits **nothing**. On parse, the absence of *both* triggers
    is the signal that it had no native resolution, so the rebuilt payload's
    `nativeResolution` **stays undefined**. The parse **never invents** one.
 
-> **Why an explicit marker here, but not for ranges.** The owner mandated
-> *derivation* for this facet, so a compact **explicit marker** is allowed: the
-> distinction between "omitted-because-canonical" (outcomes 1 & 2) and
-> "never-existed" (outcome 4) must be **unambiguous**, because inventing a
-> resolution on a tarball that never had one is the same failure class as the
-> ADR-0032 phantom `+src=` bug. The `nativeResolution.berry=` marker, a verbatim
-> `nativeResolution=`, and the `u`-member are **mutually exclusive**.
+> **The canonical berry npm locator is recomposed by the adapter, not stored.**
+> A yarn-berry registry node's `resolution:` is always `<name>@npm:<version>` —
+> fully derivable from the node's `(name, version)`. The **berry adapter** omits
+> it at parse (it never lands on `TarballPayload.nativeResolution`) and
+> **recomposes** it at emit, so the lockgraph layer never sees it: there is no
+> `nativeResolution.berry=` marker (removed in the #101 two-section redesign).
+> A `nativeResolution` that *does* reach the lockgraph model is a
+> **non-canonical** native and is stored verbatim (outcome 2). The distinction
+> between "omitted-because-canonical-url" (outcome 1) and "never-existed"
+> (outcome 3) must still be **unambiguous**, because inventing a resolution on a
+> tarball that never had one is the same failure class as the ADR-0032 phantom
+> `+src=` bug — the `u`-member and a verbatim `nativeResolution=` are **mutually
+> exclusive**.
 
 #### `payload.resolution` omission {#payloadresolution-omission}
 
@@ -651,12 +557,14 @@ their canonical multiset (source) order:
 
 ```
 integrity := <member> ( ';' <member> )*
-member    := <hash> | <u-member>
+member    := <hash> | <z-member> | <u-member>
 hash      := <origin><algo> '-' <digest>      # a real integrity multiset member
+z-member  := 'z' [ <cacheKey> '/' ] <algo> '-' <digest>   # berry-zip; OPTIONAL folded cacheKey prefix
 origin    := s | z | r | c                    # 1-char origin marker
 u-member  := 'u' 'sha1' '-' <40-hex>          # TRANSPORT-ONLY; at most one, always LAST
 algo      := sha1 | sha256 | sha384 | sha512 | …
 digest    := lowercase hex
+cacheKey  := the yarn-berry checksum cache-key prefix (e.g. 10c0, 10, 8, 2)
 ```
 
 The one-char **origin marker** is the [§3.2](./_common.md#3-integrity-model)
@@ -683,12 +591,27 @@ origin, prefixed onto the member so the derive-vs-fetch boundary survives:
 > `origin: 'url-fragment'` is **REJECTED at emit**. A `u`-member with a non-`sha1`
 > algorithm or a duplicate `u`-member fails with `PARSE_FAILED`.
 
+> **The `berry-zip` z-member folds the yarn-berry checksum cache-key.** A
+> yarn-berry `checksum` is `<cacheKey>/<sha512-hex>` (v8+) or a bare
+> `<sha512-hex>` (v4–v6); the `<cacheKey>/` prefix (`10c0` / `10` / `8` / `2`,
+> ADR-0031) is **part of that hash's value**, so it rides the `z`-member itself
+> as `z<cacheKey>/<algo>-<digest>` (e.g. `z10c0/sha512-…`) rather than a separate
+> `F` slot. A cacheKey contains no `/` and an `<algo>-<digest>` contains no `/`,
+> so on decode the **first `/`** unambiguously separates the cacheKey (before it)
+> from the hash (after it); a bare `z<algo>-<digest>` (no `/`) means **no
+> cacheKey** (the bare-era v4–v7 shape). On parse the cacheKey is lifted off and
+> reattached as `TarballPayload.berryChecksumCacheKey`. A second `/`-bearing
+> `z`-member in one column fails with `PARSE_FAILED`. A `berryChecksumCacheKey`
+> with **no** `berry-zip` member is a model anomaly that does not occur (yarn only
+> records a cache-key alongside a zip-cache digest) and has no encoding.
+
 `;` separates members and `-` separates algo from digest; neither occurs inside
 a hex digest or an algorithm token, so the sub-field is self-delimiting within
 the tab-bounded column with no further escaping. A single registry `sha512` SRI
 is the common case (`s` marker, one member); a `berry-zip` checksum and an SRI
 coexisting on one entry serialize as two `;`-joined members
-(`zsha512-…;ssha512-…`). `-` (a bare dash) in the column means *no integrity*.
+(`z<cacheKey>/sha512-…;ssha512-…`, or `zsha512-…;ssha512-…` when the berry
+checksum is bare). `-` (a bare dash) in the column means *no integrity*.
 
 ### E — edges
 
@@ -834,12 +757,15 @@ can be cut wholesale while the graph still parses identity-valid (see
 [§ Severability](#severability--cutting-the-f-section) and
 [§ Two-tier degradation](#two-tier-degradation)).
 
-#### Keyed by the full TarballKey
+#### Keyed by the representative node index
 
 Each `F` row is **one entry of the model's `State.tarballs: Map<TarballKey,
 TarballPayload>`** — the artifact metadata is a property of the **tarball**, not
-the node, "shared across peer-virtual siblings". The row key is the **full
-`TarballKey`**:
+the node, "shared across peer-virtual siblings". The region is therefore still
+**per-distinct-`TarballKey`**, deduped across peer-virtual siblings. But the row
+is **identified by a node index**, not by the `TarballKey` string:
+
+The **`TarballKey`** itself is:
 
 ```
 TarballKey := <name> '@' <version> [ '+patch=' <token> ] [ '+src=' <16-hex> ]
@@ -847,53 +773,76 @@ TarballKey := <name> '@' <version> [ '+patch=' <token> ] [ '+src=' <16-hex> ]
 
 i.e. the NodeId **stripped of `peerContext`**, with the `+patch=` and `+src=`
 discriminators in canonical (`cmpStr`-sorted) slot order — exactly
-`toTarballKey(inputs)` (graph.ts). Three consequences are **load-bearing**:
+`toTarballKey(inputs)` (graph.ts). The **representative** of a tarball is the
+**minimum node index** among the nodes that share its `TarballKey`. An `F` row
+leads with that representative index; on parse, the index is resolved to a node
+whose `(name, version, patch, src)` recompute the `TarballKey` under which the
+row's residual attaches. Four consequences are **load-bearing**:
 
-- **The key is the FULL TarballKey, not bare `name@version`.** A bare key would
-  **collide** on two distinct tarballs that share `name@version`: a patched copy
-  vs its base (`+patch=` distinguishes them), and — per #91 — a registry copy vs a
-  git fork at the same version (`+src=` distinguishes them). The `F` key carries
-  both discriminators so two such tarballs are **two distinct rows**.
+- **The row key is the representative node INDEX, not the `TarballKey` string.**
+  The leading field is a non-negative integer, exactly like an `E`-row endpoint.
+  The `N` row at that index already states the tarball's `name`/`version` (and any
+  `+patch=`/`+src=`), so restating the full `TarballKey` on the `F` row would be
+  redundant. Resolving the index recomputes the same `TarballKey` the model uses.
+- **The dedup is still by full `TarballKey`, not bare `name@version`.** Bare
+  `name@version` would **collide** on two distinct tarballs that share it: a
+  patched copy vs its base (`+patch=` distinguishes them), and — per #91 — a
+  registry copy vs a git fork at the same version (`+src=` distinguishes them).
+  Each distinct `TarballKey` is **one** `F` row, keyed by **its own**
+  representative index, so two such tarballs are **two distinct rows**.
 - **`peerContext` is NOT in the key.** Peer-virtualisation is a *node* facet, not
   a *tarball* facet: two peer-virtual siblings (same `name@version`, different
   peer context) are two **nodes** but **one tarball**, so they share **one** `F`
-  row. This is precisely why the metadata moved off the node — it would otherwise
-  be duplicated across every peer-virtual sibling.
-- **The N row does NOT reference an `F` row by index.** A node finds its tarball
-  metadata by **computing its own `TarballKey`** from `(name, version, patch,
-  src)` and looking it up in the `F` map — exactly as `graph.tarball(node)` does.
-  There is **no `f<idx>` column** on the N row; the join is by key, not by index.
+  row (keyed by the minimum of their two indices). This is precisely why the
+  metadata moved off the node — it would otherwise be duplicated across every
+  peer-virtual sibling. A non-representative sibling still finds the residual by
+  computing its **own** `TarballKey` (which equals the representative's) during
+  the per-node reattach.
+- **The join is symmetric to edges.** Just as an edge addresses its endpoints by
+  node index, an `F` row addresses its tarball by a (representative) node index.
+  The `N` row carries **no `f<idx>` column** in the other direction; a node finds
+  its tarball metadata by computing its own `TarballKey` and looking it up in the
+  reconstructed `F` map, exactly as `graph.tarball(node)` does.
 
 ```
-<tarballkey>\t<slot>…
+<repr-idx>\t<slot>…
 ```
 
-Each `F` row is the TarballKey followed by **self-describing dot-path `key=value`
-slots**, **no** positional grid (see [§ F-row slot grammar](#f-row-slot-grammar)).
-
-**Field 1 is the TarballKey — parsed POSITIONALLY, before any `=`-splitting.**
-Field 1 of an `F` row is the TarballKey: **everything up to the first tab**. It is
-parsed **positionally** (the leading field), **not** as a `key=value` slot — the
-`+patch=…` / `+src=…` segments inside it are **part of the KEY**, not slots, even
-though they textually contain `=`. The TarballKey rides the standard
-[§ TSV escape](#tsv-encoding) (the four framing bytes), exactly like every other
-field. Only fields **after** field 1 are dot-path slots (see
+Each `F` row is the representative node index followed by **self-describing
+dot-path `key=value` slots**, **no** positional grid (see
 [§ F-row slot grammar](#f-row-slot-grammar)).
 
-A TarballKey with an **empty** residual payload (e.g. a tarball whose only fact —
+**Field 1 is the representative node index — parsed POSITIONALLY, as an integer.**
+Field 1 of an `F` row is a **non-negative decimal integer** in `[0, nodeCount)` —
+**everything up to the first tab**, parsed **positionally** (the leading field),
+**not** as a `key=value` slot. It is validated exactly like an `E`-row endpoint
+(reject empty / non-integer / out-of-range → `PARSE_FAILED`) and resolved against
+the already-parsed `N` rows: `node = N[idx]`, whose `(name, version, patch, src)`
+recompute the `TarballKey` under which this row's residual is stored. Only fields
+**after** field 1 are dot-path slots (see
+[§ F-row slot grammar](#f-row-slot-grammar)).
+
+A `TarballKey` with an **empty** residual payload (e.g. a tarball whose only fact —
 integrity — lives on the N row, with a recomposable canonical resolution and no
 native sidecar) produces **no `F` row at all**: the region holds only tarballs
 that carry ≥1 residual facet (see
 [§ F-row count](#f-row-count--counted-region-rule)).
 
-> **What is NOT in `F`.** `integrity` (the N-row column) and the **canonical**
+> **A node-less tarball cannot be represented.** Because the row key is a node
+> index, a tarball with **no node** (a `setTarball` with no matching `addNode` —
+> reachable only in hand-built graphs, never in real adapter parsing) has no
+> representative index and is therefore **dropped** on emit. The `F` section stores
+> per-node fidelity, so a node-less tarball is unrepresentable by design.
+
+> **What is NOT in `F`.** `integrity` (the N-row column — including the folded
+> `berryChecksumCacheKey` on its `berry-zip` z-member) and the **canonical**
 > `TarballPayload.resolution` source descriptor *when it is the recomposable bare
 > 2-key tarball* (the R row + recomposition) stay in the GRAPH section. The native
 > sidecar's `#<sha1>` fragment (canonical-URL shape) rides the N-row integrity
-> `u`-member. Everything else — `berryChecksumCacheKey` (the `ck=` slot), the
-> `nativeResolution` sidecar (the `nativeResolution=` / `nativeResolution.berry=`
-> slots), and any non-recomposable canonical resolution union — is in the **`F`
-> residual `TarballPayload`**, every artifact-metadata field *not* captured by a
+> `u`-member, and a canonical berry npm locator is recomposed by the adapter (not
+> stored). Everything else — the verbatim `nativeResolution=` sidecar and any
+> non-recomposable canonical resolution union — is in the **`F` residual
+> `TarballPayload`**, every artifact-metadata field *not* captured by a
 > graph-section home.
 
 #### F-row slot grammar
@@ -905,7 +854,7 @@ keyed by dot-path, so order is not load-bearing on the way in. A slot is
 **omitted when its field is unset**.
 
 **One uniform slot rule.** Every field after field 1 (field 1 is the positional
-TarballKey, above) is a slot of the form:
+representative node index, above) is a slot of the form:
 
 ```
 <dotpath> '=' <value>
@@ -987,12 +936,14 @@ Slots for **one** field are emitted **contiguously** and in a **deterministic
 order**: object keys in `cmpStr` order, array indices ascending. Across fields, a
 **fixed field order**:
 `license`, `deprecated`, `cpu`, `os`, `libc`, `bundled`, `engines`, `bin`,
-`funding`, `resolution`, `nativeResolution`, `ck`. Parse is keyed (by dotpath
+`funding`, `resolution`, `nativeResolution`. Parse is keyed (by dotpath
 root), so inbound order is **not** load-bearing; **emit** order is fixed for
-byte-stability. The `nativeResolution` root is the PM-native sidecar
-(`nativeResolution=<verbatim>` or the valueless `nativeResolution.berry=` marker;
-the canonical-URL shape emits no slot — its `#<sha1>` rides the N-row integrity
-`u`-member), and `ck` is the scalar `berryChecksumCacheKey`.
+byte-stability. The `nativeResolution` root is the PM-native sidecar — only the
+verbatim `nativeResolution=<string>` form is an `F` slot; the canonical-URL shape
+emits no slot (its `#<sha1>` rides the N-row integrity `u`-member) and a canonical
+berry npm locator is recomposed by the adapter (never stored). There is **no `ck`
+root**: `berryChecksumCacheKey` rides the N-row integrity column's `berry-zip`
+z-member (`z<cacheKey>/…`), not the `F` section.
 
 **Array indices MUST be contiguous from 0 (parse rule).** For any array-valued
 field (`cpu` / `os` / `libc` / `bundled`, and the array form of `funding`), the
@@ -1141,8 +1092,10 @@ recomposable 2-key tarball is reconstructed from the identity tier's R row.
 
 The `F` region is a **pure function of the graph**:
 
-- **Rows are sorted by `TarballKey` under `cmpStr`** — exactly the order
-  `graph.tarballs()` iterates.
+- **Rows are sorted by the representative node index, ascending.** The
+  representative is the minimum node index sharing the tarball's `TarballKey`, and
+  node order is itself deterministic (canonical NodeId sort, root pinned at 0), so
+  the leading column is a stable, monotonically-ordered integer key.
 - **Slots within a row are in the fixed order** of the
   [§ F-row slot grammar](#f-row-slot-grammar) (fields in the fixed list; within a
   field, object keys in `cmpStr` order and array indices ascending; a field's
@@ -1155,25 +1108,28 @@ The `F` region is a **pure function of the graph**:
 `F <n>`: **`<n>` is the number of `F` rows actually emitted** — i.e. the count of
 distinct `TarballKey`s whose residual payload has **at least one facet**. A
 tarball with an **empty residual** (every fact already on the N row — integrity,
-`ck`, recomposable resolution) emits **NO row** and is **NOT counted**. The
+the folded `berryChecksumCacheKey` z-member, recomposable resolution, or a
+canonical berry native the adapter recomposes) emits **NO row** and is **NOT
+counted**. The
 emitted row count therefore **always equals `<n>`**; a parser MAY assert
 `emitted-rows == <n>`. There is no key-only row for empty-residual tarballs, and
 `<n>` is **not** the total tarball count (which may be larger).
 
-#### Orphan rows and node-only tarballs are tolerated
+#### No orphan rows; node-only tarballs are the common case
 
-The `F` map is keyed **independently of nodes** ([§ Keyed by the full
-TarballKey](#keyed-by-the-full-tarballkey)), so two harmless asymmetries
-**round-trip** rather than erroring:
+Because an `F` row is keyed by a **node index** ([§ Keyed by the representative
+node index](#keyed-by-the-representative-node-index)), the row **always** points
+at a real node, so an orphan `F` row (one referencing no node) **cannot exist** —
+an out-of-range index is a `PARSE_FAILED`, not a tolerated entry. The
+complementary asymmetry is the common, harmless one:
 
-- **An `F` row whose TarballKey matches no `N` node** is **tolerated**: it is loaded
-  into `tarballs()` verbatim (the tarball map is keyed independently of the node
-  set, so an entry without a referencing node is a valid map entry). It is **not**
-  a parse error.
 - **A node with no `F` row** simply has an **empty residual** payload — its only
-  facts live on the N row. That is the common case and is **not** an error either.
+  facts live on the N row. That is the common case and is **not** an error.
 
-Neither asymmetry fails parse; both survive a round-trip.
+A node-less tarball (a hand-built `setTarball` with no `addNode`) has no
+representative index and is therefore **dropped** on emit rather than stored — see
+[§ Keyed by the representative node index](#keyed-by-the-representative-node-index).
+This never arises in real adapter parsing (every tarball has ≥1 referencing node).
 
 #### Severability — cutting the `F` section
 
@@ -1185,14 +1141,16 @@ fidelity degrades. Concretely:
   canonical tarball resolution** — the entire GRAPH section is untouched. `g.diff`
   compares **nodes and edges only** (never tarball payloads), so
   `g.diff(parse(graph_section_only))` is **empty on all axes** even though the
-  per-tarball `nativeResolution`/`ck` rode `F`.
+  per-tarball `nativeResolution` rode `F`.
 - What is lost is only the **residual `TarballPayload` facets** — `license`,
   `engines`, `bin`, `cpu`/`os`/`libc`, `bundled`, `deprecated`, `funding`, the
-  per-tarball `nativeResolution` sidecar (except the canonical-URL shape, whose
-  `#<sha1>` rode the N-row `u`-member) and `berryChecksumCacheKey` (`ck`), and any
-  non-canonical `resolution` union (the whole union, when it was not the bare
-  recomposable tarball) — i.e. the `tarballs()` payloads degrade to their
-  graph-section-recoverable core (integrity + recomposable canonical resolution).
+  per-tarball verbatim `nativeResolution` sidecar (the canonical-URL shape's
+  `#<sha1>` rode the N-row `u`-member and so **survives**; a canonical berry
+  native the adapter recomposes also survives), and any non-canonical
+  `resolution` union (the whole union, when it was not the bare recomposable
+  tarball) — i.e. the `tarballs()` payloads degrade to their
+  graph-section-recoverable core (integrity, the folded `berryChecksumCacheKey`,
+  and the recomposable canonical resolution all stay on the N row).
   `tarballs()` still iterates the **same keys**; only the **values** thin out.
 
 This is the structural proof of the two sections: cut `F` → identity-valid
@@ -1265,11 +1223,12 @@ of `name@version` in any registry.
 A registry tarball `@scope/widget@2.1.0` that carries a license, an engines map,
 a per-bin map, a platform-constraint array, *and* a nested array-of-objects
 `funding` tail plus a `hostingProvider`-bearing `resolution` union. Its N row
-(identity) and its `F` row (fidelity) are independent; the join is by
-`TarballKey`. Tab-expanded for reading; real bytes use a single `\t`. **No JSON
-appears anywhere** — every value is a dot-path slot.
+(identity) and its `F` row (fidelity) are independent; the join is by **node
+index** — the `F` row leads with the representative node's index, here node `0`.
+Tab-expanded for reading; real bytes use a single `\t`. **No JSON appears
+anywhere** — every value is a dot-path slot.
 
-GRAPH section (the node — JSON-free):
+GRAPH section (the node — JSON-free; this is node index `0`):
 
 ```
 @scope/widget   2.1.0   r0   ssha512-3a7f9c2e1b8d04f6
@@ -1280,18 +1239,21 @@ GRAPH section (the node — JSON-free):
 tarball's `TarballPayload.resolution` union is **not** the bare 2-key shape — see
 the `resolution.*` slots below, where the whole union is flattened verbatim.)
 
-FIDELITY section (the tarball — fidelity):
+FIDELITY section (the tarball — fidelity; field 1 is the representative node
+index `0`):
 
 ```
 F 1
-@scope/widget@2.1.0   license=MIT   cpu.0=x64   cpu.1=arm64   engines.node=>=18   engines.npm=>=9   bin.widget=bin/widget.js   bin.widget-dev=bin/dev.js   funding.0.type=opencollective   funding.0.url=https://opencollective.com/widget   resolution.type=tarball   resolution.url=https://github.com/scope/widget/releases/download/v2.1.0/widget-2.1.0.tgz   resolution.hostingProvider=github
+0   license=MIT   cpu.0=x64   cpu.1=arm64   engines.node=>=18   engines.npm=>=9   bin.widget=bin/widget.js   bin.widget-dev=bin/dev.js   funding.0.type=opencollective   funding.0.url=https://opencollective.com/widget   resolution.type=tarball   resolution.url=https://github.com/scope/widget/releases/download/v2.1.0/widget-2.1.0.tgz   resolution.hostingProvider=github
 ```
 
 Decoding the `F` row, slot by slot — the schema drives every re-typing:
 
-- **key** `@scope/widget@2.1.0` — the full TarballKey (no `+patch=` / `+src=`
-  here; bare). Peer-virtual siblings of this tarball, if any, would share this
-  **one** row.
+- **field 1** `0` — the **representative node index**. Resolving it gives node
+  `@scope/widget@2.1.0`, whose `(name, version)` recompute the `TarballKey`
+  `@scope/widget@2.1.0` (no `+patch=` / `+src=` here; bare). Peer-virtual siblings
+  of this tarball, if any, would share this **one** row, keyed by the minimum of
+  their indices.
 - **`license=MIT`** — scalar (depth 0); schema type `string` → `'MIT'`.
 - **`cpu.0=x64` · `cpu.1=arm64`** — two array-index slots; schema type `string[]`
   → `['x64','arm64']` (indices ascending → order preserved).
@@ -1316,37 +1278,43 @@ Decoding the `F` row, slot by slot — the schema drives every re-typing:
   `{ type: 'tarball', url: 'https://…/widget-2.1.0.tgz', hostingProvider:
   'github' }`.
 
-On parse, the node computes its `TarballKey` (`@scope/widget@2.1.0`), finds this
-`F` row by key, groups the slots by **root key segment** (`license`, `cpu`,
-`engines`, `bin`, `funding`, `resolution`, `nativeResolution`, `ck`),
-reconstructs each field by its model type, then overlays `integrity` from the
-N-row column and resolves the `nativeResolution` (the berry marker → recomposed
-locator, or the N-row `u`-member fragment → recomposed URL). Note the canonical
+On parse, the `F` row's field 1 (`0`) resolves to node `@scope/widget@2.1.0`,
+whose computed `TarballKey` (`@scope/widget@2.1.0`) becomes the key under which
+the residual is stored; each node then finds its residual by computing **its own**
+`TarballKey` and looking it up. The slots are grouped by **root key segment**
+(`license`, `cpu`, `engines`, `bin`, `funding`, `resolution`,
+`nativeResolution`), each field reconstructed by its model type, then `integrity`
+is overlaid from the N-row column (lifting the folded `berryChecksumCacheKey` off
+its `berry-zip` z-member) and the `nativeResolution` resolved (a verbatim `F` slot
+passes through; the N-row `u`-member fragment → recomposed URL). Note the canonical
 resolution would have been recomposed from `r0` **had** the union been the bare
 two-key shape; here it is **not** (the `hostingProvider` extra key), so the
 flattened `resolution.*` slots win and **no** recomposition happens — exactly the
 [§ payload.resolution omission](#payloadresolution-omission) rule.
 
 A second, **flat-common** example for tarballs whose entire residual is a scalar
-or a flat one-level field:
+or a flat one-level field (field 1 is the representative node index — here `12`
+is `loose-envify@1.4.0` and `7` is `react@16.0.0`):
 
 ```
-loose-envify@1.4.0    bin=cli.js
-react@16.0.0          engines.node=>=0.10.0
+7     engines.node=>=0.10.0
+12    bin=cli.js
 ```
 
 `loose-envify` carries the **string** form of `bin` (`bin=`, depth 0 — no further
 segment, so it is the string form, not the map form); `react` carries one engines
-map entry (`engines.node=…`). Both round-trip type-exact from the schema — the
+map entry (`engines.node=…`). (Rows are sorted by index, so `react` at `7`
+precedes `loose-envify` at `12`.) Both round-trip type-exact from the schema — the
 `bin` string stays a string, the `engines` value rebuilds as a one-entry
 `Record`.
 
 A third example shows the **key-segment escape** for a map key that itself
 contains a dot — a `bin` command-name `foo.bar`, whose literal dot must not be
-read as a segment separator:
+read as a segment separator (field 1 `3` is the representative node of
+`some-pkg@3.0.0`):
 
 ```
-some-pkg@3.0.0    bin.foo\.bar=lib/foo.bar.js
+3    bin.foo\.bar=lib/foo.bar.js
 ```
 
 The two real dots in the dotpath separate the segments `bin` · `foo\.bar`; the
@@ -1358,10 +1326,11 @@ Every leaf here is a string; no value cast happens.
 
 A fourth example shows the **non-canonical `resolution` `unknown` case** on
 corpus-shaped data — the value after the first `=` is **only TSV-escaped, never
-dot-split** even when it contains `=`, `.`, `#`, `<`, `>`, `%`, `&`:
+dot-split** even when it contains `=`, `.`, `#`, `<`, `>`, `%`, `&` (field 1 `4`
+is the representative node of `weird-dep@0.0.1`):
 
 ```
-weird-dep@0.0.1    resolution.type=unknown    resolution.raw=git+ssh://g@h/o/r.git#v=1.2.3&path=a.b<c>%2Fd
+4    resolution.type=unknown    resolution.raw=git+ssh://g@h/o/r.git#v=1.2.3&path=a.b<c>%2Fd
 ```
 
 The `resolution.raw` slot splits on its **first** `=` only: everything before is
@@ -1479,7 +1448,9 @@ payloads, and a byte-stable body re-serialize) — now **without any checksum**:
   a **transport-only `u`-member** here and is restored into the recomposed
   `nativeResolution` on parse (in the reattach phase).
 - **`berryChecksumCacheKey`** — the per-tarball yarn-berry checksum-cache-key
-  prefix, carried in the dedicated `F` **`ck=` slot**.
+  prefix, **folded into the N-row integrity column's `berry-zip` z-member** as
+  `z<cacheKey>/<algo>-<digest>` (it is literally that checksum's prefix — no
+  separate `F` slot).
 - **`peerContext`** — peer-virtualisation (including nested/recursive contexts
   and pnpm-v9 hashed peer-set tokens), carried in the N-row `peer=` slot.
 - **`patch` slot** — both the canonical 128-hex form and the
@@ -1494,7 +1465,7 @@ payloads, and a byte-stable body re-serialize) — now **without any checksum**:
   empty-path root pinned at node 0**.
 - **Full `TarballPayload` residual** — `license`, `deprecated`, `engines`, `bin`,
   `cpu` / `os` / `libc`, `bundledDependencies` (the `bundled` slot root),
-  `funding`, `nativeResolution`, `berryChecksumCacheKey` (`ck`), and any
+  `funding`, the verbatim `nativeResolution`, and any
   non-canonical `resolution` union — all flattened to **dot-path slots** in the
   **severable `F` section** (no JSON), keyed by `TarballKey`, shared across
   peer-virtual siblings. The typed fields round-trip **structure-exact** via the
@@ -1506,9 +1477,11 @@ payloads, and a byte-stable body re-serialize) — now **without any checksum**:
   `{type:'tarball', url}` two-key union is **omitted and recomposed** from the R
   row.
 - **`nativeResolution`** — the per-tarball PM-native resolution **sidecar
-  string**, encoded **exact-match-or-verbatim** in the `F` `nativeResolution=` /
-  `nativeResolution.berry=` slot or the integrity `u`-member. Workspace members
-  carry none — their `@workspace:` locator recomposes from `workspacePath`.
+  string**, encoded **exact-match-or-verbatim**: a non-canonical native in the `F`
+  `nativeResolution=` slot, a canonical-URL native's `#<sha1>` on the integrity
+  `u`-member, and a canonical **berry** npm locator recomposed by the adapter
+  (never stored). Workspace members carry none — their `@workspace:` locator
+  recomposes from `workspacePath`.
 - **`LayoutHints`** — the graph's single `Graph.layoutHints()` value, carried in
   the optional `L` line.
 
@@ -1583,9 +1556,9 @@ key-segment escape choice), plus a cosmetic slot-name call.
 
 4. **Slot key names — cosmetic, still open.** Field roots are spelled out in full
    (`license` / `deprecated` / `cpu` / `os` / `libc` / `engines` / `bin` /
-   `funding` / `resolution`); `bundled` is the short token for
-   `bundledDependencies` (matching the `carries` vocabulary — the slot root is
-   `bundled`, e.g. `bundled.0=foo`, **not** `bundledDependencies`). Whether any
+   `funding` / `resolution`); `bundled` is the short slot root for
+   `bundledDependencies` (the slot root is `bundled`, e.g. `bundled.0=foo`,
+   **not** `bundledDependencies`). Whether any
    should shorten (`lic=`, `eng=`; note `dep=` collides with the edge **kind**
    word) is a style call — the full words cost ≈0 after gzip and keep the row
    eyeball-able.

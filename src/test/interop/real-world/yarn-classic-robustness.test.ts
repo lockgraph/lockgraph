@@ -103,9 +103,17 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
     expect(patched.length).toBe(1)
     expect(unpatched.length).toBe(1)
     // The sentinel node round-trips its verbatim `file:` locator (incl. the
-    // `::locator=` qualifier); the registry node keeps its `npm:` resolution.
+    // `::locator=` qualifier) — a NON-canonical native, so it is stored. The
+    // registry node's resolution is the canonical `@k8ts/sample-interfaces@npm:0.6.3`,
+    // which the berry adapter NO LONGER stores (it is recomposed from the node's
+    // (name, version) at emit), so its stored native is undefined while its
+    // canonical tarball resolution survives.
     expect(g.tarballOf(patched[0]!.id)?.nativeResolution).toMatch(/@file:.*::(hash=[0-9a-f]+&)?locator=/)
-    expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBe('@k8ts/sample-interfaces@npm:0.6.3')
+    expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBeUndefined()
+    expect(g.tarballOf(unpatched[0]!.id)?.resolution).toEqual({
+      type: 'tarball',
+      url:  'https://registry.npmjs.org/@k8ts/sample-interfaces/-/sample-interfaces-0.6.3.tgz',
+    })
 
     // Faithful round-trip: stringify → reparse yields the same two distinct nodes.
     const out = stringify('yarn-berry-v8', g)
