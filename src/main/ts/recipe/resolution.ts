@@ -27,7 +27,7 @@ import { createHash } from 'node:crypto'
 export type HostingProvider = 'github' | 'gitlab' | 'bitbucket'
 
 export type ResolutionCanonical =
-  | { type: 'tarball';   url:  string; hostingProvider?: HostingProvider }
+  | { type: 'tarball';   url:  string; hostingProvider?: HostingProvider; bind?: string }
   | { type: 'git';       url:  string; sha: string; hostingProvider?: HostingProvider }
   | { type: 'directory'; path: string }
   | { type: 'unknown';   raw:  string }
@@ -95,13 +95,38 @@ export function parse(raw: string, options: ParseOptions = {}): ResolutionCanoni
 // Inner dispatch for yarn-berry locators (`<protocol>:<spec>` peeled).
 function parseInner(protocol: string, spec: string, raw: string, options: ParseOptions): ResolutionCanonical {
   switch (protocol) {
-    case 'npm':
+    case 'npm': {
       // yarn-berry `<n>@npm:<ver>` — registry tarball; URL derived by
       // convention from the npmjs default registry per ADR-0014 §4.F3
       // (host is attribution; identity drops the host for the
       // (name, version) tuple). `npm:<n2>@<ver>` (alias) collapses to
       // `<n2>` as the underlying name.
-      return { type: 'tarball', url: deriveRegistryUrl(options.name, spec) }
+      //
+      // BIND MODIFIERS (ADR-0032 §"+src=" extension): a yarn-berry npm
+      // locator may carry a `::<key>=<value>&…` bind suffix that pins the
+      // exact fetch (private-registry mirror archives, integrity pins, etc.).
+      // The bind MUST NOT sweep into the derived version (it would corrupt
+      // the URL) and MUST fork identity — otherwise two entries differing
+      // ONLY by the bind collapse onto one NodeId (#2b loss).
+      const bindIdx     = spec.indexOf('::')
+      const version     = bindIdx >= 0 ? spec.slice(0, bindIdx) : spec
+      const bindSuffix = bindIdx >= 0 ? spec.slice(bindIdx + 2) : undefined
+      if (bindSuffix !== undefined) {
+        // `__archiveUrl=<enc>` — the bind names the ACTUAL fetch source (a
+        // private-registry mirror archive). The decoded archive URL IS the
+        // canonical tarball url: a non-registry host that naturally forks
+        // `+src` with zero new machinery. Other binds (`version=`, `hash=`,
+        // …) keep the registry url but ride the `bind` field, which the
+        // source discriminator folds in so a registry-hosted tarball WITH a
+        // bind is non-bare.
+        const archiveUrl = archiveUrlOfBind(bindSuffix)
+        if (archiveUrl !== undefined) {
+          return { type: 'tarball', url: archiveUrl }
+        }
+        return { type: 'tarball', url: deriveRegistryUrl(options.name, version), bind: bindSuffix }
+      }
+      return { type: 'tarball', url: deriveRegistryUrl(options.name, version) }
+    }
     case 'portal':
       return { type: 'directory', path: normaliseDirectoryPath(spec) }
     case 'file':
@@ -143,6 +168,26 @@ function deriveRegistryUrl(name: string | undefined, spec: string): string {
 
 function looksLikeNpmName(s: string): boolean {
   return /^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/i.test(s)
+}
+
+// Extract `__archiveUrl=<percent-encoded-url>` from a yarn-berry `::` bind
+// suffix and decode it to the literal fetch URL. The suffix is an
+// `&`-joined list of `key=value` pairs (yarn's qualifier grammar); we pick
+// the `__archiveUrl` pair. Returns undefined when the bind carries no
+// archive URL or the value fails to decode.
+function archiveUrlOfBind(bindSuffix: string): string | undefined {
+  for (const pair of bindSuffix.split('&')) {
+    const eq = pair.indexOf('=')
+    if (eq < 0) continue
+    if (pair.slice(0, eq) !== '__archiveUrl') continue
+    const enc = pair.slice(eq + 1)
+    try {
+      return decodeURIComponent(enc)
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 function registryUrlOf(name: string, version: string): string {
@@ -400,9 +445,16 @@ function hostOfTarballUrl(url: string): string | undefined {
  *
  *   - `git`                       → `git\0<url>\0<sha>`        (slot)
  *   - `tarball` (non-registry)    → `tarball\0<host>`         (slot)
+ *   - `tarball` (with `::` bind)  → `tarball\0<host>\0bind=…` (slot)
  *   - `tarball` (default registry)→ undefined                 (bare)
  *   - `directory`                 → undefined                 (bare)
  *   - `unknown`                   → undefined                 (bare)
+ *
+ * The `tarball` BIND slot (ADR-0032 §"+src=" extension) forks two entries that
+ * share the same `(name, version, host)` but differ by a yarn-berry `::` bind
+ * modifier (`version=`, `hash=`, …). The `__archiveUrl=` bind is NOT carried
+ * here — it canonicalises to its non-registry archive host directly, which the
+ * non-registry tarball slot already forks.
  *
  * `directory` and `unknown` stay BARE deliberately (ADR-0032 §"bare classes"):
  *
@@ -440,6 +492,14 @@ function canonicalSourceStringOf(resolution: ResolutionCanonical): string | unde
       return `git\0${resolution.url}\0${resolution.sha}`
     case 'tarball': {
       const host = hostOfTarballUrl(resolution.url)
+      // A `::` bind (e.g. `version=`, `hash=`) pins a distinct fetch under the
+      // SAME (name, version, host), so it MUST fork identity even for a default
+      // registry host — append it to the source string so the tarball is
+      // NON-bare. Without a bind, a default-registry tarball stays bare
+      // (undefined) exactly as before: the 99% path is untouched.
+      if (resolution.bind !== undefined) {
+        return `tarball\0${host ?? resolution.url}\0bind=${resolution.bind}`
+      }
       return host !== undefined && REGISTRY_HOSTS.has(host) ? undefined : `tarball\0${host ?? resolution.url}`
     }
     case 'directory':

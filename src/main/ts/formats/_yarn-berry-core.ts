@@ -2050,12 +2050,16 @@ function irreducibleCollisionMessage(
     r !== undefined && (r.includes('@link:') || r.includes('@portal:'))
   const isPatch = (r: string | undefined): boolean =>
     r !== undefined && r.includes('@patch:')
+  const isBind = (r: string | undefined): boolean =>
+    r !== undefined && r.includes('::')
 
-  let hint = 'likely npm: alias, patch: collision, or workspace link: locator collision'
+  let hint = 'likely npm: alias, patch: collision, workspace link: locator collision, or a `::` bind modifier (`::__archiveUrl=` / `::version=` / `::hash=`)'
   if (isLink(currentResolution) || isLink(priorResolution)) {
     hint = 'likely workspace link: / portal: locator collision (yarn `::locator=` qualifier was lost)'
   } else if (isPatch(currentResolution) || isPatch(priorResolution)) {
     hint = 'likely patch: collision'
+  } else if (isBind(currentResolution) || isBind(priorResolution)) {
+    hint = 'likely a `::` bind modifier collision (`::__archiveUrl=` private-registry mirror, `::version=`, or `::hash=` — the bind was lost from the NodeId)'
   }
 
   const resolutions = [priorResolution, currentResolution].filter((r): r is string => typeof r === 'string')
