@@ -99,7 +99,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=14.18"
   },
   "scripts": {
     "build": "tsup",
@@ -110,6 +110,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "node-fetch-native": "^1.6.7",
     "semver": "^7.6.0"
   },
   "devDependencies": {

@@ -14,11 +14,16 @@
 // dist-tags ship under the hyphenated key `'dist-tags'`; we re-key it
 // to `distTags` for the contract.
 //
-// Mock-fetch testable: `opts.fetch` defaults to `globalThis.fetch`,
-// callers in tests pass a spy. Real network calls happen ONLY when no
-// `fetch` override is supplied AND the consumer triggers a method.
+// Fetch impl: `opts.fetch` overrides (tests pass a spy); otherwise the
+// default is node-fetch-native — `globalThis.fetch` on Node 18+ (zero-
+// overhead passthrough), a polyfill on Node 14–17 (the lib's runtime
+// floor). Real network calls happen ONLY when no `fetch` override is
+// supplied AND the consumer triggers a method. Proxy / custom-CA
+// environments should inject a pre-configured `opts.fetch`: the default
+// reads no `HTTP_PROXY` env below Node 24.
 
 import semver from 'semver'
+import { fetch as nodeFetchNative } from 'node-fetch-native'
 import { parseSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 
@@ -27,7 +32,11 @@ export interface LiveRegistryOptions {
   url?:   string
   /** Bearer token for private registries (Authorization: Bearer <token>). */
   auth?:  string
-  /** Fetch implementation. Default: globalThis.fetch. Pass to mock in tests. */
+  /**
+   * Fetch implementation. Default: node-fetch-native (native `fetch` on Node
+   * 18+, polyfill on 14–17). Pass to mock in tests, or to supply a
+   * proxy / custom-CA-configured client.
+   */
   fetch?: typeof fetch
 }
 
@@ -36,9 +45,9 @@ const INSTALL_ACCEPT = 'application/vnd.npm.install-v1+json, application/json;q=
 
 export function liveRegistry(opts: LiveRegistryOptions = {}): RegistryAdapter {
   const baseUrl  = stripTrailingSlash(opts.url ?? DEFAULT_URL)
-  const fetchImpl = opts.fetch ?? globalThis.fetch
+  const fetchImpl = opts.fetch ?? (nodeFetchNative as typeof fetch)
   if (typeof fetchImpl !== 'function') {
-    throw new Error('liveRegistry: no fetch implementation available — pass opts.fetch')
+    throw new Error('liveRegistry: opts.fetch is not a function')
   }
 
   const auth = opts.auth

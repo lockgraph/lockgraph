@@ -218,13 +218,21 @@ describe('registry/live — resolve()', () => {
 })
 
 describe('registry/live — option handling', () => {
-  it('throws at construction when no fetch is available and none supplied', () => {
+  it('constructs without a global fetch — node-fetch-native is the default impl', () => {
+    // The default fetch is node-fetch-native (native `fetch` on Node 18+, a
+    // polyfill on 14–17), so construction never depends on `globalThis.fetch`.
     const originalFetch = (globalThis as any).fetch
     try {
       delete (globalThis as any).fetch
-      expect(() => liveRegistry()).toThrow(/fetch/)
+      const reg = liveRegistry()
+      expect(typeof reg.packument).toBe('function')
+      expect(typeof reg.resolve).toBe('function')
     } finally {
       ;(globalThis as any).fetch = originalFetch
     }
+  })
+
+  it('throws at construction when opts.fetch is supplied but not a function', () => {
+    expect(() => liveRegistry({ fetch: 123 as unknown as typeof fetch })).toThrow(/fetch/)
   })
 })

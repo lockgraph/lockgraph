@@ -41,7 +41,10 @@ export default defineConfig({
   dts:       true,
   clean:     true,
   outDir:    'dist',
-  target:    'node20',
+  // Floor is Node 14.18 (the `node:` import-prefix introduced there); the
+  // codebase uses no runtime API above 14 and no `import.meta`. esbuild
+  // down-levels syntax to this target. CI still tests 20/22/24.
+  target:    'node14',
   sourcemap: false,
   // Bundling: each entry self-contained — shared internals (errors.ts,
   // graph.ts, _yarn-syml.ts, _pnpm-yaml.ts, format cores) get inlined per
