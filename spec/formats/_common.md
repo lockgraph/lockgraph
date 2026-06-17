@@ -1,6 +1,7 @@
 # `_common` — shared normative rules for the format specs
 
-> Status: stable.
+> Status: stable (shared normative rules; consumed by the yarn-berry family + integrity/patch/reserved-vocab refs).
+> Updated: 2026-06-16
 > This is the shared **published** source for rules that several format
 > specs depend on, relocated verbatim from internal (unpublished) ADRs so
 > an external reader never has to consult them. Where a format spec

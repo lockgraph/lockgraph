@@ -1,6 +1,7 @@
 # `pnpm-v6` — pnpm `pnpm-lock.yaml` (lockfileVersion 6.x)
 
-> Status: stub.
+> Status: stable (adapter + pnpm-flat round-trip suite; collapsed-root + `@`-id grammar covered).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 ## Compatibility

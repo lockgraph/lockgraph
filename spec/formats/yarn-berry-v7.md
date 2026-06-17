@@ -1,6 +1,7 @@
 # `yarn-berry-v7` — yarn berry `yarn.lock` (`__metadata.version: 7`)
 
-> Status: preview.
+> Status: preview (adapter + round-trip tested; v6/v8 hybrid — Source-only, no frozen contract).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 The version-invariant emit contract — the *Graph-level roundtrip*
@@ -28,7 +29,7 @@ normative rules reference published [ADR-0023](../decisions/0023-graph-modificat
 
 | PM | semver range | Notes |
 |----|--------------|-------|
-| yarn | `>=4.0.0-rc.27` | Stable 4.x readers still accept v7; the format was deprecated as а default but не rejected on parse |
+| yarn | `>=4.0.0-rc.27` | Stable 4.x readers still accept v7; the format was deprecated as a default but not rejected on parse |
 
 ## File
 
@@ -67,7 +68,7 @@ Parse / stringify / graph-level mutate roundtrip / enrich / optimize
 implemented against the fixture matrix at
 `src/test/resources/fixtures/lockfiles/*/yarn-berry-v7.lock` (synthesised
 by parsing each existing `yarn-berry-v8.lock` and re-emitting through
-the v7 stringifier; the family pipeline guarantees this is а lossless
+the v7 stringifier; the family pipeline guarantees this is a lossless
 graph roundtrip).
 
 Real-world parse coverage at
@@ -94,7 +95,7 @@ true }`, yielding these deltas on top of that shared contract:
 - `__metadata.version` emits the literal `7`.
 - `__metadata.cacheKey` defaults to absent; when present (caller-
   supplied via `options.cacheKey` or sidecar-preserved from parse) it
-  emits as а bare numeric literal — pre-v8 form, no string quoting.
+  emits as a bare numeric literal — pre-v8 form, no string quoting.
 - Inner `dependencies` / `optionalDependencies` emit the quoted
   protocol-bearing form (`dep: "npm:2.0.0"`) — borrowed from v8/v9.
 - `checksum` values round-trip whatever was parsed (the integrity model,
@@ -110,8 +111,8 @@ true }`, yielding these deltas on top of that shared contract:
 
 ## Quirks
 
-- v7 was а transitional default только during the Yarn 4 RC window.
-  Stable Yarn 4.0.0 jumped its default к v8; v7 lockfiles in the wild
+- v7 was a transitional default only during the Yarn 4 RC window.
+  Stable Yarn 4.0.0 jumped its default to v8; v7 lockfiles in the wild
   are typically RC-era artefacts that survived without regeneration.
 - The hybrid encoding (v8-style ranges + v6-style checksum) is the
   defining marker — neither v6 nor v8 patterns match in isolation.

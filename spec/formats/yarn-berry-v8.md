@@ -1,6 +1,7 @@
 # `yarn-berry-v8` — yarn berry `yarn.lock` (`__metadata.version: 8`)
 
-> Status: preview.
+> Status: preview (adapter + round-trip + structured-fields suite; Source-only, no frozen contract).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 The version-invariant emit contract — the *Graph-level roundtrip*

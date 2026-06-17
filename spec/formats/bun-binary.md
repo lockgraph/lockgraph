@@ -1,6 +1,7 @@
 # `bun-binary` — bun `bun.lockb`
 
-> Status: deferred.
+> Status: deferred (frontier — permanent non-goal; detection-only, no parser/writer).
+> Updated: 2026-06-16
 > Provenance: Reverse-engineered (anatomy only, for detection).
 
 > **Permanent non-goal** — read body. `deferred` here means

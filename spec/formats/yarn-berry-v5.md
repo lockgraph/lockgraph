@@ -1,6 +1,7 @@
 # `yarn-berry-v5` — yarn berry `yarn.lock` (`__metadata.version: 5`)
 
-> Status: preview.
+> Status: preview (adapter + round-trip tested; read-side completion only — Source-only, no frozen contract).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 The version-invariant emit contract — the *Graph-level roundtrip*

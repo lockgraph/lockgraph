@@ -1,6 +1,7 @@
 # `npm-3` — npm `package-lock.json` (lockfileVersion 3)
 
-> Status: stub.
+> Status: stable (adapter + flat-family round-trip suite).
+> Updated: 2026-06-16
 > Provenance: **Official**.
 
 ## Compatibility

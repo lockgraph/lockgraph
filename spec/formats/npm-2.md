@@ -1,6 +1,7 @@
 # `npm-2` — npm `package-lock.json` (lockfileVersion 2)
 
-> Status: stub.
+> Status: stable (adapter + flat-family round-trip suite; dual-mode drift covered).
+> Updated: 2026-06-16
 > Provenance: **Official**.
 
 ## Compatibility

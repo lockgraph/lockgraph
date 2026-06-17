@@ -1,6 +1,7 @@
 # `yarn-classic` — yarn 1 `yarn.lock`
 
-> Status: preview.
+> Status: stable (adapter + round-trip + robustness/edge-case suites).
+> Updated: 2026-06-16
 > Provenance: **Source-only** — no published spec; format is a custom
 > yaml-like grammar implemented in the yarn 1 parser.
 

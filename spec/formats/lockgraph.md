@@ -1,6 +1,7 @@
 # `lockgraph` — native graph serialization
 
-> Status: **preview**. No contract declared.
+> Status: **preview** (native format; adapter + round-trip identity suite; no external readers/writers, no contract declared).
+> Updated: 2026-06-16
 > Provenance: **Native** — this project owns the format end-to-end (concept,
 > grammar, encoding). It is **not** a package-manager lockfile; it is a
 > portable, versioned serialization of this library's L2 [Graph](#vocabulary).
@@ -1393,10 +1394,10 @@ the compressor handle size. The principles, and their honest costs:
   per-tarball **fidelity** and is **severable**. Splitting them lets a consumer
   who only needs the graph (a diff, a topology check, an audit-scope scan) skip
   the metadata wholesale, and keeps the identity rows eyeball-able without JSON
-  noise. The owner rejected JSON **anywhere** in the body — not interleaved in the
-  graph rows, and not even as a confined escape-hatch slot; the redesign honors
-  that by **fully flattening** the `F` section to dot-path slots, so the **only**
-  remaining canonical-JSON encoding is the optional `L` line.
+  noise. The format places no JSON **anywhere** in the body — not interleaved in the
+  graph rows, and not even as a confined escape-hatch slot; the `F` section is
+  **fully flattened** to dot-path slots, so the **only** remaining canonical-JSON
+  encoding is the optional `L` line.
 - **Store facts; derive only pure mechanics, under an exact-match guard.** The
   body stores the model's *facts* explicitly: the **full** `TarballPayload`
   residual (across the `F` dot-path slots, not a lossy subset),
@@ -1510,17 +1511,16 @@ this format, **replaces** an inline checksum.
 
 ## Design notes & open items
 
-Most architectural decisions below are **RESOLVED**; a few remain as open items the
-owner may want to confirm (the `funding` totality trade, the region letter, the
+Most architectural decisions below are **RESOLVED**; a few remain as open items
+still to confirm (the `funding` totality trade, the region letter, the
 key-segment escape choice), plus a cosmetic slot-name call.
 
-1. **The `F` region letter — OPEN (owner letter chosen).** The region is **`F`**
-   ("fidelity"), the owner's pick — it names *what the section is* (the severable
-   fidelity tier) rather than *what the row keys on*. An earlier design used `T`
-   ("tarball", what the row keys on); `F` was chosen to foreground the
-   identity-vs-fidelity split that is now the format's spine. Left **open** only
-   in case the owner wants to reconsider `T` / `M` (metadata) / `A` (artifact)
-   against `F` now that the section is fully flat.
+1. **The `F` region letter — OPEN.** The region is **`F`** ("fidelity") — the
+   letter names *what the section is* (the severable fidelity tier) rather than
+   *what the row keys on*. An earlier design used `T` ("tarball", what the row
+   keys on); `F` foregrounds the identity-vs-fidelity split that is now the
+   format's spine. Open question: whether to reconsider `T` / `M` (metadata) /
+   `A` (artifact) against `F` now that the section is fully flat.
 
 2. **`funding` value type-tags vs total-in-practice — OPEN (the real v1 trade).**
    The dot-path encoding is **total** for every schema-typed field (the schema
@@ -1538,7 +1538,7 @@ key-segment escape choice), plus a cosmetic slot-name call.
    v2 should carry an optional value type-tag on `funding` leaves (e.g. a
    `~b`/`~n`/`~z` suffix marking boolean/number/null, and an empty-container
    marker) to restore provable totality — at the cost of a small in-band tag
-   vocabulary the owner has so far rejected. v1 ships total-in-practice; this is
+   vocabulary, which v1 does not carry. v1 ships total-in-practice; this is
    the one place the design is not airtight.
 
 3. **The key-segment escape (`\.` / `\=`) — OPEN.** A map key that contains a `.`
@@ -1551,7 +1551,7 @@ key-segment escape choice), plus a cosmetic slot-name call.
    the two bytes, or a different sentinel) — the backslash reuses the byte the TSV
    layer already escapes on, which is consistent but means a key with a literal
    backslash is handled **only** by the TSV layer (`\\` on the wire), with the
-   segment escape left strictly to `.`/`=`. The owner may want to confirm the
+   segment escape left strictly to `.`/`=`. Open question: confirming the
    layering order.
 
 4. **Slot key names — cosmetic, still open.** Field roots are spelled out in full

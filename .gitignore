@@ -124,14 +124,19 @@ docs
 temp
 synp
 
-# Spec (early iteration) — only spec/formats/*.md tracked; everything
-# else under spec/ is contributor-private until promoted.
+# Spec (early iteration) — spec/formats, spec/pm and spec/registry *.md are
+# tracked (promoted reference); everything else under spec/ is
+# contributor-private until promoted.
 spec/*
 !spec/formats/
 spec/formats/*
 !spec/formats/*.md
-spec/formats/_template.md
-spec/formats/README.md
+!spec/pm/
+spec/pm/*
+!spec/pm/*.md
+!spec/registry/
+spec/registry/*
+!spec/registry/*.md
 
 # Internal interactions / per-project artel runtime
 .artel

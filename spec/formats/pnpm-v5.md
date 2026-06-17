@@ -1,6 +1,7 @@
 # `pnpm-v5` — pnpm `pnpm-lock.yaml` (lockfileVersion 5.x)
 
-> Status: stub.
+> Status: stable (adapter + pnpm-flat round-trip suite; pnpm 7 default-5.4 verified).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 ## Compatibility

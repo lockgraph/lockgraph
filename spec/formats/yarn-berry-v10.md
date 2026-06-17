@@ -1,6 +1,7 @@
 # `yarn-berry-v10` — yarn berry `yarn.lock` (`__metadata.version: 10`)
 
-> Status: preview.
+> Status: preview (adapter + round-trip tested; format from yarn 5 dev branch, unreleased upstream — contract may still shift before GA).
+> Updated: 2026-06-16
 > Provenance: **Source-only** (reverse-engineered from yarnpkg/berry dev branch).
 
 The completeness contract — stringify, modify, enrich, optimize —
@@ -64,7 +65,7 @@ from v9 is the `__metadata.version: 10` field.
 
 Identical to v9. The bump is mechanical (a `version: N` field) ahead
 of yarn 5 GA. If yarn 5 ships a structural change, the family config
-forks here без re-pointing v10 to share v9's identity.
+forks here without re-pointing v10 to share v9's identity.
 
 ## Capabilities
 
@@ -99,7 +100,7 @@ Inherits v9.
 ## Open questions
 
 > **Deferred to yarn 5 GA.** What fields beyond `__metadata.version`
-> actually change в the v9 → v10 transition? Diff yarn 5 release
+> actually change in the v9 → v10 transition? Diff yarn 5 release
 > `Project.ts` against 4.14.x once a GA tag exists. The shared canonical
 > form in [`_common.md` §1](./_common.md#1-yarn-berry-emit-invariants-version-invariant)
 > is *our* canonical form; byte-identity to yarn 5 output is a bonus, not

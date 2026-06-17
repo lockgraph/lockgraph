@@ -1,6 +1,7 @@
 # `bun-text` — bun `bun.lock`
 
-> Status: stub.
+> Status: stable (adapter + round-trip tested; bun audit-fix native remediation still absent upstream).
+> Updated: 2026-06-16
 > Provenance: Official (since Bun 1.2).
 
 **Primary bun target** — audit-friendly, human-readable; all bun-related

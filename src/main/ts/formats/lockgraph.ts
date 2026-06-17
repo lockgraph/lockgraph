@@ -18,7 +18,7 @@
 // to the first (the GRAPH section AND the F section are canonical); only META's
 // volatile `generatedAt` / `generator` lines vary.
 //
-// DOCUMENT LAYOUT (see spec/formats/lockgraph.draft.md for the normative grammar):
+// DOCUMENT LAYOUT (see spec/formats/lockgraph.md for the normative grammar):
 //
 //   META       — provenance, NOT hashed. `@lockgraph 1`, `schema 1.0`,
 //                `generatedAt` (RFC-3339 UTC), the generator id. No checksum.

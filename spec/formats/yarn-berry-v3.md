@@ -1,6 +1,7 @@
 # `yarn-berry-v3` — yarn berry `yarn.lock` (`__metadata.version: 3`)
 
-> Status: deferred.
+> Status: deferred (frontier — RC-only schema, no adapter; recorded for recognition only).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 Pre-release-only schema. Defaulted in yarn `2.0.0-rc.4` … `2.0.0-rc.17`

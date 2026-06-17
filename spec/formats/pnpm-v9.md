@@ -1,6 +1,7 @@
 # `pnpm-v9` — pnpm `pnpm-lock.yaml` (lockfileVersion 9)
 
-> Status: stub.
+> Status: stable (adapter + pnpm-flat round-trip suite; packages/snapshots split covered).
+> Updated: 2026-06-16
 > Provenance: **Source-only**.
 
 ## Compatibility
