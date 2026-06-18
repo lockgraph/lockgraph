@@ -1325,7 +1325,8 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // descriptor — so the exact `<name>@npm:<version>` is used only as a LAST-RESORT
   // anchor when the node has no incoming-edge descriptor (keeping reparse bindable),
   // never prepended alongside real ranges (the B-EXACT synthesis bug).
-  const native = graph.tarballOf(node.id)?.nativeResolution
+  const payload = graph.tarballOf(node.id)
+  const native = payload?.nativeResolution
   const self = selfDescriptorOfNode(node, native)
   const specs = new Set<string>()
   if (self !== undefined) specs.add(self)
@@ -1374,8 +1375,17 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // only reached for cross-PM converts and hand-built / mutated-replaced nodes).
   // Also covers the zero-descriptor orphan (a registry pin whose only consumer
   // dropped) — it gets a bindable key.
+  //
+  // TARBALL SYNTHESIS (cross-format convert): a NON-default-registry or
+  // `::`-bound tarball synth node anchors on the SAME `::__archiveUrl=…` locator
+  // its `resolution:` carries (via `synthesisedBerryTarballLocator`), NOT the bare
+  // `<name>@npm:<version>` — otherwise a registry copy and a private-registry copy
+  // at the same name@version both anchor on the identical `<name>@npm:<version>`
+  // key and the second silently overwrites the first on emit. A default-registry
+  // synth node (and the non-tarball cases) keep the plain `<name>@npm:<version>`
+  // anchor.
   if (!Array.from(specs).some(spec => spec.startsWith(`${node.name}@`))) {
-    specs.add(`${node.name}@npm:${node.version}`)
+    specs.add(synthesisedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
   }
 
   // Stable, content-sorted key (matches yarn's lexical multi-descriptor order;
@@ -1597,6 +1607,44 @@ function entryOfNode(
   return entry
 }
 
+// A yarn-berry locator for THIS node is always `<name>@<protocol>:<spec>` —
+// it begins with `<name>@`. A FOREIGN resolution sidecar leaked by a
+// cross-format source (a yarn-classic / npm / pnpm tarball URL is a bare
+// `https://…`, never `<name>@…`) is NOT a valid berry locator and must be
+// re-synthesised before emit. Mirrors the same `startsWith(`${name}@`)` gate
+// `selfDescriptorOfNode` uses; an npm-ALIAS locator (`<name>@npm:<other>@<ver>`)
+// also begins with `<name>@`, so it correctly passes through untouched.
+function isBerryLocatorOfNode(native: string, name: string): boolean {
+  return native.startsWith(`${name}@`)
+}
+
+// Synthesise a VALID berry npm locator for a `tarball` node whose PM-native
+// sidecar is absent or is a foreign bare URL (the cross-format SYNTHESIS path —
+// classic/npm/pnpm → berry, where there is no berry verbatim sidecar). Returns
+// `undefined` for any non-`tarball` canonical (git/directory/unknown keep their
+// own emit paths). Two cases:
+//   - default-registry host AND no `::` bind → `<name>@npm:<version>` (clean —
+//     the registry artefact is content-addressed by (name, version));
+//   - non-registry host OR a `::` bind → `<name>@npm:<version>::<bind>` where the
+//     bind reuses an existing `canonical.bind` (a berry-origin entry whose native
+//     leaked, e.g. via lockgraph) or, for a bare cross-format tarball with no
+//     bind, is synthesised as `__archiveUrl=<encodeURIComponent(url)>`. This is a
+//     well-formed berry locator that FORKS identity on re-parse (the `::` bind
+//     rides the `+src=` source discriminator), so two same-`name@version`
+//     source-siblings (a registry copy + a private-registry copy) get DISTINCT
+//     keys + resolutions instead of collapsing onto a bare invalid URL.
+// Gated on `sourceDiscriminatorOf` so the registry-vs-non-registry split is the
+// SAME mapping that mints the node's `+src=` slot — key/resolution/identity stay
+// in lockstep.
+function synthesisedBerryTarballLocator(node: Node, canonical: ResolutionCanonical | undefined): string | undefined {
+  if (canonical === undefined || canonical.type !== 'tarball') return undefined
+  if (sourceDiscriminatorOf(canonical) === undefined) {
+    return `${node.name}@npm:${node.version}`
+  }
+  const bind = canonical.bind ?? `__archiveUrl=${encodeURIComponent(canonical.url)}`
+  return `${node.name}@npm:${node.version}::${bind}`
+}
+
 function resolutionOfNode(
   node: Node,
   canonical: ResolutionCanonical | undefined,
@@ -1650,15 +1698,29 @@ function resolutionOfNode(
   // CANONICAL-NATIVE RECOMPOSE (load-bearing): a canonical npm-registry node
   // stores NO `nativeResolution` (the parse-side OMISSION above), so `native`
   // is undefined here. Its canonical resolution is `{type:'tarball', url}`
-  // (the registry tarball), and `stringifyForYarnBerry` maps a `tarball`
-  // canonical for an npm node back to `<name>@npm:<version>` — NOT the tarball
-  // URL — so the round-trip reproduces the exact `name@npm:version` line. The
-  // bare-`npm:` fallback at the end covers a node with neither native nor
-  // canonical (a hand-built graph), keeping the prior behaviour.
-  if (native !== undefined) return native
+  // (the registry tarball), recomposed below to the exact `name@npm:version`
+  // line. The bare-`npm:` fallback at the end covers a node with neither native
+  // nor canonical (a hand-built graph), keeping the prior behaviour.
+  //
+  // TARBALL SYNTHESIS (cross-format convert): when `native` is a FOREIGN bare
+  // URL leaked by a yarn-classic/npm/pnpm source sidecar — NOT a berry locator —
+  // returning it verbatim emits a structurally-invalid `resolution:` (a bare URL
+  // is not a `<name>@<protocol>:<spec>` locator). For a `tarball` canonical,
+  // re-synthesise a valid berry npm locator instead: a default-registry copy
+  // becomes `<name>@npm:<version>`, a non-registry/bound copy folds its host into
+  // `::__archiveUrl=…` so a registry sibling and a private-registry sibling at the
+  // SAME name@version stay distinct + valid. A genuine berry locator (`native`
+  // begins with `<name>@`, incl. git/patch/file/alias) still passes through
+  // verbatim, so the berry→berry round-trip is unchanged.
+  if (native !== undefined && isBerryLocatorOfNode(native, node.name)) return native
   if (node.workspacePath !== undefined) {
     return `${node.name}@workspace:${node.workspacePath === '' ? '.' : node.workspacePath}`
   }
+  const synthesised = synthesisedBerryTarballLocator(node, canonical)
+  if (synthesised !== undefined) return synthesised
+  // A foreign non-tarball native (e.g. a leaked git/file URL the canonical could
+  // not classify as tarball) still round-trips verbatim through the recipe.
+  if (native !== undefined) return native
   if (canonical !== undefined) {
     return stringifyForYarnBerry(canonical, { name: node.name, version: node.version })
   }
