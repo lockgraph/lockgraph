@@ -3,7 +3,7 @@
 > Status: **preview** (docs+source-grounded) — docs-anchored, Arborist
 > source-derived core; `npm@12` trust change tracked but unreleased at time of
 > writing.
-> Updated: 2026-06-16.
+> Updated: 2026-06-17.
 > Provenance: **Official** — npm is the reference PM; behaviour is documented at
 > [docs.npmjs.com](https://docs.npmjs.com/cli/v10/) and the running CLI +
 > [`npm/cli`](https://github.com/npm/cli) source (Arborist) are the ground truth.
@@ -179,7 +179,61 @@ ideal tree**:
   [ADR-0021](../decisions/0021-npm-family-completeness-contract.md): npm-2/3 locks
   carry `link: true` + `resolved: "<wsPath>"` symlink entries, never a
   `workspace:` range.)*
-- `--workspace=<name>` / `--workspaces` scope a command to one or all members.
+
+#### Focused / targeted workspace install
+
+npm scopes install (and most commands) to specific members with workspace
+selectors
+([docs v10 — workspaces](https://docs.npmjs.com/cli/v10/using-npm/workspaces),
+accessed 2026-06-17;
+[docs v10 — npm-install](https://docs.npmjs.com/cli/v10/commands/npm-install),
+accessed 2026-06-17;
+[docs v10 — config `workspace`/`workspaces`/`include-workspace-root`](https://docs.npmjs.com/cli/v10/using-npm/config),
+accessed 2026-06-17):
+
+| Selector | Effect |
+|----------|--------|
+| `--workspace=<name>` / `-w <name>` | scope the command to **one** member, selected by its `package.json` `name` **or** by its directory path. Repeatable to select several. `npm install <pkg> -w <name>` adds `<pkg>` to *that* member's `package.json`. |
+| `--workspaces` / `-ws` | scope the command to **all** configured members. |
+| `--include-workspace-root` | also operate on the **root project** in addition to the selected workspaces. Per docs: when **false** (the default), selecting individual workspaces (via `--workspace`) or all of them (via `--workspaces`) causes npm to operate **only** on the specified workspaces and **not** on the root project. |
+
+What lands on disk when targeting a single workspace is governed by npm's
+**one-tree / one-`node_modules`** model (above), not by a per-workspace install
+root:
+
+- npm still builds **one ideal tree** rooted at the repository root and reifies a
+  **single hoisted root `node_modules`**. A focused `-w <name>` install resolves
+  and places **that member's dependencies** into the **shared root
+  `node_modules`** (hoisted alongside whatever is already there), and (re)creates
+  the **`node_modules/<member-name> → <member-dir>` symlinks** for members so
+  cross-member resolution works. There is **no** separate isolated dependency
+  tree materialized under the targeted member.
+- Selecting one workspace **narrows which manifests' declared dependencies are
+  considered for this operation**; it does not partition the on-disk store.
+  Dependencies already hoisted for sibling members remain in the shared root
+  `node_modules`.
+
+> **Open:** the precise install-time pruning behaviour — i.e. whether a bare
+> `npm install -w <name>` with an existing full tree removes hoisted packages
+> that belong only to *non*-selected members, versus leaving them in place — is
+> not stated unambiguously in the v10 workspaces/install docs and is not asserted
+> here; treat the shared root `node_modules` as additive unless `npm ci` (which
+> deletes `node_modules` first) or `npm prune` is run.
+
+**No first-class focused production install.** npm has **no exact equivalent of
+`yarn workspaces focus`** (yarn-classic/berry: install only a single workspace's
+dependencies, optionally production-only, against the lockfile) or of **`pnpm
+deploy`** (pnpm: emit a self-contained, symlink-free directory containing one
+workspace plus only the dependencies needed to run it). A focused,
+production-only, single-workspace install that omits other members' dependencies
+is **not a first-class npm mode**: `--workspace` selects *which manifests drive
+the resolve* but still targets the one shared hoisted root `node_modules`, and
+`--omit=dev` (production install) is an **orthogonal** axis that applies tree-wide
+rather than carving out a deployable single-workspace subtree
+([docs v10 — workspaces](https://docs.npmjs.com/cli/v10/using-npm/workspaces),
+accessed 2026-06-17). The nearest npm primitives are the combination of
+workspace selectors with `--omit=dev` / `--install-strategy`, which does not
+reproduce the isolated, copy-out deployable that `pnpm deploy` emits.
 
 ---
 
@@ -241,21 +295,39 @@ lockfile schema docs in
 
 **None. This is the family's contrast baseline.**
 
-npm installs **zero** runtime resolution machinery. It writes real directories
-into `node_modules` and lets **stock Node.js `require`/`import` resolution**
+npm installs **zero** runtime resolution machinery. It **materializes a physical,
+hoisted `node_modules` tree of real package directories** (Axis 2) and lets
+**stock Node.js `require`/`import` resolution**
 ([`_common.md` — Node module resolution](./_common.md#1-module-resolution--commonjs))
-find them by the standard find-up walk. There is:
+walk that tree natively by the standard find-up algorithm. Critically, npm
+emits **no resolution data file and installs no require hook**: there is
 
-- **no `.pnp.cjs`** / PnP loader (yarn-berry),
+- **no `.pnp.cjs` / `.pnp.data.json`** and **no injected resolver** (yarn-berry
+  Plug'n'Play),
 - **no symlink-farm + `.pnpm` virtual store** indirection (pnpm),
-- **no `--preserve-symlinks` requirement**, no loader hooks, no `NODE_OPTIONS`
-  injection.
+- **no `--preserve-symlinks` requirement**, no loader hooks (`require('module')`
+  patching, `--loader`/`register()`), and no `NODE_OPTIONS` injection.
 
-A program installed by npm resolves its dependencies identically whether it was
-launched directly by `node`, by `npm run`, or by any other tool — because the
-on-disk `node_modules` is the *only* thing doing the resolving. This is the
-property that makes npm output the **lowest-common-denominator** target: any tool
-that understands a flat `node_modules` can consume it.
+**Explicit contrast vs yarn Plug'n'Play.** Under npm, the dependency graph *is*
+the physical directory tree, and Node — unmodified — performs the resolution by
+reading the filesystem. Under yarn-berry PnP, by contrast, packages are **not**
+laid out as a walkable `node_modules`; instead yarn writes a **serialized map**
+of every package location (the `.pnp.cjs` / `.pnp.data.json` lookup table) and
+**injects a replacement resolver** into the Node process so that `require`
+consults that map instead of walking the filesystem
+([Yarn — PnP](https://yarnpkg.com/features/pnp), accessed 2026-06-17). npm =
+physical tree resolved by stock Node; PnP = serialized map + injected resolver.
+The npm path needs nothing loaded into the runtime; resolution is an emergent
+property of where files sit on disk
+([docs v10 — Arborist / `node_modules` is the output](https://docs.npmjs.com/cli/v10/configuring-npm/folders),
+accessed 2026-06-17;
+[`npm/cli` Arborist `reify`](https://github.com/npm/cli/tree/latest/workspaces/arborist)).
+
+A program installed by npm therefore resolves its dependencies identically
+whether it was launched directly by `node`, by `npm run`, or by any other tool —
+because the on-disk `node_modules` is the *only* thing doing the resolving. This
+is the property that makes npm output the **lowest-common-denominator** target:
+any tool that understands a flat `node_modules` can consume it.
 
 ### Binary shims — `node_modules/.bin`
 
@@ -453,6 +525,65 @@ Key interactions worth stating once:
   (the basis of the npm-family completeness contract,
   [ADR-0021](../decisions/0021-npm-family-completeness-contract.md)).
 
+### Integrity verification
+
+npm verifies that the **bytes it installs are exactly the bytes the lock
+committed to**, using **Subresource Integrity (SRI)** end to end.
+
+- **Algorithm — SRI from `package-lock.json`.** Each resolved package entry
+  carries an `integrity` field: an SRI string of the form
+  `<algo>-<base64(digest)>` (e.g. `sha512-…`). The current algorithm is
+  **`sha512`**; npm also reads **legacy `sha1`** SRI and the even older
+  `shasum` (hex SHA-1) hash carried on registry `dist` metadata, so old locks
+  and old packuments still verify
+  ([docs v10 — package-lock.json `integrity`](https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json),
+  accessed 2026-06-17;
+  [`formats/_common.md` integrity model](../formats/_common.md#3-integrity-model)).
+  An entry may carry **multiple** SRI hashes (space-separated); a match against
+  any acceptable one passes.
+- **Who checks — `ssri` + `cacache`.** The SRI parsing/compare lives in
+  [`ssri`](https://github.com/npm/ssri) (the standalone Subresource Integrity
+  library: it parses SRI strings, and its **integrity streams** hash bytes as
+  they flow and compare the result against an **expected** integrity, raising
+  an `EINTEGRITY` error on mismatch). The content store lives in
+  [`cacache`](https://github.com/npm/cacache), npm's **content-addressable
+  cache**: content is keyed and retrieved **by its integrity digest**, and on
+  insertion a precomputed digest that does not match the post-insertion digest
+  fails with **`EINTEGRITY`**
+  ([`cacache`](https://github.com/npm/cacache),
+  [`ssri`](https://github.com/npm/ssri); accessed 2026-06-17). npm wires these
+  together through its fetcher (`pacote`/`npm-registry-fetch` → `cacache` →
+  `ssri`).
+- **Against what bytes, and when.** Verification is performed on the **raw
+  fetched tarball bytes** (the `.tgz` stream as downloaded), not on the
+  extracted files. The order is **fetch → verify-into-cache → extract**:
+  1. npm downloads the tarball and **streams it through an `ssri` integrity
+     stream into `cacache`**, computing the digest over the wire bytes and
+     comparing it to the lock's `integrity`. Content is stored under the
+     **content-addressable cache** at the npm cache directory
+     (`~/.npm/_cacache` by default; configurable via `cache`), in a
+     digest-addressed `content-v2/<algo>/<hash-prefix>/…` layout — so the path
+     *is* the hash, and corrupted/substituted bytes cannot masquerade as the
+     expected content
+     ([docs v10 — cache / `npm cache`](https://docs.npmjs.com/cli/v10/commands/npm-cache),
+     accessed 2026-06-17).
+  2. Only a tarball whose digest matches is unpacked into `node_modules`.
+  3. The hidden lockfile `node_modules/.package-lock.json` (Axis 2) records the
+     **installed `integrity`** for each package, so a subsequent install can
+     confirm the on-disk tree still corresponds to verified content without
+     re-fetching.
+- **On mismatch → `EINTEGRITY`.** If the computed digest of the fetched bytes
+  does not equal the expected SRI (lock drift, a tampered/replaced tarball, or
+  cache corruption), npm **fails the install** with an **`EINTEGRITY`** error
+  rather than writing the package — the hard stop that backs the
+  reproducible-build guarantee of a committed lock + `npm ci`.
+
+> **Open:** the exact byte-for-byte trigger surface — whether every install path
+> (cache hit vs. cache miss, `npm ci` vs. `npm install`, offline `--prefer-offline`)
+> re-hashes content on each run or trusts a prior cache-validated digest — is an
+> implementation detail of `cacache`/`pacote` not pinned to a single doc URL and
+> is not asserted here beyond the fetch→cache→extract ordering above.
+
 ### Registry fetch
 
 The supply side — packument fetch, abbreviated (`corgi`) metadata, tarball
@@ -500,10 +631,15 @@ Authoritative, cited inline above; consolidated:
 - npm docs v10/v11 — [scripts](https://docs.npmjs.com/cli/v10/using-npm/scripts),
   [npmrc](https://docs.npmjs.com/cli/v10/configuring-npm/npmrc),
   [package.json (`overrides`/`workspaces`/peers)](https://docs.npmjs.com/cli/v10/configuring-npm/package-json),
+  [workspaces](https://docs.npmjs.com/cli/v10/using-npm/workspaces),
+  [npm-install (`--workspace`/`--workspaces`/`--include-workspace-root`)](https://docs.npmjs.com/cli/v10/commands/npm-install),
+  [config (workspace selectors)](https://docs.npmjs.com/cli/v10/using-npm/config),
+  [folders (`node_modules` is the output)](https://docs.npmjs.com/cli/v10/configuring-npm/folders),
   [npm-exec](https://docs.npmjs.com/cli/v10/commands/npm-exec),
-  [package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/),
+  [npm-cache (`~/.npm/_cacache`)](https://docs.npmjs.com/cli/v10/commands/npm-cache),
+  [package-lock.json (`integrity`)](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/),
   [hidden lockfile (v7)](https://docs.npmjs.com/cli/v7/configuring-npm/package-lock-json/).
-- npm/CLI + Arborist source —
+- npm/CLI + Arborist + supporting packages source —
   [`workspaces/arborist`](https://github.com/npm/cli/tree/latest/workspaces/arborist),
   [`ideal-tree.md`](https://github.com/npm/cli/blob/latest/workspaces/arborist/docs/ideal-tree.md),
   [`build-ideal-tree.js`](https://github.com/npm/cli/blob/main/workspaces/arborist/lib/arborist/build-ideal-tree.js),
@@ -511,7 +647,11 @@ Authoritative, cited inline above; consolidated:
   [`PlaceDep`/`CanPlaceDep` unification](https://github.com/npm/arborist/commit/35c9d7cec3e091eb70b36a176d694369e7a8d2cc),
   [`bin-links`](https://github.com/npm/cli/commit/3c5a866cc6e58e660a0aedb8ce6fec258e523a21),
   [`cmd-shim`](https://github.com/npm/cmd-shim),
+  [`ssri` (SRI parse/verify, `EINTEGRITY`)](https://github.com/npm/ssri),
+  [`cacache` (content-addressable cache, `EINTEGRITY`)](https://github.com/npm/cacache),
   [Arborist deep-dive (npm v7 blog)](https://blog.npmjs.org/post/618653678433435649/npm-v7-series-arborist-deep-dive.html).
+- Cross-PM mechanics referenced only for the Axis-3 contrast (not a comparison
+  table) — [Yarn — Plug'n'Play](https://yarnpkg.com/features/pnp).
 - RFCs — [RFC-0021 reduced lifecycle env](https://github.com/npm/rfcs/blob/main/implemented/0021-reduce-lifecycle-script-environment.md).
 - `npm@12` script-trust change (unreleased) —
   [Aikido](https://www.aikido.dev/blog/npm-v12-block-postinstall),
@@ -539,3 +679,10 @@ Authoritative, cited inline above; consolidated:
   the current npm-family contract does not fully model
   ([ADR-0021](../decisions/0021-npm-family-completeness-contract.md) scope note) —
   revisit if a fixture forces it.
+- **Focused-install pruning.** Whether `npm install -w <name>` against an
+  existing full tree prunes hoisted packages belonging only to non-selected
+  members is not unambiguously documented (Axis 1 — focused install Open note);
+  confirm against a fixture before relying on additive-only behaviour.
+- **Integrity re-hash surface.** Which install paths re-hash tarball bytes vs.
+  trust a prior cache-validated digest (`cacache`/`pacote` internal) is not
+  pinned to a single doc URL (Axis 6 — integrity verification Open note).

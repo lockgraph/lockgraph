@@ -771,7 +771,8 @@ descriptors / the canonical resolution, never from the NodeId):
 |-----------------------|-------------------------------|---------|
 | `git` | `git\0<url>\0<sha>` (hostingProvider dropped) | **set** |
 | `tarball`, non-registry host | `tarball\0<host>` | **set** |
-| `tarball`, default registry (`registry.npmjs.org`, `registry.yarnpkg.com`) | — | **bare** |
+| `tarball` with a yarn-berry `::` bind (`version=`, `hash=`, `__archiveUrl=`, plus any residual `&`-qualifiers) | `tarball\0<host>\0bind=<suffix>` | **set** |
+| `tarball`, default registry (`registry.npmjs.org`, `registry.yarnpkg.com`), **no bind** | — | **bare** |
 | `directory` | — | **bare** |
 | `unknown` | — | **bare** |
 
@@ -781,6 +782,16 @@ folding it in is unsafe, since a lossy cross-PM emit can degrade a registry
 `tarball` to `unknown` on one side of a convert) are deliberately bare.
 Formats that already encode the source in the key's version slot
 (pnpm `<name>@<url>`, bun) do **not** add `+src=`.
+
+A yarn-berry `::` bind modifier pins the exact fetch under the same
+`(name, version)`: a `version=` / `hash=` qualifier keeps the registry url and
+rides the `bind` field; an `__archiveUrl=<enc>` pin sets the canonical url to
+the decoded archive host **and** rides the `bind` field with its full suffix.
+Carrying the whole suffix forks two entries that differ only by a residual
+`&locator=` / `&hash=` qualifier, two archives on the same host with different
+paths, or an explicit archive pin to the default-registry host versus a bare
+un-pinned entry — each of which would otherwise collapse onto one NodeId and
+throw `IRREDUCIBLE_LOSS`.
 
 Peer-virtualised siblings that share `name@version` and **all** slot inputs
 share **one** entry (five virt-copies of `react@18.0.0` reference the same

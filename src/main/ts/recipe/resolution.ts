@@ -112,16 +112,21 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
       const version     = bindIdx >= 0 ? spec.slice(0, bindIdx) : spec
       const bindSuffix = bindIdx >= 0 ? spec.slice(bindIdx + 2) : undefined
       if (bindSuffix !== undefined) {
-        // `__archiveUrl=<enc>` — the bind names the ACTUAL fetch source (a
-        // private-registry mirror archive). The decoded archive URL IS the
-        // canonical tarball url: a non-registry host that naturally forks
-        // `+src` with zero new machinery. Other binds (`version=`, `hash=`,
-        // …) keep the registry url but ride the `bind` field, which the
-        // source discriminator folds in so a registry-hosted tarball WITH a
-        // bind is non-bare.
+        // The bind suffix pins the exact fetch and MUST fork identity (ADR-0032
+        // §"+src="): two entries differing ONLY by the bind otherwise collapse
+        // onto one NodeId → IRREDUCIBLE_LOSS. BOTH branches carry `bind`, which
+        // the source discriminator folds in so the tarball is non-bare.
+        //   - `__archiveUrl=<enc>` names the ACTUAL fetch source (a private-
+        //     registry mirror archive); the decoded archive URL becomes the
+        //     canonical tarball url, AND the full suffix still rides `bind` so a
+        //     residual `&locator=`/`&hash=` qualifier (or two archives on the
+        //     same host but different paths) discriminates, and an archive pin
+        //     to the default-registry host forks from a bare un-pinned entry.
+        //   - other binds (`version=`, `hash=`, …) keep the registry url and
+        //     ride `bind` directly.
         const archiveUrl = archiveUrlOfBind(bindSuffix)
         if (archiveUrl !== undefined) {
-          return { type: 'tarball', url: archiveUrl }
+          return { type: 'tarball', url: archiveUrl, bind: bindSuffix }
         }
         return { type: 'tarball', url: deriveRegistryUrl(options.name, version), bind: bindSuffix }
       }
@@ -452,9 +457,11 @@ function hostOfTarballUrl(url: string): string | undefined {
  *
  * The `tarball` BIND slot (ADR-0032 §"+src=" extension) forks two entries that
  * share the same `(name, version, host)` but differ by a yarn-berry `::` bind
- * modifier (`version=`, `hash=`, …). The `__archiveUrl=` bind is NOT carried
- * here — it canonicalises to its non-registry archive host directly, which the
- * non-registry tarball slot already forks.
+ * modifier (`version=`, `hash=`, `__archiveUrl=`, plus any residual
+ * `&locator=`/`&hash=` qualifiers). An `__archiveUrl=` pin sets the canonical
+ * url to the decoded archive host AND rides the bind slot, so it forks from a
+ * bare registry entry even when the archive resolves to the default-registry
+ * host, and forks a sibling archive that differs only by a residual qualifier.
  *
  * `directory` and `unknown` stay BARE deliberately (ADR-0032 §"bare classes"):
  *

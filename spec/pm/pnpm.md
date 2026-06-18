@@ -1,7 +1,7 @@
 # `pnpm` — performant npm (content-addressed store + symlinked node_modules)
 
 > Status: **preview** (docs+source-grounded) — pnpm.io docs + pnpm/pnpm source.
-> Updated: 2026-06-16.
+> Updated: 2026-06-17.
 > Provenance: **Official** (pnpm.io docs are the spec of record; the running
 > client is the tiebreaker).
 > Family: **npm-substrate** — pnpm is a *consumer* of the Node.js resolution
@@ -268,13 +268,95 @@ Auto-disabled in CI (cold cache). **ESM caveat:** hoisting under this mode leans
 way for a workspace package's peer (e.g. `react`) to resolve **differently per
 consumer** ([`package_json#dependenciesmetainjected`](https://pnpm.io/package_json#dependenciesmetainjected)).
 
+### 2.8 Focused / partial workspace installs
+
+Two distinct mechanisms scope work to a subset of a workspace. Both narrow *which
+projects* participate; only `deploy` changes the resulting on-disk shape.
+
+**`pnpm --filter <selector>... install`** restricts the command to the matched
+workspace projects. The selector grammar (verbatim from the CLI's filtering help,
+pnpm 10.0.0 — `common-cli-options-help/lib`, the `FILTERING` block; mirrors
+[pnpm.io/filtering](https://pnpm.io/filtering)):
+
+| Selector | Selects |
+|----------|---------|
+| `<pattern>` | projects whose **name** matches the glob (e.g. `foo`, `"@bar/*"`) |
+| `<pattern>...` | the matched projects **plus all their direct and indirect dependencies** |
+| `<pattern>^...` | **only** those dependencies, **excluding** the matched projects themselves |
+| `...<pattern>` | the matched projects **plus all their direct and indirect dependents** |
+| `...^<pattern>` | **only** those dependents, excluding the matched projects |
+| `./<dir>` / `.` | projects inside a subdirectory / under the cwd |
+| `{<dir>}` | projects under a directory (combinable with `...` and `[<since>]`) |
+| `[<since>]` | projects **changed since** a commit/branch (e.g. `"[origin/master]"`); combinable with `...` for changed-plus-dependents |
+| `!<selector>` | **excludes** the matched projects |
+
+(`^` must be doubled in the Windows Command Prompt. `--filter-prod` is the same but
+ignores `devDependencies` when walking dependents/dependencies; `--fail-if-no-match`
+exits non-zero on an empty match set.) For **`install`** specifically, a filter is
+a *project* selector, not a partial-graph fetch: pnpm still computes and writes the
+**whole-workspace** lockfile and the shared virtual store, then materialises
+`node_modules` for the **selected importers** (and the dependency projects a `...`
+selector pulls in). The store is content-addressable and shared regardless, so a
+filtered install does not produce a smaller or differently-keyed store — it bounds
+*what gets linked into project `node_modules`*, not the CAS.
+
+> **Open:** the exact set of `node_modules` trees written by a bare
+> `--filter <name> install` (selected importer only, vs. selected importer + its
+> workspace-dependency importers) is version-sensitive and is not asserted here;
+> the lockfile remains workspace-wide in all observed versions.
+
+**`pnpm --filter=<project> deploy <target-dir>`** is the closest analogue to
+`yarn workspaces focus`: it produces a **self-contained, isolated deployable
+directory** for **exactly one** workspace project. Source-grounded behaviour
+(pnpm 10.0.0 — `releasing/plugin-commands-deploy/lib/deploy.js`; help string
+`"Experimental! Deploy a package from a workspace"`; mirrors
+[pnpm.io/cli/deploy](https://pnpm.io/cli/deploy)):
+
+- **One project only.** The command requires being inside a workspace
+  (error code `CANNOT_DEPLOY` otherwise), selects via `--filter`, and errors if zero
+  (`NOTHING_TO_DEPLOY`) or more than one (`CANNOT_DEPLOY_MANY`) project is matched,
+  or if the target argument is missing (`INVALID_DEPLOY_TARGET`).
+- **The project's own files are copied** into `<target-dir>` (via the indexed
+  importer in `clone-or-copy` mode — reflink/clone where the FS allows, else copy),
+  defaulting to the package's published file set (`includeOnlyPackageFiles`;
+  `--deploy-all-files` copies everything).
+- **The dependency closure is inlined into an isolated `node_modules` *inside the
+  target dir*.** `deploy` runs the normal installer with
+  `virtualStoreDir = <target-dir>/node_modules/.pnpm` and
+  `modulesDir = <target-dir>/node_modules`, i.e. it builds a fresh isolated
+  symlink farm (§2.2) rooted in the deploy directory whose files are
+  **hard/clone links from the global store** — so the result is a stand-alone
+  directory that needs no access to the original workspace to run.
+- Dependency-type flags: `--prod`/`-P` (omit `devDependencies`), `--dev`/`-D`
+  (only `devDependencies`), `--no-optional` (omit `optionalDependencies`).
+- **Version caveat (pnpm 10).** `deploy` requires `inject-workspace-packages=true`
+  (else `DEPLOY_NONINJECTED_WORKSPACE`); workspace-package deps are materialised as
+  hard-linked copies (§2.7) rather than source symlinks, which is what makes the
+  output relocatable. With a shared workspace lockfile it derives a project-scoped
+  lockfile + manifest for the deploy dir; `--legacy` (`force-legacy-deploy`) forces
+  the pre-shared-lockfile implementation. `deploy` does **not** currently combine
+  with `nodeLinker: hoisted` or `dedupePeerDependents`.
+
+> **Open:** whether `inject-workspace-packages=true` remains a hard precondition
+> for `deploy` is pnpm-version-specific (it is required in 10.0.0); later releases
+> may relax it. Confirm against the target version before relying on it.
+
 ---
 
 ## 3 · Resolver mutation — *none* (realpath does the work)
 
 **pnpm does not replace, patch, or shim Node's module resolver in the default
-(`isolated`) and `hoisted` modes.** It relies entirely on two stock Node
-behaviours:
+(`isolated`) and `hoisted` modes.** Concretely, pnpm ships **no injected resolver
+and no serialized resolution data file** — there is no `.pnp.cjs`/`.pnp.data.json`
+analogue, no `require` monkey-patch, no loader hook, and no
+`NODE_OPTIONS=--require …` preamble in these modes. The on-disk *shape* of the
+symlinked virtual store (`node_modules/.pnpm`, §2.2) plus stock Node's own path
+resolution is the entire mechanism: each `bar` symlink in a consumer's
+`node_modules` points at exactly the resolved instance
+(`.pnpm/bar@<ver>/node_modules/bar`), so a stock, unflagged `node` binary —
+running the same algorithm it uses for any `node_modules` tree — lands on exactly
+the version pnpm resolved, with no pnpm code in the resolution path. It relies
+entirely on two stock Node behaviours:
 
 1. the ordinary `node_modules` upward walk, and
 2. **`fs.realpath()` symlink collapse** — Node resolves a module to its *physical*
@@ -286,7 +368,18 @@ behaviours:
    [pnpm#244](https://github.com/pnpm/pnpm/issues/244)).
 
 So the **symlink topology + Node's default realpath** together produce strictness
-with zero resolver code. Two consequences worth flagging:
+with zero resolver code.
+
+> **Contrast vs Yarn Plug'n'Play.** These are opposite strategies for the same
+> goal (strict, declared-only resolution). pnpm (default/`hoisted`) uses **real
+> on-disk symlinks resolved by Node's own realpath walk** — no data file, no
+> injected resolver. Yarn Berry PnP instead serializes the whole resolution into a
+> **lookup map** (`.pnp.cjs` / `.pnp.data.json`) and **injects a custom resolver**
+> that answers `require` from that map, with **no `node_modules`** to walk
+> ([`spec/pm/yarn.md` §3](./yarn.md#3-resolver-mutation--the-centerpiece)). pnpm's
+> `nodeLinker: pnp` mode is the one exception — it borrows Yarn's mechanism (below).
+
+Two consequences worth flagging:
 
 - **`--preserve-symlinks` breaks pnpm.** That flag tells Node to walk the *logical*
   (symlink) path instead of realpath — collapsing every package back to its
@@ -434,6 +527,78 @@ scripts** — unlike npm, a dependency's `preinstall`/`install`/`postinstall` do
   advisory/audit axis (the audit-fix driver feature) is the registry's, not
   pnpm's — [`spec/registry/_common.md §8`](../registry/_common.md#8-advisories--audit-api).
 
+### Integrity verification
+
+pnpm's integrity model is **content-addressing**, not a separate verification
+pass bolted onto an opaque cache: the store is *keyed by* the digests, so a
+correct store read is an integrity-addressed read by construction.
+
+- **Where the expected digest lives.** Each package's tarball digest is recorded
+  in `pnpm-lock.yaml` under `resolution: { integrity: sha512-… }` (an
+  [SRI](https://www.w3.org/TR/SRI/) string; `pnpm store status` reads exactly
+  `pkgSnapshot.resolution.integrity` — pnpm 10.0.0,
+  `plugin-commands-store/lib/storeStatus/index.js`). The lockfile schema for this
+  field is owned by the [format specs](../formats/pnpm-v9.md), not duplicated here.
+
+- **The store is a content-addressable store (CAS) keyed by integrity.** Inside
+  the store dir (`<store>/<STORE_VERSION>`, §2.1) every individual file is written
+  at a path **derived from its own content hash** —
+  `<store>/files/<hex[0:2]>/<hex[2:]>` (with an `-exec` suffix for executables),
+  computed from the file's SRI by `getFilePathByModeInCafs`. Each package gets a
+  per-package **index** file at `<store>/index/<hex[0:2]>/<hex[2:]>-<pkgId>.json`,
+  whose path is derived from the **package tarball's integrity**; the index lists
+  every member file with its own `integrity`, `size`, and `mode` (pnpm 10.0.0,
+  `store/cafs/lib/getFilePathInCafs.js`, `…/checkPkgFilesIntegrity.js`). Because the
+  lookup key *is* the digest, asking the store for content under a given integrity
+  can only ever return bytes that hash to that integrity.
+
+  > **Store-version note.** The version segment is `STORE_VERSION` — `v10` in
+  > pnpm 10 (older pnpm lines used `v3`); the historical `~/.pnpm-store/v3` layout
+  > is the same scheme under an earlier constant. The fallback off-home location is
+  > `<mountpoint>/.pnpm-store/<STORE_VERSION>` when the store cannot live under the
+  > home dir (pnpm 10.0.0, `store-path` resolution).
+
+- **When verification happens, and against what bytes.**
+  1. **Fetch → store write.** A fetched/unpacked tarball is added to the CAS under
+     content-derived paths; the network/tarball layer rejects a tarball whose bytes
+     fail their expected integrity (`ERR_PNPM_TARBALL_INTEGRITY`/`BAD_TARBALL_SIZE`),
+     and retries the fetch. So writing to the store is itself gated on the bytes
+     hashing to the expected digest.
+  2. **Store → project link.** Before linking store content into a project, pnpm
+     reads the package index and, when `verify-store-integrity` is **`true`**
+     (default), runs `checkPkgFilesIntegrity`: for each index entry it reads the
+     **CAS file** and checks the raw bytes with `ssri.checkData(data, entry.integrity)`
+     (a fast mtime/size short-circuit via `checkedAt`/`size` precedes the full
+     digest re-check). A file that is missing, size-mismatched, or fails the SRI
+     check is treated as not-verified and **unlinked** from the store; a file whose
+     index entry has no `integrity` raises `Integrity checksum is missing`
+     (pnpm 10.0.0, `store/cafs/lib/checkPkgFilesIntegrity.js`, worker
+     `readPkgFromCafs` handler). `--no-verify-store-integrity` skips this re-check
+     ("doesn't check whether packages in the store were mutated").
+
+- **On mismatch → refetch, then error.** If a package's store index/files fail to
+  verify (or carry no integrity), pnpm logs `Refetching <pkg> to store. It was
+  either modified or had no integrity checksums` and re-runs the fetch for that
+  package's `resolution` (pnpm 10.0.0, `package-requester`); a tarball that still
+  fails integrity surfaces as a hard error. Separately, if the store content found
+  under a given integrity has a **name/version** that disagrees with the lockfile,
+  `strictStorePkgContentCheck` (default **`true`**) throws
+  `ERR_PNPM_UNEXPECTED_PKG_CONTENT_IN_STORE`.
+
+- **Explicit store check.** `pnpm store status` walks `pnpm-lock.yaml`, locates each
+  package's CAS **index by its `resolution.integrity`**, and compares the bytes
+  currently linked into the project's virtual store
+  (`<virtualStoreDir>/<dep>/node_modules/<name>`) against that index; it returns the
+  list of modified packages and exits non-zero (`ERR_PNPM_MODIFIED_DEPENDENCY`) if
+  any differ — *"Returns exit code 0 if the content of the package is the same as it
+  was at the time of unpacking"* (pnpm 10.0.0,
+  `plugin-commands-store/lib/store.js`, `…/storeStatus/index.js`). Sibling
+  store subcommands: `add`, `prune` / `prune --force`, `path`.
+
+> **Open:** the store's hashing algorithm is **SHA-512** for registry tarballs (the
+> `sha512-` SRI prefix throughout the lockfile and CAS); whether any package source
+> can land a non-`sha512` SRI in the store on current pnpm is not asserted here.
+
 ---
 
 ## Capabilities
@@ -447,6 +612,9 @@ scripts** — unlike npm, a dependency's `preinstall`/`install`/`postinstall` do
 | Catalogs (`catalog:`) | ✓ (9.5+) | workspace version constants |
 | `overrides` / `packageExtensions` | ✓ | `pnpm-workspace.yaml` (v11) |
 | `workspace:` / `file:` / `link:` / `portal:` / `git`/`patch:` protocols | ✓ | see format specs |
+| Focused install by selector (`--filter <sel>...`) | ✓ | scopes which projects/`node_modules`; lockfile stays workspace-wide (§2.8) |
+| Self-contained workspace deploy (`pnpm deploy`) | ✓ (exp.) | one project → isolated, store-linked dir; analogue of `yarn workspaces focus` (§2.8) |
+| Integrity-keyed CAS + store verification (`store status`, `verify-store-integrity`) | ✓ | store keyed by SRI; refetch on mismatch (§6) |
 | Opt-in dep build trust (`allowBuilds`) | ✓ | strict-by-default |
 | Manages Node.js runtime (`pnpm runtime` / `engines.runtime`) | ✓ | doubles as a version manager |
 | Global virtual store (shared, hashed) | ✓ (exp.) | default for `dlx`/global in v11 |
@@ -491,9 +659,25 @@ Authoritative, in descending load-bearing order:
   [workspaces](https://pnpm.io/workspaces) ·
   [package.json](https://pnpm.io/package_json) ·
   [scripts](https://pnpm.io/scripts) ·
-  [cli/env](https://pnpm.io/cli/env)
+  [cli/env](https://pnpm.io/cli/env) ·
+  [filtering](https://pnpm.io/filtering) ·
+  [cli/deploy](https://pnpm.io/cli/deploy) ·
+  [cli/store](https://pnpm.io/cli/store)
   (fetched via the [`pnpm/pnpm.io`](https://github.com/pnpm/pnpm.io) repo,
-  `docs/`, 2026-06-16).
+  `docs/`, 2026-06-16; `filtering`/`cli/deploy`/`cli/store` added 2026-06-17 and
+  cross-checked against the bundled client below).
+- **Running client (tiebreaker, this revision):** the bundled **pnpm 10.0.0**
+  distribution (`node_modules/pm-pnpm-10/dist/pnpm.cjs` + `dist/worker.js`),
+  read directly for §2.8 and §6 Integrity verification. Load-bearing modules:
+  `common-cli-options-help/lib` (the `FILTERING` selector help),
+  `releasing/plugin-commands-deploy/lib/deploy.js` (deploy behaviour + help),
+  `store/cafs/lib/getFilePathInCafs.js` and `…/checkPkgFilesIntegrity.js` (CAS
+  keying + integrity check), `store/plugin-commands-store/lib/store.js` and
+  `…/storeStatus/index.js` (`store status`), `store-path` (store dir resolution),
+  `package-requester` (refetch-on-mismatch). Upstream permalinks:
+  [`pnpm/pnpm` `store/cafs/src/`](https://github.com/pnpm/pnpm/tree/main/store/cafs/src) ·
+  [`store/plugin-commands-store/src/`](https://github.com/pnpm/pnpm/tree/main/store/plugin-commands-store/src) ·
+  [`releasing/plugin-commands-deploy/src/`](https://github.com/pnpm/pnpm/tree/main/releasing/plugin-commands-deploy/src).
 - **pnpm/pnpm source & issues:** [pnpm#244 "Preserve symlinks"](https://github.com/pnpm/pnpm/issues/244)
   (realpath rationale); lockfile types under
   [`pnpm/pnpm` `lockfile/`](https://github.com/pnpm/pnpm/tree/main/lockfile).
@@ -512,7 +696,19 @@ Authoritative, in descending load-bearing order:
 - `pnpm.io` is unreachable via direct fetch from this environment (503/blocked);
   all docs were pulled from the **`pnpm/pnpm.io` GitHub source** (`docs/*.md`,
   current `main`) — equivalent content, but anchor slugs were inferred from
-  headings and not all verified against the rendered site.
+  headings and not all verified against the rendered site. For this revision the
+  network was fully blocked (pnpm.io, raw.githubusercontent.com, and the GitHub
+  API all unreachable), so **§2.8 (focused installs) and §6 Integrity verification
+  were grounded in the bundled pnpm 10.0.0 client source** (see Sources) rather
+  than the docs; the `filtering`/`cli/deploy`/`cli/store` doc URLs are provided for
+  the reader but were not re-fetched here.
+- **§2.8 / Integrity verification are pnpm 10.0.0-specific where versioned.** The
+  `deploy` `inject-workspace-packages=true` precondition, the `STORE_VERSION=v10`
+  segment, the error-code names, and the exact filter/deploy flag set are read off
+  the 10.0.0 bundle; selector grammar and the CAS keying scheme are stable across
+  recent majors, but confirm version-tagged details (store-version segment, deploy
+  preconditions) against the target client. Marked `> **Open:**` inline where
+  genuinely unresolved.
 - **Version drift is the main risk.** v11 is recent; several defaults/keys cited
   (config in `pnpm-workspace.yaml`, `allowBuilds`, `pnpm runtime`, global virtual
   store defaults, project-`.npmrc` env hardening) are **v11-specific** and post-

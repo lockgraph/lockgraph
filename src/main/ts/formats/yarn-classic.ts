@@ -427,30 +427,40 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     options.onDiagnostic?.(diagnostic)
   }
 
-  // yarn-classic identifies entries by `<name>@<version>` (no patch
-  // disambiguator); patched and unpatched siblings of the same
-  // `<name>@<version>` collapse onto a single entry on reparse and trip
-  // `IRREDUCIBLE_LOSS`. Emit only the cleaner sibling (prefer the unpatched
-  // node) and the discarded patch is attributed by `warnPatchDrop` /
-  // `RECIPE_FEATURE_DROPPED`. Order preserves stability of the entry-key
+  // yarn-classic identifies entries by `<name>@<version>` PLUS the `+src=`
+  // source slot (its `resolved` URL). Same-`<name>@<version>` siblings from
+  // DIFFERENT sources (a registry copy AND a git fork; two private hosts) ARE
+  // representable as distinct entries — distinct descriptor keys + distinct
+  // `resolved` URLs — so they MUST NOT collapse; collapsing silently drops a
+  // whole package. What yarn-classic genuinely cannot disambiguate is the
+  // `+patch=` slot and peer virtualisation: patched / peer siblings sharing
+  // `<name>@<version>+src=` collapse onto one entry on reparse and trip
+  // `IRREDUCIBLE_LOSS`, so emit only the cleaner sibling (prefer the unpatched
+  // node) and attribute the discard via `warnPatchDrop` /
+  // `warnPeerContextFlatten`. Order preserves stability of the entry-key
   // sorting downstream.
   const sortedNodes = Array.from(graph.nodes()).sort((a, b) =>
     cmpUtf16(a.id, b.id)
       || ((a.patch === undefined ? 0 : 1) - (b.patch === undefined ? 0 : 1)),
   )
-  const emittedNameVersion = new Set<string>()
+  const emittedIdentity = new Set<string>()
   const dedupedNodes: Node[] = []
   for (const node of sortedNodes) {
     if (node.workspacePath !== undefined) {
       dedupedNodes.push(node)
       continue
     }
-    const nameVersion = `${node.name}@${node.version}`
-    if (emittedNameVersion.has(nameVersion)) {
+    // Key on `<name>@<version>` + the `+src=` slot so source-forked siblings
+    // survive; the `+patch=` slot and peerContext are deliberately EXCLUDED so
+    // patch / peer siblings still collapse (yarn-classic cannot represent them).
+    const identity = node.source === undefined
+      ? `${node.name}@${node.version}`
+      : `${node.name}@${node.version}+src=${node.source}`
+    if (emittedIdentity.has(identity)) {
       warnPatchDrop(node, warnedPatches, emitDiagnostic)
       continue
     }
-    emittedNameVersion.add(nameVersion)
+    emittedIdentity.add(identity)
     dedupedNodes.push(node)
   }
 

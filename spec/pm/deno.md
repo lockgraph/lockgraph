@@ -3,7 +3,7 @@
 > Status: **frontier** (research-grade; search-only, not live-probed) —
 > research-derived from docs.deno.com, JSR docs, and Deno release notes; **no**
 > adapter exists; cross-referenced `spec/formats/deno.lock.md` is not yet written.
-> Updated: 2026-06-16.
+> Updated: 2026-06-17.
 > Family: **non-Node** — the single most divergent entry in `spec/pm/`. Deno is a
 > runtime first, PM second; its native model replaces, rather than extends, the
 > Node resolver.
@@ -222,6 +222,47 @@ import map, for hermetic/offline/patchable builds.
 - Commit `vendor/` (with `deno.json` + `deno.lock`) for a fully hermetic build; the
   lockfile alone does not protect against an upstream URL disappearing.
 
+### 2.4 Workspaces / monorepo — and the focused-install question
+
+Deno gained workspace/monorepo support in **Deno 1.45**. A workspace is declared by
+a **`workspace` array of member directory paths** in the root `deno.json`:
+
+```jsonc
+// root deno.json
+{ "workspace": ["./add", "./subtract"] }
+```
+
+- Each member directory has its **own `deno.json(c)`** (member identity is its
+  `name` field; npm-style `package.json` members are also supported as a
+  backwards-compatible workspace form). Members **inherit the root's `imports`**, so
+  a single version of a shared dependency is managed once at the root.
+  ([docs.deno.com/runtime/fundamentals/workspaces], accessed 2026-06-17;
+  [deno.com/blog/v1.45], accessed 2026-06-17)
+- `deno install` **with no argument** in a workspace caches the dependencies of
+  workspace members (and sets up a local `node_modules` if applicable). `--recursive`
+  / `-r` makes an operation span all members.
+  ([docs.deno.com/runtime/fundamentals/workspaces], accessed 2026-06-17)
+- A **`--filter <pattern>`** flag selects workspace members by name (newer Deno also
+  matches the member directory name) and **implies `--recursive`**. It is documented
+  for member-scoped command dispatch — e.g. `deno task --filter "client/" dev`,
+  `deno outdated --filter …`. ([docs.deno.com/runtime/fundamentals/workspaces],
+  accessed 2026-06-17; [docs.deno.com/runtime/reference/cli/outdated], accessed
+  2026-06-17)
+- The nearest thing to a **dependency-scoped** install is **`deno install
+  --entrypoint <file>`**, which caches **only** the dependencies transitively
+  imported by that entrypoint — a graph-reachability filter, not a workspace-member
+  filter. ([docs.deno.com/runtime/reference/cli/install], accessed 2026-06-17)
+
+> **Open (frontier):** Deno has **no** documented `deploy`-style or pnpm
+> `--filter`-style **focused single-member *install*** that materialises only one
+> member's dependency subgraph (the `--filter` flag is documented for command
+> dispatch — `task`, `outdated` — not as a producer of a member-isolated install
+> set; `--entrypoint` filters by import-graph reachability, not by member). Whether
+> `deno install --filter <member>` resolves/installs strictly that member's subgraph
+> is **not** confirmed from the docs surveyed and was **not** live-probed; this is an
+> evolving area (workspace tooling changed across 2.x). Confirm against a current
+> Deno before relying on it.
+
 ---
 
 ## Axis 3 — RESOLVER MUTATION (the spine, continued)
@@ -244,6 +285,28 @@ The mutation surface is the **import map** and the **lockfile pins**, *not* a
   analog to npm `overrides` / yarn `resolutions` / bun `overrides` in the Deno
   model. ([deno.com/blog/v2.7]) (Pre-2.7 the only lever was the import map / a
   patched `vendor`.)
+
+**Deno's resolver is built-in; there is no `.pnp` data file.** Deno resolves
+through its **own** resolver — URL specifiers, the `deno.json` **import map**
+(based on the [Import Maps Standard](https://github.com/WICG/import-maps)), and
+`jsr:`/`npm:` specifiers — not the stock Node resolution algorithm and not a
+serialized Plug'n'Play map. To resolve a bare specifier such as `"react"`, Deno
+requires an `imports` entry telling it where to look; it does not auto-walk a
+`node_modules` tree. ([docs.deno.com/runtime/fundamentals/modules], accessed
+2026-06-17) Deno also diverges from Node resolution in two visible ways: local ES
+module specifiers must carry the **full file extension** (no extension probing),
+and Node built-ins must be referenced as `node:fs` rather than bare `"fs"` outside
+npm dependencies. ([docs.deno.com/runtime/fundamentals/modules], accessed
+2026-06-17)
+
+> **Contrast — Deno vs yarn Plug'n'Play.** Deno's resolution is a **built-in
+> URL / import-map / specifier resolver** baked into the runtime (no on-disk
+> resolution database), whereas yarn PnP ships a **serialized package→location map**
+> (`.pnp.cjs`/`.pnp.data.json`) plus an injected JavaScript resolver that patches
+> Node's own `require`/import resolution at process start. Deno carries no PnP-style
+> data file; for `npm:` specifiers it instead runs an **npm-compatibility resolver**
+> (§3.2). ([docs.deno.com/runtime/fundamentals/node], accessed 2026-06-17)
+> *(Frontier: contrast is doc-derived, not probe-derived.)*
 
 ### 3.2 The npm-compat resolver (how `npm:` is made to work)
 
@@ -450,6 +513,70 @@ Load-bearing format facts (cross-cut with [`formats/_common.md` §3 integrity mo
   URL-module graph with **no Node analog** at all.
 - The `workspace` section is the monorepo manifest mirror (Deno 1.45+).
 
+### Integrity verification
+
+`deno.lock` is the integrity record: Deno automatically maintains it with the exact
+resolved version **and integrity hash of every dependency**, and **verifies cached
+content against those hashes on subsequent runs**.
+([docs.deno.com/runtime/fundamentals/dependency_management], accessed 2026-06-17;
+[docs.deno.com/runtime/manual/basics/modules/integrity_checking], accessed
+2026-06-17)
+
+**What is hashed, per source kind** (cross-cut with §6.1 and
+[`formats/_common.md` §3 integrity model](../formats/_common.md#3-integrity-model)):
+
+- **`remote`** — each remote URL module is keyed to a **sha256 hash of the fetched
+  module source** (single-file source, bare hex). This is the original
+  integrity-checking case: a URL import is fetched, compiled and cached, and a later
+  run on another machine must see byte-identical source or it is rejected.
+  ([docs.deno.com/runtime/manual/basics/modules/integrity_checking], accessed
+  2026-06-17)
+- **`jsr`** — per-package **sha256** integrity entries (JSR is source-served, so the
+  hash covers source, not a tarball). ([deno.com/blog/v1.45], accessed 2026-06-17)
+- **`npm`** — per-package **sha512 Subresource-Integrity** entries, i.e. the npm
+  `dist.integrity` tarball SRI (`sha512-…`), the same model as `npm.md`.
+  ([deno.com/blog/v1.45], accessed 2026-06-17)
+
+**When verification happens.** On dependency access — fetch and cache-read — Deno
+compares the cached/just-fetched bytes against the hash stored in `deno.lock`; a new
+or changed dependency is otherwise recorded **additively** into the lockfile (an
+absent lockfile is created next to `deno.json`).
+([docs.deno.com/runtime/manual/basics/modules/integrity_checking], accessed
+2026-06-17)
+
+**Flags.**
+
+- `--lock[=path]` selects the lockfile to check (defaults to `./deno.lock`); a
+  `deno.json` `"lock"` object configures path and behaviour, and `--no-lock`
+  disables it. ([docs.deno.com/runtime/fundamentals/dependency_management], accessed
+  2026-06-17)
+- `--frozen[=true]` (alias `--frozen-lockfile`; also `"lock": { "frozen": true }`)
+  makes Deno **error rather than write** when the lockfile would change — a new or
+  unseen dependency fails the build instead of being added silently. `--frozen=false`
+  / `"lock": { "frozen": false }` temporarily re-enables writes.
+  ([docs.deno.com/runtime/fundamentals/dependency_management], accessed 2026-06-17)
+- **Deno 2.8+** adds **`deno ci`**, documented as equivalent to `deno install
+  --frozen` plus npm lifecycle-script handling — the intended "install strictly from
+  the lockfile" CI entry point (errors if `deno.lock` is missing or out of date).
+  ([deno.com/blog/v2.8], accessed 2026-06-17)
+
+**Behaviour on mismatch.** A hash mismatch is a **lockfile verification error**, not
+a silent re-resolve: Deno reports an integrity-check failure for the offending
+specifier — the recorded message states the source does not match the expected hash
+in the lock file — and surfaces the expected vs actual hash. The documented
+escape hatches are to refetch the source with **`--reload`** (re-derive the hash
+from the current upstream) or to regenerate the lockfile.
+([docs.deno.com/runtime/manual/basics/modules/integrity_checking], accessed
+2026-06-17; [questions.deno.com — deno.lock conflict], accessed 2026-06-17)
+
+> **Open (frontier):** the precise wording/format of the integrity-failure
+> diagnostic, and whether `jsr`/`npm`/`remote` are verified by exactly the same code
+> path and at exactly the same lifecycle point (fetch vs cache-read vs
+> type-check), are **not** byte-confirmed here — doc-derived, **not** live-probed.
+> The mismatch-vs-out-of-date distinction (a *changed* hash raises an integrity
+> error; a *missing/new* entry under `--frozen` raises a frozen-lockfile error) is
+> stated from the docs but not exercised against a current Deno build.
+
 ### 6.2 Registries
 
 Deno is **multi-registry by construction**, and each maps to an existing
@@ -556,7 +683,9 @@ adapters:
 
 ## Sources
 
-All research-grade (docs + release notes; **not** live-probed). Dated 2026-06-16.
+All research-grade (docs + release notes; **not** live-probed). Dated 2026-06-16
+(integrity-verification, workspace focused-install and resolver/PnP-contrast
+additions accessed 2026-06-17).
 
 - **Resolution / modules / cache:** [docs.deno.com/runtime/fundamentals/modules](https://docs.deno.com/runtime/fundamentals/modules/) ·
   [docs.deno.com/runtime/packages](https://docs.deno.com/runtime/packages/) ·
@@ -570,6 +699,7 @@ All research-grade (docs + release notes; **not** live-probed). Dated 2026-06-16
   [deno.com/blog/package-json-support](https://deno.com/blog/package-json-support)
 - **Config (`deno.json`), workspaces, vendor, lock:** [docs.deno.com/runtime/fundamentals/configuration](https://docs.deno.com/runtime/fundamentals/configuration/) ·
   [docs.deno.com/runtime/fundamentals/workspaces](https://docs.deno.com/runtime/fundamentals/workspaces/) ·
+  [docs.deno.com/runtime/reference/cli/outdated](https://docs.deno.com/runtime/reference/cli/outdated/) (`--filter`/`--recursive`) ·
   [deno.com/blog/v1.19 — vendor](https://deno.com/blog/v1.19) ·
   [deno.com/blog/v1.45 — workspaces](https://deno.com/blog/v1.45)
 - **Permissions:** [docs.deno.com/runtime/fundamentals/security](https://docs.deno.com/runtime/fundamentals/security/) ·
@@ -582,6 +712,10 @@ All research-grade (docs + release notes; **not** live-probed). Dated 2026-06-16
   [deno.com/blog/v2.0-release-candidate — lockfile v4](https://deno.com/blog/v2.0-release-candidate) ·
   [deno.com/blog/v2.3 — lockfile v5](https://deno.com/blog/v2.3) ·
   real corpora: `jsr-io/jsr`, `denoland/dnt`, `denoland/deployctl` `deno.lock`
+- **Integrity verification / frozen / `deno ci`:** [docs.deno.com/runtime/fundamentals/dependency_management](https://docs.deno.com/runtime/fundamentals/dependency_management/) ·
+  [docs.deno.com/runtime/manual/basics/modules/integrity_checking](https://docs.deno.com/runtime/manual/basics/modules/integrity_checking/) ·
+  [deno.com/blog/v2.8 — `deno ci`](https://deno.com/blog/v2.8) ·
+  [questions.deno.com — deno.lock integrity/conflict](https://questions.deno.com/m/1326700188860944395) *(community Q&A; corroborating, not primary)*
 - **Audit / fix:** [docs.deno.com/runtime/reference/cli/audit](https://docs.deno.com/runtime/reference/cli/audit/) ·
   [deno.com/blog/v2.6](https://deno.com/blog/v2.6) ·
   [deno.com/blog/deno-protects-npm-exploits](https://deno.com/blog/deno-protects-npm-exploits)

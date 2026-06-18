@@ -38,7 +38,7 @@ __metadata:
 `
 
 describe('recipe/resolution — yarn-berry `::` bind modifier (ADR-0032 +src= extension)', () => {
-  it('`::__archiveUrl=<enc>` → tarball canonical on the DECODED non-registry archive url (clean version, no bind field)', () => {
+  it('`::__archiveUrl=<enc>` → tarball canonical on the DECODED archive url, full bind suffix carried for identity', () => {
     const c = parseResolution(
       'string-width@npm:4.2.3::__archiveUrl=https%3A%2F%2Fnpm.corp.example.com%2Fstring-width%2F-%2Fstring-width-4.2.3.tgz',
       { sourceKind: 'yarn-berry-locator', name: 'string-width' },
@@ -47,6 +47,10 @@ describe('recipe/resolution — yarn-berry `::` bind modifier (ADR-0032 +src= ex
       type: 'tarball',
       // the archive IS the fetch source — a non-registry host
       url: 'https://npm.corp.example.com/string-width/-/string-width-4.2.3.tgz',
+      // the FULL bind suffix rides identity so a residual `&locator=`/`&hash=`
+      // qualifier, an archive pinned to the default-registry host, or two
+      // archives on the same host but different paths all fork the NodeId
+      bind: '__archiveUrl=https%3A%2F%2Fnpm.corp.example.com%2Fstring-width%2F-%2Fstring-width-4.2.3.tgz',
     })
   })
 
@@ -120,14 +124,14 @@ describe('yarn-berry — `::` bind modifier parse + round-trip (full pipeline)',
     const ids = nodes.map(n => n.id).sort()
     expect(ids).toEqual([
       'string-width@4.2.3',
-      'string-width@4.2.3+src=2e68b544681d8de4',
+      'string-width@4.2.3+src=839a6555cde138e4',
     ])
 
     // distinct sources: the registry entry is bare, the archive entry forks
     const bare = nodes.find(n => n.id === 'string-width@4.2.3')!
     const forked = nodes.find(n => n.id.includes('+src='))!
     expect((bare as { source?: string }).source).toBeUndefined()
-    expect((forked as { source?: string }).source).toBe('2e68b544681d8de4')
+    expect((forked as { source?: string }).source).toBe('839a6555cde138e4')
 
     // distinct integrity preserved per node (aaa… vs bbb…)
     const bareDigest = g.tarballOf(bare.id)?.integrity?.hashes?.[0]?.digest
@@ -183,7 +187,7 @@ describe('yarn-berry — `::` bind modifier parse + round-trip (full pipeline)',
     const ids = Array.from(g.nodes()).map(n => n.id).sort()
     expect(ids).toEqual([
       'string-width@4.2.3',
-      'string-width@4.2.3+src=2e68b544681d8de4',
+      'string-width@4.2.3+src=839a6555cde138e4',
     ])
   })
 
@@ -220,5 +224,71 @@ describe('yarn-berry — `::` bind modifier parse + round-trip (full pipeline)',
     const g2 = parse('lockgraph', lgRaw)
     const ids2 = Array.from(g2.nodes()).map(n => n.id).sort()
     expect(ids2).toEqual(nodes.map(n => n.id).sort())
+  })
+
+  it('two `__archiveUrl=` entries differing ONLY by a trailing `&locator=` qualifier fork (no IRREDUCIBLE_LOSS)', () => {
+    // Enterprise mirror: same archive host+path, distinct yarn qualifier. The
+    // residual `&locator=` past the `__archiveUrl=` pair must discriminate, else
+    // both canonicalise identically and collapse onto one NodeId.
+    const enc = 'https%3A%2F%2Fnexus.corp%2Fdual%2F-%2Fdual-1.0.0.tgz'
+    const lock = `__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"dual@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "dual@npm:1.0.0::__archiveUrl=${enc}&locator=foo"
+  checksum: ${CK('a')}
+  languageName: node
+  linkType: hard
+
+"dual@npm:^1":
+  version: 1.0.0
+  resolution: "dual@npm:1.0.0::__archiveUrl=${enc}&locator=bar"
+  checksum: ${CK('b')}
+  languageName: node
+  linkType: hard
+`
+    const fmt = detect(lock)!
+    const g = parse(fmt, lock) // must NOT throw IRREDUCIBLE_LOSS
+    const nodes = Array.from(g.nodes())
+    expect(nodes).toHaveLength(2)
+    const sources = nodes.map(n => (n as { source?: string }).source)
+    expect(sources.every(s => s !== undefined)).toBe(true)
+    expect(sources[0]).not.toBe(sources[1])
+  })
+
+  it('an `__archiveUrl=` pin to the DEFAULT registry host forks from a bare un-pinned entry (no IRREDUCIBLE_LOSS)', () => {
+    // Offline-mirror configs rewrite EVERY entry with `__archiveUrl`, including
+    // ones that point back at the default registry. The explicit pin is itself a
+    // discriminating fact: it must fork from a sibling plain registry entry
+    // rather than collapse onto the same `+src`-bare NodeId.
+    const enc = 'https%3A%2F%2Fregistry.npmjs.org%2Freg%2F-%2Freg-1.0.0.tgz'
+    const lock = `__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"reg@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "reg@npm:1.0.0"
+  checksum: ${CK('a')}
+  languageName: node
+  linkType: hard
+
+"reg@npm:^1":
+  version: 1.0.0
+  resolution: "reg@npm:1.0.0::__archiveUrl=${enc}"
+  checksum: ${CK('b')}
+  languageName: node
+  linkType: hard
+`
+    const fmt = detect(lock)!
+    const g = parse(fmt, lock) // must NOT throw
+    const nodes = Array.from(g.nodes())
+    expect(nodes).toHaveLength(2)
+    const bare = nodes.find(n => (n as { source?: string }).source === undefined)
+    const forked = nodes.find(n => (n as { source?: string }).source !== undefined)
+    expect(bare).toBeDefined()
+    expect(forked).toBeDefined()
   })
 })

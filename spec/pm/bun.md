@@ -2,7 +2,7 @@
 
 > Status: **preview** (docs+source-grounded) — bun.com/docs + oven-sh/bun source
 > & blog; selected behaviours version-pinned below.
-> Updated: 2026-06-16.
+> Updated: 2026-06-17.
 > Provenance: **Official** (bun.com/docs + oven-sh/bun source & blog).
 > Substrate: **Node.js** — see [`_common.md`](./_common.md). This doc records only
 > bun's **extension** of (and divergence from) that substrate.
@@ -97,6 +97,52 @@ deltas are below.
   > (oven-sh/bun#21236), and same-dep-different-catalog installs had bugs
   > (oven-sh/bun#21238) — flag as fidelity risks, not settled behaviour.
 
+### Workspace install & focused (`--filter`) install
+
+How a monorepo install scopes, and the `node_modules` it leaves behind.
+
+- **Whole-monorepo default.** A bare `bun install` from the repo root installs
+  the dependencies of **every** workspace member, de-duplicating shared
+  `name@version` instances where possible, and links each local member that
+  satisfies another member's dependency **in place of** the registry copy
+  (gated by `linkWorkspacePackages`, [§1](#workspaces)). [bun.com/docs/pm/workspaces,
+  bun.com/docs/guides/install/workspaces — accessed 2026-06-17]
+- **`--filter <pattern>` scopes the operation to a workspace subset.** The
+  pattern matches **package names, workspace names, or path globs** (the same
+  selector grammar pnpm uses) and is negatable (`--filter '!pkg-c'`); multiple
+  `--filter` flags union. `bun install --filter './packages/pkg-*'` restricts the
+  install to the matched members. [bun.com/docs/cli/install,
+  bun.com/docs/pm/workspaces — accessed 2026-06-17]
+- **Resulting `node_modules` shape is the linker's, unchanged by the filter.**
+  Filtering selects *which members* are processed; it does **not** switch layout
+  strategy. With the **isolated** linker (the workspace default since **1.3**,
+  [§2](#2-linking--layout)) each member gets its own `node_modules` of symlinks
+  into the central `node_modules/.bun/` store; with the **hoisted** linker a
+  shared dependency is lifted to the **root** `node_modules`. Bun's
+  installer hoists workspace deps toward the root regardless of which member
+  declared them (oven-sh/bun#7547). [bun.com/docs/install/isolated — accessed
+  2026-06-17]
+  > **Open:** whether `bun install --filter <one-member>` installs **only** that
+  > member's dependency closure or still resolves/links the full workspace graph
+  > is **not stated precisely** in the docs — treat the pruning semantics as
+  > unverified, not asserted (accessed 2026-06-17). `bun add --filter` (add a dep
+  > to a *specific* member, not the root) is an **open feature request**, not
+  > shipped (oven-sh/bun#14719).
+
+- **No documented exact `yarn workspaces focus` / `pnpm deploy` analog.** As of
+  the sources accessed 2026-06-17, bun's published CLI exposes **no** command
+  that (a) installs *only one* member's dependency set into that member while
+  ignoring siblings (`yarn workspaces focus`), nor (b) emits a **pruned,
+  copy-and-run-elsewhere** package directory with the workspace closure inlined
+  (`pnpm deploy`). The closest primitive is `--filter` scoping plus the isolated
+  linker's per-member `node_modules`; producing a self-contained deployable is
+  left to the user. [bun.com/docs/pm/workspaces, bun.com/docs/cli/install —
+  accessed 2026-06-17]
+  > **Open:** a true `deploy`/`focus` equivalent may land in a future bun
+  > minor — re-check `bun.com/docs/cli` before stating its absence as permanent;
+  > stated here as *not present in the accessed docs*, not as a guarantee of
+  > non-existence.
+
 ### Overrides & resolutions — **bun reads both**
 
 - Bun honours **both** npm's `"overrides"` **and** yarn's `"resolutions"` in
@@ -188,6 +234,33 @@ performance/COW knobs and carry no fact the converter records.
 > This is the face that makes bun more than "a faster npm." When you execute with
 > **`bun`**, module resolution is bun's own implementation, **not** Node's — even
 > though it starts from the same `node_modules`.
+
+**Native in-runtime resolver, real files — no `.pnp` data file.** Bun's runtime
+(`bun <file>` / `bun run`) resolves modules through its **own built-in module
+resolver compiled into the bun binary**, not via stock Node and **not** by
+reading a serialised resolution map such as yarn-berry's `.pnp.cjs` /
+`.pnp.data.json`. Bun emits no `.pnp*` artefact of any kind. When `bun install`
+runs, it materialises a **real `node_modules` on disk** per the active linker
+([§2](#2-linking--layout)); that physical tree is then resolvable by **both**
+bun's runtime resolver **and** stock `node`. [bun.com/docs/runtime/modules,
+bun.com/docs/install/isolated; oven-sh/bun source — accessed 2026-06-17]
+
+- **Contrast with yarn Plug'n'Play.** PnP **removes** `node_modules` and replaces
+  it with a serialised lookup table (`.pnp.cjs`) that maps each
+  `name@version` → an on-disk (often zipped) location, loaded by an **injected
+  JavaScript resolver** that patches Node's `require`/`import`. Bun is the
+  inverse on both axes: the resolver is **native code inside the runtime** (no
+  injected JS shim) and it reads **ordinary unpacked files** in a real
+  `node_modules`, not a map indirection. [bun.com/docs/runtime/modules; yarnpkg
+  PnP — accessed 2026-06-17]
+  > **Open:** bun *also* has a separate **auto-install** runtime mode
+  > ([`bun.com/docs/runtime/auto-install`]) where, if **no** `node_modules` is
+  > found walking up from the entrypoint, bun resolves bare specifiers straight
+  > out of the **global cache** ([§2](#2-linking--layout)) with no install step.
+  > That mode is distinct from the installed-tree path above and is **not** what
+  > `bun install` produces; confirm against `runtime/auto-install` whether it is
+  > on by default for `bun run` of a project that has a lockfile but an empty
+  > `node_modules` (accessed 2026-06-17, page not re-fetched).
 
 ### What bun's runtime resolver does
 
@@ -390,6 +463,63 @@ on-disk encoding lives in those format specs.
   this project's converter, but worth noting: bun is itself a multi-format
   reader.)
 
+### Integrity verification
+
+How bun records and checks the expected digest of a fetched package. The on-disk
+**encoding** of the digest field lives in the format specs
+([`bun-text.md`](../formats/bun-text.md) /
+[`bun-binary.md`](../formats/bun-binary.md)); recorded here is the **mechanism**.
+
+- **Algorithm — Subresource-Integrity (SRI) `sha512`.** For a registry-served
+  package bun carries the registry's SRI string, i.e. `sha512-<base64>` (the same
+  `dist.integrity` value npm publishes; legacy entries may present `sha1`-class
+  digests where that is all the registry exposes). The digest is a **whole-tarball**
+  checksum, not a per-file one. [npm registry `dist.integrity` / SRI;
+  bun.com/docs/pm/lockfile — accessed 2026-06-17]
+- **Where the expected digest lives — `bun.lock` (text).** Each registry entry in
+  the `packages` map is a positional array whose **third element carries the
+  package's integrity/SRI** (registry entries) — alongside the resolved
+  `name@version` and the resolution URL; non-registry sources (`github:`,
+  `file:`, tarball) key on a content hash instead. The exact field position,
+  optionality, and string encoding are specified in
+  [`bun-text.md`](../formats/bun-text.md) — **not duplicated here**.
+  [bun.com/docs/pm/lockfile — accessed 2026-06-17]
+  > **Open:** confirm verbatim against `bun.com/docs/pm/lockfile` /
+  > oven-sh/bun source whether the text entry uses a named `"integrity"` key or
+  > a bare positional slot, and exactly which array index holds it (accessed
+  > 2026-06-17; the canonical statement belongs in `bun-text.md`).
+- **Where the expected digest lives — `bun.lockb` (legacy binary).** The binary
+  lockfile stores the per-package integrity hash inside its packed package
+  metadata (binary structures, not text), de-duplicated with the rest of the
+  string data; it is **never parsed by this project** ([§6 Lockfile]). The
+  precise binary layout is in [`bun-binary.md`](../formats/bun-binary.md).
+  [oven-sh/bun source — accessed 2026-06-17]
+- **What is verified, and when.** On install, when a tarball is fetched (or read
+  for extraction) and the entry's integrity hash is present and of a supported
+  algorithm, bun **verifies the tarball against the expected digest before
+  extraction** — gated internally by a `skip_verify` condition (verification runs
+  when `skip_verify` is false and the hash is supported). The comparison is
+  **downloaded/cache tarball bytes vs the lockfile's expected SRI**.
+  [oven-sh/bun source (install pipeline) — accessed 2026-06-17]
+  > **Open:** whether a tarball **already resident in the global cache**
+  > (`~/.bun/install/cache/`, [§2](#2-linking--layout)) is **re-hashed on every
+  > cache read** or trusted once written is **not clearly documented** — do not
+  > assert a cache-read re-verification without a source confirming it (accessed
+  > 2026-06-17).
+- **Behaviour on mismatch.** A digest that does not match aborts the install with
+  bun's **`IntegrityCheckFailed`** error (surfaced as *"integrity check failed for
+  tarball"* / *"IntegrityCheckFailed extracting tarball"*); it is bun's analog of
+  npm's `EINTEGRITY`. Reported triggers include a stale/corrupt cache, a registry
+  that re-published differing bytes, or a network-truncated download
+  (oven-sh/bun#1590, #5581, #18864, #20084, #21493, #22470).
+  [oven-sh/bun issues — accessed 2026-06-17]
+  > **Open:** bun's mismatch path is currently **fail-fast** — whether it
+  > auto-evicts the offending cache entry and re-downloads, or simply errors out,
+  > is **not documented**; an automatic retry/backoff on recoverable fetch errors
+  > is an **open request**, not shipped behaviour (oven-sh/bun#26879, accessed
+  > 2026-06-17). Treat "delete cache + reinstall" as a user workaround, not
+  > defined bun semantics.
+
 ### Registry
 
 Cross-ref [`registry/bun.md`](../registry/bun.md) +
@@ -412,7 +542,11 @@ Cross-ref [`registry/bun.md`](../registry/bun.md) +
 
 ## Sources
 
-Authoritative (bun.com/docs + oven-sh blog/source), fetched/searched 2026-06-16:
+Authoritative (bun.com/docs + oven-sh blog/source), fetched/searched 2026-06-16;
+resolver/focused-install/integrity material added in a follow-up search pass
+2026-06-17 (direct doc fetch was unavailable that day — claims drawn from indexed
+doc text + oven-sh/bun source and issue tracker, marked `> **Open:**` where a
+detail could not be confirmed verbatim):
 
 - [bun.com/docs/cli/install](https://bun.com/docs/cli/install) — `bun install`,
   `--linker` / `--backend` / `--filter` / `--frozen-lockfile` / `--omit`,
@@ -433,8 +567,21 @@ Authoritative (bun.com/docs + oven-sh blog/source), fetched/searched 2026-06-16:
   + auth.
 - [bun.com/docs/pm/bunx](https://bun.com/docs/pm/bunx) — `bunx` / `bun x`,
   auto-install to global cache, shebang respect, `--package`.
-- [bun.com/docs/pm/workspaces](https://bun.com/docs/pm/workspaces) — workspaces,
-  `workspace:` + `catalog:` protocols.
+- [bun.com/docs/pm/workspaces](https://bun.com/docs/pm/workspaces) +
+  [bun.com/docs/guides/install/workspaces](https://bun.com/docs/guides/install/workspaces) —
+  workspaces, `workspace:` + `catalog:` protocols, whole-monorepo install +
+  `--filter` scoping, root-hoisting of workspace deps.
+- [bun.com/docs/runtime/auto-install](https://bun.com/docs/runtime/auto-install) —
+  no-`node_modules` runtime mode that resolves bare specifiers out of the global
+  cache (distinct from the installed-tree resolver in [§3](#3-resolver-mutation)).
+- [bun.com/docs/pm/lockfile](https://bun.com/docs/pm/lockfile) — `packages` map
+  entry shape (positional array; integrity/SRI carried per registry entry),
+  `lockfileVersion`.
+- oven-sh/bun **source + issue tracker** (install pipeline / integrity) —
+  pre-extraction tarball verification (`skip_verify` gate), SRI `sha512` digest,
+  `IntegrityCheckFailed` on mismatch (oven-sh/bun#1590, #5581, #18864, #20084,
+  #21493, #22470), fail-fast + retry-request (#26879); `bun add --filter` feature
+  request (#14719); root-hoist-of-workspace-deps (#7547).
 - [bun.com/docs/guides/install/trusted](https://bun.com/docs/guides/install/trusted) —
   `trustedDependencies`, default allowlist, non-transitivity, `bun pm trust` /
   `bun pm untrusted`.
@@ -454,3 +601,14 @@ Authoritative (bun.com/docs + oven-sh blog/source), fetched/searched 2026-06-16:
 >    and `.npmrc` vs `bunfig.toml` registry precedence.
 > 3. Full `.env.*` cascade + precedence (`runtime/env` page 503'd at write time).
 > 4. (carried) `bun audit` advisory endpoint + corgi `Accept` header.
+> 5. Auto-install runtime mode ([§3](#3-resolver-mutation)): is it on by default
+>    for `bun run` of a project that has a lockfile but an empty `node_modules`?
+> 6. Focused install ([§1 — Workspace install & focused install](#1-resolution)):
+>    does `bun install --filter <one-member>` prune to that member's closure or still
+>    resolve the full workspace graph? Is there any `yarn workspaces focus` /
+>    `pnpm deploy` analog in a current or planned bun release?
+> 7. Integrity ([§6](#integrity-verification)): named `"integrity"` key vs bare
+>    positional slot (and array index) in the `bun.lock` text entry — canonical
+>    answer belongs in `bun-text.md`; whether a cache-resident tarball is
+>    re-hashed on every read or trusted once written; whether a mismatch
+>    auto-evicts + re-downloads or only errors.
