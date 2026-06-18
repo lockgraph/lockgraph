@@ -1,9 +1,9 @@
 # `spec/pm/` — package-manager behavior specs
 
-> Status: **preview** (reference family; deno frontier) — contributor-private; grounded in official docs, not all live-probed — see [§ Grounding](#grounding--status).
-> Updated: 2026-06-16.
+> Status: **preview** (reference family; deno frontier) — grounded in official docs, not all live-probed — see [§ Grounding](#grounding--status).
+> Updated: 2026-06-17.
 > Provenance: **External** — these document how the *real* package managers behave; this library reads/writes their artefacts.
-> Family: foundational reference. Promotion to a published surface is gated; this family is contributor-private (like [`spec/registry/`](../registry/)).
+> Family: foundational reference — git-tracked and published alongside [`spec/formats/`](../formats/) and [`spec/registry/`](../registry/).
 
 A package manager is **not only an installer.** It (1) resolves and fetches
 dependencies, (2) **lays them out on disk**, (3) often **mutates the module
@@ -54,6 +54,32 @@ That split — who keeps Node's resolver vs who supplants it — is what `spec/p
 exists to make precise, because it dictates what a faithful FS-projection (L3)
 and a cross-PM convert must reproduce.
 
+## Monorepo focused-install modes
+
+How each PM narrows an install to part of a workspace. Details + citations in each per-PM doc.
+
+| PM | workspace filter | focused single-member install | self-contained deploy / copy-out |
+|----|------------------|-------------------------------|----------------------------------|
+| npm | `-w` / `--workspace`, `--workspaces`, `--include-workspace-root` | — (no first-class focus) | — |
+| yarn classic | — | — | — |
+| yarn berry | — | **`yarn workspaces focus [--production] [--all]`** (deps closure of selected workspaces only) | — |
+| pnpm | **`--filter <selector>...`** (dependents / dependencies / path / since selectors) | via `--filter … install` | **`pnpm deploy`** (isolated, dependency-closure-inlined dir) |
+| bun | **`--filter <pattern>`** | — (open) | — |
+| deno *(frontier)* | `--filter` / `--recursive` (command dispatch) | `deno install --entrypoint <file>` (import-graph reachability) | — |
+
+## Integrity verification
+
+How each PM checks that fetched bytes match the lock. Details + citations in each per-PM doc; the shared SRI substrate is [`spec/formats/_common.md` §3](../formats/_common.md#3-integrity-model).
+
+| PM | algorithm | digest stored in | verified when | against what | on mismatch |
+|----|-----------|------------------|---------------|--------------|-------------|
+| npm | SRI `sha512` (+ legacy `sha1`) | `package-lock.json` `integrity` | fetch → cache (`ssri` + `cacache`) | fetched tarball bytes | `EINTEGRITY` (hard fail) |
+| yarn classic | SRI `sha512` (+ legacy `sha1` in `resolved#`) | `integrity` | on tarball extract | fetched tarball | error |
+| yarn berry | `sha512`, cacheKey-prefixed | `checksum` (`<cacheKey>/<hex>`) | on cache-zip access (incl. zero-install) | `.yarn/cache/*.zip` | `YN0018`; tunable via `checksumBehavior` |
+| pnpm | SRI `sha512` | `pnpm-lock.yaml` `resolution.integrity` | fetch → store, store → link (`verify-store-integrity`) | content-addressed store objects | unlink + refetch, then error |
+| bun | SRI `sha512` | `bun.lock` / `bun.lockb` | pre-extraction (`skip_verify` gate) | fetched / cached tarball | `IntegrityCheckFailed` |
+| deno *(frontier)* | `sha256` (remote / `jsr:`), SRI `sha512` (`npm:`) | `deno.lock` | on fetch / cache-read; `--frozen` / `deno ci` | fetched source / tarball | lockfile verification error |
+
 ## Cross-references
 
 - **Lockfile encodings** live in [`spec/formats/`](../formats/) — these docs cite them for *what* is persisted, they don't re-document the byte grammar.
@@ -62,8 +88,9 @@ and a cross-PM convert must reproduce.
 
 ## Grounding & status
 
-These are **foundational reference drafts**, contributor-private (the whole
-`spec/` tree is gitignored except `spec/formats/*.md`). They were composed from
+These are **foundational reference** docs, git-tracked and published alongside
+[`spec/formats/`](../formats/) and [`spec/registry/`](../registry/) (the rest of the
+`spec/` tree stays contributor-private). They were composed from
 **authoritative sources** — official docs (`nodejs.org/api`, `docs.npmjs.com`,
 `yarnpkg.com`, `pnpm.io`, `bun.com`, `docs.deno.com`), PM source/issues, and
 this repo's own format/registry specs — with inline citations.
