@@ -1,7 +1,7 @@
 # `_common` — shared normative rules for the format specs
 
 > Status: stable (shared normative rules; consumed by the yarn-berry family + integrity/patch/reserved-vocab refs).
-> Updated: 2026-06-16
+> Updated: 2026-06-19
 > This is the shared **published** source for rules that several format
 > specs depend on, relocated verbatim from internal (unpublished) ADRs so
 > an external reader never has to consult them. Where a format spec
@@ -792,6 +792,23 @@ Carrying the whole suffix forks two entries that differ only by a residual
 paths, or an explicit archive pin to the default-registry host versus a bare
 un-pinned entry — each of which would otherwise collapse onto one NodeId and
 throw `IRREDUCIBLE_LOSS`.
+
+A `+src=` slot is **internal identity**, never emitted verbatim; each target
+projects it back into its own grammar on `stringify`:
+
+- **yarn-classic** emits source-forked siblings as **distinct entries** (distinct
+  descriptor keys + distinct `resolved` URLs) — it can represent both, so neither
+  is dropped.
+- **yarn-berry** synthesises a valid locator from the canonical resolution on a
+  cross-format convert: a non-default-registry tarball becomes
+  `<name>@npm:<version>::__archiveUrl=<enc>`, never a bare URL.
+- **npm** never emits a yarn-berry locator (a `::` bind or a `patch:` shape) as
+  `resolved`: a private-registry archive projects to its decoded URL, and a
+  `patch:` node (which npm cannot represent) **omits** `resolved` — npm
+  re-resolves from the range. A scoped package whose private registry lived only
+  in `.yarnrc.yml` (no `__archiveUrl` in the lock) has no recoverable URL, so the
+  convert fabricates the default-registry `registry.npmjs.org` tarball URL — a
+  documented cross-origin degradation.
 
 Peer-virtualised siblings that share `name@version` and **all** slot inputs
 share **one** entry (five virt-copies of `react@18.0.0` reference the same
