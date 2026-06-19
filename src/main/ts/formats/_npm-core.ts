@@ -57,6 +57,7 @@ import {
   unknownResolutionDiagnostic,
 } from '../recipe/diagnostics.ts'
 import {
+  isYarnBerryLocator,
   parse as parseResolutionRecipe,
   sourceDiscriminatorOf,
   stringifyForNpm,
@@ -1203,14 +1204,26 @@ function buildNodeModulesEntry(
   body.version = node.version
 
   const tarball = graph.tarballOf(node.id)
-  // `resolved` URL: prefer the per-tarball `nativeResolution`. Adapter-specific
-  // recovery (e.g. npm-2 legacy-mirror sidecar that stashes the on-disk URL when
-  // the parser does not sync it to `nativeResolution`) is delegated via
-  // `hooks.recoverResolvedForNode`. ADR-0014 §4.F3 cross-format fallback:
-  // when neither carrier is present, derive from canonical resolution.
-  const resolved = tarball?.nativeResolution
+  // `resolved` URL: prefer the per-tarball `nativeResolution`, but ONLY when it
+  // is a real npm `resolved` URL. A cross-format source (yarn-berry) stores its
+  // own LOCATOR there (`<name>@npm:…::__archiveUrl=…`, `<name>@patch:…`) — not a
+  // URL — so emitting it verbatim yields an `npm ci`-unusable lock; reject it and
+  // fall through. Adapter-specific recovery (npm-2 legacy-mirror sidecar) is
+  // delegated via `hooks.recoverResolvedForNode`. ADR-0014 §4.F3 cross-format
+  // fallback: derive from the canonical resolution (a `tarball` canonical yields
+  // its URL — the private-registry archive host — losslessly).
+  const native = tarball?.nativeResolution
+  let resolved = (native !== undefined && !isYarnBerryLocator(native) ? native : undefined)
     ?? config.hooks?.recoverResolvedForNode?.(graph, node)
     ?? deriveResolvedFromCanonical(tarball?.resolution)
+  // The canonical of a `patch:` / any non-canonicalisable shape is `unknown`,
+  // whose `stringifyForNpm` re-emits the raw yarn locator — also not a URL. Drop
+  // it (npm has no patch protocol; it re-resolves from the range) so the lock
+  // stays structurally valid. The patch-incapability loss is already surfaced by
+  // the recipe's `RECIPE_FEATURE_DROPPED(patch)` path, so no extra diagnostic here.
+  if (resolved !== undefined && isYarnBerryLocator(resolved)) {
+    resolved = undefined
+  }
   if (resolved !== undefined) body.resolved = resolved
   if (tarball?.integrity !== undefined) {
     const sri = emitSri(tarball.integrity)

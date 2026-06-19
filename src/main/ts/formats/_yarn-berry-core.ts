@@ -1472,7 +1472,10 @@ function baseSpecOfPatchLocator(locator: string): string | undefined {
 // link emits as `<name>@portal:<path>`). A locator we cannot peel (a bare URL
 // from a leaked cross-format sidecar) falls through to `hard`, the safe default
 // for a copied/extracted artefact.
-const ARCHIVE_PATH_RE = /\.(?:tgz|tar\.gz|tar)(?:$|[#?])/i
+// Terminator includes `:` so a `.tgz` archive followed by a `::<params>` bind
+// (e.g. `file:./vendor/x.tgz::locator=…`) is still recognised as an archive
+// (→ `hard`); without it the `::` tail fell through to the `soft` default.
+const ARCHIVE_PATH_RE = /\.(?:tgz|tar\.gz|tar)(?:$|[#?:])/i
 function linkTypeOfResolution(resolution: string | undefined): 'soft' | 'hard' {
   if (resolution === undefined) return 'hard'
   let part: SpecPart

@@ -34,6 +34,7 @@ import { type Graph, type Node, type Diagnostic } from '../graph.ts'
 import { emitSri } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import {
+  isYarnBerryLocator,
   stringifyForNpm,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
@@ -315,7 +316,7 @@ function buildLegacyNodeEntry(
   // fallback: derive from canonical resolution as last resort.
   const sourceResolved = sidecarResolvedFor(ctx, node)
     ?? deriveLegacyResolvedFromCanonical(tarball?.resolution)
-  if (native !== undefined) {
+  if (native !== undefined && !isYarnBerryLocator(native)) {
     // For git entries the resolution itself becomes the `version` field
     // (per the npm-2 legacy mirror fixture) and `from:` records the original
     // request spec.
@@ -327,7 +328,7 @@ function buildLegacyNodeEntry(
     } else {
       entry.resolved = native
     }
-  } else if (sourceResolved !== undefined) {
+  } else if (sourceResolved !== undefined && !isYarnBerryLocator(sourceResolved)) {
     // Same git-vs-tarball discrimination on the recovered URL.
     const looksLikeGit = /^git[+@]/.test(sourceResolved)
     if (looksLikeGit) {

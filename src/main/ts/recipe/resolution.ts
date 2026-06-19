@@ -586,6 +586,16 @@ export function stringifyForYarnClassic(can: ResolutionCanonical, hints: YarnCla
  * Project canonical → npm `resolved` URL per ADR-0014 §4.F3.
  * Workspace members emit via link entries through packages/<p>; not this path.
  */
+// True when a string is a yarn-berry locator (`<name>@<protocol>:<spec>` and/or
+// a `::` bind) rather than a URL. npm `resolved`/`version` values are URLs
+// (`https://`, `git+…`, `git@…`, `file:`) or shorthand (`github:o/r`) and never
+// begin with a `<name>@<yarn-protocol>:` prefix, so this rejects a leaked
+// yarn-native locator on a cross-format convert without dropping real npm shapes.
+export function isYarnBerryLocator(s: string): boolean {
+  return s.includes('::')
+    || /^[^:\s]+@(?:npm|patch|workspace|portal|link|exec|virtual):/.test(s)
+}
+
 export function stringifyForNpm(can: ResolutionCanonical): string | undefined {
   switch (can.type) {
     case 'tarball':

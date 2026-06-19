@@ -63,6 +63,7 @@ import {
 import { derivePeerCandidates, pruneSidecar } from './_npm-core.ts'
 import { emitDropped as patchEmitDropped, emitDropped as recipeEmitDropped } from '../recipe/diagnostics.ts'
 import {
+  isYarnBerryLocator,
   parse as parseResolutionRecipe,
   sourceDiscriminatorOf,
   stringifyForNpm,
@@ -864,8 +865,14 @@ function buildEntry(
   const tarball = graph.tarballOf(node.id)
   // ADR-0014 §4.F3 cross-format fallback: when PM-native `nativeResolution`
   // is absent (cross-format input), derive from canonical.
-  const resolutionStr = tarball?.nativeResolution ?? deriveResolvedFromCanonical(tarball?.resolution)
-  if (resolutionStr !== undefined) {
+  const native = tarball?.nativeResolution
+  const resolutionStr = (native !== undefined && !isYarnBerryLocator(native) ? native : undefined)
+    ?? deriveResolvedFromCanonical(tarball?.resolution)
+  // A yarn-berry locator that leaked from a cross-format source (a `patch:` /
+  // `::`-bound shape the canonical could not reduce to a URL) is not a valid npm
+  // `resolved`/`version` — skip it (npm re-resolves from the range) so the lock
+  // stays structurally valid.
+  if (resolutionStr !== undefined && !isYarnBerryLocator(resolutionStr)) {
     if (/^(git[+:]|github:)/.test(resolutionStr)) {
       entry.version = resolutionStr
     } else if (isHttpUrl(resolutionStr) && isHttpUrl(node.version)) {
