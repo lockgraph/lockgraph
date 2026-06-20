@@ -89,7 +89,7 @@ single canonical sweep that all flows defer to.
 Per ADR-0008 fixpoint semantics and ADR-0023 §8.4:
 
 ```
-parse → [modify → complete → optimize → enrich]* → stringify
+parse → [modify → complete → enrich → optimize]* → stringify
         \________________ one iteration ________/
 ```
 

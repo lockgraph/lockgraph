@@ -64,6 +64,8 @@ typings/
 
 # Output of 'npm pack'
 *.tgz
+# …except vendored test-fixture tarballs (ADR-0035 berry-checksum conformance)
+!src/test/resources/fixtures/tarballs/*.tgz
 
 # Yarn Integrity file
 .yarn-integrity

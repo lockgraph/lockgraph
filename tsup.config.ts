@@ -33,6 +33,9 @@ export default defineConfig({
     complete: 'src/main/ts/complete/index.ts',
     optimize: 'src/main/ts/optimize/index.ts',
     registry: 'src/main/ts/registry/index.ts',
+    // ADR-0034 — `@antongolub/lockfile/enrich` publishes the install-completeness
+    // phase (`refurbish`), which recomputes the yarn-berry `checksum`.
+    enrich:   'src/main/ts/enrich/index.ts',
     ...Object.fromEntries(
       adapters.map(id => [`formats/${id}`, `src/main/ts/formats/${id}.ts`]),
     ),

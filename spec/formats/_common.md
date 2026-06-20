@@ -668,7 +668,18 @@ To verify a package against a carrier:
    **not** reproduce it. To verify it you must reproduce yarn's zip transform
    and hash the resulting cache entry. This is why a `berry-zip` digest is
    never substituted into, or compared against, a tarball SRI
-   ([§3.3](#33-the-berry-zip--tarball-sri-boundary)).
+   ([§3.3](#33-the-berry-zip--tarball-sri-boundary)). That reproduction is
+   implemented for the **STORE** compression (`cacheKey` ending `c0` — the
+   Yarn-4 default) in
+   [`recipe/berry-checksum.ts`](../../src/main/ts/recipe/berry-checksum.ts)
+   `computeBerryChecksum`: gunzip the tarball, re-pack it under
+   `node_modules/<ident>/` with yarn's libzip conventions (STORE, `SAFE_TIME`
+   mtime, fixed mode/version/order), then sha512 the zip — byte-exact vs yarn's
+   own output. DEFLATE `cacheKey`s (`cN`, N≥1) are not yet reproducible
+   byte-exact (they need zlib parity with yarn's vendored libzip). So a
+   `berry-zip` digest CAN be **synthesised** for a STORE node from the tarball
+   — but only by this reproduction, never by relabelling a tarball SRI
+   ([§3.4](#34-omit-never-fabricate)).
 
 ---
 
