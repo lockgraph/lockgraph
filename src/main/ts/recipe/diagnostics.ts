@@ -207,19 +207,13 @@ export function emitDropped(
 }
 
 /**
- * Emit `RECIPE_RESOLUTION_UNKNOWN` (warning) per ADR-0014 §5 once per
- * distinct `{ type: 'unknown', raw }` value. Adapter call sites pass
- * `nodeId` for the subject; callers are responsible for de-duplication
- * across nodes (the helper does not maintain state). Lives in
- * `recipe/diagnostics.ts` (not `recipe/resolution.ts`) per the F1/F2
- * split convention — recipe primitives stay pure-math, diagnostics live
- * here.
- */
-/**
- * Pure factory for the canonical `RECIPE_RESOLUTION_UNKNOWN` diagnostic
- * object. Use this directly when pushing к an adapter-side
- * `Diagnostic[]` buffer; use `emitUnknownResolution()` для the
- * callback-style consumer surface.
+ * Pure factory for the canonical `RECIPE_RESOLUTION_UNKNOWN` (warning,
+ * ADR-0014 §5) diagnostic object — one per distinct `{ type: 'unknown', raw }`
+ * value. Use this directly when pushing to an adapter-side `Diagnostic[]`
+ * buffer; use `emitUnknownResolution()` for the callback-style consumer surface.
+ * Callers own de-duplication across nodes (the helper keeps no state). Lives in
+ * `recipe/diagnostics.ts` (not `recipe/resolution.ts`) per the F1/F2 split
+ * convention — recipe primitives stay pure-math, diagnostics live here.
  */
 export function unknownResolutionDiagnostic(
   nodeId: NodeId,

@@ -7,7 +7,7 @@
 // (cacache CAS under `~/.npm/_cacache/`), and `pnpmCache` (content-
 // addressable store under `~/.pnpm-store/v3/`). All four coexist and
 // share the same registry/cache shapes so consumers can swap one for
-// the other без touching modifier / completion call sites.
+// the other without touching modifier / completion call sites.
 
 export { frozenRegistry } from './frozen.ts'
 export { liveRegistry, type LiveRegistryOptions } from './live.ts'

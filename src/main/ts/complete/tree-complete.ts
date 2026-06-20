@@ -200,10 +200,8 @@ export async function completeTransitives(
         // peer-edge ↔ peerContext coherence invariant. We cannot synthesise
         // a peer edge to a freshly-added node without first re-peer-keying
         // the consumer — out of scope for v1 (peer-virt is recipe-layer
-        // territory per §4.3). Emit the diagnostic instead.
+        // territory per §4.3). Emit the diagnostic without adding the node.
         if (kind === 'peer') {
-          // Still add the node and mark unresolved-as-peer so caller knows
-          // the consumer's peer slot needs enrich.
           emitAndLand(completionPeerContextIncomplete(nodeId, depName, depRange))
           continue
         }

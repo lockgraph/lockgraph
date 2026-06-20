@@ -3,13 +3,13 @@
 // Thin entry threading the `v9-importers-snapshots` profile through
 // `_pnpm-flat-core.ts`. Per ADR-0022 §5 mining strategy r2 — extraction
 // round (mirrors npm-flat family core-extraction precedent). All
-// version-agnostic logic lives в `_pnpm-flat-core.ts`; this module owns
+// version-agnostic logic lives in `_pnpm-flat-core.ts`; this module owns
 // the v9 profile + v9-specific option/result types.
 //
 // §A pinning per ADR-0022 §A.pnpm-v9:
 //   - top-level `lockfileVersion: '9.0'` literal handshake (quoted string).
 //   - top-level `settings` always emitted.
-//   - top-level `importers` ALWAYS present (single-importer collapses к `.`).
+//   - top-level `importers` ALWAYS present (single-importer collapses to `.`).
 //   - `packages` map: static manifest info, bare `name@version` keys.
 //   - `snapshots` map: resolved tree info, peer-virt-disambiguated keys.
 //   - Cross-block consistency: every `snapshots[id]` MUST have matching

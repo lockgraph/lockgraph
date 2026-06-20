@@ -11,13 +11,13 @@
 //     "sections" (immediate children prefixed with a blank line, pnpm's
 //     `packages:` / `snapshots:` style).
 //
-// Codec-supplied typed surface для format-affecting variants — these
+// Codec-supplied typed surface for format-affecting variants — these
 // are PUBLIC discriminated wrappers, NOT magic properties on YamlMap:
 //
 //   - `flowMap(entries)` — emit as `{k: v, …}` inline flow map.
 //   - `quoted(value)`    — force single-quoted scalar (e.g. `'9.0'`).
 //
-// The codec dispatches on the tagged kind, никаких string keys are
+// The codec dispatches on the tagged kind, no string keys are
 // reserved. Per r2 BLOCKER B1' resolution.
 //
 // Scope of the supported YAML subset:
@@ -423,10 +423,7 @@ function emitBlockMap(lines: string[], map: YamlMap, depth: number, sectionKey?:
     if (pair === undefined) continue
     const [key, value] = pair
     const emittedKey = emitScalarKey(key)
-    if (isTopSubsection && i > 0) lines.push('')
-    if (isTopSubsection) {
-      if (i === 0) lines.push('')
-    }
+    if (isTopSubsection) lines.push('')
     if (value === undefined || value === null) {
       lines.push(`${indent}${emittedKey}:`)
       continue

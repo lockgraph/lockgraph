@@ -25,7 +25,7 @@
 // decomposes tarballs into per-file content-addressable blobs at
 // install time and discards the original archive. Re-tarring on demand
 // would require reading every file referenced by the index, applying
-// the mode, и rebuilding gzip bytes — out of scope for v1, and the
+// the mode, and rebuilding gzip bytes — out of scope for v1, and the
 // caller cannot trust the bytes against the original tarball integrity
 // since gzip is not deterministic across implementations.
 //

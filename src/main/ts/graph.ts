@@ -71,10 +71,9 @@ export interface TarballPayload {
   bundledDependencies?: string[]
   // ADR-0014 §4.F3 — typed canonical resolution. Distinct from
   // `nativeResolution` (PM-native verbatim string sidecar per ADR-0013): this
-  // carrier holds the 5-case discriminated union populated at adapter parse via
-  // `recipe/resolution.parse()`. Adapter stringify projects back to PM-native
-  // via `recipe/resolution.stringifyFor*`.
-  // (4-case discriminated union: tarball | git | directory | unknown.)
+  // carrier holds the 4-case discriminated union (tarball | git | directory |
+  // unknown) populated at adapter parse via `recipe/resolution.parse()`.
+  // Adapter stringify projects back to PM-native via `recipe/resolution.stringifyFor*`.
   resolution?:          ResolutionCanonical
   // ADR-0013 — PM-native verbatim resolution string sidecar. Captured at
   // adapter parse verbatim (e.g. yarn-classic `resolved`, npm `resolved`,
@@ -335,7 +334,7 @@ export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
   return id
 }
 
-// Patch-token grammar предикаты owned by `recipe/patch.ts` per ADR-0014
+// Patch-token grammar predicates owned by `recipe/patch.ts` per ADR-0014
 // §4.F2 + ADR-0011 §Decision. graph.ts consumes them — there is no local
 // regex shadow here so the token grammar stays single-source.
 import { isCanonicalHash, isHashedPeerSetToken, isSentinelPatch as recipeIsSentinelPatch } from './recipe/patch.ts'

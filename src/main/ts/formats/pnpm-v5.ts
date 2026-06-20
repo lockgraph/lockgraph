@@ -191,7 +191,7 @@ function rememberSidecar(graph: Graph, sidecar: PnpmV5Sidecar): void {
 const V5_LOCKFILE_VERSION_CANONICAL = 5.4
 // Accepted on-disk literals (parsed back as bare strings by `_pnpm-yaml.ts`'s
 // reader, which never coerces scalars to numbers). The 5.0 → 5.4 minor-bump
-// range is collapsed к canonical `5.4` on emit per ADR-0022 §A.pnpm-v5.
+// range is collapsed to canonical `5.4` on emit per ADR-0022 §A.pnpm-v5.
 const V5_LOCKFILE_VERSION_ACCEPTED = new Set(['5.0', '5.1', '5.2', '5.3', '5.4'])
 
 const TOP_LEVEL_ORDER: readonly string[] = [
@@ -224,10 +224,10 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
   const normalized = normalizeLineEndings(input)
   const yaml = readYaml(normalized)
 
-  // The YAML reader is shape-agnostic для scalars — both `5.4` (decimal)
-  // и `'6.0'` (quoted) come back as the same JS string. The reader
+  // The YAML reader is shape-agnostic for scalars — both `5.4` (decimal)
+  // and `'6.0'` (quoted) come back as the same JS string. The reader
   // never coerces. The byte-level regex below is therefore the
-  // authoritative discriminator between v5 (unquoted) и v6/v9 (quoted);
+  // authoritative discriminator between v5 (unquoted) and v6/v9 (quoted);
   // the accepted-literal set check is a secondary sanity gate. Both run
   // so that hand-edited inputs whose literal lies outside `{5.0..5.4}`
   // surface a clear FORMAT_MISMATCH with the parsed-but-rejected value
@@ -806,8 +806,8 @@ interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] 
  * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5 r2. Given
  * `<version>[_<peer>@<v>…]`, peel `_<peerName>@<peerVersion>` segments
  * from the tail while PEER_TAIL_RE matches; returns the bare version
- * (unconsumed remainder) и peers in canonical order. Returns undefined
- * for an empty input или fully-consumed remainder (no base version
+ * (unconsumed remainder) and peers in canonical order. Returns undefined
+ * for an empty input or fully-consumed remainder (no base version
  * left).
  *
  * v5-scoped-peer-grammar edge per ADR-0022 stub: scoped peers containing
@@ -831,9 +831,9 @@ function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | 
 
 /**
  * Parse a v5 `/<name>/<version>[<peer-tail>]` packages key. Strip the
- * leading `/`, split on the LAST `/` для name vs `<version><peer-tail>`
+ * leading `/`, split on the LAST `/` for name vs `<version><peer-tail>`
  * (the version segment contains no `/`, so the rule applies uniformly
- * к scoped и unscoped names), then peel the peer tail right-to-left.
+ * to scoped and unscoped names), then peel the peer tail right-to-left.
  */
 function parsePackagesKey(key: string): ParsedPackagesKey | undefined {
   if (!key.startsWith('/')) return undefined

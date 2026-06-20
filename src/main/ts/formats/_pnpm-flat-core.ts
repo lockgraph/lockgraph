@@ -4,7 +4,7 @@
 // peer-virt encoding + importer synthesis loop are owned wholly by this
 // module. pnpm-v5 (decimal version literal, dense snapshot tree) ships
 // standalone with its own profile and codec per ADR-0022 phase order,
-// но reuses the format-neutral helpers exported here — `tarballPayloadOf`
+// but reuses the format-neutral helpers exported here — `tarballPayloadOf`
 // (F1/F3 shared parser), peer-target resolution, line-ending normalisation,
 // importer-path math. v5 takes the parts that have no on-disk shape
 // dependency; the v6/v9 YAML codec, profile semantics, and
@@ -14,12 +14,12 @@
 // `PnpmLayoutProfile` — a discriminated union with one variant per
 // supported on-disk shape — through the shared parse / stringify /
 // enrich / optimize implementations. The profile IS the single source
-// of truth для each shape; no separate flag toggles are exposed.
+// of truth for each shape; no separate flag toggles are exposed.
 //
 // Supported profiles:
 //
 //   - `'v6-collapsed-root'`  → pnpm 6.x: quoted `'6.0'` handshake,
-//     single-importer collapses к top-level `dependencies` blocks,
+//     single-importer collapses to top-level `dependencies` blocks,
 //     slash-leading `packages` keys, peer-context directly on the
 //     packages key, inline transitives, per-entry `dev: false|true`,
 //     no `snapshots` block.
@@ -33,9 +33,9 @@
 // `PNPM_V6_INVALID_INTEGRITY`). Family-shared diagnostics keep the bare
 // `PNPM_` prefix (e.g. `PNPM_BAD_ENTRY`, `PNPM_UNRESOLVED_DEP`). Patch
 // loss surfaces through the canonical `RECIPE_FEATURE_DROPPED` code per
-// ADR-0014 §5 (recipe diagnostics live в `recipe/diagnostics.ts`).
+// ADR-0014 §5 (recipe diagnostics live in `recipe/diagnostics.ts`).
 //
-// YAML in/out is delegated к `_pnpm-yaml.ts`; this module owns only
+// YAML in/out is delegated to `_pnpm-yaml.ts`; this module owns only
 // the higher-level pnpm family semantics.
 
 import semver from 'semver'
@@ -127,7 +127,7 @@ export interface PnpmSettings {
 // Discriminated union — each supported on-disk shape is ONE coherent
 // profile object. The shape constants for each variant are pinned in
 // `PROFILE_TABLE` below; per-version adapter modules pass only the
-// discriminant tag (`profile: 'v6-collapsed-root'`) и the core resolves
+// discriminant tag (`profile: 'v6-collapsed-root'`) and the core resolves
 // it to the full shape internally.
 
 export type PnpmLayoutProfile =
@@ -155,7 +155,7 @@ interface PnpmLayoutShape {
   readonly peerContextLocation: 'snapshots-keys' | 'packages-keys'
   /** Whether a `snapshots` block is emitted. */
   readonly hasSnapshots: boolean
-  /** Whether transitive resolved-tree dependencies live inline в packages entries. */
+  /** Whether transitive resolved-tree dependencies live inline in packages entries. */
   readonly inlineTransitives: boolean
   /** Whether per-packages-entry `dev: false|true` flag is emitted. */
   readonly devFlag: boolean
@@ -299,7 +299,7 @@ export function getPnpmOverridesCanonical(graph: Graph): OverrideConstraint[] | 
 
 export function checkFamily(input: string, profile: PnpmLayoutProfile): boolean {
   const shape = resolveProfile(profile)
-  // Empirical probe — anchor on the version literal handshake. Both v6 и v9
+  // Empirical probe — anchor on the version literal handshake. Both v6 and v9
   // use quoted strings (`'6.0'` / `'9.0'`), distinguishing them from v5
   // decimal (`5.4`).
   const escaped = shape.lockfileVersion.replace(/\./g, '\\.')
@@ -675,7 +675,7 @@ export function stringifyFamily(
 
   // ADR-0014 §4.F2 — pnpm v6/v9 SUPPORT patch slots via the `overrides:`
   // block carrier. `synthesiseOverridePatches` merges sidecar.overrides
-  // attribution (round-trip case) с per-Node.patch synthesised entries
+  // attribution (round-trip case) with per-Node.patch synthesised entries
   // (cross-format conversion case where source-side path is recovered
   // from `Node.resolution`). No drop diagnostic in this family.
   const effectiveOverrides = synthesiseOverridePatches(graph, sidecar)
@@ -1116,7 +1116,7 @@ export function optimizeFamily(
 
 // === Helpers ===============================================================
 //
-// Micro-utilities below are exported для consumption by pnpm-family
+// Micro-utilities below are exported for consumption by pnpm-family
 // adapters that own their own pipelines but share family-internal infra
 // (e.g. pnpm-v5 standalone-fit per ADR-0022). They are NOT part of the
 // interop surface — they remain prefixed-private (`_pnpm-flat-core`) by
@@ -1571,7 +1571,7 @@ function resolveAliasedSnapshotTarget(
 /**
  * Resolve a `<peerName>@<peerVersion>` reference to a known node id —
  * either the bare id or a parenthesised peer-virt instance. Used by both
- * v9 snapshot edges и v5 peer edges из `packages` entries.
+ * v9 snapshot edges and v5 peer edges from `packages` entries.
  *
  * `peerVersion` may be a BARE version (`8.0.8`, v5 / leaf peers) or a FULL
  * peer-virt form carrying the consumer's recorded nested suffix
@@ -1838,7 +1838,7 @@ function extractSettings(value: unknown): PnpmSettings {
 }
 
 /**
- * Locate the synthetic root importer node для emit. Prefers the sidecar's
+ * Locate the synthetic root importer node for emit. Prefers the sidecar's
  * recorded `rootId`, falls back to `workspacePath === ''`, finally to a
  * sole root. Generic across sidecar shapes — only the `rootId` field is
  * required.
@@ -2144,8 +2144,8 @@ function buildSnapshotEntry(
 /**
  * Three-branch peer-virt fallback per ADR-0006. Given a peer `peerName`
  * declaration with semver `peerRange`, return all bare (non-peer-virt)
- * nodes whose version satisfies the range. Sorted lexically для stable
- * downstream diagnostics. Exported для pnpm-family adapters that own
+ * nodes whose version satisfies the range. Sorted lexically for stable
+ * downstream diagnostics. Exported for pnpm-family adapters that own
  * their own pipelines (e.g. pnpm-v5 standalone-fit).
  */
 export function derivePeerCandidates(graph: Graph, peerName: string, peerRange: string): NodeId[] {
@@ -2167,7 +2167,7 @@ export function derivePeerCandidates(graph: Graph, peerName: string, peerRange: 
 
 // ADR-0014 §4.F2 — parse-side overrides patch extraction.
 //
-// Scans the pnpm `overrides:` block для entries whose value is a `patch:`
+// Scans the pnpm `overrides:` block for entries whose value is a `patch:`
 // locator and returns a directive list. Each directive carries the
 // verbatim `overrides:` key (preserved per ADR-0011 sentinel-input rule),
 // the raw patch value, a parsed `PatchMatcher` per pnpm key grammar
@@ -2183,7 +2183,7 @@ export function derivePeerCandidates(graph: Graph, peerName: string, peerRange: 
  *   - `<name>@<range>` — semver range; matches versions satisfying range
  *   - `<name>@<version>` — exact version; literal match
  * The leading `npm:` protocol prefix on the version-half is accepted and
- * stripped (pnpm permits both `lodash@4.17.21` и `lodash@npm:4.17.21`).
+ * stripped (pnpm permits both `lodash@4.17.21` and `lodash@npm:4.17.21`).
  */
 type PatchMatcher =
   | { readonly kind: 'bare';  readonly name: string }
@@ -2242,7 +2242,7 @@ function parseOverridePatches(
 
 function parseOverrideKey(key: string): PatchMatcher | undefined {
   if (key === '') return undefined
-  // Scoped names start с `@scope/` — skip the leading `@` when locating
+  // Scoped names start with `@scope/` — skip the leading `@` when locating
   // the name/spec separator.
   const scoped  = key.startsWith('@')
   const sepIdx  = scoped ? key.indexOf('@', 1) : key.indexOf('@')
@@ -2296,7 +2296,7 @@ function resolvePatchForNode(
       }
       return dir.canonical
     }
-    // ADR-0011 sentinel input для pnpm: `<name>@<version>:<literal-key>`
+    // ADR-0011 sentinel input for pnpm: `<name>@<version>:<literal-key>`
     // (verbatim `overrides:` key). Distinct keys collapsing to the same
     // (name, version) yield distinct sentinels per spec.
     return patchSentinelHashOf(`${name}@${version}:${dir.literalKey}`)
@@ -2307,9 +2307,9 @@ function resolvePatchForNode(
 // ADR-0014 §4.F2 stringify-side: pnpm v6/v9 SUPPORT patch slots via the
 // `overrides:` block carrier. When `Node.patch` is set on the graph, the
 // adapter ensures the overrides block carries an entry; sidecar.overrides
-// attribution wins when present, else a default entry is synthesised из
+// attribution wins when present, else a default entry is synthesised from
 // `Node.resolution` (preserves cross-format conversion's source-side
-// path) или from a generic per-hash convention.
+// path) or from a generic per-hash convention.
 function synthesiseOverridePatches(
   graph: Graph,
   sidecar: PnpmSidecar | undefined,
@@ -2320,7 +2320,7 @@ function synthesiseOverridePatches(
     if (node.patch === undefined || seenForNode.has(node.id)) continue
     seenForNode.add(node.id)
     // Sidecar entry already covers this node via ANY admissible pnpm key
-    // shape (bare / range / exact, с or без `npm:` protocol) — skip
+    // shape (bare / range / exact, with or without `npm:` protocol) — skip
     // synthesis. Reuse the parse-side matcher so the membership test
     // mirrors the grammar accepted at parse.
     if (Object.entries(out).some(([k, v]) => {
@@ -2336,11 +2336,11 @@ function synthesiseOverridePatches(
   return out
 }
 
-// Extract the workspace-relative patch path из a yarn-berry-style
+// Extract the workspace-relative patch path from a yarn-berry-style
 // `@patch:<spec>#<path>::version=…` resolution string. Cross-format
 // conversion path: yarn-berry parse populates the per-tarball
-// `nativeResolution` с the patch locator; pnpm stringify reuses the same
-// workspace path so the emitted lockfile round-trips к the source patch bytes.
+// `nativeResolution` with the patch locator; pnpm stringify reuses the same
+// workspace path so the emitted lockfile round-trips to the source patch bytes.
 function patchPathOfResolution(resolution: string | undefined): string | undefined {
   if (resolution === undefined) return undefined
   const patchIdx = resolution.indexOf('@patch:')
@@ -2463,14 +2463,14 @@ function isWorkspaceProtocolRange(range: string): boolean {
 }
 
 /**
- * Generic sidecar pruner для any pnpm-family sidecar carrying
+ * Generic sidecar pruner for any pnpm-family sidecar carrying
  * `nodes: Map<string, NodeSc>` + `importerEdges: Map<string, EdgeSc>`
  * keyed by `<src>\0<kind>\0<dst>` edge tokens. Drops entries that
  * reference node ids no longer present in `graph`. The spread preserves
  * any other fields on the sidecar shape verbatim (e.g. `settings`,
  * `rootId`, `importerSpecifiers`, `inboundSettings`).
  *
- * Exported для pnpm-family adapters that own their own pipelines (e.g.
+ * Exported for pnpm-family adapters that own their own pipelines (e.g.
  * pnpm-v5 standalone-fit) while reusing the prune contract verbatim.
  */
 export function prunePnpmSidecar<

@@ -158,8 +158,7 @@ function deriveRegistryUrl(name: string | undefined, spec: string): string {
       return registryUrlOf(aliasName, aliasVersion)
     }
   }
-  const ver = spec
-  return registryUrlOf(name ?? '', ver)
+  return registryUrlOf(name ?? '', spec)
 }
 
 function looksLikeNpmName(s: string): boolean {

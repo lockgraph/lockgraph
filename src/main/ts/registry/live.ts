@@ -5,10 +5,10 @@
 // facade: `packument(name)` does ONE GET, `resolve(name, range)` reuses
 // the packument it just fetched. No caching, no retries, no tarball
 // reads — those layers stack on top via CacheAdapter (Phase D-B) and
-// the modify/complete tree-walks (already landed на Phase B/Phase C).
+// the modify/complete tree-walks (already landed on Phase B/Phase C).
 //
 // Normalisation: the npm registry returns each version under
-// `versions[v]` with `dist.tarball` / `dist.integrity` nested под dist.
+// `versions[v]` with `dist.tarball` / `dist.integrity` nested under dist.
 // Per Phase C contract `PackumentVersion.tarball` / `.integrity` are
 // flat fields, so we lift them out of `dist` during normalisation.
 // dist-tags ship under the hyphenated key `'dist-tags'`; we re-key it

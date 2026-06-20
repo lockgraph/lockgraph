@@ -2,14 +2,14 @@
 //
 // Standalone-fit per yarn-classic / npm-1 / pnpm-v5 precedent. bun-text's
 // schema (JSON-with-trailing-commas; positional `[id, "", inner, integrity]`
-// tuples под `packages`; declarative `workspaces` map) is unique и does not
-// share a flat-shape core с npm-flat or pnpm-flat. Reuses only
-// shape-compatible micro-utilities (cmpStr / sortRecord) из `_npm-flat-types`.
+// tuples under `packages`; declarative `workspaces` map) is unique and does not
+// share a flat-shape core with npm-flat or pnpm-flat. Reuses only
+// shape-compatible micro-utilities (cmpStr / sortRecord) from `_npm-flat-types`.
 //
 // §A pinning (see spec/formats/bun-text.md):
 //   - top-level numeric `lockfileVersion: 1`; `workspaces` + `packages` blocks.
 //   - JSONC subset: trailing commas + comments. Stripped pre-`JSON.parse`,
-//     replayed по emit.
+//     replayed to emit.
 //   - `packages` values: `[<id>, "", <inner?>, "<integrity>"]` (len 4) for
 //     regular packages, `[<name>@workspace:<path>]` (len 1) for workspace refs.
 //
@@ -20,7 +20,7 @@
 //     peer-virt NodeIds (`<id>(<peer>@<v>)`) flatten on emit.
 //
 // §C enrich: workspace concretisation from manifests. peer-virt structurally
-// absent (declarative peer-deps live в the inner-block).
+// absent (declarative peer-deps live in the inner-block).
 // §D optimize: prune unreachable from `graph.roots()` BFS (ADR-0016 §D).
 
 import {
@@ -172,8 +172,8 @@ export function getBunOverridesCanonical(graph: Graph): OverrideConstraint[] | u
 
 export function check(input: string): boolean {
   // bun-text discriminant: `lockfileVersion: 1` numeric literal AND both
-  // `workspaces` + `packages` blocks present. Distinguishes от npm-1 (which
-  // carries `dependencies` instead и has no `workspaces` block) и от
+  // `workspaces` + `packages` blocks present. Distinguishes from npm-1 (which
+  // carries `dependencies` instead and has no `workspaces` block) and from
   // npm-2/npm-3 (whose `lockfileVersion` is 2 or 3).
   if (!/"lockfileVersion"\s*:\s*1\b/.test(input)) return false
   if (!/"workspaces"\s*:\s*\{/.test(input)) return false
@@ -236,10 +236,10 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
 
   // === Pass 1: register all packages entries as graph nodes ================
   //
-  // bun-text `packages` map keys могут carry slash segments for hoisting
-  // conflicts (`<consumer-path>/<dep-name>` form). We split на the last
-  // `/` для name extraction где the leaf segment is the actual package name.
-  // The id pulled из tuple slot [0] is the canonical `<name>@<version>` (или
+  // bun-text `packages` map keys can carry slash segments for hoisting
+  // conflicts (`<consumer-path>/<dep-name>` form). We split on the last
+  // `/` for name extraction where the leaf segment is the actual package name.
+  // The id pulled from tuple slot [0] is the canonical `<name>@<version>` (or
   // workspace-form `<name>@workspace:<path>`).
 
   const packages = lf.packages as Record<string, unknown[]>
@@ -339,7 +339,7 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   }
 
   // Pre-register workspace members declared in the `workspaces` map even
-  // when they don't appear in `packages` (rare; bun emits both, но if a
+  // when they don't appear in `packages` (rare; bun emits both, but if a
   // member has no installed deps the packages-side entry is still emitted).
   for (const [path, manifest] of Object.entries(workspaces)) {
     if (path === '') continue
@@ -364,7 +364,7 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   }
 
   // Pass 2: emit workspace-manifest edges. workspace-protocol ranges resolve
-  // через `workspaceByPath` (member name lookup); plain ranges resolve через
+  // via `workspaceByPath` (member name lookup); plain ranges resolve via
   // the flat package index.
   const packageByName = buildPackageByName(packages)
 
@@ -375,8 +375,8 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   }
 
   // Pass 3: emit packages inner-block edges. Resolution uses a per-consumer
-  // scoped index, since bun de-hoists conflicting entries под `<consumer>/<dep>`
-  // packages keys и those shadow the flat lookup for that consumer.
+  // scoped index, since bun de-hoists conflicting entries under `<consumer>/<dep>`
+  // packages keys and those shadow the flat lookup for that consumer.
   //
   // A single NodeId can appear under multiple `packages` keys — via npm-alias
   // siblings (`string-width` + `string-width-cjs`, both `string-width@4.2.3`)
@@ -578,7 +578,7 @@ export function enrich(
 
   if (options.manifests === undefined) {
     // No manifests provided — peer-virt structurally absent, workspace block
-    // already carries member tagging из parse. Return graph as-is.
+    // already carries member tagging from parse. Return graph as-is.
     return { graph, diagnostics }
   }
 
@@ -726,7 +726,7 @@ function parseJsonc(input: string): BunTextLockfile {
 
 function stripJsoncExtensions(input: string): string {
   // State-machine pass: skip line-comments + block-comments + trailing
-  // commas before `}` / `]`. Strings и escape sequences are honored so we
+  // commas before `}` / `]`. Strings and escape sequences are honored so we
   // don't corrupt embedded `//` / `/*` inside string values.
   const out: string[] = []
   const len = input.length
@@ -767,7 +767,7 @@ function stripJsoncExtensions(input: string): string {
       i += 2
       continue
     }
-    // Trailing comma: `,` followed by whitespace + (`}` или `]`).
+    // Trailing comma: `,` followed by whitespace + (`}` or `]`).
     if (c === ',') {
       let j = i + 1
       while (j < len && /\s/.test(input[j]!)) j++
@@ -783,7 +783,7 @@ function stripJsoncExtensions(input: string): string {
   return out.join('')
 }
 
-// JSONC emitter с trailing commas on every `}` and `]` (one space leading,
+// JSONC emitter with trailing commas on every `}` and `]` (one space leading,
 // matching bun's exact emit style; verified against the 7 fixtures).
 //
 // Pretty-print algorithm: standard 2-space indent for objects; arrays
@@ -803,7 +803,7 @@ function renderValue(value: unknown, depth: number, isTopLevel: boolean): string
 
 function renderArray(arr: unknown[]): string {
   // Arrays in bun-text are always positional tuples (1-elem for workspace refs,
-  // 4-elem for regular packages) — both short и single-line.
+  // 4-elem for regular packages) — both short and single-line.
   return `[${arr.map(renderInlineValue).join(', ')}]`
 }
 
@@ -884,9 +884,9 @@ function parseWorkspaceRef(token: string): { name: string; path: string } | unde
 }
 
 // Build a flat depname -> NodeId index from `packages` keys (regular entries
-// only; workspace refs resolve через `workspaceByPath`). Scoped names (`@foo/bar`)
+// only; workspace refs resolve via `workspaceByPath`). Scoped names (`@foo/bar`)
 // are top-level keys c a single `/` and a leading `@`; de-hoisted entries
-// (`<consumer>/<dep>`) carry a `/` без the leading `@` и are SKIPPED here —
+// (`<consumer>/<dep>`) carry a `/` without the leading `@` and are SKIPPED here —
 // `buildConsumerScope` layers them in per-consumer.
 function buildPackageByName(packages: Record<string, unknown[]>): Map<string, string> {
   const byName = new Map<string, string>()
@@ -910,7 +910,7 @@ function buildConsumerScope(
   packages: Record<string, unknown[]>,
   flatByName: Map<string, string>,
 ): Map<string, string> {
-  // Returns a name -> NodeId map с de-hoisted overrides applied.
+  // Returns a name -> NodeId map with de-hoisted overrides applied.
   // De-hoisted keys: `<consumerKey>/<dep-name>`.
   const scoped = new Map<string, string>(flatByName)
   const prefix = `${consumerKey}/`
@@ -935,9 +935,9 @@ interface BunTextDepBlocks {
   peerDependencies?: Record<string, string>
 }
 
-// Adds dep / dev / optional / peer edges из a block-bearing source (workspace
-// manifest или inner-block of a packages entry). For source = 'manifest',
-// workspace-protocol ranges resolve через `workspaceByPath`; otherwise we
+// Adds dep / dev / optional / peer edges from a block-bearing source (workspace
+// manifest or inner-block of a packages entry). For source = 'manifest',
+// workspace-protocol ranges resolve via `workspaceByPath`; otherwise we
 // rely on the pre-scoped `byName` map. Peer ranges are stashed declaratively
 // — bun encodes peers as data, not graph edges (ADR-0006 / §C enrich).
 function addBlockEdges(
@@ -1036,8 +1036,8 @@ function buildWorkspaceManifest(
   sidecarManifest: BunTextWorkspaceManifest | undefined,
   emitDiagnostic: (d: Diagnostic) => void = () => undefined,
 ): BunTextWorkspaceManifest {
-  // Workspace manifest emitted к the `workspaces` block. Pulls structural data
-  // из the graph (edges out of the workspace node) and falls back к sidecar
+  // Workspace manifest emitted to the `workspaces` block. Pulls structural data
+  // from the graph (edges out of the workspace node) and falls back to sidecar
   // for the name / version pin.
   const out: BunTextWorkspaceManifest = {}
   if (workspaceNode !== undefined) {
@@ -1050,7 +1050,7 @@ function buildWorkspaceManifest(
     if (sidecarManifest.version !== undefined) out.version = sidecarManifest.version
   }
 
-  // Walk dep / dev / optional / peer edges и emit ranges.
+  // Walk dep / dev / optional / peer edges and emit ranges.
   if (workspaceNode !== undefined) {
     const dependencies: Record<string, string> = {}
     const devDependencies: Record<string, string> = {}
@@ -1141,14 +1141,14 @@ function chooseNodeEmitKey(
   alreadyEmitted: Record<string, unknown>,
 ): string {
   // Preserve the parse-time packagesKey (which may carry the de-hoisting
-  // `<consumer-path>/<name>` form) when available и not yet taken.
+  // `<consumer-path>/<name>` form) when available and not yet taken.
   const stored = sidecar?.nodes.get(node.id)?.packagesKey
   if (stored !== undefined && alreadyEmitted[stored] === undefined) {
     return stored
   }
   // Fallback: bare name. If the bare key is already taken (different version
   // of the same name), append `@<version>` as a disambiguator. The disambiguated
-  // form is admittedly non-canonical, но bun's de-hoisting layer outside this
+  // form is admittedly non-canonical, but bun's de-hoisting layer outside this
   // adapter's reach — mutator-added duplicates fall back here.
   if (alreadyEmitted[node.name] === undefined) return node.name
   return `${node.name}@${node.version}`

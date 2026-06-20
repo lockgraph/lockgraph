@@ -16,7 +16,7 @@
 // compute the input string themselves and pass it to `sentinelHashOf`.
 //
 // This module is pure-math: no Diagnostic emission, no Graph traversal.
-// Adapter-facing helpers live в `recipe/diagnostics.ts`.
+// Adapter-facing helpers live in `recipe/diagnostics.ts`.
 
 import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
@@ -141,11 +141,11 @@ export function normalisePatchBytes(input: Uint8Array): {
  * Compute the canonical patch hash from source bytes — `sha512(bytes)` as
  * lowercase hex per ADR-0014 §4.F2, with F5 byte normalisation applied
  * first per ADR-0014 §4.F5. Existing callers stay transparent: passing
- * already-LF-normalised input is a no-op fast-path и produces the same
+ * already-LF-normalised input is a no-op fast-path and produces the same
  * hex as raw `sha512(bytes)`.
  *
  * String inputs are encoded as UTF-8 before normalisation (note: the
- * literal characters `\r\n` в a JS string encode to bytes `0x0D 0x0A`,
+ * literal characters `\r\n` in a JS string encode to bytes `0x0D 0x0A`,
  * so the rule applies uniformly through both call shapes).
  */
 export function canonicalHashOfBytes(bytes: Uint8Array | string): string {
@@ -153,11 +153,11 @@ export function canonicalHashOfBytes(bytes: Uint8Array | string): string {
 }
 
 /**
- * Combined F5 normalisation + F2 sha512 fingerprint в a single linear
+ * Combined F5 normalisation + F2 sha512 fingerprint in a single linear
  * pass — returns `{ hash, normalised }`. Adapter call sites that need
- * BOTH the canonical hash AND the normalised-flag (для
- * `RECIPE_PATCH_NORMALISED` emission) MUST use this helper к avoid
- * re-scanning the buffer; `canonicalHashOfBytes` delegates here для
+ * BOTH the canonical hash AND the normalised-flag (for
+ * `RECIPE_PATCH_NORMALISED` emission) MUST use this helper to avoid
+ * re-scanning the buffer; `canonicalHashOfBytes` delegates here for
  * hash-only callers.
  */
 export function hashAndNormaliseBytes(bytes: Uint8Array | string): {

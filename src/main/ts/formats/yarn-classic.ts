@@ -1605,7 +1605,7 @@ function collectBlockEntries(
       // ADR-0014 §4.F4 — workspace edges: yarn-classic lacks `workspace:`
       // protocol; drop the specifier and emit `resolvedVersion` (or fire
       // RECIPE_WORKSPACE_UNRESOLVED when no resolved version is available).
-      // Empty pending specifier carried nothing к drop — gate via
+      // Empty pending specifier carried nothing to drop — gate via
       // shouldEmitWorkspaceResolved per ADR-0014 §5:412.
       if (isWorkspaceEdge(edge)) {
         const ws = workspaceRangeOfEdge(edge, dst)

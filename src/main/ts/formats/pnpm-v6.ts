@@ -10,7 +10,7 @@
 //   - top-level `settings` always emitted.
 //   - top-level `dependencies` (collapsed single-importer) OR
 //     `importers` (multi-importer workspaces).
-//   - `packages` map: keys `/<name>@<version>` (slash-leading) или
+//   - `packages` map: keys `/<name>@<version>` (slash-leading) or
 //     `/<name>@<version>(peer@version)` (peer-virt directly on the key —
 //     v9 carries this in `snapshots` block; v6 inlines it).
 //   - NO `snapshots` block — transitives are inlined under each

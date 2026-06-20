@@ -1,10 +1,10 @@
 // Public surface — ADR-0014 §3.
 //
-// Exposes both the `convert()` sugar и the underlying primitives
+// Exposes both the `convert()` sugar and the underlying primitives
 // (`parse / stringify / check / detect`). Recipe-layer normalisation
 // (ADR-0014 §4) lands per-feature in subsequent implementer rounds —
 // this skeleton dispatches to existing adapter parse / stringify
-// hooks без plumbing recipe primitives yet.
+// hooks without plumbing recipe primitives yet.
 
 import type { Diagnostic, Graph, Manifest, OverrideConstraint } from './graph.ts'
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
@@ -105,7 +105,7 @@ export type { Manifest, OverrideConstraint } from './graph.ts'
 
 export type ParseOptions = {
   /**
-   * Filesystem root для adapter parse hooks that read out-of-lockfile
+   * Filesystem root for adapter parse hooks that read out-of-lockfile
    * sources (yarn-berry / pnpm v6 / pnpm v9 patch byte hashing per
    * ADR-0014 §4.F2). Adapters without out-of-lockfile reads ignore it.
    */
@@ -148,9 +148,9 @@ export type ConvertOptions = {
   onDiagnostic?:  (d: Diagnostic) => void
 }
 
-// Ordered so first-match wins на ambiguous head. Disjoint в practice —
+// Ordered so first-match wins on ambiguous head. Disjoint in practice —
 // adapter `check()` probes are version-pinned (yarn-berry `version: N`,
-// npm `lockfileVersion: N`, pnpm `lockfileVersion: '<v>'`) — но guard
+// npm `lockfileVersion: N`, pnpm `lockfileVersion: '<v>'`) — but guard
 // against future loosening with newest-first / family-distinctive-first.
 const DETECT_ORDER: readonly FormatId[] = [
   'lockgraph',

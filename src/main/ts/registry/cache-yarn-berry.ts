@@ -80,7 +80,7 @@ export function yarnBerryCache(opts: YarnBerryCacheOptions = {}): CacheAdapter {
       if (versionList.length === 0) return undefined
 
       // No reliable dist-tag derivable from on-disk cache — yarn does not
-      // record `latest` пер version on disk. Leave distTags empty rather
+      // record `latest` per version on disk. Leave distTags empty rather
       // than fake a `latest` from version order.
       const packument: Packument = {
         name,
@@ -136,7 +136,7 @@ async function scanCacheFolder(folder: string, name: string): Promise<CacheEntry
     files = await readdir(folder)
   } catch {
     // Missing folder = empty cache. Permission errors fall through here
-    // too — by design we treat the cache as opaque и miss silently.
+    // too — by design we treat the cache as opaque and miss silently.
     return []
   }
 

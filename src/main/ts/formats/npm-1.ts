@@ -8,7 +8,7 @@
 // `_npm-flat-types.ts` + `_npm-core.ts` (cmpStr, sortRecord, edgeTripleKey,
 // NPM_EDGE_RANGE_ATTR, NpmSidecar, derivePeerCandidates, pruneSidecar).
 //
-// Dependency direction (parallel к yarn-classic precedent):
+// Dependency direction (parallel to yarn-classic precedent):
 //   - this module imports from `_npm-flat-types.ts` (types + tiny utilities)
 //     and `_npm-core.ts` (cross-format peer derivation, sidecar pruning).
 //   - it does NOT call `parseFamily` / `stringifyFamily` — those are
@@ -418,7 +418,7 @@ export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): str
   }
 
   // Build the hoisting plan: top-level slots first (deps reachable from the
-  // root); conflicts fall к nested `<parent>.dependencies` blocks. Mirrors
+  // root); conflicts fall to nested `<parent>.dependencies` blocks. Mirrors
   // the legacy npm v6 dedup walker.
   const rootId = rootNode?.id ?? `${rootName}@${rootVersion}`
   const dependencies = buildDependenciesTree(graph, sidecar, rootId, emittableIds)
@@ -659,10 +659,10 @@ function isHttpUrl(value: string): boolean {
   return value.startsWith('https://') || value.startsWith('http://')
 }
 
-// Resolve a `requires` target по the closest hoisted parent. The
+// Resolve a `requires` target to the closest hoisted parent. The
 // resolution chain mirrors npm v6's `findDependency`: try current scope
 // first, then walk ancestor scopes outward. Returns the matched NodeId
-// или undefined.
+// or undefined.
 function resolveTreeTarget(
   name: string,
   _installPath: string,
@@ -702,14 +702,14 @@ function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | u
 // === Hoisting emit ==========================================================
 
 // Reconstruct the nested-tree shape for emit. Strategy (mining legacy
-// `preformat`): walk BFS from the root, hoist each transitive в the
-// shallowest level that does not introduce a version conflict с an
-// already-hoisted sibling. Conflicts fall к nested `<parent>.dependencies`.
+// `preformat`): walk BFS from the root, hoist each transitive in the
+// shallowest level that does not introduce a version conflict with an
+// already-hoisted sibling. Conflicts fall to nested `<parent>.dependencies`.
 //
 // Sidecar installPaths are an authoritative hint: if the parse-time tree
 // placed a node at a specific path, mirror that placement (this preserves
 // the `parse → stringify → parse` invariant for fixture inputs). Mutator-
-// added nodes have no install path; they get hoisted к the root level
+// added nodes have no install path; they get hoisted to the root level
 // unless that introduces a conflict.
 function buildDependenciesTree(
   graph: Graph,
@@ -718,14 +718,14 @@ function buildDependenciesTree(
   emittableIds: ReadonlySet<string>,
 ): Record<string, Npm1Entry> | undefined {
   // First, plan placements. `placements: Map<NodeId, parentPath>`. The empty
-  // string parentPath means top-level. Placement comes от either the sidecar
-  // installPaths (parse-time hint) или the BFS-with-conflict-resolution
+  // string parentPath means top-level. Placement comes from either the sidecar
+  // installPaths (parse-time hint) or the BFS-with-conflict-resolution
   // fallback (mutator state).
   const placements = new Map<string, Set<string>>()
   const hoistedByName = new Map<string, string>() // top-level name -> NodeId
 
   // Pass 1: replay sidecar install paths verbatim. The sidecar stores
-  // `node_modules/<name>` или `<parent_path>/node_modules/<name>` strings.
+  // `node_modules/<name>` or `<parent_path>/node_modules/<name>` strings.
   if (sidecar !== undefined) {
     for (const [nodeId, sc] of sidecar.nodes) {
       if (!emittableIds.has(nodeId)) continue
@@ -741,9 +741,9 @@ function buildDependenciesTree(
     }
   }
 
-  // Pass 2: any emittable node without a sidecar placement hoists к the
+  // Pass 2: any emittable node without a sidecar placement hoists to the
   // shallowest non-conflicting level. Walking BFS keeps the placement order
-  // deterministic; conflicting nodes fall к the parent's nested deps.
+  // deterministic; conflicting nodes fall to the parent's nested deps.
   const queue: Array<{ id: string; parentPath: string }> = []
   const visited = new Set<string>()
   const seenRoot = new Set<string>()
@@ -767,11 +767,11 @@ function buildDependenciesTree(
     if (!placements.has(id) || placements.get(id)!.size === 0) {
       // Need to choose a placement. Try parentPath; if its containing
       // `node_modules` already holds a different version of `node.name`,
-      // fall к a deeper level.
+      // fall to a deeper level.
       let chosen = parentPath
       const existingAt = hoistedAtPath(hoistedByName, placements, graph, chosen, node.name)
       if (existingAt !== undefined && existingAt !== id) {
-        // Conflict at chosen level; place при parent (de-hoist).
+        // Conflict at chosen level; place during parent (de-hoist).
         chosen = parentPath
         if (chosen === '') {
           // Root-level conflict: must de-hoist to consumer install path.
@@ -802,13 +802,13 @@ function buildDependenciesTree(
   }
 
   // Any nodes still unplaced (orphans not reachable from root but in
-  // emittableIds, e.g. mutator stash) — hoist к root.
+  // emittableIds, e.g. mutator stash) — hoist to root.
   for (const id of emittableIds) {
     if (placements.has(id) && placements.get(id)!.size > 0) continue
     ensureSet(placements, id).add('')
   }
 
-  // Build the nested-tree из placements. We materialise a tree shape
+  // Build the nested-tree from placements. We materialise a tree shape
   // keyed by parent install path. Each parentPath ∈ { '' } ∪ { node_modules/X,
   // X/node_modules/Y, ... } stores its direct children name → NodeId.
   const treeByParent = new Map<string, Map<string, string>>()
@@ -858,8 +858,8 @@ function buildEntry(
   const nodeSide = sidecar?.nodes.get(node.id)
 
   // Resolved / from / integrity. npm v6 convention: git/github resolutions
-  // live в `version` directly (`version: "git+https://..."`); direct tarball
-  // URLs (`https://.../<tgz>`) live в `version` IFF the node's version was
+  // live in `version` directly (`version: "git+https://..."`); direct tarball
+  // URLs (`https://.../<tgz>`) live in `version` IFF the node's version was
   // parsed as a URL (preserving the parse-time shape per ADR-0021 §A.npm-1);
   // otherwise the URL goes under `resolved`.
   const tarball = graph.tarballOf(node.id)
@@ -996,7 +996,7 @@ function hoistedAtPath(
   if (parentPath === '') {
     return hoistedByName.get(name)
   }
-  // Walk all known placements; find any with parentPath matching и name equal.
+  // Walk all known placements; find any with parentPath matching and name equal.
   for (const [id, pSet] of placements) {
     if (!pSet.has(parentPath)) continue
     const node = graph.getNode(id)
@@ -1012,8 +1012,8 @@ function firstConsumerInstallPath(
   emittableIds: ReadonlySet<string>,
 ): string | undefined {
   // Find an incoming edge from an emittable consumer; return that consumer's
-  // first install path + `/node_modules/<name>`. Used когда a node conflicts
-  // at root и needs to be placed inside its consumer's nested tree.
+  // first install path + `/node_modules/<name>`. Used when a node conflicts
+  // at root and needs to be placed inside its consumer's nested tree.
   const node = graph.getNode(id)
   if (node === undefined) return undefined
   for (const incoming of graph.in(id)) {
@@ -1094,7 +1094,7 @@ function planManifestEnrich(
   }
 
   // (a) Tag existing nodes that match manifest member name+version (or
-  // a workspace-protocol sentinel) с workspacePath. None likely on npm-1
+  // a workspace-protocol sentinel) with workspacePath. None likely on npm-1
   // (workspace members rarely appear in the on-disk dep tree), but
   // bookkeeping is cheap.
   for (const node of graph.nodes()) {
@@ -1127,8 +1127,8 @@ function planManifestEnrich(
     })
   }
 
-  // Prospective NodeIds: workspace members we plan к synthesise. The edge
-  // resolver consults this so the desired-root-edge pass binds к them even
+  // Prospective NodeIds: workspace members we plan to synthesise. The edge
+  // resolver consults this so the desired-root-edge pass binds to them even
   // before the mutator runs.
   const prospectiveIds = new Set<string>()
   for (const node of addMemberNodes) prospectiveIds.add(node.id)
@@ -1176,7 +1176,7 @@ function planManifestEnrich(
       )
       if (!match) addRootEdges.push(edge)
     }
-    // We don't actively remove root edges на npm-1 enrich — preserves the
+    // We don't actively remove root edges on npm-1 enrich — preserves the
     // parse-time edge set. Mutations are additive.
   }
 

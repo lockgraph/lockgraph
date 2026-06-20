@@ -183,7 +183,7 @@ function gcOrphans(
   if (node.workspacePath !== undefined) return graph
   if (graph.in(nodeId).length > 0) return graph
 
-  const outTargets = graph.out(nodeId).map(e => ({ dst: e.dst, kind: e.kind }))
+  const outTargets = graph.out(nodeId).map(e => e.dst)
 
   const removedDiag = modifyNodeRemoved(nodeId)
   graph = graph.mutate(m => {
@@ -194,7 +194,7 @@ function gcOrphans(
   recentlyOrphaned.add(nodeId)
   emit(removedDiag)
 
-  for (const { dst } of outTargets) {
+  for (const dst of outTargets) {
     graph = gcOrphans(graph, dst, removed, recentlyOrphaned, emit)
   }
   return graph

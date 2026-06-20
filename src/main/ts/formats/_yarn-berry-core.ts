@@ -672,7 +672,7 @@ export function parseFamily(
     // range carries the `workspace:` protocol AND whose target is a
     // workspace member node get `attrs.workspace = true` plus the
     // canonical workspaceRange sidecar. The same logic also runs in
-    // enrichFamily для downstream rebuilds; doing it here ensures the
+    // enrichFamily for downstream rebuilds; doing it here ensures the
     // public `parse()` surface (and convert without explicit enrich)
     // delivers F4-ready edges.
     const graph = markWorkspaceEdgesAtParse(sealed)
@@ -2171,7 +2171,7 @@ function isDerivedWorkspaceRange(range: string | undefined): boolean {
  * F4 yarn-berry attribution rule (ADR-0014 §4.F4): given an eligible
  * source edge + workspace-member destination, derive the `{ workspace:
  * true, workspaceRange }` attrs payload. yarn-berry takes the verbatim
- * `workspace:<spec>` range от disk as the source-side specifier;
+ * `workspace:<spec>` range from disk as the source-side specifier;
  * `resolvedVersion` is best-effort `dst.version` (`0.0.0-use.local`
  * sentinel when manifests are absent). Single source of truth shared
  * by parse-time `markWorkspaceEdgesAtParse` AND enrich-time rewiring

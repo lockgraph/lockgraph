@@ -17,7 +17,7 @@ import {
 // the bump is mechanical (`version: N` field only). Family config tracks
 // v9 verbatim: `quoted-protocol` range emit, `cachekey-prefixed` checksum,
 // `conditions:` block permitted on entries. When yarn 5 ships a real
-// structural change в the lockfile body, fork the family config from this
+// structural change in the lockfile body, fork the family config from this
 // constant rather than re-pointing v10 to share v9's identity.
 const CONFIG = {
   lockfileVersion: 10,

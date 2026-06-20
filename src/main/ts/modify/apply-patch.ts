@@ -129,25 +129,20 @@ export async function applyPatch(
     })
     currentGraph = tarballResult.graph
 
+    // newId !== node.id here — the equal case already `continue`d above.
     patched.push({ from: node.id, to: newId })
-    if (newId !== node.id) {
-      recentlyAdded.add(newId)
-      recentlyOrphaned.add(node.id)
-    }
+    recentlyAdded.add(newId)
+    recentlyOrphaned.add(node.id)
     emit(appliedDiag)
   }
 
   // ADR-0023 §7.4 / §9.2: RECIPE_PATCH_NORMALISED fires once per applyPatch
   // invocation when F5 normalisation altered ≥ 1 byte (CRLF→LF / BOM strip).
-  // LF-only input passes through unchanged — no emit. Subject is 'graph'
-  // (the byte event is call-level, not node-level; matches recipe-layer
-  // convention where the parse-time diagnostic uses the affected NodeId,
-  // but here at modify-time the patch bytes are not yet keyed to a node
-  // until after the hash, so call-level subject is the right granularity).
+  // LF-only input passes through unchanged — no emit. The byte event is
+  // call-level, but we subject it to the first patched NodeId so adapters
+  // that key by NodeId (recipe convention) get a concrete locus; with no
+  // patched node there is no useful locus, so skip.
   if (normalised && patched.length > 0) {
-    // Use the first patched NodeId as subject so adapters that key by NodeId
-    // (existing recipe convention) see a concrete locus; if no node was
-    // patched, the diagnostic has no useful locus — skip.
     const subject = patched[0]!.to
     const d = patchNormalisedDiagnostic(subject)
     emit(d)

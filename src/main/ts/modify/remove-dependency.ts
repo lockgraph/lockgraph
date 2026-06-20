@@ -118,22 +118,12 @@ function gcOrphans(
 
   // Collect previous out-edge targets BEFORE removeNode — they may become
   // orphans next.
-  const outTargets = graph.out(nodeId).map(e => ({ dst: e.dst, kind: e.kind }))
+  const outTargets = graph.out(nodeId).map(e => e.dst)
 
-  // Remove all out-edges first (removeNode requires zero incoming on the
-  // target side; we only check out-edges from this node to the descendants).
-  // Actually graph.removeNode allows the node to have out-edges — it cleans
-  // them up. Let's check graph.ts:692-698 — removeNode iterates outgoing,
-  // clears each peer's incoming entry, then deletes. So we can remove the
-  // node directly. But for the peer-edge invariant, we need to ensure no
-  // peer edges sourced from this node remain — graph.ts handles that via
-  // the cleanup in removeNode.
-  //
-  // However, replacePeerContext invariant: if this node is in another node's
-  // peerContext, removing it would break that. Per ADR-0017 / peer-coherence,
-  // a peer'd node's incoming peer edges count as "incoming edges", so
-  // graph.in(nodeId).length > 0 would catch that case. Good — we already
-  // guard above.
+  // removeNode cleans up this node's own out-edges, so we don't pre-remove
+  // them. Peer-coherence (ADR-0017): if this node sits in another node's
+  // peerContext, its incoming peer edges count as incoming edges, so the
+  // graph.in(nodeId).length > 0 guard above already refuses to remove it.
 
   const removedDiag = modifyNodeRemoved(nodeId)
   graph = graph.mutate(m => {
@@ -145,7 +135,7 @@ function gcOrphans(
   emit(removedDiag)
 
   // Recurse: each previous out-edge target may now be orphaned.
-  for (const { dst } of outTargets) {
+  for (const dst of outTargets) {
     graph = gcOrphans(graph, dst, removed, recentlyOrphaned, emit)
   }
 

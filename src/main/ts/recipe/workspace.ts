@@ -174,8 +174,8 @@ export function isWorkspaceEdge(edge: {
  * Gate predicate for `RECIPE_WORKSPACE_RESOLVED` emit per ADR-0014 §5:412
  * — "once per edge when source `specifier` is dropped on emit". An edge
  * whose source-side `specifier` was empty (pending sentinel from npm-2/3
- * link-form parse, или cross-format conversion landing pending state)
- * carried nothing к drop; emitting `RESOLVED` for it produces spurious
+ * link-form parse, or cross-format conversion landing pending state)
+ * carried nothing to drop; emitting `RESOLVED` for it produces spurious
  * `(empty) → <version>` diagnostics. Adapters call this before invoking
  * `emitWorkspaceResolved`.
  */
