@@ -405,4 +405,39 @@ describe('complete/completeTransitives', () => {
     expect(requested).not.toContain('jest')
     expect(requested).not.toContain('typescript')
   })
+
+  it('an empty seed does ZERO registry work; the seed bounds completion (incremental contract)', async () => {
+    const graph = graphOf(builder => {
+      const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      addPackage(builder, { name: 'a', version: '1.0.0' })
+      addEdge(builder, ws, 'a@1.0.0', 'dep')
+    })
+    const queried: string[] = []
+    const reg: RegistryAdapter = {
+      async packument(name) {
+        queried.push(name)
+        if (name === 'a') return { name: 'a', distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'a', version: '1.0.0', dependencies: { b: '^1.0.0' } } } }
+        if (name === 'b') return { name: 'b', distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'b', version: '1.0.0' } } }
+        return undefined
+      },
+      async resolve(name) {
+        return name === 'a' || name === 'b' ? { name, version: '1.0.0' } : undefined
+      },
+    }
+
+    // EMPTY seed → empty frontier → ZERO registry queries (was O(graph)).
+    queried.length = 0
+    await completeTransitives(graph, reg, { seed: { recentlyAdded: new Set(), recentlyOrphaned: new Set() } })
+    expect(queried).toEqual([])
+
+    // NO seed → full completion from roots.
+    queried.length = 0
+    await completeTransitives(graph, reg)
+    expect(queried).toContain('a')
+
+    // Seed = { a } → bounded to a's subtree (still reaches a).
+    queried.length = 0
+    await completeTransitives(graph, reg, { seed: { recentlyAdded: new Set(['a@1.0.0']), recentlyOrphaned: new Set() } })
+    expect(queried).toContain('a')
+  })
 })

@@ -301,4 +301,63 @@ describe('optimize/mark-and-sweep', () => {
     expect(optimized.removed).toEqual([])  // removeDependency already swept the cascade
     expect(optimized.unresolved.map(d => d.code)).toEqual(['OPTIMIZE_NOOP'])
   })
+
+  // ────────────────────────────────────────────────────────────────
+  // Rootless guard (§4.1 edge case / §6 r3) — non-workspace graphs
+  // ────────────────────────────────────────────────────────────────
+  //
+  // Classic lockfiles carry no `workspacePath` on any node, so the mark
+  // phase seeds an EMPTY live set. Without the guard the §4.3 sweep would
+  // remove every node — wiping the whole graph (adoption finding #3). With
+  // it, optimize keeps all nodes and surfaces OPTIMIZE_NO_ROOTS instead.
+  it('§6 r3 — rootless (classic) graph kept intact, not wiped; OPTIMIZE_NO_ROOTS', () => {
+    const graph = graphOf(builder => {
+      // No node carries workspacePath — the classic-lockfile shape.
+      const top = addPackage(builder, { name: 'simple-git', version: '3.27.0' })
+      const dep = addPackage(builder, { name: 'debug',      version: '4.3.4'  })
+      const old = addPackage(builder, { name: 'simple-git', version: '3.16.0' })  // would-be orphan
+      addEdge(builder, top, dep, 'dep')
+      void old
+    })
+
+    const result = optimize(graph)
+    // Nothing removed — the whole point of the guard.
+    expect(result.removed).toEqual([])
+    expect(result.graph.getNode('simple-git@3.27.0')).toBeDefined()
+    expect(result.graph.getNode('debug@4.3.4')).toBeDefined()
+    expect(result.graph.getNode('simple-git@3.16.0')).toBeDefined()
+    // Surfaced as a per-call warning, NOT a silent noop.
+    const diags = result.unresolved
+    expect(diags.map(d => d.code)).toEqual(['OPTIMIZE_NO_ROOTS'])
+    expect(diags[0]!.severity).toBe('warning')
+    expect(diags[0]!.subject).toBe('graph')
+    // Dual-channel — also lands on Graph.diagnostics() per §6.3.
+    expect(result.graph.diagnostics().map(d => d.code)).toContain('OPTIMIZE_NO_ROOTS')
+
+    // Idempotent (§7 item 4): a second pass on the unchanged graph removes
+    // nothing and re-emits NO_ROOTS, not NOOP.
+    const again = optimize(result.graph)
+    expect(again.removed).toEqual([])
+    expect(again.unresolved.map(d => d.code)).toEqual(['OPTIMIZE_NO_ROOTS'])
+  })
+
+  // A caller that DOES want orphan GC on a rootless graph passes the real
+  // roots via `preserve` — the guard then stands down and the sweep runs.
+  it('§6 r3 — preserve on a rootless graph re-enables the sweep', () => {
+    const graph = graphOf(builder => {
+      const top = addPackage(builder, { name: 'simple-git', version: '3.27.0' })
+      const dep = addPackage(builder, { name: 'debug',      version: '4.3.4'  })
+      const old = addPackage(builder, { name: 'simple-git', version: '3.16.0' })  // orphan
+      addEdge(builder, top, dep, 'dep')
+      void old
+    })
+
+    const result = optimize(graph, { preserve: new Set(['simple-git@3.27.0']) })
+    // With a real root pinned, the orphaned old version is swept; the
+    // reachable subtree survives.
+    expect(result.removed).toEqual(['simple-git@3.16.0'])
+    expect(result.graph.getNode('simple-git@3.27.0')).toBeDefined()
+    expect(result.graph.getNode('debug@4.3.4')).toBeDefined()
+    expect(result.graph.getNode('simple-git@3.16.0')).toBeUndefined()
+  })
 })

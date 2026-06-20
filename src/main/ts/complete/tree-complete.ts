@@ -1,9 +1,11 @@
 // ADR-0023 §4 — tree completion algorithm.
 //
-// BFS from `roots(graph) ∪ seed.recentlyAdded`, excluding
-// `seed.recentlyOrphaned`. Workspace nodes are skipped as packument
-// targets — but their out-edges are walked normally (per §4 workspace
-// handling clause). Monotone-additive: never removes nodes.
+// The seed BOUNDS the frontier: with a seed supplied BFS starts from
+// `seed.recentlyAdded` only (cost O(changed-subtree) — the incremental
+// contract); with no seed it starts from every `roots(graph)` (full
+// completion). Both paths exclude `seed.recentlyOrphaned`. Workspace nodes
+// are skipped as packument targets — but their out-edges are walked normally
+// (per §4 workspace handling clause). Monotone-additive: never removes nodes.
 
 import {
   serializeNodeId,
@@ -88,13 +90,21 @@ export async function completeTransitives(
     currentGraph = currentGraph.mutate(m => { m.diagnostic(d) }).graph
   }
 
-  // Seed frontier: roots(graph) \ recentlyOrphaned ∪ recentlyAdded.
+  // The seed BOUNDS the work. With a seed supplied, ONLY `recentlyAdded` seeds
+  // the frontier — BFS then walks their transitive closure, so cost is
+  // O(changed-subtree) and an empty seed does ~zero work (the incremental
+  // contract yaf relies on). With NO seed, complete the WHOLE graph from every
+  // root. `recentlyOrphaned` is excluded from the frontier either way (the
+  // optimize phase collects orphans).
   const frontier: NodeId[] = []
-  for (const root of currentGraph.roots()) {
-    if (!seed.recentlyOrphaned.has(root)) frontier.push(root)
-  }
-  for (const id of seed.recentlyAdded) {
-    if (!seed.recentlyOrphaned.has(id)) frontier.push(id)
+  if (options.seed === undefined) {
+    for (const root of currentGraph.roots()) {
+      if (!seed.recentlyOrphaned.has(root)) frontier.push(root)
+    }
+  } else {
+    for (const id of seed.recentlyAdded) {
+      if (!seed.recentlyOrphaned.has(id)) frontier.push(id)
+    }
   }
 
   while (frontier.length > 0) {

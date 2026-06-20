@@ -327,6 +327,22 @@ alongside the consumer's top-level package. Seeding from
 preserved root set; `preserve` extends it; `graph.roots()` is
 not consulted by optimize.
 
+**Rootless graphs (r3 amendment).** The root set
+`workspaces ∪ preserve` is empty when a graph carries no
+workspace nodes and the caller passes no `preserve` — the shape
+of a non-workspace (classic) lockfile, where every top-level
+dependency is a bare package with no `workspacePath`. A literal
+sweep would then mark nothing live and remove every node,
+destroying the graph. With no root anchor the phase cannot
+distinguish a wanted top-level dependency from an orphan (both
+are zero-incoming nodes), so it does NOT sweep: it keeps every
+node, emits `OPTIMIZE_NO_ROOTS` (§6), and returns the graph
+unchanged. A caller that wants orphan GC on a rootless graph
+supplies the real roots via `preserve` — the guard then stands
+down and the normal mark-and-sweep runs. An empty graph (zero
+nodes) has nothing to protect and falls through to the §4
+`OPTIMIZE_NOOP` epilogue.
+
 ### §4.2 Reachability — edge kinds and peerContext
 
 Every out-edge kind (`'dep'`, `'dev'`, `'optional'`, `'peer'`)
@@ -483,6 +499,7 @@ graph-mutation events.
 | `OPTIMIZE_NODE_REMOVED` | info | NodeId | once per removed node; message includes `name@version` for grep-ability per ADR-0006 readability rationale |
 | `OPTIMIZE_WORKSPACE_UNREACHABLE` | warning | NodeId | **Reserved code; v1 never emits.** The §4.1 explicit-workspace-mark step unconditionally adds every workspace to the live set, so the §4 sweep branch that would emit this diagnostic is dead under the v1 algorithm. The code is declared in the taxonomy so future opt-in mark-policy tightenings — e.g. a hypothetical `policy: 'strict-workspaces'` option that drops the implicit workspace mark from §4.1 and forces explicit reachability — can emit it without enlarging the diagnostic surface. Under any such future policy, emitting this on a real audit-fix run is a topology smell — flag it but do not abort. v1 callers can safely ignore this code in switch statements over `OPTIMIZE_*`. |
 | `OPTIMIZE_NOOP` | info | `'graph'` | once per `optimize(graph)` call when `removed.length === 0`. Useful for fixpoint convergence detection — an iteration with `OPTIMIZE_NOOP` confirms the reductive phase is stable; combined with the upstream additive phases also being stable, the loop exits |
+| `OPTIMIZE_NO_ROOTS` | warning | `'graph'` | **r3 amendment.** Once per `optimize(graph)` call when the mark phase finds an empty live set on a non-empty graph — no workspace nodes and an empty `preserve`. The phase keeps every node and returns the graph unchanged rather than sweeping it to empty. See §4.1 (rootless-graph guard) and §6.4. |
 
 ### §6.1 Composition with existing families
 
@@ -521,6 +538,29 @@ appear on `OptimizeResult.unresolved` for per-call streaming /
 aggregation. Stringify-side adapters consult `Graph.diagnostics()`
 for graph-level state per ADR-0023 §3.2 read-channel contract.
 
+### §6.4 Rootless-graph guard (r3 amendment)
+
+`OPTIMIZE_NO_ROOTS` closes a safety gap in the §4.1 root model.
+That model seeds liveness from `workspaces ∪ preserve` and
+deliberately does NOT consult `graph.roots()` (§4.1 "Why not
+graph.roots()"). The design assumes a workspace root exists. On a
+non-workspace (classic) graph with no `preserve`, the live set is
+empty and the §4.3 sweep would remove every node.
+
+The guard is the minimal closure: when the marked live set is
+empty AND the graph is non-empty, optimize keeps all nodes, emits
+one `OPTIMIZE_NO_ROOTS` (warning, `'graph'` subject), and returns
+the graph unchanged. It does NOT reverse §4.1 — `graph.roots()` is
+still not consulted, and orphans are still not self-seeded. It only
+declines a destructive all-sweep that the caller cannot have
+intended. Callers that want orphan GC on a rootless graph pass the
+legitimate roots through `preserve`, restoring the normal mark-and-
+sweep.
+
+The §7 invariants stay intact: the phase remains monotone-reductive
+(it removes zero nodes here), deterministic, and idempotent (a
+second call on the unchanged graph re-emits `OPTIMIZE_NO_ROOTS`).
+
 ## §7 Invariants
 
 All seven items below are normative and acceptance-gated (§9).
@@ -546,10 +586,11 @@ All seven items below are normative and acceptance-gated (§9).
    arrays.
 
 4. **Idempotent.** `optimize(optimize(g).graph)` returns
-   `removed: []` and a single `OPTIMIZE_NOOP`. The graph state
-   is byte-identical modulo the second `OPTIMIZE_NOOP`
-   diagnostic record. (The diagnostic list grows monotonically;
-   structural state stabilises after one call.)
+   `removed: []` and a single per-call diagnostic — `OPTIMIZE_NOOP`,
+   or `OPTIMIZE_NO_ROOTS` when `g` is rootless (§6.4). The graph
+   state is byte-identical modulo that second diagnostic record.
+   (The diagnostic list grows monotonically; structural state
+   stabilises after one call.)
 
 5. **Peer-context coherence (ADR-0006).** A removed node MUST
    NOT be referenced from any surviving node's `peerContext`.
@@ -631,7 +672,7 @@ All seven items below are normative and acceptance-gated (§9).
 1. **Cold-reader gate.** A subagent reading ADR-0024 end-to-end
    without prior context can answer: *what is the optimize
    phase, when does it run, what does it remove, how does it
-   compose with completion / fixpoint, what are the three
+   compose with completion / fixpoint, what are the four
    `OPTIMIZE_*` codes, why are workspaces preserved, why are
    sentinel-keyed nodes collected* — without re-reading. Per
    ADR-0023 §9.1 precedent.
@@ -659,7 +700,8 @@ assertion:
 | `filterLicense` strict mode | A graph with a GPL-3.0 node; `filterLicense({ deny: ['GPL-3.0'], mode: 'strict' })` removes the GPL node via `removeDependency`; optimize sweeps any cascaded orphans. Final graph stringifies to npm-3 / pnpm-v9 / yarn-berry-v9 cleanly. |
 | Workspace unreachable | A workspace fixture where workspace `app` has no incoming edges and no other workspace depends on it; `OptimizeResult.removed === []`; the workspace remains in the graph; no `OPTIMIZE_WORKSPACE_UNREACHABLE` diagnostic emitted under the v1 mark policy (the §4.1 explicit workspace mark covers it). |
 | Sentinel-keyed unreachable | A graph with a `lodash@4.17.21+patch=unresolved-<sha256>` node that becomes unreachable; optimize removes it without emitting any sentinel-specific warning (the removal is a normal `OPTIMIZE_NODE_REMOVED`). |
-| Idempotency | `optimize(optimize(g).graph)` returns `removed: []` and `unresolved: [OPTIMIZE_NOOP]`. The graph state is byte-identical to the first call's output modulo the second `OPTIMIZE_NOOP` diagnostic. |
+| Idempotency | `optimize(optimize(g).graph)` returns `removed: []` and `unresolved: [OPTIMIZE_NOOP]` (or `[OPTIMIZE_NO_ROOTS]` when `g` is rootless, per §6.4). The graph state is byte-identical to the first call's output modulo that second diagnostic. |
+| Rootless guard (r3) | A non-workspace graph (no `workspacePath` on any node) with empty `preserve` and ≥1 node; `OptimizeResult.removed === []`; every input node remains; one `OPTIMIZE_NO_ROOTS` (warning, `'graph'` subject) emitted. Supplying `preserve` with the real roots re-enables the sweep. An empty graph (0 nodes) still yields `OPTIMIZE_NOOP`, not `OPTIMIZE_NO_ROOTS`. |
 | Peer-context coherence | A graph where node `A` has `peerContext: [B]` and `B` would be unreachable except for the peerContext reference; `B` is preserved (live via §4.2 peer-context walk); `A`'s seal invariant holds post-optimize. |
 | Determinism | Run `optimize` on the same input graph twice (fresh seed); `OptimizeResult.removed` arrays compare byte-equal; emission order of `OPTIMIZE_NODE_REMOVED` matches content-sort iteration. |
 

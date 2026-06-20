@@ -414,7 +414,9 @@ type CompletionSeed = {
 function completeTransitives(
   graph: Graph,
   ctx:   ModifyContext,
-  seed:  CompletionSeed,
+  seed?: CompletionSeed,   // optional (amendment, pending ratification): omitted
+                           // ⇒ full completion from roots; supplied ⇒ bounded
+                           // to the changed subtree. See §4.2.
 ): Promise<CompletionResult>
 ```
 
@@ -422,14 +424,24 @@ function completeTransitives(
 
 ```
 visited:    Set<NodeId> = {}
-# Seed frontier with current graph roots and the modifier's
-# recently-added nodes, minus nodes the just-completed mutate phase
-# freshly orphaned (`recently-orphaned`, supplied by the modifier).
-# Freshly-orphaned roots will be GC'd by the optimize phase; visiting
-# them only emits spurious COMPLETION_NODE_UNKNOWN noise.
+# The seed BOUNDS the frontier (amendment — optional-seed incremental path,
+# PENDING OWNER RATIFICATION; supersedes the original unconditional union):
+#   • seed supplied → recently-added-nodes \ recently-orphaned ONLY (no
+#     roots). The modify→complete pipeline ALWAYS supplies a seed, so
+#     completion walks only the changed subtree — cost O(changed-subtree),
+#     not O(graph). An empty seed does ~zero work. This is the incremental
+#     contract downstream tools (yarn-audit-fix) depend on; the original
+#     `roots(graph) ∪ recently-added` made every seeded call O(graph) and
+#     a no-change call ~10 s on a 3k-node graph.
+#   • no seed → roots(graph) \ recently-orphaned (full completion from every
+#     root — the "complete this whole graph from scratch" caller).
+# Freshly-orphaned nodes are excluded on BOTH paths; the optimize phase
+# (§8.4 step 4) GC's them. Visiting them only emits spurious
+# COMPLETION_NODE_UNKNOWN noise.
 frontier:   Queue<NodeId> =
-  (roots(graph) \ recently-orphaned)
-  ∪ recently-added-nodes
+  seed supplied
+    ? (recently-added-nodes \ recently-orphaned)
+    : (roots(graph) \ recently-orphaned)
 added:      NodeId[] = []
 wired:      EdgeTriple[] = []
 unresolved: Diagnostic[] = []
