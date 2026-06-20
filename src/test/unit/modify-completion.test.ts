@@ -362,4 +362,47 @@ describe('complete/completeTransitives', () => {
     const streamCodes = result.unresolved.map(d => d.code).sort()
     expect(streamCodes).toEqual(graphCodes)
   })
+
+  it('excludes a transitive node\'s devDependencies — does not traverse the dev universe', async () => {
+    // `file-exists` (a transitive dep) has a prod dep (`debug`) AND devDeps
+    // (`jest` / `typescript`). Completion must follow only the install tree —
+    // a transitive's devDependencies are never installed; traversing them pulls
+    // the whole dev universe and never terminates.
+    const graph = graphOf(builder => {
+      const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      addPackage(builder, { name: 'file-exists', version: '1.1.1' })
+      addEdge(builder, ws, 'file-exists@1.1.1', 'dep')
+    })
+
+    const requested: string[] = []
+    const pkgs: Record<string, Packument> = {
+      'file-exists': {
+        name: 'file-exists', distTags: { latest: '1.1.1' },
+        versions: { '1.1.1': { name: 'file-exists', version: '1.1.1',
+          dependencies: { debug: '^4.0.0' },
+          devDependencies: { jest: '^29.0.0', typescript: '^5.0.0' } } },
+      },
+      debug:      { name: 'debug',      distTags: { latest: '4.3.4' },  versions: { '4.3.4':  { name: 'debug',      version: '4.3.4' } } },
+      jest:       { name: 'jest',       distTags: { latest: '29.0.0' }, versions: { '29.0.0': { name: 'jest',       version: '29.0.0' } } },
+      typescript: { name: 'typescript', distTags: { latest: '5.0.0' },  versions: { '5.0.0':  { name: 'typescript', version: '5.0.0' } } },
+    }
+    const ver: Record<string, string> = { debug: '4.3.4', jest: '29.0.0', typescript: '5.0.0' }
+    const fakeRegistry: RegistryAdapter = {
+      async packument(name) { requested.push(name); return pkgs[name] },
+      async resolve(name) {
+        const v = ver[name]
+        return v !== undefined ? { name, version: v } : undefined
+      },
+    }
+
+    const result = await completeTransitives(graph, fakeRegistry)
+
+    // prod dep followed:
+    expect(result.graph.getNode('debug@4.3.4')).toBeDefined()
+    // devDependencies NEVER traversed — no dev node lands, no dev packument fetched:
+    expect(result.graph.getNode('jest@29.0.0')).toBeUndefined()
+    expect(result.graph.getNode('typescript@5.0.0')).toBeUndefined()
+    expect(requested).not.toContain('jest')
+    expect(requested).not.toContain('typescript')
+  })
 })
