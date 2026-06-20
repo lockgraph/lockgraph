@@ -1204,23 +1204,17 @@ function buildNodeModulesEntry(
   body.version = node.version
 
   const tarball = graph.tarballOf(node.id)
-  // `resolved` URL: prefer the per-tarball `nativeResolution`, but ONLY when it
-  // is a real npm `resolved` URL. A cross-format source (yarn-berry) stores its
-  // own LOCATOR there (`<name>@npm:…::__archiveUrl=…`, `<name>@patch:…`) — not a
-  // URL — so emitting it verbatim yields an `npm ci`-unusable lock; reject it and
-  // fall through. Adapter-specific recovery (npm-2 legacy-mirror sidecar) is
-  // delegated via `hooks.recoverResolvedForNode`. ADR-0014 §4.F3 cross-format
-  // fallback: derive from the canonical resolution (a `tarball` canonical yields
-  // its URL — the private-registry archive host — losslessly).
+  // `resolved` URL: prefer `nativeResolution`, but only when it is a real npm
+  // URL. A cross-format (yarn-berry) source stores its own LOCATOR there
+  // (`<name>@npm:…::…`, `<name>@patch:…`) which is `npm ci`-unusable — reject it
+  // and fall through to the npm-2 recovery hook, then the canonical resolution.
   const native = tarball?.nativeResolution
   let resolved = (native !== undefined && !isYarnBerryLocator(native) ? native : undefined)
     ?? config.hooks?.recoverResolvedForNode?.(graph, node)
     ?? deriveResolvedFromCanonical(tarball?.resolution)
-  // The canonical of a `patch:` / any non-canonicalisable shape is `unknown`,
-  // whose `stringifyForNpm` re-emits the raw yarn locator — also not a URL. Drop
-  // it (npm has no patch protocol; it re-resolves from the range) so the lock
-  // stays structurally valid. The patch-incapability loss is already surfaced by
-  // the recipe's `RECIPE_FEATURE_DROPPED(patch)` path, so no extra diagnostic here.
+  // A `patch:` / unknown canonical re-emits its raw yarn locator (also not a
+  // URL): drop it (npm re-resolves from the range) — the patch loss is already
+  // surfaced by `RECIPE_FEATURE_DROPPED(patch)`, so no extra diagnostic here.
   if (resolved !== undefined && isYarnBerryLocator(resolved)) {
     resolved = undefined
   }

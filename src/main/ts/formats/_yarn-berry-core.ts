@@ -1610,35 +1610,20 @@ function entryOfNode(
   return entry
 }
 
-// A yarn-berry locator for THIS node is always `<name>@<protocol>:<spec>` —
-// it begins with `<name>@`. A FOREIGN resolution sidecar leaked by a
-// cross-format source (a yarn-classic / npm / pnpm tarball URL is a bare
-// `https://…`, never `<name>@…`) is NOT a valid berry locator and must be
-// re-synthesised before emit. Mirrors the same `startsWith(`${name}@`)` gate
-// `selfDescriptorOfNode` uses; an npm-ALIAS locator (`<name>@npm:<other>@<ver>`)
-// also begins with `<name>@`, so it correctly passes through untouched.
+// A genuine berry locator for THIS node begins with `<name>@` (incl. an npm
+// alias `<name>@npm:<other>@<ver>`); a foreign sidecar leaked by a cross-format
+// source is a bare URL (`https://…`) and must be re-synthesised before emit.
 function isBerryLocatorOfNode(native: string, name: string): boolean {
   return native.startsWith(`${name}@`)
 }
 
-// Synthesise a VALID berry npm locator for a `tarball` node whose PM-native
-// sidecar is absent or is a foreign bare URL (the cross-format SYNTHESIS path —
-// classic/npm/pnpm → berry, where there is no berry verbatim sidecar). Returns
-// `undefined` for any non-`tarball` canonical (git/directory/unknown keep their
-// own emit paths). Two cases:
-//   - default-registry host AND no `::` bind → `<name>@npm:<version>` (clean —
-//     the registry artefact is content-addressed by (name, version));
-//   - non-registry host OR a `::` bind → `<name>@npm:<version>::<bind>` where the
-//     bind reuses an existing `canonical.bind` (a berry-origin entry whose native
-//     leaked, e.g. via lockgraph) or, for a bare cross-format tarball with no
-//     bind, is synthesised as `__archiveUrl=<encodeURIComponent(url)>`. This is a
-//     well-formed berry locator that FORKS identity on re-parse (the `::` bind
-//     rides the `+src=` source discriminator), so two same-`name@version`
-//     source-siblings (a registry copy + a private-registry copy) get DISTINCT
-//     keys + resolutions instead of collapsing onto a bare invalid URL.
-// Gated on `sourceDiscriminatorOf` so the registry-vs-non-registry split is the
-// SAME mapping that mints the node's `+src=` slot — key/resolution/identity stay
-// in lockstep.
+// Synthesise a valid berry npm locator from a `tarball` canonical when no berry
+// sidecar exists (cross-format convert). Default-registry → clean
+// `<name>@npm:<version>`; non-registry/bound → `…::<bind>` (reusing
+// `canonical.bind`, else `__archiveUrl=<enc>`) so source-siblings fork on
+// re-parse instead of collapsing onto a bare invalid URL. Gated on
+// `sourceDiscriminatorOf` so the registry split matches the node's `+src=` slot;
+// non-`tarball` canonicals keep their own emit paths.
 function synthesisedBerryTarballLocator(node: Node, canonical: ResolutionCanonical | undefined): string | undefined {
   if (canonical === undefined || canonical.type !== 'tarball') return undefined
   if (sourceDiscriminatorOf(canonical) === undefined) {

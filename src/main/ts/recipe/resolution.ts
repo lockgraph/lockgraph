@@ -112,18 +112,9 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
       const version     = bindIdx >= 0 ? spec.slice(0, bindIdx) : spec
       const bindSuffix = bindIdx >= 0 ? spec.slice(bindIdx + 2) : undefined
       if (bindSuffix !== undefined) {
-        // The bind suffix pins the exact fetch and MUST fork identity (ADR-0032
-        // §"+src="): two entries differing ONLY by the bind otherwise collapse
-        // onto one NodeId → IRREDUCIBLE_LOSS. BOTH branches carry `bind`, which
-        // the source discriminator folds in so the tarball is non-bare.
-        //   - `__archiveUrl=<enc>` names the ACTUAL fetch source (a private-
-        //     registry mirror archive); the decoded archive URL becomes the
-        //     canonical tarball url, AND the full suffix still rides `bind` so a
-        //     residual `&locator=`/`&hash=` qualifier (or two archives on the
-        //     same host but different paths) discriminates, and an archive pin
-        //     to the default-registry host forks from a bare un-pinned entry.
-        //   - other binds (`version=`, `hash=`, …) keep the registry url and
-        //     ride `bind` directly.
+        // Both branches carry the full suffix on `bind` (the source discriminator
+        // folds it in → non-bare). An `__archiveUrl=<enc>` also becomes the
+        // canonical url; other binds keep the derived registry url.
         const archiveUrl = archiveUrlOfBind(bindSuffix)
         if (archiveUrl !== undefined) {
           return { type: 'tarball', url: archiveUrl, bind: bindSuffix }
@@ -586,11 +577,10 @@ export function stringifyForYarnClassic(can: ResolutionCanonical, hints: YarnCla
  * Project canonical → npm `resolved` URL per ADR-0014 §4.F3.
  * Workspace members emit via link entries through packages/<p>; not this path.
  */
-// True when a string is a yarn-berry locator (`<name>@<protocol>:<spec>` and/or
-// a `::` bind) rather than a URL. npm `resolved`/`version` values are URLs
-// (`https://`, `git+…`, `git@…`, `file:`) or shorthand (`github:o/r`) and never
-// begin with a `<name>@<yarn-protocol>:` prefix, so this rejects a leaked
-// yarn-native locator on a cross-format convert without dropping real npm shapes.
+// True when `s` is a yarn-berry locator (`<name>@<protocol>:<spec>` or a `::`
+// bind), not a URL. npm `resolved`/`version` values (URLs, `github:` shorthand)
+// never begin with a `<name>@<yarn-protocol>:` prefix, so this safely rejects a
+// leaked yarn locator on a cross-format convert.
 export function isYarnBerryLocator(s: string): boolean {
   return s.includes('::')
     || /^[^:\s]+@(?:npm|patch|workspace|portal|link|exec|virtual):/.test(s)

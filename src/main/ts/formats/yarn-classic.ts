@@ -427,18 +427,11 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     options.onDiagnostic?.(diagnostic)
   }
 
-  // yarn-classic identifies entries by `<name>@<version>` PLUS the `+src=`
-  // source slot (its `resolved` URL). Same-`<name>@<version>` siblings from
-  // DIFFERENT sources (a registry copy AND a git fork; two private hosts) ARE
-  // representable as distinct entries — distinct descriptor keys + distinct
-  // `resolved` URLs — so they MUST NOT collapse; collapsing silently drops a
-  // whole package. What yarn-classic genuinely cannot disambiguate is the
-  // `+patch=` slot and peer virtualisation: patched / peer siblings sharing
-  // `<name>@<version>+src=` collapse onto one entry on reparse and trip
-  // `IRREDUCIBLE_LOSS`, so emit only the cleaner sibling (prefer the unpatched
-  // node) and attribute the discard via `warnPatchDrop` /
-  // `warnPeerContextFlatten`. Order preserves stability of the entry-key
-  // sorting downstream.
+  // Dedup entries by `<name>@<version>+src=` (the `resolved` URL identity):
+  // source-forked siblings stay distinct, but `+patch=` / peer-virtual siblings —
+  // which yarn-classic cannot represent — collapse onto one entry, preferring the
+  // unpatched node (sort below) and attributing the discard via `warnPatchDrop` /
+  // `warnPeerContextFlatten`.
   const sortedNodes = Array.from(graph.nodes()).sort((a, b) =>
     cmpUtf16(a.id, b.id)
       || ((a.patch === undefined ? 0 : 1) - (b.patch === undefined ? 0 : 1)),
@@ -450,9 +443,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
       dedupedNodes.push(node)
       continue
     }
-    // Key on `<name>@<version>` + the `+src=` slot so source-forked siblings
-    // survive; the `+patch=` slot and peerContext are deliberately EXCLUDED so
-    // patch / peer siblings still collapse (yarn-classic cannot represent them).
+    // `+patch=` and peerContext are deliberately excluded from this key.
     const identity = node.source === undefined
       ? `${node.name}@${node.version}`
       : `${node.name}@${node.version}+src=${node.source}`

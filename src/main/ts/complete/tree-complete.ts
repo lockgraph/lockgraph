@@ -135,12 +135,9 @@ export async function completeTransitives(
       continue
     }
 
-    // Walk the INSTALL-TREE dep-kind buckets only. `devDependencies` are
-    // deliberately EXCLUDED: only a transitive, non-workspace node reaches here
-    // (workspace/root nodes take the branch above and never fetch a packument),
-    // and a transitive dependency's devDependencies are NEVER installed —
-    // traversing them pulls the entire dev universe and never terminates. The
-    // root/workspace node's own devDeps come from parse, already on the graph.
+    // Install-tree kinds only — `devDependencies` are EXCLUDED: only transitive
+    // (non-workspace) nodes reach here, and a transitive's devDeps are never
+    // installed; traversing them pulls the whole dev universe and never ends.
     const depBuckets: Array<{ deps?: Record<string, string>; kind: EdgeKind }> = [
       { deps: pv.dependencies,         kind: 'dep' },
       { deps: pv.optionalDependencies, kind: 'optional' },
