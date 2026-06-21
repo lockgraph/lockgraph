@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { pruneOrphans } from '../../main/ts/optimize/prune.ts'
 import { optimize } from '../../main/ts/optimize/optimize.ts'
+import { canonicalHashOfBytes } from '../../main/ts/recipe/patch.ts'
 import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'
 
 describe('optimize/pruneOrphans', () => {
@@ -129,6 +130,27 @@ describe('optimize/pruneOrphans', () => {
     expect(result.graph.getNode('a@1.0.0')).toBeDefined()
     expect(result.graph.getNode('dep@1.0.0')).toBeDefined()
     expect(result.unresolved.map(d => d.code)).toContain('PRUNE_NO_ROOTS')
+  })
+
+  it('patch-base preservation — keeps a bare base while a patched variant is live (vs both GCs)', () => {
+    // A `@patch:…!builtin` node (e.g. fsevents) is a separate lock entry on top
+    // of its bare base; consumers route to the patched variant, so the base sits
+    // at in-degree 0 yet yarn keeps both. Neither GC may strip the base.
+    const patch = canonicalHashOfBytes('builtin-patch-bytes')
+    const graph = graphOf(b => {
+      const ws      = addPackage(b, { name: 'app',      version: '0.0.0', workspacePath: '.' })
+      addPackage(b, { name: 'fsevents', version: '2.3.3' })                  // bare base, in-degree 0
+      const patched = addPackage(b, { name: 'fsevents', version: '2.3.3', patch })
+      addEdge(b, ws, patched, 'optional')                                    // consumer → patched variant
+    })
+
+    const pruned = pruneOrphans(graph)
+    expect(pruned.graph.getNode('fsevents@2.3.3')).toBeDefined()
+    expect(pruned.removed).not.toContain('fsevents@2.3.3')
+
+    const optimized = optimize(graph)
+    expect(optimized.graph.getNode('fsevents@2.3.3')).toBeDefined()
+    expect(optimized.removed).not.toContain('fsevents@2.3.3')
   })
 
   it('seeded sweep still works on a rootless graph — bounded, no-roots guard does not apply', () => {

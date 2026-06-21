@@ -10,7 +10,7 @@
 // over the INPUT snapshot in content-sort order; `next` is the cumulative
 // write target and is never re-examined for reachability mid-sweep.
 
-import type { Diagnostic, Graph, NodeId } from '../graph.ts'
+import { serializeNodeId, type Diagnostic, type Graph, type NodeId } from '../graph.ts'
 import { optimizeNodeRemoved, optimizeNoop, optimizeNoRoots } from './diagnostics.ts'
 
 export interface OptimizeOptions {
@@ -127,6 +127,20 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
         }
       }
     }
+  }
+
+  // Patch-base preservation. A `@patch:…!builtin` / source-tagged node is a
+  // SEPARATE lock entry installed on top of its bare base (consumers' edges
+  // route to the patched variant, so the base sits at in-degree 0 yet yarn keeps
+  // both entries). Mark the bare base of every live patched/sourced node live so
+  // the sweep does not strip it (e.g. `fsevents@npm:2.3.3` under the optional-
+  // builtin patch). The base carries no install-tree deps of its own, so adding
+  // it to the live set without re-walking is sufficient.
+  for (const node of graph.nodes()) {
+    if (!live.has(node.id)) continue
+    if (node.patch === undefined && node.source === undefined) continue
+    const baseId = serializeNodeId(node.name, node.version, node.peerContext, undefined, undefined)
+    if (baseId !== node.id && graph.getNode(baseId) !== undefined) live.add(baseId)
   }
 
   // === Phase 2 — sweep (§4.3, §4.4, §4.5) ===

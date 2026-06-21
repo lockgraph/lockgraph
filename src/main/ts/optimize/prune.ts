@@ -21,7 +21,7 @@
 // old closure. Workspaces are never collected (they anchor the tree at
 // in-degree 0). Monotone-REDUCTIVE: only removals + diagnostics, never growth.
 
-import type { Diagnostic, Graph, NodeId } from '../graph.ts'
+import { serializeNodeId, type Diagnostic, type Graph, type Node, type NodeId } from '../graph.ts'
 import { pruneNodeRemoved, pruneNoop, pruneNoRoots } from './diagnostics.ts'
 
 export interface PruneOrphansOptions {
@@ -105,7 +105,15 @@ export function pruneOrphans(graph: Graph, options: PruneOrphansOptions = {}): P
     if (node === undefined) return false                 // already removed
     if (node.workspacePath !== undefined) return false   // workspaces anchor the tree
     if (preserve.has(id)) return false
-    return current.in(id).length === 0
+    if (current.in(id).length > 0) return false
+    // Patch-base preservation. A `@patch:…!builtin` (or any patched/source-tagged)
+    // node is a SEPARATE lock entry installed ON TOP of its bare base
+    // (`fsevents@npm:2.3.3` under `fsevents@patch:…#optional!builtin`), and
+    // consumers' edges route to the patched variant — so the base sits at
+    // in-degree 0 yet yarn KEEPS it (both entries are in a valid lock). Keep a
+    // bare node while any patched/sourced variant of it is still present.
+    if (hasLivePatchedVariant(current, node)) return false
+    return true
   }
 
   const queue: NodeId[] = []
@@ -147,6 +155,26 @@ export function pruneOrphans(graph: Graph, options: PruneOrphansOptions = {}): P
   }
 
   return { graph: current, removed, unresolved }
+}
+
+/**
+ * True iff `node` is a BARE base (no patch / source slot) for which a
+ * patched / source-tagged variant is still present — i.e. some other node with
+ * the same `(name, version, peerContext)` carries a `+patch=` / `+src=` slot.
+ * Such a base is the install source of its variant and must outlive a GC even
+ * at in-degree 0 (yarn keeps both the `@npm:` and the `@patch:…!builtin` entry).
+ */
+function hasLivePatchedVariant(graph: Graph, node: Node): boolean {
+  if (node.patch !== undefined || node.source !== undefined) return false
+  for (const id of graph.byName(node.name)) {
+    if (id === node.id) continue
+    const other = graph.getNode(id)
+    if (other === undefined) continue
+    if (other.patch === undefined && other.source === undefined) continue
+    if (other.version !== node.version) continue
+    if (serializeNodeId(other.name, other.version, other.peerContext, undefined, undefined) === node.id) return true
+  }
+  return false
 }
 
 /**

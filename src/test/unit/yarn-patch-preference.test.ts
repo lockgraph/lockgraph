@@ -4,11 +4,13 @@
 // package resolve to a sibling PATCH copy of the same `name@version`. The lock
 // records BOTH a base `<name>@npm:<ver>` node and an `<name>@patch:…` sibling;
 // a consumer declaring a plain `npm:` range binds the base (Rung 0/3) and the
-// overlay then redirects it onto the patched copy — leaving the base GC-able
-// (its bytes are the patch's diff source, re-emitted from the patch locator;
-// optimize() prunes the now-orphaned base, exactly as yarn lists only the
-// patched copy). Shape mined from the real highlight/highlight lock
-// (bufrw → ansi-color@npm:^0.2.1, base + patch sibling).
+// overlay then redirects it onto the patched copy — leaving the base at
+// in-degree 0. yarn KEEPS that base entry regardless (it is the patch's install
+// source — verified across fsevents / interpret / ast-types / lru-cache locks,
+// and a real `yarn install --immutable` rejects a lock with the base dropped),
+// so the GC PRESERVES a bare base while its patched variant is live. Shape mined
+// from the real highlight/highlight lock (bufrw → ansi-color@npm:^0.2.1, base +
+// patch sibling).
 //
 // Classic flattens patches (no `patch:` protocol) so it is unaffected — covered
 // only here for berry.
@@ -89,16 +91,18 @@ describe('Bug #104 — yarn-berry patch preference (lock-borne)', () => {
     expect(d?.message).toMatch(/ansi-color=npm:\^0\.2\.1/)
   })
 
-  it('leaves the base node GC-able — optimize() prunes the now-orphaned base', () => {
+  it('keeps the base node — GC preserves a bare base while its patch sibling is live', () => {
     const g = parse('yarn-berry-v8', LOCK)
-    // Pre-optimize the base node still exists (parse keeps every entry) but has
-    // no incoming dep edge (the only consumer was redirected to the patch).
+    // The base node has no incoming dep edge (the only consumer was redirected to
+    // the patch) — yet yarn keeps the base entry: it is the patch's install
+    // source (both `@npm:` and `@patch:` entries are in a valid lock, and
+    // `yarn install --immutable` fails if the base is dropped).
     expect(g.getNode(ANSI_BASE)).toBeDefined()
     expect(g.in(ANSI_BASE).filter(e => e.kind === 'dep' || e.kind === 'optional').length).toBe(0)
-    // optimize() GCs the orphaned base, matching yarn (only the patched copy
-    // survives); the patch node remains (reachable via bufrw).
+    // optimize() must PRESERVE the orphaned base while the patch sibling is live
+    // (patch-base preservation); the patch node also survives (reachable via bufrw).
     const opt = optimize(g).graph
-    expect(opt.getNode(ANSI_BASE)).toBeUndefined()
+    expect(opt.getNode(ANSI_BASE)).toBeDefined()
     const patchId = ansiTarget(g)
     expect(opt.getNode(patchId!)).toBeDefined()
   })
