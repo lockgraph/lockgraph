@@ -22,7 +22,7 @@
 // in-degree 0). Monotone-REDUCTIVE: only removals + diagnostics, never growth.
 
 import type { Diagnostic, Graph, NodeId } from '../graph.ts'
-import { pruneNodeRemoved, pruneNoop } from './diagnostics.ts'
+import { pruneNodeRemoved, pruneNoop, pruneNoRoots } from './diagnostics.ts'
 
 export interface PruneOrphansOptions {
   /** Stream diagnostics as they fire (mirrors the modify / optimize channel). */
@@ -32,9 +32,17 @@ export interface PruneOrphansOptions {
   /**
    * Bound the sweep to a candidate set. When provided, ONLY these NodeIds (and
    * the closure they transitively strand) are removal candidates — any OTHER
-   * pre-existing in-degree-0 node is left untouched. Pass the mutation's removed
-   * / orphaned NodeIds (e.g. `replaceVersion`'s `recentlyOrphaned`) for a purely
-   * differential GC. Omit for a whole-graph sweep.
+   * pre-existing in-degree-0 node is left untouched.
+   *
+   * **Seeded is the SAFE / recommended mode for post-mutation GC.** Pass the
+   * mutation's orphaned NodeIds (`replaceVersion`'s `recentlyOrphaned` — which
+   * now includes the targets whose last incoming edge a rebind's edge-refresh
+   * dropped). The sweep then retires exactly that delta and CANNOT touch a node
+   * the mutation never affected — including ones that only LOOK orphaned because
+   * an incoming edge is unresolved in the parse (e.g. berry `@patch:…!builtin`
+   * fsevents). Omit only for a whole-graph sweep on a graph whose edges you trust
+   * to be complete; the unseeded path over-prunes such unresolved-edge nodes and
+   * is guarded against wiping a rootless lock (PRUNE_NO_ROOTS).
    */
   seed?:         ReadonlySet<NodeId>
 }
@@ -69,6 +77,25 @@ export function pruneOrphans(graph: Graph, options: PruneOrphansOptions = {}): P
   }
 
   let current: Graph = graph
+
+  // No-roots guard (UNSEEDED only). A whole-graph sweep with no workspace anchor
+  // would treat every top-level dependency (in-degree 0) as an orphan and
+  // cascade-wipe a rootless yarn-classic lock. No-op + warn instead; a seeded
+  // sweep is always bounded to its delta, so the guard never applies to it.
+  if (options.seed === undefined) {
+    let hasNodes = false
+    let hasWorkspace = false
+    for (const node of current.nodes()) {
+      hasNodes = true
+      if (node.workspacePath !== undefined) { hasWorkspace = true; break }
+    }
+    if (hasNodes && !hasWorkspace) {
+      const diag = pruneNoRoots()
+      const guarded = current.mutate(m => { m.diagnostic(diag) }).graph
+      emit(diag)
+      return { graph: guarded, removed, unresolved }
+    }
+  }
 
   // A node is collectable iff it is non-workspace, not preserved, and has zero
   // incoming edges. With a `seed`, only seeded candidates bootstrap the sweep

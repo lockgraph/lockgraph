@@ -100,6 +100,10 @@ describe('modify/replaceVersion', () => {
     // the bumped node carries NO stale outgoing deps; completion rewires fresh.
     const out = [...result.graph.out('handlebars@4.7.9')].filter(e => e.kind === 'dep')
     expect(out).toEqual([])
+    // a REBIND removes no node, so the dropped-edge targets that lost their last
+    // incoming edge are the only orphan signal — reported via recentlyOrphaned so
+    // a seeded pruneOrphans can retire them (yaf .69: empty res.removed on rebind).
+    expect([...result.recentlyOrphaned].sort()).toEqual(['async@1.0.0', 'optimist@0.6.1'])
   })
 
   it('fromRange="*" matches every version of the named package', async () => {

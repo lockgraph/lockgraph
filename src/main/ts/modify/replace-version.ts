@@ -155,15 +155,25 @@ export async function replaceVersion(
       // The rebound node still carries the OLD version's outgoing deps. Clear
       // the dep/optional out-edges so completeTransitives rewires them from the
       // NEW manifest — else the stale deps linger and MERGE with the new set,
-      // yielding an invalid node (yaf lockgraph-message, 2026-06-20). Orphaned
-      // dep targets are swept by the optimize phase. (peer edges are left —
-      // peerContext coherence is out of scope here.)
+      // yielding an invalid node (yaf lockgraph-message, 2026-06-20). (peer edges
+      // are left — peerContext coherence is out of scope here.)
       const staleOut = [...currentGraph.out(targetId)]
         .filter(e => e.kind === 'dep' || e.kind === 'optional')
       if (staleOut.length > 0) {
         currentGraph = currentGraph.mutate(m => {
           for (const e of staleOut) m.removeEdge(targetId, e.dst, e.kind)
         }).graph
+        // A dropped edge may have been its target's LAST incoming edge (e.g.
+        // handlebars 4.0.0's async/optimist after the bump). Record those as
+        // recentlyOrphaned: a REBIND upgrade removes NO node, so this edge-refresh
+        // is the only source of the stranded closure — and a seeded pruneOrphans
+        // needs that delta to retire it (rebinds yield an empty `removed`).
+        for (const e of staleOut) {
+          const dst = currentGraph.getNode(e.dst)
+          if (dst !== undefined && dst.workspacePath === undefined && currentGraph.in(e.dst).length === 0) {
+            recentlyOrphaned.add(e.dst)
+          }
+        }
       }
       replaced.push({ from: node.id, to: targetId })
       recentlyAdded.add(targetId)

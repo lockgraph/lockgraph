@@ -18,6 +18,7 @@ export {
   optimizeWorkspaceUnreachable,
   pruneNodeRemoved,
   pruneNoop,
+  pruneNoRoots,
   type OptimizeDiagnostic,
   type OptimizeDiagnosticCode,
   type PruneDiagnostic,

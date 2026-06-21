@@ -171,11 +171,14 @@ describe('lockgraph-message e2e — dependency-changing berry upgrade', () => {
       .filter(e => e.kind === 'optional').map(e => e.dst)
     expect(optTargets).toEqual(['uglify-js@3.17.4'])
 
-    // .69 issue 2 — the bump strands the 4.0.0 closure (async / optimist); additive
-    // completion leaves them in place, pruneOrphans retires exactly those.
+    // .69 issue 2 — the bump is a REBIND (removes no node), so the stranded 4.0.0
+    // closure (async / optimist) surfaces via recentlyOrphaned, NOT res.removed.
+    expect([...bumped.recentlyOrphaned].sort()).toEqual(['async@1.4.2', 'optimist@0.6.1'])
+    // additive completion leaves them in place; a SEEDED pruneOrphans (yaf's real
+    // flow) retires exactly that delta and nothing else.
     expect(completed.graph.getNode('async@1.4.2')).toBeDefined()
     expect(completed.graph.getNode('optimist@0.6.1')).toBeDefined()
-    const pruned = pruneOrphans(completed.graph)
+    const pruned = pruneOrphans(completed.graph, { seed: bumped.recentlyOrphaned })
     expect([...pruned.removed].sort()).toEqual(['async@1.4.2', 'optimist@0.6.1'])
     expect(pruned.graph.getNode('handlebars@4.7.9')).toBeDefined()    // live node kept
     expect(pruned.graph.getNode('uglify-js@3.17.4')).toBeDefined()    // optional dep kept

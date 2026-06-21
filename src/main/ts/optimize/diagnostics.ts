@@ -62,6 +62,7 @@ function nodeLabel(nodeId: NodeId): string {
 export type PruneDiagnosticCode =
   | 'PRUNE_NODE_REMOVED'
   | 'PRUNE_NOOP'
+  | 'PRUNE_NO_ROOTS'
 
 export interface PruneDiagnostic extends Diagnostic {
   code: PruneDiagnosticCode
@@ -84,6 +85,23 @@ export function pruneNoop(): PruneDiagnostic {
     severity: 'info',
     subject:  'graph',
     message:  'pruneOrphans: no unreferenced nodes to collect',
+  }
+}
+
+/**
+ * Fires when an UNSEEDED pruneOrphans runs on a non-empty graph with no
+ * workspace anchor (e.g. a rootless yarn-classic lock). Without a workspace
+ * every top-level dependency is itself in-degree 0, so a whole-graph sweep would
+ * cascade and wipe the lock. We no-op instead — the caller bounds the sweep with
+ * an explicit `seed` (or `preserve`) to GC a rootless graph. Mirrors
+ * OPTIMIZE_NO_ROOTS.
+ */
+export function pruneNoRoots(): PruneDiagnostic {
+  return {
+    code:     'PRUNE_NO_ROOTS',
+    severity: 'warning',
+    subject:  'graph',
+    message:  'pruneOrphans: no workspace anchor and no seed on a non-empty graph — kept all nodes to avoid wiping a rootless lock',
   }
 }
 

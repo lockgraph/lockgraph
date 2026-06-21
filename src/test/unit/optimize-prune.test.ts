@@ -114,4 +114,34 @@ describe('optimize/pruneOrphans', () => {
     expect(result.removed).toEqual(['seeded@1.0.0'])
     expect(result.graph.getNode('unseeded@1.0.0')).toBeDefined()   // not in seed → kept
   })
+
+  it('no-roots guard — unseeded on a rootless (no-workspace) graph no-ops, never wipes', () => {
+    // yarn-classic shape: no workspace node, so every top-level dep is in-degree 0.
+    // An unseeded sweep would cascade-wipe the lock; the guard keeps all nodes.
+    const graph = graphOf(b => {
+      const a   = addPackage(b, { name: 'a',   version: '1.0.0' })   // top-level, in-degree 0
+      const dep = addPackage(b, { name: 'dep', version: '1.0.0' })
+      addEdge(b, a, dep, 'dep')
+    })
+
+    const result = pruneOrphans(graph)
+    expect(result.removed).toEqual([])
+    expect(result.graph.getNode('a@1.0.0')).toBeDefined()
+    expect(result.graph.getNode('dep@1.0.0')).toBeDefined()
+    expect(result.unresolved.map(d => d.code)).toContain('PRUNE_NO_ROOTS')
+  })
+
+  it('seeded sweep still works on a rootless graph — bounded, no-roots guard does not apply', () => {
+    const graph = graphOf(b => {
+      const a      = addPackage(b, { name: 'a',      version: '1.0.0' })   // top-level, in-degree 0
+      const keep   = addPackage(b, { name: 'keep',   version: '1.0.0' })
+      addPackage(b, { name: 'orphan', version: '1.0.0' })                  // in-degree 0, seeded
+      addEdge(b, a, keep, 'dep')
+    })
+
+    const result = pruneOrphans(graph, { seed: new Set(['orphan@1.0.0']) })
+    expect(result.removed).toEqual(['orphan@1.0.0'])
+    expect(result.graph.getNode('a@1.0.0')).toBeDefined()      // top-level NOT swept (unseeded guard is moot under a seed)
+    expect(result.graph.getNode('keep@1.0.0')).toBeDefined()
+  })
 })
