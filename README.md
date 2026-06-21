@@ -101,7 +101,11 @@ format-agnostically:
 - **`modify`** applies a `Primitive[]` — `replaceVersion`, `pinOverride`,
   `addDependency`, `removeDependency`, `applyPatch`, `filterLicense` — the
   building blocks of audit-fix, override-pinning and license filtering.
-- **`optimize`** runs orphan GC / dedup over the graph.
+- **`optimize`** runs orphan GC / dedup over the graph (a production-reachability
+  sweep). **`pruneOrphans`** (via `@antongolub/lockfile/optimize`) is the
+  reference-count sibling: it retires only nodes that lost their *last* incoming
+  edge of any kind — post-bump cleanup that, unlike reachability, never
+  over-collects a still-referenced dev/optional/peer dep.
 - **`overridesOf(graph)`** reads the canonical overrides back out.
 
 ### Options
@@ -132,7 +136,9 @@ ships as opt-in adapters (see [Sub-imports](#sub-imports)).
 |---------|---------------|----------|
 | Root | `@antongolub/lockfile` | `detect`, `check`, `parse`, `stringify`, `convert`, `modify`, `optimize`, `overridesOf`, plus types `Graph`, `FormatId`, `ParseOptions`, `StringifyOptions`, `ConvertOptions`, `Manifest` |
 | Modifiers | `@antongolub/lockfile/modify` | the individual `Primitive` functions behind `modify` (audit-fix, override-pin, license-filter) |
-| Optimize | `@antongolub/lockfile/optimize` | the individual GC passes behind `optimize` |
+| Complete | `@antongolub/lockfile/complete` | `completeTransitives` — registry-backed tree completion that wires the transitive deps a modify introduced |
+| Optimize | `@antongolub/lockfile/optimize` | `optimize` (reachability orphan GC) and `pruneOrphans` (reference-count orphan GC) |
+| Enrich | `@antongolub/lockfile/enrich` | `refurbish` — monotone field-fill (e.g. recomputes a yarn-berry zip `checksum` from a tarball source so a patched lock installs without `yarn install`) |
 | Registry | `@antongolub/lockfile/registry` | `frozenRegistry`, `liveRegistry`, `fsCache`, `npmCache`, `pnpmCache` |
 | Per-format | `@antongolub/lockfile/formats/<id>` | a single adapter directly (test surface; not a primary user API) |
 

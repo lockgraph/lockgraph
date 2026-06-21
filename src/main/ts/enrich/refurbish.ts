@@ -84,6 +84,13 @@ export async function refurbish(
     // Gap iff no `berry-zip` digest present (emit returns undefined then).
     if (emitBerryChecksum(payload.integrity ?? emptyIntegrity()) !== undefined) continue
 
+    // A PATCHED node's berry-zip checksum hashes the PATCHED zip, not the base:
+    // `computeBerryChecksum` reproduces only the bare tarball's repack, so filling
+    // a patch node from the base would write a WRONG digest. And a SENTINEL
+    // (unresolved `@patch:…!builtin`, e.g. fsevents) node refuses `setTarball`
+    // outright. Defer either way — yarn recomputes a patch's checksum on install.
+    if (node.patch !== undefined) { record(enrichChecksumDeferred(node.id)); continue }
+
     // Recompute is STORE-only (ADR-0035 §6); a DEFLATE cacheKey or missing
     // tarball bytes ⇒ defer (omit + diagnostic).
     if (!isStore) { record(enrichChecksumDeferred(node.id)); continue }

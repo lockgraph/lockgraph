@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { refurbish, type TarballSource } from '../../main/ts/enrich/refurbish.ts'
 import { computeBerryChecksum } from '../../main/ts/recipe/berry-checksum.ts'
 import { emitBerryChecksum } from '../../main/ts/recipe/integrity.ts'
+import { sentinelHashOf } from '../../main/ts/recipe/patch.ts'
 import { graphOf, addPackage } from './_modify-test-utils.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -44,6 +45,23 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
     expect(r.unresolved[0]!.severity).toBe('warning')
     expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
+  })
+
+  it('defers a sentinel-patched node — never setTarball on a sentinel (fsevents @patch:!builtin)', async () => {
+    // A `@patch:…#optional!builtin` node (e.g. fsevents) carries a SENTINEL patch
+    // (unresolved bytes). It has a checksum gap, but its digest hashes the PATCHED
+    // zip — and a sentinel refuses setTarball outright. refurbish must DEFER it,
+    // not crash. (Real yaf run on qiwi/mware: `setTarball: sentinel-keyed entries
+    // refuse mutation (fsevents@2.3.3)`.)
+    const sentinel = sentinelHashOf('fsevents@npm:2.3.3#optional!builtin<compat/fsevents>')
+    const graph = graphOf(b => { addPackage(b, { name: 'fsevents', version: '2.3.3', patch: sentinel }) })
+    // a base tarball IS available — refurbish must STILL skip via the patch guard,
+    // proving it's not the no-tarball defer path.
+    const r = await refurbish(graph, 'yarn-berry-v8', sourceOf({ 'fsevents@2.3.3': tgz('ms-2.1.3.tgz') }))
+
+    expect(r.enriched).toEqual([])
+    expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
+    expect(r.graph.getNode(`fsevents@2.3.3+patch=${sentinel}`)).toBeDefined()
   })
 
   it('noop on a non-berry target (npm/pnpm integrity is completion-filled)', async () => {
