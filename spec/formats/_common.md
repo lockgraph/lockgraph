@@ -592,13 +592,21 @@ and a soft `RECIPE_INTEGRITY_INCOMPLETE` diagnostic — **never a digest the
 target PM would reject.**
 
 The canonical case: converting npm / pnpm → yarn-berry, no berry-zip
-digest is derivable offline (yarn hashes the zip-cache, not the tarball),
-so the `checksum:` line is **omitted entirely** — a valid yarn lock, which
-yarn re-computes on install — accompanied by `RECIPE_INTEGRITY_INCOMPLETE`.
-"Best available" for a berry checksum slot from a tarball-only source is
-*nothing*; a registry/tarball sha512 is never substituted. This is the
-omit-not-fabricate posture: a missing checksum that yarn self-heals beats
-a wrong one it rejects.
+digest is derivable from the source lock alone (yarn hashes the zip-cache,
+not the tarball), so the `checksum:` line is **omitted entirely** — a valid
+yarn lock, which yarn re-computes on install — accompanied by
+`RECIPE_INTEGRITY_INCOMPLETE`. "Best available" for a berry checksum slot
+from a source carrying only a tarball SRI is *nothing*; a registry/tarball
+sha512 is never substituted. This is the omit-not-fabricate posture: a
+missing checksum that yarn self-heals beats a wrong one it rejects.
+
+This omission is the **convert-time** posture — a source lock supplies a
+tarball SRI, not the tarball *bytes*. The explicit **enrich** phase
+([§3.6](#36-how-to-verify), `computeBerryChecksum`), given the bytes,
+synthesises a STORE-`cacheKey` `berry-zip` checksum byte-exact and fills the
+slot rather than omitting it; DEFLATE `cacheKey`s stay omitted. The omission
+is thus the default for a hash-only source, not a permanent ceiling — the
+recompute fills it, a relabelled tarball SRI never does.
 
 **Comparison digest.** When a tarball-origin sha512 is present it is the
 canonical compare digest; otherwise the strongest shared algorithm.
