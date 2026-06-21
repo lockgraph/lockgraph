@@ -171,8 +171,10 @@ v8-specific deltas inherited on top of the shared contract are:
   or `optionalDependencies:` entry whose target package is **absent**
   from the lock (no `resolution:` entry block; the
   [descriptor→node ladder](./_common.md#52-the-resolution-ladder-normative)
-  Rung 4 cannot bind it — e.g. a `catalog:` ref, or a `resolutions`-pinned
-  descriptor whose pin has no entry) is **not** a graph edge, so it cannot
+  Rung 4 cannot bind it — e.g. a **multi-version** `catalog:` ref (Rung 3.6
+  binds a single-sibling catalog, but a `catalog:` whose name has ≥2 versions
+  in the lock falls through here), or a `resolutions`-pinned descriptor whose
+  pin has no entry) is **not** a graph edge, so it cannot
   be reconstructed from the edge set on emit. It is preserved **verbatim**
   (its block, dep-name, and exact on-disk range string) in a per-node
   PM-native sidecar — the same role
@@ -214,8 +216,9 @@ v8-specific deltas inherited on top of the shared contract are:
 - A dependency reference to a package **absent** from the lock (no
   `resolution:` entry) round-trips **verbatim** via a per-node sidecar
   rather than being dropped (F8/#103). It is observed on real v8/v9 locks
-  (e.g. babel drops 38 such refs, highlight 15) — frequently a `catalog:`
-  ref or a `resolutions` pin with no entry. The
+  (e.g. babel drops 38 such refs, highlight 15) — frequently a multi-version
+  `catalog:` ref (a single-version `catalog:` now binds via Rung 3.6) or a
+  `resolutions` pin with no entry. The
   `YARN_BERRY_UNRESOLVED_DEP` warning still fires for each. Preservation is
   **same-format only**: a cross-PM convert does not carry these (the
   carrier is a berry-adapter sidecar, and these are not graph edges).

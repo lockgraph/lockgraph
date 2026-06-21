@@ -189,6 +189,28 @@ export function distTagResolve(range: string, candidates: readonly SemverCandida
 }
 
 /**
+ * Rung 3.6 — CATALOG bind. A `catalog:` / `catalog:<name>` descriptor (pnpm &
+ * yarn-berry catalogs) defers the actual range to a catalog defined OUTSIDE the
+ * lockfile (`.yarnrc.yml` / `pnpm-workspace.yaml` / root `package.json`). The
+ * lock already carries the resolved entry the catalog points at (`vitest:
+ * "catalog:"` alongside a single `"vitest@npm:^4.0.18"` → 4.1.5), so — exactly
+ * like a dist-tag — the only safe parse-time bind is the UNIQUE registry sibling
+ * of that name; the external catalog definition is not needed for the common
+ * single-version case. ≥2 siblings → ambiguous (the catalog could name any, and
+ * we cannot tell which without the external map) → caller diagnoses + drops.
+ *
+ * Gates mirror Rung 3.5: tarball-source candidates only; 0 → none, 1 → bound,
+ * ≥2 → ambiguous. `candidates` need not be pre-filtered or pre-sorted.
+ */
+export function catalogResolve(range: string, candidates: readonly SemverCandidate[]): SemverResolveResult {
+  if (!range.startsWith('catalog:')) return { kind: 'none' }
+  const eligible = candidates.filter(c => c.sourceType === 'tarball')
+  if (eligible.length === 0) return { kind: 'none' }
+  if (eligible.length === 1) return { kind: 'bound', id: eligible[0]!.id }
+  return { kind: 'ambiguous', candidateIds: eligible.map(c => c.id).sort(cmpStr) }
+}
+
+/**
  * Rung 2 — OVERRIDE-MAP forced link. Find the human-declared override pin for a
  * dependency `(depName, declaredRange, consumerPath)` and return its verbatim
  * `to` target, or `undefined` when no constraint matches.

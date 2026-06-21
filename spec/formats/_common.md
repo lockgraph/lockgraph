@@ -1036,6 +1036,7 @@ miss — it never drops an edge, so the shrink-only invariant still holds.
 | **2 — override map** | If an override constraint matches `(depName, declaredRange, consumerPath)`, resolve its `to` target by feeding `to` **back through Rungs 0+1** (`to:"3.0.9"` → the exact `<name>@npm:3.0.9` node; `to:"patch:…"` → the patch node). This handles the NON-satisfying pin. The override is **authoritative** — a human declaration beats inference — so it precedes semver. |
 | **3 — source-gated semver** | For an `npm:`/bare descriptor **only**, among the entries that share `depName` and whose **source is a registry tarball**, pick the **max-satisfying** locked version. A single eligible registry sibling binds directly (the unique pin yarn chose, even if its version does not satisfy the bare range). A final tie at the maximum → **diagnose and drop**, never guess. *(berry) When the bound node has a sibling `patch:` copy of the same `name@version` and no override fired, the* **patch-preference overlay** ([§5.5](#55-patch-preference-lock-borne)) *redirects the edge onto the patched copy.* |
 | **3.5 — dist-tag** | For an `npm:`/bare descriptor whose inner token is a published **dist-TAG** (`latest`, `next`) rather than a semver range (`semver.validRange(tag) === null`), among the same registry-**tarball** entries that share `depName`, bind the **single** eligible sibling. A tag against **≥2** registry siblings is **diagnose and drop** — a tag is a channel pointer the lock cannot resolve and `next` is frequently older than `latest`, so a max-version pick would be actively wrong. Source-gated exactly like Rung 3. |
+| **3.6 — catalog** | A `catalog:` / `catalog:<name>` descriptor (pnpm & yarn-berry catalogs) defers its range to a catalog defined **outside** the lockfile (`.yarnrc.yml` / `pnpm-workspace.yaml` / root `package.json`); the lock already carries the entry the catalog points at, so bind the **single** registry-**tarball** sibling that shares `depName`. With **≥2** (or 0) siblings the catalog could name any and the lock cannot tell which, so it **falls through to Rung 4** — the `catalog:` descriptor is preserved verbatim (F8), never guessed. Source-gated exactly like Rung 3/3.5. Without this rung the descriptor drops and the whole cataloged subtree looks orphaned to a downstream reachability/GC pass. |
 | **4 — drop** | No rung matched → the edge is dropped with the adapter's `*_UNRESOLVED_DEP` / `*_MISSING_ENTRY` diagnostic. *(berry, F8/#103) The dropped descriptor's verbatim bytes (block, dep-name, exact range) are additionally captured in a per-node format sidecar so a **same-format** round-trip re-emits the line byte-for-byte — see the [yarn-berry-v8 Emit notes](./yarn-berry-v8.md#emit). This is byte-fidelity preservation, **not** an edge: the GRAPH still drops the edge (the shrink-only invariant above holds unchanged), no node is minted, and a cross-PM convert does not carry it.* |
 
 ### 5.3 The source-awareness invariant
@@ -1054,9 +1055,9 @@ cannot *prove* it is a registry tarball. This gate is independent of node
 **identity**: it holds regardless of whether the source class is also folded
 into the NodeId, so the ladder stays correct on its own.
 
-**Rung 3.5 inherits the same gate.** A dist-tag descriptor binds **only** a
-registry-tarball sibling — a git / directory / `unknown` / resolution-less node is
-invisible to a tag exactly as to a semver range. The gate keys on the candidate's
+**Rungs 3.5 and 3.6 inherit the same gate.** A dist-tag or `catalog:` descriptor
+binds **only** a registry-tarball sibling — a git / directory / `unknown` /
+resolution-less node is invisible to a tag or catalog exactly as to a semver range. The gate keys on the candidate's
 **source-class projection**, never on the key string, so a future source-id slot
 on the TarballKey (the `+src=` work) does not affect it: source-awareness is
 slot-independent.

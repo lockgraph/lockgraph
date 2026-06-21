@@ -43,7 +43,7 @@ import {
   sentinelHashOfLocator,
 } from '../recipe/patch.ts'
 import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, patchPreferredDiagnostic, recipePeerMetaIncomplete, resolutionPinUnresolvedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
-import { distTagResolve, overrideTargetFor, patchPreferenceFor, semverResolve, type PatchSibling, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
+import { catalogResolve, distTagResolve, overrideTargetFor, patchPreferenceFor, semverResolve, type PatchSibling, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import { readInstalledManifest, type InstalledManifestMeta } from '../complete/local-manifest.ts'
 
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
@@ -2618,6 +2618,23 @@ function addEdgesFromBlock(
         }
         continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
       }
+    }
+    // Rung 3.6 — CATALOG bind (berry catalog: protocol). A `catalog:` /
+    // `catalog:<name>` descriptor defers its range to a catalog defined OUTSIDE
+    // the lockfile (.yarnrc.yml / pnpm-workspace.yaml / root package.json); the
+    // lock already carries the resolved entry, so bind the UNIQUE registry
+    // sibling of that name. Without this the descriptor never resolves to an edge
+    // and the whole cataloged subtree looks orphaned to a downstream GC.
+    //
+    // ONLY the unique-sibling case binds. With ≥2 (or 0) siblings we cannot pick
+    // without the external catalog map, so we FALL THROUGH to Rung 4 — which
+    // preserves the `catalog:` descriptor VERBATIM (F8) and diagnoses. (Never
+    // `continue` here: that would skip the Rung-4 verbatim preservation and drop
+    // the descriptor from emit, breaking byte round-trip — babel has multiple
+    // `@jridgewell/trace-mapping` / `semver` versions behind one `catalog:`.)
+    if (dstId === undefined) {
+      const result = catalogResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
+      if (result.kind === 'bound') dstId = result.id
     }
     // Bug #104 Rung-3 OVERLAY — PATCH PREFERENCE (berry only). After a REGISTRY
     // range bound its BASE node via Rung 0 or 3 with NO override forcing it, yarn
