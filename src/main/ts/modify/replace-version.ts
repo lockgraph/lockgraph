@@ -152,6 +152,19 @@ export async function replaceVersion(
       currentGraph = currentGraph.mutate(m => {
         m.setTarball({ name: target.name, version: target.version, patch: node.patch }, payload)
       }).graph
+      // The rebound node still carries the OLD version's outgoing deps. Clear
+      // the dep/optional out-edges so completeTransitives rewires them from the
+      // NEW manifest — else the stale deps linger and MERGE with the new set,
+      // yielding an invalid node (yaf lockgraph-message, 2026-06-20). Orphaned
+      // dep targets are swept by the optimize phase. (peer edges are left —
+      // peerContext coherence is out of scope here.)
+      const staleOut = [...currentGraph.out(targetId)]
+        .filter(e => e.kind === 'dep' || e.kind === 'optional')
+      if (staleOut.length > 0) {
+        currentGraph = currentGraph.mutate(m => {
+          for (const e of staleOut) m.removeEdge(targetId, e.dst, e.kind)
+        }).graph
+      }
       replaced.push({ from: node.id, to: targetId })
       recentlyAdded.add(targetId)
       added.push(targetId)

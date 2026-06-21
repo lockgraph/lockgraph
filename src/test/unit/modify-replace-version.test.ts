@@ -70,6 +70,38 @@ describe('modify/replaceVersion', () => {
     expect(result.graph.getNode('lodash@4.17.20')).toBeUndefined()
   })
 
+  it('a dependency-changing bump clears the old version\'s outgoing deps (yaf lockgraph-message)', async () => {
+    // handlebars@4.0.0 declares async/optimist; @4.7.9 drops them for a fresh
+    // set. The bump must NOT leave the 4.0.0 deps on the node — completeTransitives
+    // (additive) cannot remove them, so replaceVersion clears them.
+    const graph = graphOf(builder => {
+      const ws       = addPackage(builder, { name: 'app',        version: '0.0.0', workspacePath: '.' })
+      const hb       = addPackage(builder, { name: 'handlebars', version: '4.0.0' })
+      const asyncDep = addPackage(builder, { name: 'async',      version: '1.0.0' })
+      const optimist = addPackage(builder, { name: 'optimist',   version: '0.6.1' })
+      addEdge(builder, ws, hb,       'dep', '^4.0.0')
+      addEdge(builder, hb, asyncDep, 'dep', '^1.4.0')   // 4.0.0-era deps — stale post-bump
+      addEdge(builder, hb, optimist, 'dep', '^0.6.1')
+    })
+    const fakeRegistry = {
+      async packument() { return undefined },
+      async resolve(name: string, range: string) {
+        return name === 'handlebars' && range === '4.7.9'
+          ? { name: 'handlebars', version: '4.7.9' }
+          : undefined
+      },
+    }
+
+    const result = await replaceVersion(
+      graph, { name: 'handlebars', fromRange: '4.0.0' }, '4.7.9', { registry: fakeRegistry },
+    )
+
+    expect(result.graph.getNode('handlebars@4.7.9')).toBeDefined()
+    // the bumped node carries NO stale outgoing deps; completion rewires fresh.
+    const out = [...result.graph.out('handlebars@4.7.9')].filter(e => e.kind === 'dep')
+    expect(out).toEqual([])
+  })
+
   it('fromRange="*" matches every version of the named package', async () => {
     const graph = graphOf(builder => {
       const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })

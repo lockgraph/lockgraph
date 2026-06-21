@@ -1804,7 +1804,15 @@ function emittedRangeOfEdge(kind: EdgeKind, range: string, config: YarnBerryFami
   // the npm: prefix is structural (it carries the alias-target name), not
   // a bare-form decoration, so the bare-emit shortener does NOT strip it.
   if (aliased) return range
-  if (config.rangeEmit !== 'bare') return range
+  // Synthesise the default `npm:` protocol for a bare semver range. A parsed
+  // edge keeps its `npm:` verbatim, but a freshly-added edge (completion /
+  // replaceVersion-refresh) carries the packument's BARE range; emitted bare,
+  // yarn reads it as the `semver:` protocol ("isn't supported by any available
+  // resolver") and `yarn install` aborts. `entryKeyRangeOf` adds `npm:` only to
+  // a prefix-less semver — explicit protocols / GitHub shorthands stay verbatim,
+  // and an already-`npm:` range is identity, so round-trip byte-fidelity holds.
+  // (yaf lockgraph-message, 2026-06-20.)
+  if (config.rangeEmit !== 'bare') return entryKeyRangeOf(range)
   return range.startsWith('npm:') ? range.slice('npm:'.length) : range
 }
 

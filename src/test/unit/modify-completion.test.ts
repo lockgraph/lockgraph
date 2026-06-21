@@ -406,6 +406,118 @@ describe('complete/completeTransitives', () => {
     expect(requested).not.toContain('typescript')
   })
 
+  // Anton's wish 2026-06-21 — when a freshly-introduced transitive's range is
+  // already met by a version PRESENT in the lockfile (but not find-up-reachable
+  // from the consumer), reuse it instead of fetching the registry's latest.
+  it('reuse — a new dep binds to an existing satisfying version, not a registry fetch', async () => {
+    // bumped@2.0.0 newly declares foo:^1.0.0. foo@1.2.0 already lives in the
+    // project under an UNRELATED branch (`other`), so find-up from `bumped`
+    // can't see it — but project-wide reuse must.
+    const graph = graphOf(builder => {
+      const ws     = addPackage(builder, { name: 'app',    version: '0.0.0', workspacePath: '.' })
+      const bumped = addPackage(builder, { name: 'bumped', version: '2.0.0' })
+      const other  = addPackage(builder, { name: 'other',  version: '1.0.0' })
+      const foo    = addPackage(builder, { name: 'foo',    version: '1.2.0' })
+      addEdge(builder, ws,    bumped, 'dep')
+      addEdge(builder, ws,    other,  'dep')
+      addEdge(builder, other, foo,    'dep', '^1.0.0')   // existing, satisfies ^1.0.0
+    })
+
+    const resolved: string[] = []
+    const pkgs: Record<string, Packument> = {
+      bumped: { name: 'bumped', distTags: { latest: '2.0.0' }, versions: { '2.0.0': { name: 'bumped', version: '2.0.0', dependencies: { foo: '^1.0.0' } } } },
+      other:  { name: 'other',  distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'other',  version: '1.0.0' } } },
+      foo:    { name: 'foo',    distTags: { latest: '1.5.0' }, versions: { '1.2.0': { name: 'foo', version: '1.2.0' }, '1.5.0': { name: 'foo', version: '1.5.0' } } },
+    }
+    const fakeRegistry: RegistryAdapter = {
+      async packument(name) { return pkgs[name] },
+      async resolve(name, range) {
+        resolved.push(name)
+        if (name === 'foo' && range === '^1.0.0') return { name: 'foo', version: '1.5.0' } // latest — must NOT be used
+        const v = pkgs[name]?.distTags.latest
+        return v !== undefined ? { name, version: v } : undefined
+      },
+    }
+
+    const result = await completeTransitives(graph, fakeRegistry)
+
+    // bumped → foo wired to the EXISTING 1.2.0, latest 1.5.0 never materialised.
+    const bumpedOut = result.graph.out('bumped@2.0.0')
+    expect(bumpedOut.some(e => e.dst === 'foo@1.2.0' && e.kind === 'dep')).toBe(true)
+    expect(result.graph.getNode('foo@1.5.0')).toBeUndefined()
+    expect(result.added).not.toContain('foo@1.5.0')
+    expect(resolved).not.toContain('foo')   // registry never consulted for foo
+  })
+
+  it('reuse is range-gated — an existing version that does NOT satisfy falls through to the registry', async () => {
+    // foo@1.2.0 is present but bumped now wants foo:^2.0.0 — 1.2.0 can't serve,
+    // so completion fetches foo@2.3.0 from the registry (and keeps 1.2.0).
+    const graph = graphOf(builder => {
+      const ws     = addPackage(builder, { name: 'app',    version: '0.0.0', workspacePath: '.' })
+      const bumped = addPackage(builder, { name: 'bumped', version: '2.0.0' })
+      const other  = addPackage(builder, { name: 'other',  version: '1.0.0' })
+      const foo    = addPackage(builder, { name: 'foo',    version: '1.2.0' })
+      addEdge(builder, ws,    bumped, 'dep')
+      addEdge(builder, ws,    other,  'dep')
+      addEdge(builder, other, foo,    'dep', '^1.0.0')
+    })
+
+    const pkgs: Record<string, Packument> = {
+      bumped: { name: 'bumped', distTags: { latest: '2.0.0' }, versions: { '2.0.0': { name: 'bumped', version: '2.0.0', dependencies: { foo: '^2.0.0' } } } },
+      other:  { name: 'other',  distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'other',  version: '1.0.0' } } },
+      foo:    { name: 'foo',    distTags: { latest: '2.3.0' }, versions: { '1.2.0': { name: 'foo', version: '1.2.0' }, '2.3.0': { name: 'foo', version: '2.3.0' } } },
+    }
+    const fakeRegistry: RegistryAdapter = {
+      async packument(name) { return pkgs[name] },
+      async resolve(name, range) {
+        if (name === 'foo' && range === '^2.0.0') return { name: 'foo', version: '2.3.0' }
+        const v = pkgs[name]?.distTags.latest
+        return v !== undefined ? { name, version: v } : undefined
+      },
+    }
+
+    const result = await completeTransitives(graph, fakeRegistry)
+
+    expect(result.graph.getNode('foo@2.3.0')).toBeDefined()
+    expect(result.added).toContain('foo@2.3.0')
+    expect(result.graph.out('bumped@2.0.0').some(e => e.dst === 'foo@2.3.0')).toBe(true)
+    // monotone: the non-satisfying 1.2.0 is untouched.
+    expect(result.graph.getNode('foo@1.2.0')).toBeDefined()
+  })
+
+  it('reuse picks the HIGHEST satisfying version already present (find-up tiebreaker)', async () => {
+    // Two existing foo versions both satisfy ^1.0.0; reuse must take 1.4.0.
+    const graph = graphOf(builder => {
+      const ws     = addPackage(builder, { name: 'app',    version: '0.0.0', workspacePath: '.' })
+      const bumped = addPackage(builder, { name: 'bumped', version: '2.0.0' })
+      const a      = addPackage(builder, { name: 'a',      version: '1.0.0' })
+      const b      = addPackage(builder, { name: 'b',      version: '1.0.0' })
+      const fooLo  = addPackage(builder, { name: 'foo',    version: '1.2.0' })
+      const fooHi  = addPackage(builder, { name: 'foo',    version: '1.4.0' })
+      addEdge(builder, ws, bumped, 'dep')
+      addEdge(builder, ws, a,      'dep')
+      addEdge(builder, ws, b,      'dep')
+      addEdge(builder, a,  fooLo,  'dep', '^1.0.0')
+      addEdge(builder, b,  fooHi,  'dep', '^1.0.0')
+    })
+
+    const pkgs: Record<string, Packument> = {
+      bumped: { name: 'bumped', distTags: { latest: '2.0.0' }, versions: { '2.0.0': { name: 'bumped', version: '2.0.0', dependencies: { foo: '^1.0.0' } } } },
+      a:      { name: 'a',      distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'a', version: '1.0.0' } } },
+      b:      { name: 'b',      distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'b', version: '1.0.0' } } },
+      foo:    { name: 'foo',    distTags: { latest: '1.9.0' }, versions: { '1.2.0': { name: 'foo', version: '1.2.0' }, '1.4.0': { name: 'foo', version: '1.4.0' } } },
+    }
+    const fakeRegistry: RegistryAdapter = {
+      async packument(name) { return pkgs[name] },
+      async resolve(name) { const v = pkgs[name]?.distTags.latest; return v !== undefined ? { name, version: v } : undefined },
+    }
+
+    const result = await completeTransitives(graph, fakeRegistry)
+
+    expect(result.graph.out('bumped@2.0.0').some(e => e.dst === 'foo@1.4.0' && e.kind === 'dep')).toBe(true)
+    expect(result.graph.out('bumped@2.0.0').some(e => e.dst === 'foo@1.2.0')).toBe(false)
+  })
+
   it('an empty seed does ZERO registry work; the seed bounds completion (incremental contract)', async () => {
     const graph = graphOf(builder => {
       const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })

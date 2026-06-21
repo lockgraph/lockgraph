@@ -101,6 +101,50 @@ export function resolveFindUp(
   return undefined
 }
 
+/**
+ * Project-wide reuse resolve (ADR-0023 §5 extension, 2026-06-21).
+ *
+ * The best EXISTING node named `name` whose version satisfies `range`, scanned
+ * across the WHOLE graph — not just the consumer's ancestor chain. This is the
+ * dedup fallback `completeTransitives` consults AFTER find-up and BEFORE the
+ * registry: when a freshly-introduced transitive's range is already met by a
+ * version present in the lockfile, reuse it rather than fetching the registry's
+ * latest-satisfying. Don't pull a new copy when the project already carries a
+ * fit.
+ *
+ * Only "clean" registry instances are eligible — a non-empty peerContext, a
+ * `patch`, a non-registry `source`, or a `workspacePath` disqualifies a node:
+ * those carry binding context a transitive reuse must not silently inherit, and
+ * the registry path (which mints a bare `name@version`) is their correct home.
+ *
+ * Tiebreaker matches find-up (§5.1 / F1): highest semver version wins; on tie,
+ * lowest NodeId lexicographically.
+ */
+export function bestExistingSatisfying(
+  graph: Graph,
+  name: string,
+  range: string,
+): NodeId | undefined {
+  const candidates: Node[] = []
+  for (const id of graph.byName(name)) {
+    const node = graph.getNode(id)
+    if (node === undefined) continue
+    if (node.peerContext.length > 0) continue
+    if (node.patch !== undefined) continue
+    if (node.source !== undefined) continue
+    if (node.workspacePath !== undefined) continue
+    if (safeSatisfies(node.version, range)) candidates.push(node)
+  }
+  if (candidates.length === 0) return undefined
+
+  candidates.sort((a, b) => {
+    const v = semverRcompareSafe(a.version, b.version)
+    if (v !== 0) return v
+    return cmpStr(a.id, b.id)
+  })
+  return candidates[0]!.id
+}
+
 function safeSatisfies(version: string, range: string): boolean {
   // `*` is admissible in our find-up callers as the degenerate "match all" range;
   // semver.satisfies('1.2.3', '*') is true so no special case needed, but we guard

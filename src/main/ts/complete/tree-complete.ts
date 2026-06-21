@@ -19,7 +19,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import type { PackumentVersion, RegistryAdapter } from '../registry/types.ts'
-import { resolveFindUp } from './find-up.ts'
+import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
 import {
   completionEdgeResolved,
   completionNodeAdded,
@@ -186,7 +186,32 @@ export async function completeTransitives(
           continue
         }
 
-        // Find-up did not satisfy: query registry for a fresh resolution.
+        // Find-up did not satisfy (no hoistable ancestor binding, or a
+        // block-hoist conflict). Before paying a registry round-trip that may
+        // pull a version NOT already in the lockfile, prefer ANY existing node
+        // whose version already satisfies the range — project-wide reuse /
+        // dedup (Anton's wish 2026-06-21: reuse known-good versions over
+        // fetching latest-satisfying). Peer edges are excluded: they need
+        // peerContext coherence, handled on the registry path below. A self-loop
+        // (the consumer itself satisfying its own range) is never reused.
+        if (kind !== 'peer') {
+          const reuseId = bestExistingSatisfying(currentGraph, depName, depRange)
+          if (reuseId !== undefined && reuseId !== nodeId) {
+            const triple: EdgeTriple = { src: nodeId, dst: reuseId, kind }
+            const resolvedDiag = completionEdgeResolved(triple)
+            const result = currentGraph.mutate(m => {
+              m.addEdge(nodeId, reuseId, kind, { range: depRange })
+              m.diagnostic(resolvedDiag)
+            })
+            currentGraph = result.graph
+            wired.push(triple)
+            emit(resolvedDiag)
+            if (!visited.has(reuseId)) frontier.push(reuseId)
+            continue
+          }
+        }
+
+        // Nothing already present fits: query registry for a fresh resolution.
         const resolved = await registry.resolve(depName, depRange)
         if (resolved === undefined) {
           if (kind === 'peer') {
