@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest'
 import { parse, stringify } from '../../main/ts/index.ts'
 import { replaceVersion } from '../../main/ts/modify/replace-version.ts'
 import { completeTransitives } from '../../main/ts/complete/tree-complete.ts'
+import { pruneOrphans } from '../../main/ts/optimize/prune.ts'
 import type { Packument, RegistryAdapter } from '../../main/ts/registry/types.ts'
 
 const CK = '10c0/d924b57e7312b3b63ad21fc5b3dc0af5e78d61a1fc7cfb5457edaf26326bf62be5307cc87ffb6862ef1c2b33b0233cdb5d4f01c4c958cc0d660948b65a287a48'
@@ -89,7 +90,7 @@ const HANDLEBARS: Packument = {
   distTags: { latest: '4.7.9' },
   versions: {
     '4.0.0': { name: 'handlebars', version: '4.0.0', dependencies: { async: '^1.4.0', optimist: '^0.6.1' } },
-    '4.7.9': { name: 'handlebars', version: '4.7.9', dependencies: { minimist: '^1.2.5', 'neo-async': '^2.6.2', 'source-map': '^0.6.0', wordwrap: '^1.0.0' } },
+    '4.7.9': { name: 'handlebars', version: '4.7.9', dependencies: { minimist: '^1.2.5', 'neo-async': '^2.6.2', 'source-map': '^0.6.0', wordwrap: '^1.0.0' }, optionalDependencies: { 'uglify-js': '^3.1.4' } },
   },
 }
 const NODEPS = (name: string, version: string): Packument => ({
@@ -100,6 +101,7 @@ const PKGS: Record<string, Packument> = {
   minimist:    NODEPS('minimist', '1.2.8'),
   'neo-async': NODEPS('neo-async', '2.6.2'),
   wordwrap:    NODEPS('wordwrap', '1.0.0'),
+  'uglify-js':  NODEPS('uglify-js', '3.17.4'),
   'source-map': { name: 'source-map', distTags: { latest: '0.7.0' }, versions: { '0.6.1': { name: 'source-map', version: '0.6.1' }, '0.7.0': { name: 'source-map', version: '0.7.0' } } },
 }
 const registry: RegistryAdapter = {
@@ -109,6 +111,7 @@ const registry: RegistryAdapter = {
     if (name === 'minimist')   return { name, version: '1.2.8' }
     if (name === 'neo-async')  return { name, version: '2.6.2' }
     if (name === 'wordwrap')   return { name, version: '1.0.0' }
+    if (name === 'uglify-js')  return { name, version: '3.17.4' }
     if (name === 'source-map') return { name, version: '0.7.0' }  // tripwire — reuse must beat this
     return undefined
   },
@@ -152,5 +155,36 @@ describe('lockgraph-message e2e — dependency-changing berry upgrade', () => {
     expect(out).toContain('wordwrap: "npm:^1.0.0"')
     expect(out).not.toMatch(/minimist: \^1\.2\.5/)   // not the bare (semver:) form
     expect(out).not.toMatch(/wordwrap: \^1\.0\.0/)
+  })
+
+  it('.69 flow — optional dep folds into dependencies + dependenciesMeta; prune retires the stranded closure', async () => {
+    const g0 = parse('yarn-berry-v8', LOCK)
+    const bumped = await replaceVersion(
+      g0, { name: 'handlebars', fromRange: '4.0.0' }, '4.7.9', { registry },
+    )
+    const completed = await completeTransitives(bumped.graph, registry, {
+      seed: { recentlyAdded: bumped.recentlyAdded, recentlyOrphaned: bumped.recentlyOrphaned },
+    })
+
+    // .69 issue 1 (model) — handlebars' optionalDependency wires as an OPTIONAL edge.
+    const optTargets = [...completed.graph.out('handlebars@4.7.9')]
+      .filter(e => e.kind === 'optional').map(e => e.dst)
+    expect(optTargets).toEqual(['uglify-js@3.17.4'])
+
+    // .69 issue 2 — the bump strands the 4.0.0 closure (async / optimist); additive
+    // completion leaves them in place, pruneOrphans retires exactly those.
+    expect(completed.graph.getNode('async@1.4.2')).toBeDefined()
+    expect(completed.graph.getNode('optimist@0.6.1')).toBeDefined()
+    const pruned = pruneOrphans(completed.graph)
+    expect([...pruned.removed].sort()).toEqual(['async@1.4.2', 'optimist@0.6.1'])
+    expect(pruned.graph.getNode('handlebars@4.7.9')).toBeDefined()    // live node kept
+    expect(pruned.graph.getNode('uglify-js@3.17.4')).toBeDefined()    // optional dep kept
+
+    // .69 issue 1 (emit) — optional folds into `dependencies` + dependenciesMeta,
+    // never a separate optionalDependencies block (yarn rejects one, YN0028).
+    const out = stringify('yarn-berry-v8', pruned.graph)
+    expect(out).not.toContain('optionalDependencies:')
+    expect(out).toContain('uglify-js: "npm:^3.1.4"')
+    expect(out).toMatch(/dependenciesMeta:\n\s+uglify-js:\n\s+optional: true/)
   })
 })

@@ -269,12 +269,14 @@ __metadata:
 // MISSING-ENTRY (`YARN_BERRY_UNRESOLVED_DEP`) diagnostic — we keep informing AND
 // keep the bytes. Sibling repro: mui/material-ui@9291574.
 describe('yarn-berry unresolvable dep refs round-trip verbatim (F8/#103)', () => {
-  // `host` declares a `dependencies:` ref to `ghost@npm:^1.0.0`, an
-  // optionalDependencies ref to `phantom@npm:^2.0.0`, and a peerDependencies ref
-  // to `spectre@*` — NONE of which have an entry block in the lock. (A resolvable
-  // sibling `present` is also present so the dep block is non-trivial.) Written
-  // in this adapter's CANONICAL emit order (linkType / languageName before
-  // checksum — see the format spec) so a byte-for-byte `toBe` round-trip holds.
+  // `host` declares `dependencies:` refs to `ghost@npm:^1.0.0` and (flagged
+  // optional via `dependenciesMeta`) `phantom@npm:^2.0.0`, plus a peerDependencies
+  // ref to `spectre@*` — NONE of which have an entry block in the lock. (A
+  // resolvable sibling `present` keeps the dep block non-trivial.) berry has NO
+  // `optionalDependencies:` block — an optional dep lives in `dependencies` +
+  // `dependenciesMeta.<name>.optional` (§1.4), so the unresolvable optional ref
+  // is exercised in that real shape. Written in this adapter's CANONICAL emit
+  // order so a byte-for-byte `toBe` round-trip holds.
   const A128 = 'a'.repeat(128)
   const F128 = 'f'.repeat(128)
   // NB: the canonical preamble carries a BLANK line before `__metadata:` (the
@@ -292,11 +294,13 @@ __metadata:
   resolution: "host@npm:1.0.0"
   dependencies:
     ghost: "npm:^1.0.0"
-    present: "npm:1.2.3"
-  optionalDependencies:
     phantom: "npm:^2.0.0"
+    present: "npm:1.2.3"
   peerDependencies:
     spectre: "*"
+  dependenciesMeta:
+    phantom:
+      optional: true
   checksum: 10c0/${A128}
   languageName: node
   linkType: hard
@@ -311,10 +315,12 @@ __metadata:
 
   it('round-trips an unresolvable dependencies-block ref byte-for-byte', () => {
     const out = stringify(parse(REPRO))
-    // The dropped dep MUST reappear verbatim in the host's dependencies block.
-    expect(out).toContain('  dependencies:\n    ghost: "npm:^1.0.0"\n    present: "npm:1.2.3"\n')
-    // And the unresolvable optionalDependencies ref survives too.
-    expect(out).toContain('  optionalDependencies:\n    phantom: "npm:^2.0.0"\n')
+    // Both dropped refs reappear verbatim in the host's dependencies block
+    // (ghost + phantom unresolvable, present resolvable), name-sorted.
+    expect(out).toContain('  dependencies:\n    ghost: "npm:^1.0.0"\n    phantom: "npm:^2.0.0"\n    present: "npm:1.2.3"\n')
+    // The optional flag survives as dependenciesMeta — never a separate block.
+    expect(out).toContain('  dependenciesMeta:\n    phantom:\n      optional: true\n')
+    expect(out).not.toContain('optionalDependencies:')
     // Full byte-for-byte: the emitted lock equals the source.
     expect(out).toBe(REPRO)
   })
@@ -322,9 +328,9 @@ __metadata:
   it('still emits the MISSING-ENTRY diagnostic for every unresolvable ref (preservation ≠ silencing)', () => {
     const g = parse(REPRO)
     const codes = g.diagnostics().filter(d => d.code === 'YARN_BERRY_UNRESOLVED_DEP')
-    // ghost (dep), phantom (optional), spectre (peer) all miss the ladder. The
-    // dep + optional refs go through addEdgesFromBlock and must each diagnose;
-    // the peer ref is reconstructed at enrich, so the parse-time count is ≥2.
+    // ghost + phantom (both dependencies refs), spectre (peer) all miss the
+    // ladder. The two dep refs go through addEdgesFromBlock and must each
+    // diagnose; the peer ref is reconstructed at enrich, so the count is ≥2.
     const subjects = codes.map(d => d.message)
     expect(subjects.some(m => m.includes('ghost'))).toBe(true)
     expect(subjects.some(m => m.includes('phantom'))).toBe(true)

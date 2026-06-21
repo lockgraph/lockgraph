@@ -119,9 +119,15 @@ nuances the earlier draft got wrong (#117):
   a manifest's optional deps into the entry's `dependencies` block and records
   optionality in `dependenciesMeta[pkg].optional: true`; it does **not** write
   a separate `optionalDependencies` block in the lockfile (zero occurrences
-  across the whole berry corpus). The slot is retained in the schedule only to
-  pin where such a block would sort (between `dependencies` and
-  `peerDependencies`, per `exportTo`) if a cross-PM convert emits one.
+  across the whole berry corpus). This emitter never writes one either: an
+  `optional` edge (from completion or a cross-PM convert) folds into
+  `dependencies` plus a synthesised `dependenciesMeta[pkg].optional: true`, and
+  on parse a `dependenciesMeta`-flagged dep is read back as an `optional` edge —
+  so optional-ness round-trips as the model's edge kind without an
+  `optionalDependencies` block ever appearing. The schedule slot (between
+  `dependencies` and `peerDependencies`, per `exportTo`) is documented for
+  completeness only; a stray hand-authored block is tolerated on parse and
+  normalised to the folded form on emit.
 
 #### 1.4.1 `linkType` / `languageName` derivation (#95)
 

@@ -27,10 +27,21 @@ export interface OptimizeDiagnostic extends Diagnostic {
  * rationale — the NodeId alone may carry a long peerContext suffix.
  */
 export function optimizeNodeRemoved(nodeId: NodeId): OptimizeDiagnostic {
-  // Best-effort parse of `${name}@${version}` from the NodeId for the
-  // human-readable message. Falls back to the bare NodeId on shapes we
-  // cannot split (e.g. sentinel/patched/peer-keyed NodeIds where the
-  // grep-target is the full string).
+  return {
+    code:     'OPTIMIZE_NODE_REMOVED',
+    severity: 'info',
+    subject:  nodeId,
+    message:  `removed orphan ${nodeLabel(nodeId)} (${nodeId})`,
+  }
+}
+
+/**
+ * Best-effort `${name}@${version}` label from a NodeId for human-readable
+ * diagnostic messages. Falls back to the bare NodeId on shapes we cannot split
+ * (sentinel / patched / peer-keyed NodeIds where the grep-target is the full
+ * string). Shared by the OPTIMIZE_* and PRUNE_* node-removal factories.
+ */
+function nodeLabel(nodeId: NodeId): string {
   const name = nameOf(nodeId)
   const tail = nodeId.slice(name.length + 1)  // skip the separator '@'
   // Strip peerContext segment if present — first depth-0 '(' marks its start.
@@ -43,14 +54,36 @@ export function optimizeNodeRemoved(nodeId: NodeId): OptimizeDiagnostic {
     else if (c === ')') depth--
   }
   const version = tail.slice(0, cut)
-  const label = name.length > 0 && version.length > 0
-    ? `${name}@${version}`
-    : nodeId
+  return name.length > 0 && version.length > 0 ? `${name}@${version}` : nodeId
+}
+
+// PRUNE_* — diagnostics for `pruneOrphans` (reference-count GC, the sibling of
+// optimize's reachability GC). Same subject/severity conventions.
+export type PruneDiagnosticCode =
+  | 'PRUNE_NODE_REMOVED'
+  | 'PRUNE_NOOP'
+
+export interface PruneDiagnostic extends Diagnostic {
+  code: PruneDiagnosticCode
+}
+
+/** Fires once per node retired because it lost its last incoming edge. */
+export function pruneNodeRemoved(nodeId: NodeId): PruneDiagnostic {
   return {
-    code:     'OPTIMIZE_NODE_REMOVED',
+    code:     'PRUNE_NODE_REMOVED',
     severity: 'info',
     subject:  nodeId,
-    message:  `removed orphan ${label} (${nodeId})`,
+    message:  `pruned unreferenced ${nodeLabel(nodeId)} (${nodeId})`,
+  }
+}
+
+/** Fires once per `pruneOrphans(graph)` call when nothing was removed. */
+export function pruneNoop(): PruneDiagnostic {
+  return {
+    code:     'PRUNE_NOOP',
+    severity: 'info',
+    subject:  'graph',
+    message:  'pruneOrphans: no unreferenced nodes to collect',
   }
 }
 

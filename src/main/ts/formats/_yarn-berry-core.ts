@@ -651,7 +651,18 @@ export function parseFamily(
     // The source entry's own resolution doubles as its locator for resolving
     // any `link:` / `portal:` deps it declares (see addEdgesFromBlock).
     const srcResolution = asString(value['resolution'])
-    addEdgesFromBlock(builder, srcId, asMap(value['dependencies']), 'dep', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
+    // berry has no `optionalDependencies:` block — an optional dep lives in
+    // `dependencies` flagged by `dependenciesMeta.<name>.optional: true`. Split
+    // the block so a flagged dep becomes an `optional` EDGE (the model's
+    // canonical optional carrier, queryable + cross-PM portable). The verbatim
+    // dependenciesMeta sidecar is still captured (rawDependenciesMeta), so emit
+    // re-folds the optional edge into `dependencies` and re-emits the flag —
+    // a byte-faithful round-trip. (§1.4.)
+    const { regular, optional } = splitOptionalDeps(asMap(value['dependencies']), rawDependenciesMeta.get(srcId))
+    addEdgesFromBlock(builder, srcId, regular, 'dep', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
+    addEdgesFromBlock(builder, srcId, optional, 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
+    // Defensive: a hand-built / non-canonical berry lock may still carry an
+    // explicit optionalDependencies block — honour it as optional edges too.
     addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
   }
 
@@ -1153,6 +1164,44 @@ export function rawDependenciesMetaBlockOfNode(graph: Graph, nodeId: string): Sy
   return block === undefined ? undefined : coerceSymlMap(block)
 }
 
+// yarn-berry has NO `optionalDependencies:` block: an optional dep lives in the
+// `dependencies:` map and is flagged via `dependenciesMeta.<name>.optional = true`
+// (spec/formats/_common.md §1.4 — a separate map makes yarn reject the lock on
+// `install --immutable`). Parsed berry nodes already hold their optional deps as
+// `dep` edges + a verbatim dependenciesMeta sidecar, so they surface no `optional`
+// edges here and round-trip untouched. `optional`-KIND edges only arise from
+// completion (a registry optionalDependency) or a cross-family convert
+// (npm/pnpm → berry); for those, synthesise the flag so the folded `dependencies`
+// entry is read back as optional. The key matches the emitted dep key
+// (`alias ?? dst.name`, per edgeBlockOfKinds). Verbatim flags win a collision
+// (fidelity); synthesis only fills a name the sidecar didn't already cover. The
+// merged block is name-sorted to match yarn's alphabetical inner-block order.
+function dependenciesMetaWithOptional(
+  graph: Graph,
+  node: Node,
+  verbatim: SymlMap | undefined,
+): SymlMap | undefined {
+  const optionalNames: string[] = []
+  for (const edge of graph.out(node.id, 'optional')) {
+    const dst = graph.getNode(edge.dst)
+    if (dst === undefined) continue
+    optionalNames.push(edge.attrs?.alias ?? dst.name)
+  }
+  if (optionalNames.length === 0) return verbatim
+
+  const merged: SymlMap = {}
+  if (verbatim !== undefined) {
+    for (const [name, meta] of Object.entries(verbatim)) merged[name] = meta
+  }
+  for (const name of optionalNames) {
+    if (name in merged) continue   // verbatim flag wins
+    merged[name] = { optional: 'true' }
+  }
+  const sorted: SymlMap = {}
+  for (const name of Object.keys(merged).sort(cmpStr)) sorted[name] = merged[name]!
+  return sorted
+}
+
 export function rawPeerDependenciesMetaBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
   const block = sidecarByGraph.get(graph)?.peerDependenciesMeta?.get(nodeId)
   return block === undefined ? undefined : coerceSymlMap(block)
@@ -1513,24 +1562,21 @@ function entryOfNode(
   }
 
   // yarn-berry's on-disk format has a single `dependencies:` block per entry —
-  // no separate `devDependencies` block. ADR-0019 §C derives `dev` edges at the
-  // workspace root from manifests; merge them with `dep` on emit so the
-  // classification survives stringify (parse-side will collapse back to `dep`
-  // per §C's "no on-lockfile signal" table). F8/#103 — fold any verbatim
-  // Rung-4-dropped refs (target absent from the lock) back into the SAME block
-  // so a same-format round-trip is byte-faithful (re-sorted by name with the live
-  // edges to match yarn's alphabetical block order).
+  // no separate `devDependencies` OR `optionalDependencies` block. ADR-0019 §C
+  // derives `dev` edges at the workspace root from manifests; `optional` deps
+  // fold in too and carry their optional-ness via `dependenciesMeta.<name>.optional`
+  // below (spec/formats/_common.md §1.4 — a real berry lock NEVER writes a
+  // separate `optionalDependencies` map; yarn rejects one on `install --immutable`,
+  // YN0028). Merge all three kinds on emit so the classification survives
+  // stringify (parse collapses `dev`/`optional` back per §C + the dependenciesMeta
+  // sidecar). F8/#103 — fold any verbatim Rung-4-dropped refs (target absent from
+  // the lock) back into the SAME block so a same-format round-trip is byte-faithful
+  // (re-sorted by name with the live edges to match yarn's alphabetical order).
   const dependencies = withUnresolvedDepRefs(
-    edgeBlockOfKinds(graph, node, ['dep', 'dev'], config),
+    edgeBlockOfKinds(graph, node, ['dep', 'dev', 'optional'], config),
     unresolvedDepRefsOfNode(graph, node.id, 'dependencies'),
   )
   if (dependencies !== undefined) entry['dependencies'] = dependencies
-
-  const optionalDependencies = withUnresolvedDepRefs(
-    edgeBlockOfKinds(graph, node, ['optional'], config),
-    unresolvedDepRefsOfNode(graph, node.id, 'optionalDependencies'),
-  )
-  if (optionalDependencies !== undefined) entry['optionalDependencies'] = optionalDependencies
 
   const peerDependencies = extraBlockOfNode(node, 'peerDependencies')
     ?? rawPeerDependenciesBlockOfNode(graph, node.id)
@@ -1541,8 +1587,14 @@ function entryOfNode(
   // (verified against real berry locks, e.g. @angular-devkit/build-angular). Both
   // round-trip from the per-node raw sidecar captured at parse, with the legacy
   // node-field hint kept as a fallback for hand-built nodes.
-  const dependenciesMeta = rawDependenciesMetaBlockOfNode(graph, node.id)
-    ?? extraBlockOfNode(node, 'dependenciesMeta')
+  // Optional deps folded into `dependencies` above are flagged here via
+  // `dependenciesMeta.<name>.optional = true`. Parsed berry nodes already hold
+  // this verbatim (their optional deps are `dep` edges); `optional`-KIND edges
+  // (completion / cross-family convert) get the flag synthesised.
+  const dependenciesMeta = dependenciesMetaWithOptional(
+    graph, node,
+    rawDependenciesMetaBlockOfNode(graph, node.id) ?? extraBlockOfNode(node, 'dependenciesMeta'),
+  )
   if (dependenciesMeta !== undefined) entry['dependenciesMeta'] = dependenciesMeta
 
   const peerDependenciesMeta = peerDependenciesMetaOfNode(graph, node)
@@ -1557,11 +1609,9 @@ function entryOfNode(
   // (#117). `checksum` precedes `conditions`, which precedes `languageName`, which
   // precedes `linkType`. Any other interleaving breaks byte-fidelity and
   // `yarn install --immutable` on essentially every entry. The blocks above
-  // (dependencies, optionalDependencies, peerDependencies, dependenciesMeta,
-  // peerDependenciesMeta) keep yarn's `Manifest.exportTo` order; `optionalDependencies`
-  // sits between `dependencies` and `peerDependencies` IFF present (yarn folds optional
-  // deps into `dependencies` + `dependenciesMeta`, so a real berry lock never carries
-  // a separate `optionalDependencies` block — see spec/formats/_common.md §1.4).
+  // (dependencies, peerDependencies, dependenciesMeta, peerDependenciesMeta) keep
+  // yarn's `Manifest.exportTo` order. There is deliberately NO `optionalDependencies`
+  // block — optional deps fold into `dependencies` + `dependenciesMeta` (§1.4).
   const checksum = checksumOfPayload(payload, config, cacheKey, node.id, emitDiagnostic)
   if (checksum !== undefined) entry['checksum'] = checksum
 
@@ -1726,7 +1776,13 @@ function edgeBlockOfKinds(
   if (edges.length === 0) return undefined
 
   const blockEntries: Array<[string, string]> = []
-  const seen = new Set<string>()
+  // depName -> dst. When several kinds fold into one block, the only realistic
+  // collision is the SAME target reached as both a `dep` and an `optional` edge
+  // — berry lists it ONCE in `dependencies` (flagged optional via
+  // dependenciesMeta), so the second kind collapses onto the first. A collision
+  // on a DIFFERENT target is a genuine emit conflict (two packages claiming one
+  // key) and still throws.
+  const seen = new Map<string, string>()   // depName -> dst NodeId (string)
 
   for (const edge of edges) {
     const dst = graph.getNode(edge.dst)
@@ -1752,13 +1808,15 @@ function edgeBlockOfKinds(
     // Canonical descriptors emit under the dst's actual name.
     const aliased = edge.attrs.alias !== undefined
     const depName = aliased ? edge.attrs.alias! : dst.name
-    if (seen.has(depName)) {
+    const prior = seen.get(depName)
+    if (prior !== undefined) {
+      if (prior === edge.dst) continue   // same target via another kind (dep+optional) → one entry
       throw new LockfileError({
         code: 'INVARIANT_VIOLATION',
-        message: `cannot emit duplicate ${edge.kind} dependency key ${depName} from ${node.id}`,
+        message: `cannot emit duplicate dependency key ${depName} from ${node.id} (targets ${prior} and ${edge.dst})`,
       })
     }
-    seen.add(depName)
+    seen.set(depName, edge.dst)
     blockEntries.push([depName, emittedRangeOfEdge(edge.kind, edge.attrs.range, config, aliased)])
   }
 
@@ -2440,6 +2498,33 @@ interface EdgeLadderContext {
   manifestsProvided: boolean
 }
 
+// berry folds optional deps into `dependencies`, flagged by
+// `dependenciesMeta.<name>.optional: true` (it has no optionalDependencies
+// block). Partition a dependencies block by that flag so the flagged entries
+// become `optional` edges and the rest `dep`. The flag is read from the
+// verbatim per-node dependenciesMeta sidecar (a bare boolean captured as the
+// string 'true'). Other meta keys (built / unplugged) do NOT reclassify.
+function splitOptionalDeps(
+  deps: SymlMap | undefined,
+  meta: SymlMap | undefined,
+): { regular: SymlMap | undefined; optional: SymlMap | undefined } {
+  if (deps === undefined) return { regular: undefined, optional: undefined }
+  if (meta === undefined) return { regular: deps, optional: undefined }
+  let regular:  SymlMap | undefined
+  let optional: SymlMap | undefined
+  for (const [name, range] of Object.entries(deps)) {
+    if (isOptionalDepFlag(meta, name)) (optional ??= {})[name] = range
+    else                               (regular  ??= {})[name] = range
+  }
+  return { regular, optional }
+}
+
+function isOptionalDepFlag(meta: SymlMap, name: string): boolean {
+  const entry = meta[name]
+  if (entry === undefined || typeof entry === 'string') return false
+  return (entry as Record<string, SymlValue>)['optional'] === 'true'
+}
+
 function addEdgesFromBlock(
   builder: ReturnType<typeof newBuilder>,
   srcId: string,
@@ -2580,8 +2665,11 @@ function addEdgesFromBlock(
       // sidecar), so only the dep / optional emit blocks are addressed.
       if (unresolvedDeps !== undefined && (kind === 'dep' || kind === 'optional')) {
         const refs = unresolvedDeps.get(srcId) ?? []
+        // berry folds BOTH regular and optional deps into the single
+        // `dependencies` block, so an unresolvable optional ref re-emits there
+        // too (its optional-ness rides the verbatim dependenciesMeta sidecar).
         refs.push({
-          block: kind === 'optional' ? 'optionalDependencies' : 'dependencies',
+          block: 'dependencies',
           name: depName,
           range: depRange,
         })

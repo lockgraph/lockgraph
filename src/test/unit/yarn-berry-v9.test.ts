@@ -1363,15 +1363,20 @@ describe('yarn-berry-v9 — modify', () => {
   })
 
   it('roundtrips addEdge optional', () => {
+    // case-simple already deps on ms; add the optional edge from lodash (a leaf
+    // that does NOT already depend on ms) so the round-trip exercises a CLEAN
+    // optional edge. berry has no optionalDependencies block — the edge emits
+    // into lodash's `dependencies` + `dependenciesMeta.ms.optional: true`, and
+    // reparses back to an optional edge.
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      m.addEdge('case-simple@0.0.0-use.local', 'ms@2.1.3', 'optional', { range: 'npm:2.1.3' })
+      m.addEdge('lodash@4.17.21', 'ms@2.1.3', 'optional', { range: 'npm:2.1.3' })
     })
     const reparsed = parse(stringify(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(result.applied).toEqual([
-      { kind: 'edge-added', subject: { src: 'case-simple@0.0.0-use.local', dst: 'ms@2.1.3', kind: 'optional' } },
+      { kind: 'edge-added', subject: { src: 'lodash@4.17.21', dst: 'ms@2.1.3', kind: 'optional' } },
     ])
   })
 
