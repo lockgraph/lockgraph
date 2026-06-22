@@ -614,6 +614,17 @@ slot rather than omitting it; DEFLATE `cacheKey`s stay omitted. The omission
 is thus the default for a hash-only source, not a permanent ceiling — the
 recompute fills it, a relabelled tarball SRI never does.
 
+**Reproducible only in the yarn-4 prefix era (v8+).** The recompute targets
+the `10c0` STORE form that v8–v10 use (`checksumPrefix: true`). A **bare-era**
+lock (v4–v7 = yarn 2.x/3.x, `checksumPrefix: false`) is left **untouched even
+when bytes are available**: its on-disk `checksum` is a no-prefix digest over a
+`compressionLevel: mixed` (DEFLATE) zip, so a synthesised `10c0/<hex>` would be
+doubly foreign — wrong prefix **and** wrong compression — and `yarn install`
+would reject every filled line and rewrite the whole lock (observed on a real
+yarn-3 project). The enrich gate (`berryChecksumReproducible`) therefore defers
+the entire bare era to `yarn install`, which fills the blank natively. A blank
+yarn self-heals beats a `10c0/` digest yarn churns.
+
 **Comparison digest.** When a tarball-origin sha512 is present it is the
 canonical compare digest; otherwise the strongest shared algorithm.
 Identity is unaffected (integrity is not in the NodeId / TarballKey), so a

@@ -64,6 +64,19 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     expect(r.graph.getNode(`fsevents@2.3.3+patch=${sentinel}`)).toBeDefined()
   })
 
+  it('defers on a bare-era yarn-3 lock (v6) — never writes a 10c0 checksum yarn-3 rejects', async () => {
+    // yarn-2.x/3.x locks (lockfile v4–v7) carry NO `<cacheKey>/` prefix and
+    // default to DEFLATE — ADR-0035 can't reproduce that. refurbish must DEFER
+    // even though a tarball is available, NOT fabricate a yarn-4 `10c0/` digest
+    // (which yarn-3 would reject and rewrite the whole lock — real run: qiwi/mware).
+    const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }))
+
+    expect(r.enriched).toEqual([])
+    expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
+    expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
+  })
+
   it('recomputes CONCURRENTLY — parallel tarball fetch, not one-at-a-time', async () => {
     const graph = graphOf(b => {
       addPackage(b, { name: 'ms',                   version: '2.1.3' })

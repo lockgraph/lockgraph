@@ -9,7 +9,7 @@
 
 import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
-import { cacheKeyCompressionLevel, computeBerryChecksum } from '../recipe/berry-checksum.ts'
+import { berryChecksumReproducible, cacheKeyCompressionLevel, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
 
 /** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3) — wired
@@ -54,7 +54,10 @@ export interface RefurbishResult {
 const isBerryFormat = (format: string): boolean => format.startsWith('yarn-berry')
 
 /** The cacheKey to target: the prevailing one carried by the graph's own berry
- *  nodes (the unchanged siblings), else the Yarn-4 STORE default. */
+ *  nodes (the unchanged siblings), else the Yarn-4 STORE default. The default is
+ *  only ever consumed when the format is a reproducible (v8+) era — a bare-era
+ *  lock carries no per-node prefix AND is gated out by `berryChecksumReproducible`
+ *  before this value is used, so the `10c0` fallback never reaches a yarn-3 lock. */
 function berryCacheKeyFor(graph: Graph): string {
   for (const node of graph.nodes()) {
     const ck = graph.tarballOf(node.id)?.berryChecksumCacheKey
@@ -114,16 +117,23 @@ export async function refurbish(
   }
 
   const cacheKey = berryCacheKeyFor(graph)
-  const isStore  = cacheKeyCompressionLevel(cacheKey) === 0
+  // ADR-0035 reproduces a faithful `checksum` ONLY for the yarn-4 prefix era
+  // (v8+) in STORE. A bare-era lock (v4–v7 = yarn 2.x/3.x) writes a no-prefix,
+  // default-DEFLATE digest we can neither format- nor byte-match — filling one
+  // here makes `yarn install` rewrite the whole lock (it rejects the foreign
+  // `10c0/` prefix). So for a non-reproducible era we DEFER every gap; yarn
+  // fills the blank cleanly on install. (Real yarn-3 run: qiwi/mware.)
+  const reproducible = berryChecksumReproducible(format) && cacheKeyCompressionLevel(cacheKey) === 0
 
   // 1) Gather fill candidates in content-sorted node order (deterministic).
   // A `defer` candidate carries no async work; a `fetch` candidate needs its
   // tarball. Filters (in order): seed/workspace skip; no gap → skip; a PATCHED
   // node defers (its checksum hashes the PATCHED zip — computeBerryChecksum
   // reproduces only the bare repack → wrong digest — and a SENTINEL
-  // `@patch:…!builtin` (fsevents) refuses setTarball outright); a non-STORE
-  // cacheKey defers (not byte-reproducible in v1, ADR-0035 §6). yarn recomputes a
-  // patch's / DEFLATE checksum on install.
+  // `@patch:…!builtin` (fsevents) refuses setTarball outright); a
+  // non-`reproducible` era/compression defers (bare-era v4–v7 or a non-STORE
+  // cacheKey — not byte-reproducible in v1, ADR-0035 §6). yarn recomputes a
+  // patch's / bare-era / DEFLATE checksum on install.
   type Cand =
     | { kind: 'defer'; id: NodeId }
     | { kind: 'fetch'; node: Node; payload: TarballPayload }
@@ -133,7 +143,7 @@ export async function refurbish(
     if (node.workspacePath !== undefined) continue
     const payload: TarballPayload = graph.tarballOf(node.id) ?? {}
     if (emitBerryChecksum(payload.integrity ?? emptyIntegrity()) !== undefined) continue
-    if (node.patch !== undefined || !isStore) { cands.push({ kind: 'defer', id: node.id }); continue }
+    if (node.patch !== undefined || !reproducible) { cands.push({ kind: 'defer', id: node.id }); continue }
     cands.push({ kind: 'fetch', node, payload })
   }
 

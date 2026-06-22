@@ -134,6 +134,23 @@ export function cacheKeyCompressionLevel(cacheKey: string): number {
   return m ? Number(m[1]) : -1
 }
 
+/** First lockfile version of the yarn-4 "prefix era" — the only era whose
+ *  `checksum` ADR-0035 can byte-reproduce. v8/v9/v10 carry a `<cacheKey>/<hex>`
+ *  digest over a STORE-default cache zip; v4–v7 (yarn 2.x/3.x) write a raw,
+ *  no-prefix, `compressionLevel: mixed` (DEFLATE) digest we cannot reproduce.
+ *  Mirror of the `checksumPrefix` flag in the formats/yarn-berry-v*.ts configs. */
+const PREFIX_ERA_MIN_LOCKFILE_VERSION = 8
+
+/** Whether ADR-0035's recompute can produce a faithful `checksum` for a berry
+ *  `format` id at all. True only for the yarn-4 prefix era (`yarn-berry-v8`+);
+ *  for a bare era (`v4`–`v7`) a recompute would be wrong-format AND, by default,
+ *  wrong-value (DEFLATE) — `refurbish` must DEFER such gaps to `yarn install`
+ *  rather than fabricate a digest yarn would reject and rewrite. */
+export function berryChecksumReproducible(format: string): boolean {
+  const m = /^yarn-berry-v(\d+)$/.exec(format)
+  return m !== null && Number(m[1]) >= PREFIX_ERA_MIN_LOCKFILE_VERSION
+}
+
 /**
  * Reproduce yarn-berry's `checksum` digest (the 128-hex after `<cacheKey>/`)
  * for `(tarball, ident, cacheKey)`. STORE only (cacheKey ending `c0`); throws
