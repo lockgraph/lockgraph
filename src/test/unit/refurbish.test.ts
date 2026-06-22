@@ -64,6 +64,68 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     expect(r.graph.getNode(`fsevents@2.3.3+patch=${sentinel}`)).toBeDefined()
   })
 
+  it('recomputes CONCURRENTLY — parallel tarball fetch, not one-at-a-time', async () => {
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'ms',                   version: '2.1.3' })
+      addPackage(b, { name: 'is-buffer',            version: '2.0.5' })
+      addPackage(b, { name: '@kwsites/file-exists', version: '1.1.1' })
+    })
+    const bytes: Record<string, Buffer> = {
+      'ms@2.1.3':                   tgz('ms-2.1.3.tgz'),
+      'is-buffer@2.0.5':            tgz('is-buffer-2.0.5.tgz'),
+      '@kwsites/file-exists@1.1.1': tgz('kwsites-file-exists-1.1.1.tgz'),
+    }
+    let inFlight = 0
+    let peak = 0
+    const source: TarballSource = {
+      async tarball(name, version) {
+        inFlight++; peak = Math.max(peak, inFlight)
+        await new Promise(r => setTimeout(r, 15))   // hold the slot so overlap is observable
+        inFlight--
+        return bytes[`${name}@${version}`]
+      },
+    }
+    const r = await refurbish(graph, 'yarn-berry-v8', source)
+    expect(r.enriched.length).toBe(3)
+    expect(peak).toBeGreaterThan(1)                 // fetches overlapped (serial would peak at 1)
+    // order preserved (content-sorted node order), regardless of fetch race.
+    expect(r.enriched).toEqual([...r.enriched].sort())
+  })
+
+  it('uses a caller-supplied cached berryChecksum — NO tarball fetch, no recompute', async () => {
+    const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
+    // the true STORE digest, supplied "from .yarn/cache" — tarball must NOT be touched.
+    const cachedHex = computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '10c0')
+    let tarballCalled = false
+    const source: TarballSource = {
+      async tarball() { tarballCalled = true; return undefined },
+      async berryChecksum(name, version, cacheKey) {
+        return name === 'ms' && version === '2.1.3' && cacheKey === '10c0' ? cachedHex : undefined
+      },
+    }
+    const r = await refurbish(graph, 'yarn-berry-v8', source)
+
+    expect(tarballCalled).toBe(false)                  // fast path — no fetch, no recompute
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(cachedHex)
+  })
+
+  it('falls back to tarball recompute when berryChecksum misses (cache miss)', async () => {
+    const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
+    let tarballCalled = false
+    const source: TarballSource = {
+      async tarball(name) { tarballCalled = true; return name === 'ms' ? tgz('ms-2.1.3.tgz') : undefined },
+      async berryChecksum() { return undefined },      // cache miss → fall back
+    }
+    const r = await refurbish(graph, 'yarn-berry-v8', source)
+
+    expect(tarballCalled).toBe(true)
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '10c0'),
+    )
+  })
+
   it('noop on a non-berry target (npm/pnpm integrity is completion-filled)', async () => {
     const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
     const r = await refurbish(graph, 'npm-3', sourceOf({}))
