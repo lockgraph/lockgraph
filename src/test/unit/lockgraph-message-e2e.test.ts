@@ -112,7 +112,10 @@ const registry: RegistryAdapter = {
     if (name === 'neo-async')  return { name, version: '2.6.2' }
     if (name === 'wordwrap')   return { name, version: '1.0.0' }
     if (name === 'uglify-js')  return { name, version: '3.17.4' }
-    if (name === 'source-map') return { name, version: '0.7.0' }  // tripwire — reuse must beat this
+    // source-map: `^0.6.0` EXCLUDES 0.7.0 — the highest SATISFYING version is
+    // 0.6.1. A faithful registry (maxSatisfying) resolves `^0.6.0` → 0.6.1; the
+    // out-of-range 0.7.0 never enters, matching yarn under `--immutable`.
+    if (name === 'source-map') return { name, version: '0.6.1' }
     return undefined
   },
 }
@@ -141,7 +144,8 @@ describe('lockgraph-message e2e — dependency-changing berry upgrade', () => {
     expect(deps).toEqual([
       'minimist@1.2.8', 'neo-async@2.6.2', 'source-map@0.6.1', 'wordwrap@1.0.0',
     ])
-    // reuse — the existing 0.6.1 served ^0.6.0; the 0.7.0 tripwire never fired.
+    // `^0.6.0` excludes 0.7.0 → highest-satisfying is 0.6.1; the out-of-range
+    // 0.7.0 never materialises (yarn-faithful, `--immutable`-clean).
     expect(completed.graph.getNode('source-map@0.6.1')).toBeDefined()
     expect(completed.graph.getNode('source-map@0.7.0')).toBeUndefined()
     // bug 1 — async / optimist no longer hang off handlebars.

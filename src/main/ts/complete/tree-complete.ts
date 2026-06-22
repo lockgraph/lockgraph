@@ -44,9 +44,33 @@ export interface CompletionResult {
   unresolved:  Diagnostic[]
 }
 
+/**
+ * How a freshly-introduced transitive descriptor picks its version:
+ * - `'highest'` (DEFAULT) — resolve to the highest version satisfying the range
+ *   from the registry, matching `yarn install`. This is the only strategy that
+ *   upholds the fundamental frozen/CI-acceptance invariant (`_common.md
+ *   §1.1.1`): reusing an older-but-satisfying version diverges from the package
+ *   manager's resolution, so the manager REWRITES the lock and
+ *   `yarn install --immutable` / `npm ci` / `--frozen-lockfile` fails (e.g. a
+ *   bumped `qs` requesting `side-channel@^1.0.6` resolves to `1.1.1`, not a
+ *   reused `1.1.0`).
+ * - `'prefer-existing'` (opt-in) — reuse a satisfying version already in the
+ *   graph (hoist-aware find-up, then project-wide `bestExistingSatisfying`)
+ *   before a registry round-trip; minimises lock churn but produces a lock the
+ *   manager may correct, so it is NOT frozen-clean. Use only for non-CI flows
+ *   that tolerate a follow-up `install`.
+ * Either way, ALREADY-WIRED descriptors keep their resolution — only NEW edges
+ * introduced by this completion pass are affected (the manager keeps existing
+ * resolutions pinned too, so this preserves minimal-diff for the common case).
+ */
+export type ResolutionStrategy = 'highest' | 'prefer-existing'
+
 export interface CompletionOptions {
   seed?:         CompletionSeed
   onDiagnostic?: (d: Diagnostic) => void
+  /** New-descriptor version-selection policy (default `'highest'` — the
+   *  frozen/CI-clean path). Pass `'prefer-existing'` only for non-CI flows. */
+  resolution?:   ResolutionStrategy
 }
 
 const EMPTY_SEED: CompletionSeed = {
@@ -65,6 +89,7 @@ export async function completeTransitives(
 ): Promise<CompletionResult> {
   const seed         = options.seed ?? EMPTY_SEED
   const onDiagnostic = options.onDiagnostic
+  const resolution   = options.resolution ?? 'highest'
 
   const visited:    Set<NodeId>  = new Set()
   const added:      NodeId[]      = []
@@ -162,7 +187,12 @@ export async function completeTransitives(
         const depRange = deps[depName]!
         if (alreadyWired(currentGraph, nodeId, depName, kind)) continue
 
-        const targetId = resolveFindUp(currentGraph, nodeId, depName, depRange, kind)
+        // Hoist-aware ancestor reuse — `prefer-existing` only. `highest` skips it:
+        // yarn binds a new descriptor to the registry's highest match, not to a
+        // hoistable older sibling.
+        const targetId = resolution === 'prefer-existing'
+          ? resolveFindUp(currentGraph, nodeId, depName, depRange, kind)
+          : undefined
         if (targetId !== undefined) {
           // For peer deps, adding the edge requires updating the consumer's
           // peerContext (peer-edge ↔ peerContext coherence invariant). Peer-
@@ -194,7 +224,9 @@ export async function completeTransitives(
         // fetching latest-satisfying). Peer edges are excluded: they need
         // peerContext coherence, handled on the registry path below. A self-loop
         // (the consumer itself satisfying its own range) is never reused.
-        if (kind !== 'peer') {
+        // `highest` skips this reuse entirely (registry's highest match wins,
+        // matching yarn — the `--immutable`-fidelity path).
+        if (resolution === 'prefer-existing' && kind !== 'peer') {
           const reuseId = bestExistingSatisfying(currentGraph, depName, depRange)
           if (reuseId !== undefined && reuseId !== nodeId) {
             const triple: EdgeTriple = { src: nodeId, dst: reuseId, kind }

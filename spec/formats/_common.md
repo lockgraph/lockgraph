@@ -63,6 +63,33 @@ accessor (`addedNodes`, `removedNodes`, `changedNodes`, `addedEdges`,
 iteration; diagnostics ignored). Whether the stringify output is
 byte-identical to `x` is **irrelevant** to this contract.
 
+#### 1.1.1 Fundamental invariant — frozen / CI acceptance
+
+Beyond the graph-level round-trip, an emitted lockfile — **including one
+produced after a graph mutation** (a version bump, an add, a removal) — MUST
+be accepted by the target package manager in its **frozen / CI mode** with **no
+modification**: `yarn install --immutable`, `npm ci`, `pnpm install
+--frozen-lockfile`, `bun install --frozen-lockfile`. If the manager would
+rewrite any part of the lock on install, the frozen-mode gate fails and the
+output is **defective**, not merely sub-optimal.
+
+The boundary is sharp:
+
+- **Acceptable** — a sub-optimal but *accepted* resolution: a valid version the
+  manager leaves untouched (e.g. a slightly higher dedup than strictly minimal).
+- **Defective** — an *incompatible* resolution the manager **corrects**: it
+  rewrites the lock, so frozen mode rejects it.
+
+A mutation's transitive completion therefore MUST resolve a **new** descriptor
+exactly as the target manager would — for yarn, the **highest version
+satisfying the range** from the registry — rather than reuse an older-but-
+satisfying version already present in the graph (which the manager would
+overwrite). Already-resolved descriptors stay pinned (the manager keeps them);
+only newly-introduced descriptors are re-resolved. See the completion
+`resolution` strategy (`'highest'` vs `'prefer-existing'`,
+[`complete/tree-complete.ts`](../../src/main/ts/complete/tree-complete.ts)):
+the frozen-acceptance invariant requires the manager-faithful strategy.
+
 ### 1.2 Canonical preamble
 
 Regenerate the yarn-berry preamble verbatim:

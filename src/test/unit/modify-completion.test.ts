@@ -439,7 +439,7 @@ describe('complete/completeTransitives', () => {
       },
     }
 
-    const result = await completeTransitives(graph, fakeRegistry)
+    const result = await completeTransitives(graph, fakeRegistry, { resolution: 'prefer-existing' })
 
     // bumped → foo wired to the EXISTING 1.2.0, latest 1.5.0 never materialised.
     const bumpedOut = result.graph.out('bumped@2.0.0')
@@ -512,7 +512,7 @@ describe('complete/completeTransitives', () => {
       async resolve(name) { const v = pkgs[name]?.distTags.latest; return v !== undefined ? { name, version: v } : undefined },
     }
 
-    const result = await completeTransitives(graph, fakeRegistry)
+    const result = await completeTransitives(graph, fakeRegistry, { resolution: 'prefer-existing' })
 
     expect(result.graph.out('bumped@2.0.0').some(e => e.dst === 'foo@1.4.0' && e.kind === 'dep')).toBe(true)
     expect(result.graph.out('bumped@2.0.0').some(e => e.dst === 'foo@1.2.0')).toBe(false)
@@ -551,5 +551,72 @@ describe('complete/completeTransitives', () => {
     queried.length = 0
     await completeTransitives(graph, reg, { seed: { recentlyAdded: new Set(['a@1.0.0']), recentlyOrphaned: new Set() } })
     expect(queried).toContain('a')
+  })
+
+  // ── resolution strategy: prefer-existing vs highest ─────────────────────────
+  // Mirrors the real qiwi/mware `--immutable` break: a bumped `qs@6.13.0`
+  // requests `side-channel@^1.0.6`; an older `side-channel@1.1.0` (which
+  // satisfies ^1.0.6) is already in the graph; the registry's highest match is
+  // `1.1.1`, which pulls a NEW dep `side-channel-list@1.0.1`. yarn resolves the
+  // new descriptor to 1.1.1 — reusing 1.1.0 diverges and gets rewritten.
+  const sideChannelScenario = (): { graph: ReturnType<typeof graphOf>; registry: RegistryAdapter } => {
+    const graph = graphOf(builder => {
+      const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      addPackage(builder, { name: 'qs', version: '6.13.0' })
+      addPackage(builder, { name: 'side-channel', version: '1.1.0' })   // older, satisfies ^1.0.6
+      addEdge(builder, ws, 'qs@6.13.0', 'dep')
+    })
+    const packuments: Record<string, Packument> = {
+      qs: {
+        name: 'qs', distTags: { latest: '6.13.0' },
+        versions: { '6.13.0': { name: 'qs', version: '6.13.0', dependencies: { 'side-channel': '^1.0.6' } } },
+      },
+      'side-channel': {
+        name: 'side-channel', distTags: { latest: '1.1.1' },
+        versions: {
+          '1.1.0': { name: 'side-channel', version: '1.1.0' },
+          '1.1.1': { name: 'side-channel', version: '1.1.1', dependencies: { 'side-channel-list': '^1.0.1' } },
+        },
+      },
+      'side-channel-list': {
+        name: 'side-channel-list', distTags: { latest: '1.0.1' },
+        versions: { '1.0.1': { name: 'side-channel-list', version: '1.0.1' } },
+      },
+    }
+    const resolved: Record<string, { name: string; version: string }> = {
+      'side-channel@^1.0.6':      { name: 'side-channel',      version: '1.1.1' },
+      'side-channel-list@^1.0.1': { name: 'side-channel-list', version: '1.0.1' },
+    }
+    const registry: RegistryAdapter = {
+      async packument(name) { return packuments[name] },
+      async resolve(name, range) { return resolved[`${name}@${range}`] },
+    }
+    return { graph, registry }
+  }
+
+  it("resolution 'prefer-existing' (opt-in) reuses the older satisfying version — minimal diff, NOT frozen-clean", async () => {
+    const { graph, registry } = sideChannelScenario()
+    const result = await completeTransitives(graph, registry, { resolution: 'prefer-existing' })
+    // qs→side-channel binds to the EXISTING 1.1.0; no new node, no transitive pull.
+    expect(result.added).toEqual([])
+    expect(result.graph.getNode('side-channel@1.1.1')).toBeUndefined()
+    expect(result.graph.getNode('side-channel-list@1.0.1')).toBeUndefined()
+  })
+
+  it("resolution 'highest' (DEFAULT) resolves a NEW descriptor to the registry's highest — yarn --immutable fidelity", async () => {
+    const { graph, registry } = sideChannelScenario()
+    const result = await completeTransitives(graph, registry, { resolution: 'highest' })
+    // matches yarn: ^1.0.6 → 1.1.1, which in turn pulls side-channel-list@1.0.1.
+    expect(result.added).toContain('side-channel@1.1.1')
+    expect(result.added).toContain('side-channel-list@1.0.1')
+    expect(result.graph.getNode('side-channel@1.1.1')).toBeDefined()
+    expect(result.graph.getNode('side-channel-list@1.0.1')).toBeDefined()
+  })
+
+  it("'highest' is the DEFAULT — omitting the option gives the frozen-clean resolution", async () => {
+    const { graph, registry } = sideChannelScenario()
+    const result = await completeTransitives(graph, registry)            // no option → default
+    expect(result.added).toContain('side-channel@1.1.1')
+    expect(result.added).toContain('side-channel-list@1.0.1')
   })
 })
