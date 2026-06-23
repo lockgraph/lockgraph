@@ -619,4 +619,40 @@ describe('complete/completeTransitives', () => {
     expect(result.added).toContain('side-channel@1.1.1')
     expect(result.added).toContain('side-channel-list@1.0.1')
   })
+
+  it("'highest' dedups by descriptor identity — an EXISTING range never double-binds (yaf .77 semver)", async () => {
+    // `a` already binds semver@^7.3.4 → 7.3.5, stored WITH the `npm:` protocol
+    // (as a parsed berry edge is). A bumped `b` newly declares the SAME range,
+    // bare (as a manifest does). 'highest' MUST reuse 7.3.5, not mint a 2nd
+    // semver@7.8.5 entry — a descriptor bound to two versions is malformed and
+    // `yarn install --immutable` rejects it. Also proves `npm:^7.3.4` (existing)
+    // and `^7.3.4` (new) normalise to the same descriptor.
+    const graph = graphOf(builder => {
+      const ws = addPackage(builder, { name: 'app',    version: '0.0.0', workspacePath: '.' })
+      const a  = addPackage(builder, { name: 'a',      version: '1.0.0' })
+      const sv = addPackage(builder, { name: 'semver', version: '7.3.5' })
+      const b  = addPackage(builder, { name: 'b',      version: '2.0.0' })
+      addEdge(builder, ws, a,  'dep')
+      addEdge(builder, ws, b,  'dep')
+      addEdge(builder, a,  sv, 'dep', 'npm:^7.3.4')   // EXISTING descriptor, protocol form
+    })
+    const pkgs: Record<string, Packument> = {
+      a:      { name: 'a',      distTags: { latest: '1.0.0' }, versions: { '1.0.0': { name: 'a', version: '1.0.0' } } },
+      b:      { name: 'b',      distTags: { latest: '2.0.0' }, versions: { '2.0.0': { name: 'b', version: '2.0.0', dependencies: { semver: '^7.3.4' } } } },
+      semver: { name: 'semver', distTags: { latest: '7.8.5' }, versions: { '7.3.5': { name: 'semver', version: '7.3.5' }, '7.8.5': { name: 'semver', version: '7.8.5' } } },
+    }
+    const registry: RegistryAdapter = {
+      async packument(name) { return pkgs[name] },
+      async resolve(name, range) {
+        return name === 'semver' && range === '^7.3.4' ? { name: 'semver', version: '7.8.5' } : undefined  // tripwire
+      },
+    }
+
+    const result = await completeTransitives(graph, registry)   // default 'highest'
+    // b reuses the EXISTING descriptor resolution (7.3.5), normalised across npm:/bare.
+    expect(result.graph.out('b@2.0.0').some(e => e.dst === 'semver@7.3.5' && e.kind === 'dep')).toBe(true)
+    // the registry-highest 7.8.5 NEVER enters — no second, double-bound ^7.3.4 entry.
+    expect(result.graph.getNode('semver@7.8.5')).toBeUndefined()
+    expect(result.added).not.toContain('semver@7.8.5')
+  })
 })

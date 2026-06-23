@@ -78,6 +78,19 @@ const EMPTY_SEED: CompletionSeed = {
   recentlyOrphaned: new Set(),
 }
 
+/** Strip the default `npm:` protocol so a parsed `npm:^1.2.3` and a manifest's
+ *  bare `^1.2.3` compare as the SAME descriptor (npm: is yarn's default
+ *  protocol). Other protocols (`patch:`, `workspace:`, `file:`, `git:`) stay
+ *  distinct — they ARE different descriptors. */
+function canonicalRange(range: string): string {
+  return range.startsWith('npm:') ? range.slice(4) : range
+}
+
+/** Identity key for a descriptor (`name@range`), protocol-normalised. A berry
+ *  lock binds each such key to exactly ONE resolution project-wide. */
+const descriptorKey = (name: string, range: string): string =>
+  `${name} ${canonicalRange(range)}`
+
 /**
  * Walk graph, query registry for missing transitive deps, wire edges.
  * Monotone-additive: returned graph ⊇ input graph (no removals).
@@ -97,6 +110,22 @@ export async function completeTransitives(
   const unresolved: Diagnostic[]  = []
 
   let currentGraph = graph
+
+  // Descriptor-identity index (yarn invariant: a descriptor STRING resolves to
+  // exactly ONE version project-wide). Pre-seeded from every EXISTING edge so a
+  // newly-introduced edge whose range already exists reuses that binding instead
+  // of minting a SECOND entry for the same descriptor — a double-bound range
+  // that `yarn install --immutable` rejects (yaf .77 berry semver regression).
+  // Kept current as completion wires fresh edges.
+  const descriptorResolution = new Map<string, NodeId>()
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      const r = edge.attrs?.range
+      if (r === undefined) continue
+      const dst = graph.getNode(edge.dst)
+      if (dst !== undefined) descriptorResolution.set(descriptorKey(dst.name, r), edge.dst)
+    }
+  }
 
   // ADR-0023 §8.6: COMPLETION_* diagnostics also land on Graph.diagnostics()
   // so stringify-side adapters see them via the canonical read channel. Where
@@ -187,6 +216,30 @@ export async function completeTransitives(
         const depRange = deps[depName]!
         if (alreadyWired(currentGraph, nodeId, depName, kind)) continue
 
+        // STEP 0 — descriptor-identity dedup (BOTH strategies, before any
+        // version selection). A descriptor STRING resolves to ONE version
+        // project-wide: if this exact `name@range` is already bound (an existing
+        // edge OR an earlier-wired completion edge), reuse that resolution.
+        // Without this, `highest` re-resolves an already-present range to a newer
+        // version and emits a SECOND entry for it → a double-bound descriptor
+        // `yarn install --immutable` rejects (yaf .77 semver). Peers keep their
+        // dedicated incomplete-handling on the paths below.
+        if (kind !== 'peer') {
+          const boundId = descriptorResolution.get(descriptorKey(depName, depRange))
+          if (boundId !== undefined && boundId !== nodeId && currentGraph.getNode(boundId) !== undefined) {
+            const triple: EdgeTriple = { src: nodeId, dst: boundId, kind }
+            const resolvedDiag = completionEdgeResolved(triple)
+            currentGraph = currentGraph.mutate(m => {
+              m.addEdge(nodeId, boundId, kind, { range: depRange })
+              m.diagnostic(resolvedDiag)
+            }).graph
+            wired.push(triple)
+            emit(resolvedDiag)
+            if (!visited.has(boundId)) frontier.push(boundId)
+            continue
+          }
+        }
+
         // Hoist-aware ancestor reuse — `prefer-existing` only. `highest` skips it:
         // yarn binds a new descriptor to the registry's highest match, not to a
         // hoistable older sibling.
@@ -213,6 +266,7 @@ export async function completeTransitives(
           wired.push(triple)
           emit(resolvedDiag)
           if (!visited.has(targetId)) frontier.push(targetId)
+          descriptorResolution.set(descriptorKey(depName, depRange), targetId)
           continue
         }
 
@@ -239,6 +293,7 @@ export async function completeTransitives(
             wired.push(triple)
             emit(resolvedDiag)
             if (!visited.has(reuseId)) frontier.push(reuseId)
+            descriptorResolution.set(descriptorKey(depName, depRange), reuseId)
             continue
           }
         }
@@ -295,6 +350,7 @@ export async function completeTransitives(
         const triple: EdgeTriple = { src: nodeId, dst: newId, kind }
         wired.push(triple)
         if (!visited.has(newId)) frontier.push(newId)
+        descriptorResolution.set(descriptorKey(depName, depRange), newId)
       }
     }
 
