@@ -8,6 +8,8 @@ import {
   type Mutator,
   type MutateResult,
   type Node,
+  type NodeId,
+  type ChangeRecord,
   type EdgeAttrs,
   type EdgeKind,
   nameOf,
@@ -1135,10 +1137,19 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnBerryFamilySidecar): 
         const effectiveSidecar: YarnBerryFamilySidecar = isEmptySidecar(nextSidecar) && sidecar.metadata !== undefined
           ? { metadata: sidecar.metadata }
           : nextSidecar
-        rememberSidecar(result.graph, effectiveSidecar)
+        // Keep the verbatim entry-key descriptor sidecar in sync with the edge
+        // mutations this transaction applied: a bumped consumer's dropped edge
+        // retires its descriptor from the dst entry's key; a completion-added
+        // edge contributes its descriptor. Acts ONLY on the edges that actually
+        // changed, so untouched entries (incl. un-edge-backed descriptors the
+        // edges never carried — `^3`, `*`) re-emit byte-faithfully, while a
+        // mutated entry no longer drifts into a key `yarn install --immutable`
+        // rewrites (§1.1.1).
+        const maintainedSidecar = maintainEntryKeyDescriptors(effectiveSidecar, result.applied, graph, result.graph)
+        rememberSidecar(result.graph, maintainedSidecar)
         return {
           ...result,
-          graph: withSidecarPropagation(result.graph, effectiveSidecar),
+          graph: withSidecarPropagation(result.graph, maintainedSidecar),
         }
       }
       return result
@@ -1437,6 +1448,15 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
     specs.add(synthesisedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
   }
 
+  // B-EXACT round-trip: re-emit the VERBATIM source key (parse-captured) to keep
+  // byte-identical source order and a genuine resolutions-pin's exact descriptor.
+  // EXCEPTION — a PLAIN REGISTRY node (no `workspace:`/`patch:` self-descriptor)
+  // whose incoming-edge set DIVERGED from the source key: a bump added or dropped
+  // a consumer, so the verbatim key is stale (a range yarn would rewrite under
+  // `--immutable`). Those fall through to the content-sorted edge reconstruction
+  // (matches yarn's lexical order). Workspace / patch nodes keep verbatim
+  // unconditionally — their source key carries bare-version / locator descriptors
+  // the edge reconstruction does not reproduce byte-for-byte.
   // Stable, content-sorted key (matches yarn's lexical multi-descriptor order;
   // verbatim source order is preserved by the sidecar path above).
   return Array.from(specs).sort(cmpStr).join(', ')
@@ -2858,6 +2878,75 @@ function resolvePatchDescriptor(
     message: `patch descriptor ${lookup} from ${srcId} is ambiguous across ${candidates.length} patch entries (no matching consumer locator)`,
   })
   return null
+}
+
+/**
+ * Sync the verbatim entry-key descriptor sidecar with the edge mutations a
+ * transaction applied. An `edge-added` contributes `<alias|name>@<range>` to the
+ * dst entry's key (re-sorted to yarn's lexical order); an `edge-removed` retires
+ * it. Only dst entries whose edges actually changed are rewritten — every other
+ * entry, and any descriptor the edges never carried (a resolved-version or
+ * `*`/`^3` range that lives ONLY in the source key — `entryKeyOfNode` cannot
+ * rebuild those, which is why the verbatim sidecar exists), re-emits
+ * byte-faithfully. Skips peer edges (never entry-key descriptors) and a dst with
+ * no captured verbatim (a freshly-minted node — `entryKeyOfNode` reconstructs its
+ * key from live edges). This is what keeps a BUMPED graph `--immutable`-clean:
+ * the dst entry's key reflects the new consumer set, not the stale parse-time one
+ * (qiwi/mware: `glob` gains `^10.2.2`, `@babel/generator@7.22.15` drops the now-
+ * orphaned `^7.22.15`). Pure when nothing edge-changed (returns `sidecar`).
+ */
+function maintainEntryKeyDescriptors(
+  sidecar: YarnBerryFamilySidecar,
+  applied: readonly ChangeRecord[],
+  oldGraph: Graph,
+  newGraph: Graph,
+): YarnBerryFamilySidecar {
+  const ekd = sidecar.entryKeyDescriptors
+  if (ekd === undefined) return sidecar
+
+  // The dst entries whose incoming edges this transaction touched (an edge-add or
+  // -remove). Only these can have drifted; everything else re-emits verbatim.
+  const touchedDst = new Set<NodeId>()
+  for (const rec of applied) {
+    if ((rec.kind === 'edge-added' || rec.kind === 'edge-removed') && rec.subject.kind !== 'peer') {
+      touchedDst.add(rec.subject.dst)
+    }
+  }
+  if (touchedDst.size === 0) return sidecar
+
+  let next: Map<string, string[]> | undefined
+  for (const dst of touchedDst) {
+    const current = ekd.get(dst)
+    if (current === undefined) continue            // minted node — emit reconstructs from edges
+    const dstNode = newGraph.getNode(dst)
+    if (dstNode === undefined) continue            // dst gone — remapSidecar prunes its entry
+    // Diff the dst's incoming-edge descriptor SET old→new. The range comes from
+    // the edges themselves (robust to the rename's id churn), so a CHANGED edge
+    // adds/drops exactly its `<alias|name>@<range>` on the key — while a verbatim
+    // descriptor the edges never carried (`*`, a resolved-version pin) is never in
+    // either set, so it is left untouched.
+    const before = incomingKeyDescriptors(oldGraph, dst, dstNode.name)
+    const after  = incomingKeyDescriptors(newGraph, dst, dstNode.name)
+    let updated = current
+    for (const d of before) if (!after.has(d)) updated = updated.filter(x => x !== d)
+    for (const d of after) if (!before.has(d) && !updated.includes(d)) updated = [...updated, d]
+    if (updated !== current) {
+      next ??= new Map(ekd)
+      next.set(dst, updated.slice().sort(cmpStr))
+    }
+  }
+  return next === undefined ? sidecar : { ...sidecar, entryKeyDescriptors: next }
+}
+
+/** The set of entry-key descriptors a node's non-peer INCOMING edges contribute
+ *  (`<alias|name>@<entry-key range>`) — the live half of its key. */
+function incomingKeyDescriptors(graph: Graph, dst: NodeId, dstName: string): Set<string> {
+  const out = new Set<string>()
+  for (const e of graph.in(dst)) {
+    if (e.kind === 'peer' || e.attrs?.range === undefined) continue
+    out.add(`${e.attrs.alias ?? dstName}@${entryKeyRangeOf(e.attrs.range)}`)
+  }
+  return out
 }
 
 function remapSidecar(

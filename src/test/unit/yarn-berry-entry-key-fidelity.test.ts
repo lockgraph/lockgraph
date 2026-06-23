@@ -145,6 +145,39 @@ __metadata:
     expect(outKeys).toEqual(srcKeys)
   })
 
+  it('a MUTATED entry key tracks added/removed incoming edges; untouched entries stay verbatim', () => {
+    // The verbatim sidecar goes STALE on a bump unless maintained: a new consumer
+    // edge must add its descriptor to the dst key, a dropped one must retire it —
+    // else `yarn install --immutable` rewrites the key (qiwi/mware @babel drift).
+    const LOCK = [
+      '__metadata:', '  version: 8', '  cacheKey: 10c0', '',
+      '"dep@npm:^1.0.0":', '  version: 1.0.0', '  resolution: "dep@npm:1.0.0"',
+      '  languageName: node', '  linkType: hard', '',
+      '"consumer@npm:2.0.0":', '  version: 2.0.0', '  resolution: "consumer@npm:2.0.0"',
+      '  dependencies:', '    dep: "npm:^1.0.0"', '  languageName: node', '  linkType: hard', '',
+      '"root@workspace:.":', '  version: 0.0.0-use.local', '  resolution: "root@workspace:."',
+      '  dependencies:', '    consumer: "npm:2.0.0"', '  languageName: unknown', '  linkType: soft', '',
+    ].join('\n')
+    const g0 = parseV8(LOCK)
+    const id = (pred: (n: { name: string; workspacePath?: string }) => boolean): string =>
+      [...g0.nodes()].find(pred)!.id
+    const depId = id(n => n.name === 'dep')
+    const rootId = id(n => n.workspacePath !== undefined)
+    const consumerId = id(n => n.name === 'consumer')
+    const keyLine = (lock: string, name: string): string | undefined =>
+      lock.split('\n').find(l => !l.startsWith(' ') && l.includes(`${name}@npm:`))
+
+    // ADD a second consumer range (`~1.0.0`, which 1.0.0 satisfies) → key gains it, sorted.
+    const added = g0.mutate(m => { m.addEdge(rootId, depId, 'dep', { range: 'npm:~1.0.0' }) }).graph
+    const addedOut = stringifyV8(added)
+    expect(keyLine(addedOut, 'dep')).toBe('"dep@npm:^1.0.0, dep@npm:~1.0.0":')
+    expect(keyLine(addedOut, 'consumer')).toBe('"consumer@npm:2.0.0":')   // untouched → verbatim
+
+    // REMOVE the original consumer edge → key drops `^1.0.0`.
+    const removed = added.mutate(m => { m.removeEdge(consumerId, depId, 'dep') }).graph
+    expect(keyLine(stringifyV8(removed), 'dep')).toBe('"dep@npm:~1.0.0":')
+  })
+
   // The verbatim key sidecar is per-NodeId and must survive the graph rebuilds in
   // enrich (peer derivation remaps ids) and optimize (GC prunes orphans). A peer
   // entry keeps the same package+version, so its source key stays valid; a node
