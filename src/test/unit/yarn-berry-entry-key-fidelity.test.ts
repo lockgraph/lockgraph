@@ -178,6 +178,38 @@ __metadata:
     expect(keyLine(stringifyV8(removed), 'dep')).toBe('"dep@npm:~1.0.0":')
   })
 
+  it('a PRUNED consumer retires its descriptor from the dst key (removeNode drops out-edges silently)', () => {
+    // `removeNode` emits only `node-removed` (no per-out-edge `edge-removed`), so
+    // a pruned consumer that held an exact-version pin would leave a STALE
+    // descriptor on the dst key — which `yarn install --immutable` rewrites
+    // (react-navigation `@types/estree@npm:1.0.8`, mantine). The maintenance must
+    // retire it via the node-removed path.
+    const LOCK = [
+      '__metadata:', '  version: 8', '  cacheKey: 10c0', '',
+      '"dep@npm:1.0.0, dep@npm:^1.0.0":', '  version: 1.0.0', '  resolution: "dep@npm:1.0.0"',
+      '  languageName: node', '  linkType: hard', '',
+      '"pinHolder@npm:2.0.0":', '  version: 2.0.0', '  resolution: "pinHolder@npm:2.0.0"',
+      '  dependencies:', '    dep: "npm:1.0.0"', '  languageName: node', '  linkType: hard', '',
+      '"ranger@npm:3.0.0":', '  version: 3.0.0', '  resolution: "ranger@npm:3.0.0"',
+      '  dependencies:', '    dep: "npm:^1.0.0"', '  languageName: node', '  linkType: hard', '',
+      '"root@workspace:.":', '  version: 0.0.0-use.local', '  resolution: "root@workspace:."',
+      '  dependencies:', '    pinHolder: "npm:2.0.0"', '    ranger: "npm:3.0.0"',
+      '  languageName: unknown', '  linkType: soft', '',
+    ].join('\n')
+    const g0 = parseV8(LOCK)
+    const id = (name: string): string => [...g0.nodes()].find(n => n.name === name)!.id
+    const depId = id('dep'), pinId = id('pinHolder'), rootId = id('root')
+    const keyLine = (lock: string): string | undefined =>
+      lock.split('\n').find(l => !l.startsWith(' ') && l.includes('dep@npm:'))
+    // sanity: both descriptors present at parse
+    expect(keyLine(stringifyV8(g0))).toBe('"dep@npm:1.0.0, dep@npm:^1.0.0":')
+    // prune pinHolder: remove its incoming edge, then the node (which silently drops pinHolder→dep)
+    const pruned = g0.mutate(m => { m.removeEdge(rootId, pinId, 'dep'); m.removeNode(pinId) }).graph
+    // the exact `1.0.0` pin is gone; only ranger's `^1.0.0` remains
+    expect(keyLine(stringifyV8(pruned))).toBe('"dep@npm:^1.0.0":')
+    expect(pruned.getNode(depId)).toBeDefined()
+  })
+
   // The verbatim key sidecar is per-NodeId and must survive the graph rebuilds in
   // enrich (peer derivation remaps ids) and optimize (GC prunes orphans). A peer
   // entry keeps the same package+version, so its source key stays valid; a node

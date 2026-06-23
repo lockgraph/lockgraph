@@ -2910,6 +2910,16 @@ function maintainEntryKeyDescriptors(
   for (const rec of applied) {
     if ((rec.kind === 'edge-added' || rec.kind === 'edge-removed') && rec.subject.kind !== 'peer') {
       touchedDst.add(rec.subject.dst)
+    } else if (rec.kind === 'node-removed') {
+      // `removeNode` silently drops the node's OUT-edges (it emits only
+      // `node-removed`, never per-edge `edge-removed`). Collect their dsts from
+      // the OLD graph so the diff retires the removed consumer's descriptor from
+      // each surviving dst's key — else a PRUNED pin-holder leaves a stale
+      // exact-version descriptor the manager rejects (react-navigation
+      // `@types/estree@npm:1.0.8`, mantine).
+      for (const e of oldGraph.out(rec.subject)) {
+        if (e.kind !== 'peer') touchedDst.add(e.dst)
+      }
     }
   }
   if (touchedDst.size === 0) return sidecar
