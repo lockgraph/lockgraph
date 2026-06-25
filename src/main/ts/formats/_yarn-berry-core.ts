@@ -2047,7 +2047,12 @@ function cloneSymlValue(value: SymlValue | undefined): SymlValue | undefined {
 function binBlockOfNode(node: Node, payload: TarballPayload | undefined): SymlMap | undefined {
   if (payload?.bin === undefined) return undefined
   if (typeof payload.bin === 'string') {
-    return { [node.name]: payload.bin }
+    // npm: a STRING `bin` declares ONE command whose name is the package's
+    // UNSCOPED name (`@babel/parser` → `parser`), not the full id. Keying it by
+    // `node.name` emits `"@babel/parser": …`, which `yarn install --immutable`
+    // rewrites to `parser: …` (seen when completion adds a scoped string-bin pkg).
+    const cmd = node.name.startsWith('@') ? node.name.slice(node.name.indexOf('/') + 1) : node.name
+    return { [cmd]: payload.bin }
   }
 
   const block: SymlMap = {}

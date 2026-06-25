@@ -210,6 +210,25 @@ __metadata:
     expect(pruned.getNode(depId)).toBeDefined()
   })
 
+  it('a STRING bin on a SCOPED package emits under the UNSCOPED command name (npm convention)', () => {
+    // npm: `bin: "./x.js"` (string) declares ONE command named after the
+    // package's UNSCOPED name (`@babel/parser` → `parser`). Keying it by the full
+    // scoped id emits `"@babel/parser": …`, which `yarn install --immutable`
+    // rewrites to `parser: …` (real: redwood, completion-added @babel/parser).
+    const LOCK = [
+      '__metadata:', '  version: 8', '  cacheKey: 10c0', '',
+      '"@babel/parser@npm:7.0.0":', '  version: 7.0.0', '  resolution: "@babel/parser@npm:7.0.0"',
+      '  languageName: node', '  linkType: hard', '',
+    ].join('\n')
+    const g0 = parseV8(LOCK)
+    const n = [...g0.nodes()][0]!
+    // completion stores the packument's STRING bin verbatim → exercise the emit
+    const withBin = g0.mutate(m => { m.setTarball({ name: n.name, version: n.version }, { bin: './bin/babel-parser.js' }) }).graph
+    const out = stringifyV8(withBin)
+    expect(out).toContain('    parser: ./bin/babel-parser.js')
+    expect(out).not.toContain('"@babel/parser": ./bin/babel-parser.js')
+  })
+
   // The verbatim key sidecar is per-NodeId and must survive the graph rebuilds in
   // enrich (peer derivation remaps ids) and optimize (GC prunes orphans). A peer
   // entry keeps the same package+version, so its source key stays valid; a node
