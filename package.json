@@ -125,11 +125,14 @@
   },
   "dependencies": {
     "node-fetch-native": "^1.6.7",
+    "pako": "^2.2.0",
     "semver": "^7.8.5"
   },
   "devDependencies": {
     "@antongolub/artel": "^0.4.0",
+    "@size-limit/file": "^12.1.0",
     "@types/node": "^22.10.0",
+    "@types/pako": "^2.0.4",
     "@types/semver": "^7.7.1",
     "bun": "1.2.0",
     "pm-npm-10": "npm:npm@10.9.2",
@@ -145,6 +148,7 @@
     "pm-pnpm-9": "npm:pnpm@9.15.0",
     "pm-yarn-1": "npm:yarn@1.22.22",
     "pm-yarn-2": "npm:yarn@2.4.3",
+    "size-limit": "^12.1.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"

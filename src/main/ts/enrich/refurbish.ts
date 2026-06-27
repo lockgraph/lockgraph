@@ -9,7 +9,7 @@
 
 import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
-import { berryChecksumReproducible, cacheKeyCompressionLevel, computeBerryChecksum } from '../recipe/berry-checksum.ts'
+import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
 
 /** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3) — wired
@@ -41,6 +41,11 @@ export interface RefurbishOptions {
    *  Default 16. The graph mutation that applies each result stays sequential and
    *  deterministic (node order), so this only parallelises the fetch/compute. */
   concurrency?:  number
+  /** The berry cacheKey to recompute against (e.g. `'10c0'`, `'8'`). REQUIRED to
+   *  fill a BARE-era lock (v4–v7) — its entries carry no per-node prefix to infer
+   *  it from, so absent it every gap DEFERS. Optional for a prefix-era lock (read
+   *  off a sibling's `<cacheKey>/`). */
+  cacheKey?:     string
 }
 
 export interface RefurbishResult {
@@ -53,17 +58,31 @@ export interface RefurbishResult {
 
 const isBerryFormat = (format: string): boolean => format.startsWith('yarn-berry')
 
-/** The cacheKey to target: the prevailing one carried by the graph's own berry
- *  nodes (the unchanged siblings), else the Yarn-4 STORE default. The default is
- *  only ever consumed when the format is a reproducible (v8+) era — a bare-era
- *  lock carries no per-node prefix AND is gated out by `berryChecksumReproducible`
- *  before this value is used, so the `10c0` fallback never reaches a yarn-3 lock. */
-function berryCacheKeyFor(graph: Graph): string {
+/** First lockfile format version of the prefix era (`<cacheKey>/<hex>` per-node
+ *  checksums). Below it (v4–v7) checksums are bare — no inferable cacheKey. */
+const PREFIX_ERA_MIN_LOCKFILE_VERSION = 8
+
+const isPrefixEraFormat = (format: string): boolean => {
+  const m = /^yarn-berry-v(\d+)$/.exec(format)
+  return m !== null && Number(m[1]) >= PREFIX_ERA_MIN_LOCKFILE_VERSION
+}
+
+/** The cacheKey to recompute against, or `undefined` when it can't be inferred
+ *  in-graph (so the caller DEFERS rather than guess). Precedence:
+ *    1. a per-node `<cacheKey>/` prefix on an existing sibling — the only
+ *       in-graph signal, present in a prefix-era (v8+) lock;
+ *    2. for a prefix-era FORMAT with no such sibling (e.g. a fresh cross-family
+ *       convert) the Yarn-4 STORE default `10c0` — this assumes the modern STORE
+ *       convention; an orchestrator targeting a `mixed` project should pass
+ *       `opts.cacheKey` so a STORE digest is not filled for a mixed lock;
+ *    3. otherwise (bare-era v4–v7, no sibling prefix) `undefined` — the caller
+ *       must pass `opts.cacheKey` (the lock's `__metadata.cacheKey`) to fill. */
+function berryCacheKeyFor(graph: Graph, format: string): string | undefined {
   for (const node of graph.nodes()) {
     const ck = graph.tarballOf(node.id)?.berryChecksumCacheKey
     if (ck !== undefined) return ck
   }
-  return '10c0'
+  return isPrefixEraFormat(format) ? '10c0' : undefined
 }
 
 /** Bounded-concurrency map that preserves INPUT order in the result. The slow
@@ -116,14 +135,18 @@ export async function refurbish(
     return { graph: next, enriched, unresolved }
   }
 
-  const cacheKey = berryCacheKeyFor(graph)
-  // ADR-0035 reproduces a faithful `checksum` ONLY for the yarn-4 prefix era
-  // (v8+) in STORE. A bare-era lock (v4–v7 = yarn 2.x/3.x) writes a no-prefix,
-  // default-DEFLATE digest we can neither format- nor byte-match — filling one
-  // here makes `yarn install` rewrite the whole lock (it rejects the foreign
-  // `10c0/` prefix). So for a non-reproducible era we DEFER every gap; yarn
-  // fills the blank cleanly on install. (Real yarn-3 run: qiwi/mware.)
-  const reproducible = berryChecksumReproducible(format) && cacheKeyCompressionLevel(cacheKey) === 0
+  const cacheKey = opts.cacheKey ?? berryCacheKeyFor(graph, format)
+  // ADR-0035 byte-reproduces the `checksum` for STORE (`cN0`, any era) and for
+  // `mixed` at cacheKey VERSION 7/8 (yarn 2.4 / yarn 3.0–3.x, pako-portable).
+  // cacheKey 9/10 `mixed` vendor a different, non-portable zlib, and an explicit
+  // `cN` (N>=1) is unverified — those DEFER every gap (yarn fills the blank
+  // cleanly on install). The gate keys off the PER-LOCK cacheKey, NOT the
+  // lockfile format version: a bare-era v6 lock pinned at cacheKey 8 (yarn 3.8,
+  // qiwi/mware) IS fillable once `opts.cacheKey` supplies its `__metadata.cacheKey`
+  // — the bare-vs-`<cacheKey>/` emit is the format's job (`checksumPrefix`), so a
+  // fill never forces a foreign prefix into a bare lock. An indeterminable
+  // cacheKey (`undefined`) defers everything rather than guess.
+  const reproducible = cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)
 
   // 1) Gather fill candidates in content-sorted node order (deterministic).
   // A `defer` candidate carries no async work; a `fetch` candidate needs its
@@ -136,15 +159,17 @@ export async function refurbish(
   // patch's / bare-era / DEFLATE checksum on install.
   type Cand =
     | { kind: 'defer'; id: NodeId }
-    | { kind: 'fetch'; node: Node; payload: TarballPayload }
+    | { kind: 'fetch'; node: Node; payload: TarballPayload; cacheKey: string }
   const cands: Cand[] = []
   for (const node of graph.nodes()) {
     if (seed !== undefined && !seed.has(node.id)) continue
     if (node.workspacePath !== undefined) continue
     const payload: TarballPayload = graph.tarballOf(node.id) ?? {}
     if (emitBerryChecksum(payload.integrity ?? emptyIntegrity()) !== undefined) continue
+    // `reproducible` ⟹ `cacheKey` is defined; a patch or a non-reproducible
+    // (or indeterminable) cacheKey defers.
     if (node.patch !== undefined || !reproducible) { cands.push({ kind: 'defer', id: node.id }); continue }
-    cands.push({ kind: 'fetch', node, payload })
+    cands.push({ kind: 'fetch', node, payload, cacheKey: cacheKey as string })
   }
 
   // 2) Recompute CONCURRENTLY — the bottleneck is the per-tarball fetch (network),
@@ -157,18 +182,21 @@ export async function refurbish(
     // Fast path: a caller-supplied cached digest (e.g. from `.yarn/cache`, where
     // the hash is in the filename) skips the fetch + recompute entirely.
     let hex = source.berryChecksum !== undefined
-      ? await source.berryChecksum(c.node.name, c.node.version, cacheKey)
+      ? await source.berryChecksum(c.node.name, c.node.version, c.cacheKey)
       : undefined
     if (hex === undefined) {
       const tgz = await source.tarball(c.node.name, c.node.version)
       if (tgz === undefined) return { kind: 'defer', id: c.node.id }   // no fetchable tarball
-      hex = computeBerryChecksum(tgz, c.node.name, cacheKey)
+      hex = computeBerryChecksum(tgz, c.node.name, c.cacheKey)
     }
     const integrity = mergeIntegrity(
       c.payload.integrity ?? emptyIntegrity(),
       { hashes: [{ algorithm: 'sha512', digest: hex, origin: 'berry-zip' }] },
     )
-    return { kind: 'fill', node: c.node, merged: { ...c.payload, integrity, berryChecksumCacheKey: cacheKey } }
+    // No `berryChecksumCacheKey`: a FILL is not a parsed prefix to round-trip,
+    // so the bare-vs-`<cacheKey>/` rendering is left to the format's
+    // `checksumPrefix` (else a bare-era v6 lock would get a foreign `8/` prefix).
+    return { kind: 'fill', node: c.node, merged: { ...c.payload, integrity } }
   })
 
   // 3) Apply sequentially in node order — graph mutation is in-memory + fast, and

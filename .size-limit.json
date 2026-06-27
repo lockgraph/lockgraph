@@ -1,0 +1,22 @@
+[
+  {
+    "name": "all",
+    "path": [
+      "dist",
+      "README.md",
+      "LICENSE"
+    ],
+    "limit": "2.20 MB",
+    "brotli": false,
+    "gzip": false
+  },
+  {
+    "name": "types",
+    "path": [
+      "dist/*.d.ts"
+    ],
+    "limit": "44.00 kB",
+    "brotli": false,
+    "gzip": false
+  }
+]

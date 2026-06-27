@@ -28,7 +28,9 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
 
     expect(r.enriched).toEqual(['ms@2.1.3'])
     const payload = r.graph.tarballOf('ms@2.1.3')
-    expect(payload?.berryChecksumCacheKey).toBe('10c0')
+    // A fill never sets `berryChecksumCacheKey` (that field round-trips a PARSED
+    // prefix); the prefix-era `<cacheKey>/` rendering is the format's job.
+    expect(payload?.berryChecksumCacheKey).toBeUndefined()
     expect(emitBerryChecksum(payload!.integrity!)).toBe(
       computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '10c0'),
     )
@@ -64,17 +66,34 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     expect(r.graph.getNode(`fsevents@2.3.3+patch=${sentinel}`)).toBeDefined()
   })
 
-  it('defers on a bare-era yarn-3 lock (v6) — never writes a 10c0 checksum yarn-3 rejects', async () => {
-    // yarn-2.x/3.x locks (lockfile v4–v7) carry NO `<cacheKey>/` prefix and
-    // default to DEFLATE — ADR-0035 can't reproduce that. refurbish must DEFER
-    // even though a tarball is available, NOT fabricate a yarn-4 `10c0/` digest
-    // (which yarn-3 would reject and rewrite the whole lock — real run: qiwi/mware).
+  it('defers a bare-era v6 lock when the cacheKey is indeterminable — never guesses a 10c0 yarn-3 rejects', async () => {
+    // A bare-era lock (v4–v7) carries NO per-node `<cacheKey>/` prefix, so with
+    // no `opts.cacheKey` the target cacheKey is unknowable. refurbish must DEFER
+    // even though a tarball is available, NOT fabricate a yarn-4 `10c0/` STORE
+    // digest (wrong value AND wrong format — yarn-3 rewrites the whole lock).
     const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
     const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }))
 
     expect(r.enriched).toEqual([])
     expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
     expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
+  })
+
+  it('fills a bare-era v6 lock from opts.cacheKey (mixed cacheKey 8 — qiwi/mware path)', async () => {
+    // The real driving case: yarn 3.8 pins `__metadata.cacheKey: 8` with BARE
+    // checksums. Given that cacheKey, ADR-0035 reproduces the `mixed` digest
+    // byte-exact (pako). The fill carries the cacheKey-8 value and leaves the
+    // bare-vs-prefix rendering to the v6 format (`checksumPrefix: false`) — so a
+    // fill never forces a foreign `8/` prefix into the bare lock.
+    const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }), { cacheKey: '8' })
+
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '8'),
+    )
+    // no forced prefix → the v6 (bare-era) emit renders the hex without `8/`.
+    expect(r.graph.tarballOf('ms@2.1.3')?.berryChecksumCacheKey).toBeUndefined()
   })
 
   it('recomputes CONCURRENTLY — parallel tarball fetch, not one-at-a-time', async () => {

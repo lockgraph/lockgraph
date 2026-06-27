@@ -19,6 +19,11 @@ const adapters = [
   'yarn-berry-v9',
   'yarn-berry-v10',
   'yarn-classic',
+  // Native graph-serialization format (#101). Declared in package.json
+  // `exports` (`./formats/lockgraph`) and imported by index.ts, so it needs
+  // its own entry file — previously omitted here, which left the subpath
+  // export unresolvable (no dist/formats/lockgraph.js emitted).
+  'lockgraph',
 ]
 
 export default defineConfig({
@@ -49,11 +54,18 @@ export default defineConfig({
   // down-levels syntax to this target. CI still tests 20/22/24.
   target:    'node14',
   sourcemap: false,
-  // Bundling: each entry self-contained — shared internals (errors.ts,
-  // graph.ts, _yarn-syml.ts, _pnpm-yaml.ts, format cores) get inlined per
-  // entry point. Trade some duplication on disk for predictable single-file
-  // imports. Consumers usually import ONE adapter — no cascade of chunk loads.
-  splitting: false,
+  // ESM code-splitting: shared internals (errors.ts, graph.ts, the recipe/*
+  // layer, and the big format cores — _yarn-berry-core.ts (~149 kB src),
+  // _pnpm-flat-core.ts, _npm-core.ts) are hoisted into hashed shared chunks
+  // imported by each entry, instead of being inlined into every bundle.
+  // Without this the 7 yarn-berry adapters each inlined a full copy of the
+  // berry core (and index.js inlined the entire surface, ~418 kB), bloating
+  // total dist well past the size-limit budget. All cross-module imports are
+  // static and the cores hold no module-level mutable state, so splitting is
+  // behaviour-preserving (ESM modules stay singletons). Consumers importing a
+  // single adapter now pull a few shared chunks alongside it — a deliberate
+  // disk-size-over-file-count trade, the inverse of the previous default.
+  splitting: true,
   treeshake: true,
   shims:     false,
 })

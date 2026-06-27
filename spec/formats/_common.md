@@ -331,6 +331,34 @@ values bit-for-bit because checksums round-trip as opaque strings; the
 cacheKey itself does not need to round-trip unless the caller explicitly
 threads it.
 
+#### 1.7.1 `checksum` recompute reproducibility
+
+A `checksum` normally round-trips as an opaque string (§1.7). When a modifier
+mints a node with no parsed checksum (a version bump, a cross-PM convert), the
+enrich phase MAY **recompute** one from the package tarball — but only when the
+result is byte-identical to what yarn would write. A divergent digest raises
+`YN0018 (CACHE_CHECKSUM_MISMATCH)` and fails a frozen install (§1.1.1), which is
+strictly worse than a missing checksum (yarn fills a blank one cleanly on the
+next install). Reproducibility depends on the cacheKey's compression mode and
+the yarn line that wrote it:
+
+| cacheKey | yarn line | recompute |
+|---|---|---|
+| `<n>c0` — STORE, n≥8 | yarn 3.1+ / yarn-4 default | reproduced byte-exact |
+| `7` / `8` — `mixed` | yarn 2.4 / 3.0–3.x | reproduced byte-exact |
+| `9` — `mixed` | yarn 3.6+ | deferred (checksum left absent) |
+| `10` — `mixed` | yarn 4.x | deferred (checksum left absent) |
+
+STORE has no compressed stream to match. The `mixed` modes DEFLATE each file
+that shrinks; cacheKey 7/8 use a zlib build a pinned pure-JS port reproduces
+exactly, while cacheKey 9/10 use a later zlib whose output is not portably
+reproducible — those defer rather than emit a wrong digest. A bare-era lock
+(v4–v7, whose checksums carry no `<cacheKey>/` prefix to infer from) must have
+its `__metadata.cacheKey` supplied as the recompute target; absent it the
+recompute defers. A recomputed checksum is rendered in the format's native shape
+(bare for v4–v7, `<cacheKey>/<hex>` for v8+ — §1.4), never forcing a foreign
+prefix into a bare lock.
+
 ### 1.8 Non-goals (explicit)
 
 - **Byte-lossless roundtrip.** Comments, original whitespace, the
