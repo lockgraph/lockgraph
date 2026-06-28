@@ -10,6 +10,7 @@
 import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
 import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
+import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
 import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
 
 /** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3) — wired
@@ -85,6 +86,26 @@ function berryCacheKeyFor(graph: Graph, format: string): string | undefined {
   return isPrefixEraFormat(format) ? '10c0' : undefined
 }
 
+/** Whether the INSTALLED `@yarnpkg/libzip` reproduces THIS lock's cache
+ *  generation — verified by recomputing ONE existing sibling checksum and
+ *  comparing. The optional libzip backend matches only its own generation
+ *  (libzip 3.x → cacheKey 10, NOT 9) and a wrong digest hard-fails `yarn install
+ *  --immutable`, so a libzip fill is trusted ONLY after this passes. Returns
+ *  false when libzip is absent (`computeBerryChecksumViaLibzip` → undefined),
+ *  no checksummed + fetchable anchor exists, or the reproduction mismatches. */
+async function calibrateLibzip(graph: Graph, cacheKey: string, source: TarballSource): Promise<boolean> {
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined || node.patch !== undefined) continue
+    const integrity = graph.tarballOf(node.id)?.integrity
+    const existing = integrity !== undefined ? emitBerryChecksum(integrity) : undefined
+    if (existing === undefined) continue                 // not an anchor (no berry-zip checksum)
+    const tgz = await source.tarball(node.name, node.version)
+    if (tgz === undefined) continue                      // unfetchable anchor — try another
+    return (await computeBerryChecksumViaLibzip(tgz, node.name, cacheKey)) === existing
+  }
+  return false                                           // no fetchable anchor → can't trust libzip
+}
+
 /** Bounded-concurrency map that preserves INPUT order in the result. The slow
  *  refurbish step is the per-tarball fetch; a pool turns N serial network
  *  round-trips into ≈⌈N/limit⌉. Output is indexed by input position, so a
@@ -136,17 +157,25 @@ export async function refurbish(
   }
 
   const cacheKey = opts.cacheKey ?? berryCacheKeyFor(graph, format)
-  // ADR-0035 byte-reproduces the `checksum` for STORE (`cN0`, any era) and for
-  // `mixed` at cacheKey VERSION 7/8 (yarn 2.4 / yarn 3.0–3.x, pako-portable).
-  // cacheKey 9/10 `mixed` vendor a different, non-portable zlib, and an explicit
-  // `cN` (N>=1) is unverified — those DEFER every gap (yarn fills the blank
-  // cleanly on install). The gate keys off the PER-LOCK cacheKey, NOT the
-  // lockfile format version: a bare-era v6 lock pinned at cacheKey 8 (yarn 3.8,
-  // qiwi/mware) IS fillable once `opts.cacheKey` supplies its `__metadata.cacheKey`
-  // — the bare-vs-`<cacheKey>/` emit is the format's job (`checksumPrefix`), so a
-  // fill never forces a foreign prefix into a bare lock. An indeterminable
-  // cacheKey (`undefined`) defers everything rather than guess.
-  const reproducible = cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)
+  // ADR-0035 byte-reproduces the `checksum` with the pinned `pako` path for
+  // STORE (`cN0`, any era) and `mixed` at cacheKey VERSION 7/8 (yarn 2.4 / yarn
+  // 3.0–3.x). The gate keys off the PER-LOCK cacheKey, NOT the lockfile format
+  // version: a bare-era v6 lock pinned at cacheKey 8 (yarn 3.8, qiwi/mware) IS
+  // fillable once `opts.cacheKey` supplies its `__metadata.cacheKey` — the bare-
+  // vs-`<cacheKey>/` emit is the format's job (`checksumPrefix`), so a fill never
+  // forces a foreign prefix into a bare lock. An indeterminable cacheKey
+  // (`undefined`) defers everything rather than guess.
+  const pakoOk = cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)
+  // cacheKey 9/10 `mixed` (+ explicit `cN`) vendor a non-portable zlib pako
+  // can't match. The OPTIONAL `@yarnpkg/libzip` backend (§berry-pack-libzip) MAY
+  // cover them — but the installed libzip reproduces ONLY its own cache
+  // generation (3.x → cacheKey 10, not 9), and a wrong digest hard-fails
+  // `--immutable`. So trust it ONLY after CALIBRATION: reproduce one existing
+  // sibling checksum and compare. Absent libzip / no anchor / mismatch → defer.
+  const useLibzip = cacheKey !== undefined && !pakoOk
+    ? await calibrateLibzip(graph, cacheKey, source)
+    : false
+  const reproducible = pakoOk || useLibzip
 
   // 1) Gather fill candidates in content-sorted node order (deterministic).
   // A `defer` candidate carries no async work; a `fetch` candidate needs its
@@ -187,7 +216,10 @@ export async function refurbish(
     if (hex === undefined) {
       const tgz = await source.tarball(c.node.name, c.node.version)
       if (tgz === undefined) return { kind: 'defer', id: c.node.id }   // no fetchable tarball
-      hex = computeBerryChecksum(tgz, c.node.name, c.cacheKey)
+      hex = pakoOk
+        ? computeBerryChecksum(tgz, c.node.name, c.cacheKey)           // pinned pako (STORE / mixed 7,8)
+        : await computeBerryChecksumViaLibzip(tgz, c.node.name, c.cacheKey)  // calibrated libzip (9/10)
+      if (hex === undefined) return { kind: 'defer', id: c.node.id }   // libzip couldn't pack — defer
     }
     const integrity = mergeIntegrity(
       c.payload.integrity ?? emptyIntegrity(),

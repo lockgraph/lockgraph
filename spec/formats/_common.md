@@ -346,13 +346,19 @@ the yarn line that wrote it:
 |---|---|---|
 | `<n>c0` — STORE, n≥8 | yarn 3.1+ / yarn-4 default | reproduced byte-exact |
 | `7` / `8` — `mixed` | yarn 2.4 / 3.0–3.x | reproduced byte-exact |
-| `9` — `mixed` | yarn 3.6+ | deferred (checksum left absent) |
-| `10` — `mixed` | yarn 4.x | deferred (checksum left absent) |
+| `9` — `mixed` | yarn 3.6+ | deferred by default; opt-in `@yarnpkg/libzip` |
+| `10` — `mixed` | yarn 4.x | deferred by default; opt-in `@yarnpkg/libzip` |
 
 STORE has no compressed stream to match. The `mixed` modes DEFLATE each file
 that shrinks; cacheKey 7/8 use a zlib build a pinned pure-JS port reproduces
 exactly, while cacheKey 9/10 use a later zlib whose output is not portably
-reproducible — those defer rather than emit a wrong digest. A bare-era lock
+reproducible — those defer by default rather than emit a wrong digest. An
+OPTIONAL `@yarnpkg/libzip` backend covers cacheKey 9/10 when installed: it drives
+yarn's own packer, reproducing whatever cache generation the installed libzip
+matches (libzip 3.x → cacheKey 10). Because that match is generation-specific (a
+libzip reproduces ONLY its own cacheKey), it is trusted only after CALIBRATION —
+reproducing one existing sibling checksum in the same lock and confirming the
+byte match; on mismatch, or with libzip absent, the gap defers. A bare-era lock
 (v4–v7, whose checksums carry no `<cacheKey>/` prefix to infer from) must have
 its `__metadata.cacheKey` supplied as the recompute target; absent it the
 recompute defers. A recomputed checksum is rendered in the format's native shape
