@@ -12,6 +12,7 @@ import {
   type NodeId,
 } from '../../main/ts/graph.ts'
 import { mkIntegrity } from '../_integrity-fixtures.ts'
+import type { ResolutionCanonical } from '../../main/ts/recipe/resolution.ts'
 
 export function graphOf(build: (builder: Builder) => void): Graph {
   const builder = newBuilder()
@@ -25,6 +26,8 @@ export interface AddPackageOpts {
   peerContext?:   NodeId[]
   workspacePath?: string
   patch?:         string
+  source?:        string                  // ADR-0032 +src= discriminator (non-registry node)
+  resolution?:    ResolutionCanonical      // overrides the tarball-derived resolution
   integrity?:     string
   tarball?:       string
   engines?:       Record<string, string>
@@ -39,18 +42,20 @@ export interface AddPackageOpts {
 
 export function addPackage(builder: Builder, opts: AddPackageOpts): NodeId {
   const peerContext = opts.peerContext ?? []
-  const id = serializeNodeId(opts.name, opts.version, peerContext, opts.patch)
+  const id = serializeNodeId(opts.name, opts.version, peerContext, opts.patch, opts.source)
   builder.addNode({
     id,
     name:          opts.name,
     version:       opts.version,
     peerContext,
     patch:         opts.patch,
+    source:        opts.source,
     workspacePath: opts.workspacePath,
   })
   if (
     opts.integrity !== undefined
     || opts.tarball !== undefined
+    || opts.resolution !== undefined
     || opts.engines !== undefined
     || opts.os !== undefined
     || opts.cpu !== undefined
@@ -72,7 +77,7 @@ export function addPackage(builder: Builder, opts: AddPackageOpts): NodeId {
         bin:                 opts.bin,
         bundledDependencies: opts.bundledDeps,
         license:             opts.license,
-        resolution:          opts.tarball === undefined ? undefined : { type: 'tarball', url: opts.tarball },
+        resolution:          opts.resolution ?? (opts.tarball === undefined ? undefined : { type: 'tarball', url: opts.tarball }),
       },
     )
   }

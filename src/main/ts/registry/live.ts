@@ -25,13 +25,18 @@
 import semver from 'semver'
 import { fetch as nodeFetchNative } from 'node-fetch-native'
 import { parseSri, isEmptyIntegrity } from '../recipe/integrity.ts'
+import { resolveRegistry, type ResolveRegistryOptions } from './config.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 
 export interface LiveRegistryOptions {
   /** Registry URL. Default: 'https://registry.npmjs.org'. */
   url?:   string
-  /** Bearer token for private registries (Authorization: Bearer <token>). */
+  /** Bearer token for private registries (sent as `Authorization: Bearer <token>`). */
   auth?:  string
+  /** Full `Authorization` header value (`Bearer …` / `Basic …`), used verbatim —
+   *  takes precedence over `auth`. Supplied by `fromConfig` (`authHeaderFor`) so
+   *  Basic-auth registries get the right scheme. */
+  authHeader?: string
   /**
    * Fetch implementation. Default: node-fetch-native (native `fetch` on Node
    * 18+, polyfill on 14–17). Pass to mock in tests, or to supply a
@@ -40,17 +45,37 @@ export interface LiveRegistryOptions {
   fetch?: typeof fetch
 }
 
+/** A raw npm advisory object, passed through UNnormalized — audit semantics
+ *  (severity, vulnerable ranges, fix selection) are the consumer's, not the
+ *  lib's. Shape per the npm bulk-advisory endpoint. */
+export type RawAdvisory = Record<string, unknown>
+
+export interface AuditOptions {
+  /** Max packages per bulk request (the endpoint is size-limited). Default 250. */
+  chunkSize?: number
+}
+
+/** `liveRegistry`'s adapter — the read facade (`packument`/`resolve`) plus a
+ *  thin RAW bulk-advisory fetch. */
+export interface LiveRegistryAdapter extends RegistryAdapter {
+  /** POST the `{ name: versions[] }` map to
+   *  `<registry>/-/npm/v1/security/advisories/bulk` (chunked by `chunkSize`),
+   *  returning the RAW per-package advisories merged across chunks. No
+   *  normalization — only packages WITH advisories appear in the result. */
+  audit(pkgs: Record<string, string[]>, opts?: AuditOptions): Promise<Record<string, RawAdvisory[]>>
+}
+
 const DEFAULT_URL    = 'https://registry.npmjs.org'
 const INSTALL_ACCEPT = 'application/vnd.npm.install-v1+json, application/json;q=0.8'
 
-export function liveRegistry(opts: LiveRegistryOptions = {}): RegistryAdapter {
+export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapter {
   const baseUrl  = stripTrailingSlash(opts.url ?? DEFAULT_URL)
   const fetchImpl = opts.fetch ?? (nodeFetchNative as typeof fetch)
   if (typeof fetchImpl !== 'function') {
     throw new Error('liveRegistry: opts.fetch is not a function')
   }
 
-  const auth = opts.auth
+  const authHeader = opts.authHeader ?? (opts.auth !== undefined ? `Bearer ${opts.auth}` : undefined)
 
   return {
     async packument(name) {
@@ -58,7 +83,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): RegistryAdapter {
       const headers: Record<string, string> = {
         accept: INSTALL_ACCEPT,
       }
-      if (auth !== undefined) headers.authorization = `Bearer ${auth}`
+      if (authHeader !== undefined) headers.authorization = authHeader
 
       const response = await fetchImpl(url, { headers })
       if (response.status === 404) return undefined
@@ -87,6 +112,27 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): RegistryAdapter {
       } catch {
         return undefined
       }
+    },
+
+    async audit(pkgs, opts = {}) {
+      const chunkSize = opts.chunkSize ?? 250
+      const url = `${baseUrl}/-/npm/v1/security/advisories/bulk`
+      const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' }
+      if (authHeader !== undefined) headers.authorization = authHeader
+
+      const names = Object.keys(pkgs)
+      const out: Record<string, RawAdvisory[]> = {}
+      for (let i = 0; i < names.length; i += chunkSize) {
+        const batch: Record<string, string[]> = {}
+        for (const name of names.slice(i, i + chunkSize)) batch[name] = pkgs[name]!
+        const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(batch) })
+        if (!response.ok) throw new Error(`liveRegistry.audit: ${response.status} ${url}`)
+        const body = (await response.json()) as Record<string, unknown>
+        for (const [name, advisories] of Object.entries(body)) {
+          (out[name] ??= []).push(...(Array.isArray(advisories) ? (advisories as RawAdvisory[]) : []))
+        }
+      }
+      return out
     },
   }
 }
@@ -160,4 +206,23 @@ function isStringMap(value: unknown): value is Record<string, string> {
     if (typeof v !== 'string') return false
   }
   return true
+}
+
+export interface FromConfigOptions extends ResolveRegistryOptions {
+  /** Fetch override (proxy / custom-CA / test spy), forwarded to `liveRegistry`. */
+  fetch?: typeof fetch
+}
+
+// `liveRegistry.fromConfig(cwd, name?)` — named-constructor sugar that resolves
+// the registry URL (scope-aware for `name`) and its host-bound token from the PM
+// config under `cwd` (§registry/config), then opens a `liveRegistry` against it.
+// The token is https-only by construction (`tokenFor` never returns one for a
+// plaintext URL), so it is never sent over an insecure channel.
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace liveRegistry {
+  export function fromConfig(cwd: string, name: string | undefined, opts: FromConfigOptions): LiveRegistryAdapter {
+    const cfg = resolveRegistry(cwd, opts)
+    const url = cfg.registryFor(name ?? '')
+    return liveRegistry({ url, authHeader: cfg.authHeaderFor(url), fetch: opts.fetch })
+  }
 }

@@ -12,6 +12,11 @@ export { optimize, type OptimizeOptions, type OptimizeResult } from './optimize.
 // dev/optional/peer nodes optimize's reachability sweep over-collects.
 export { pruneOrphans, type PruneOrphansOptions, type PruneOrphansResult } from './prune.ts'
 
+// registryPackages — locator-aware `{ name: versions[] }` of the graph's real
+// npm-registry packages (skips workspaces + non-registry sources). Owned here so
+// an audit/registry consumer doesn't re-derive the classification.
+export { registryPackages } from './registry-packages.ts'
+
 export {
   optimizeNodeRemoved,
   optimizeNoop,

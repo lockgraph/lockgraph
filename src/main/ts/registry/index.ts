@@ -10,7 +10,21 @@
 // the other without touching modifier / completion call sites.
 
 export { frozenRegistry } from './frozen.ts'
-export { liveRegistry, type LiveRegistryOptions } from './live.ts'
+export {
+  liveRegistry,
+  type LiveRegistryOptions,
+  type FromConfigOptions,
+  type LiveRegistryAdapter,
+  type AuditOptions,
+  type RawAdvisory,
+} from './live.ts'
+export {
+  resolveRegistry,
+  DEFAULT_REGISTRY,
+  type Ecosystem,
+  type RegistryConfig,
+  type ResolveRegistryOptions,
+} from './config.ts'
 export { yarnBerryCache, type YarnBerryCacheOptions } from './cache-yarn-berry.ts'
 export { npmCache, type NpmCacheOptions } from './cache-npm.ts'
 export { pnpmCache, type PnpmCacheOptions } from './cache-pnpm.ts'
