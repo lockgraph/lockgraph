@@ -67,7 +67,7 @@ const nativeCrc32 = (zlib as { crc32?: (data: Uint8Array, value?: number) => num
 const crc32: (buf: Buffer) => number =
   typeof nativeCrc32 === 'function' ? (buf) => nativeCrc32(buf) >>> 0 : crc32Table
 
-interface TarFile { name: string; mode: number; data: Buffer }
+export interface TarFile { name: string; mode: number; data: Buffer }
 
 const tarField = (b: Buffer, off: number, len: number): string => {
   const slice = b.subarray(off, off + len)
@@ -77,8 +77,10 @@ const tarField = (b: Buffer, off: number, len: number): string => {
 
 // Minimal ustar reader: regular files only (`typeflag` '0'/''), honouring the
 // `prefix` long-path field. Directory and metadata entries are skipped — the
-// zip's directory entries are synthesised by mkdirp (§zip below).
-function parseTar(tar: Buffer): TarFile[] {
+// zip's directory entries are synthesised by mkdirp (§zip below). Exported for
+// the optional `berry-pack-libzip` backend (drives `@yarnpkg/libzip` for the
+// cacheKeys pako can't reproduce).
+export function parseTar(tar: Buffer): TarFile[] {
   const out: TarFile[] = []
   for (let o = 0; o + 512 <= tar.length; ) {
     const header = tar.subarray(o, o + 512)

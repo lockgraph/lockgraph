@@ -146,6 +146,7 @@
     "@types/node": "^22.10.0",
     "@types/pako": "^2.0.4",
     "@types/semver": "^7.7.1",
+    "@yarnpkg/libzip": "^3.2.2",
     "bun": "1.2.0",
     "pm-npm-10": "npm:npm@10.9.2",
     "pm-npm-11": "npm:npm@11.0.0",
@@ -165,6 +166,14 @@
     "size-limit": "^12.1.0",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
+  },
+  "peerDependencies": {
+    "@yarnpkg/libzip": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@yarnpkg/libzip": {
+      "optional": true
+    }
   },
   "repository": {
     "type": "git",
