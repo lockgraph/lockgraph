@@ -36,7 +36,9 @@ export default {
   input,
   external,
   plugins: [
-    esbuild({ target: 'node14', minify: true, tsconfig: './tsconfig.json' }),
+    // No minify — the whole point is a readable, debuggable dist. esbuild still
+    // strips types and down-levels syntax to the node14 target.
+    esbuild({ target: 'node14', minify: false, tsconfig: './tsconfig.json' }),
   ],
   output: {
     dir: 'dist',
