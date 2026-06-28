@@ -12,24 +12,24 @@
       "default": "./dist/index.js"
     },
     "./modify": {
-      "types": "./dist/modify.d.ts",
-      "default": "./dist/modify.js"
+      "types": "./dist/modify/index.d.ts",
+      "default": "./dist/modify/index.js"
     },
     "./complete": {
-      "types": "./dist/complete.d.ts",
-      "default": "./dist/complete.js"
+      "types": "./dist/complete/index.d.ts",
+      "default": "./dist/complete/index.js"
     },
     "./optimize": {
-      "types": "./dist/optimize.d.ts",
-      "default": "./dist/optimize.js"
+      "types": "./dist/optimize/index.d.ts",
+      "default": "./dist/optimize/index.js"
     },
     "./registry": {
-      "types": "./dist/registry.d.ts",
-      "default": "./dist/registry.js"
+      "types": "./dist/registry/index.d.ts",
+      "default": "./dist/registry/index.js"
     },
     "./enrich": {
-      "types": "./dist/enrich.d.ts",
-      "default": "./dist/enrich.js"
+      "types": "./dist/enrich/index.d.ts",
+      "default": "./dist/enrich/index.js"
     },
     "./formats/bun-text": {
       "types": "./dist/formats/bun-text.d.ts",
@@ -98,12 +98,24 @@
   },
   "typesVersions": {
     "*": {
-      "modify": ["./dist/modify.d.ts"],
-      "complete": ["./dist/complete.d.ts"],
-      "optimize": ["./dist/optimize.d.ts"],
-      "registry": ["./dist/registry.d.ts"],
-      "enrich": ["./dist/enrich.d.ts"],
-      "formats/*": ["./dist/formats/*.d.ts"]
+      "modify": [
+        "./dist/modify/index.d.ts"
+      ],
+      "complete": [
+        "./dist/complete/index.d.ts"
+      ],
+      "optimize": [
+        "./dist/optimize/index.d.ts"
+      ],
+      "registry": [
+        "./dist/registry/index.d.ts"
+      ],
+      "enrich": [
+        "./dist/enrich/index.d.ts"
+      ],
+      "formats/*": [
+        "./dist/formats/*.d.ts"
+      ]
     }
   },
   "files": [
@@ -116,7 +128,7 @@
     "node": ">=14.18"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node scripts/clean.mjs && rollup -c && tsc -p tsconfig.dts.json && node scripts/fix-dts.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -148,8 +160,9 @@
     "pm-pnpm-9": "npm:pnpm@9.15.0",
     "pm-yarn-1": "npm:yarn@1.22.22",
     "pm-yarn-2": "npm:yarn@2.4.3",
+    "rollup": "^4.62.2",
+    "rollup-plugin-esbuild": "^6.2.1",
     "size-limit": "^12.1.0",
-    "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   },
