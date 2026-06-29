@@ -130,6 +130,37 @@ carry on their own (notably for `yarn-classic` monorepos); everything else
 succeeds offline against the bytes alone. Registry- and cache-backed refinement
 ships as opt-in adapters (see [Sub-imports](#sub-imports)).
 
+### Registry, config & audit
+
+Registry-backed work — re-resolution, checksum refill, advisory audit — needs a
+registry URL and its auth, resolved from the package-manager config, never guessed.
+
+```ts
+import { resolveRegistry, liveRegistry } from '@antongolub/lockfile/registry'
+import { registryPackages } from '@antongolub/lockfile/optimize'
+
+// Resolve routing + host-bound auth for ONE ecosystem. `ecosystem` is REQUIRED:
+// it fixes exactly which config files + env namespace are read, so a planted
+// `.yarnrc.yml` can't inject into an npm resolve — npm and yarn directives never mix.
+const cfg = resolveRegistry(cwd, { ecosystem: 'npm' })  // 'npm' | 'pnpm' | 'yarn-classic' | 'yarn-berry'
+cfg.registryFor('@scope/pkg')   // scope-aware registry URL (@scope:registry / npmScopes)
+cfg.authHeaderFor(url)          // 'Bearer …' | 'Basic …', https-only, longest host-prefix wins
+cfg.tokenFor(url)               // Bearer-only convenience
+
+// A live adapter already wired to the resolved registry + auth:
+const reg = liveRegistry.fromConfig(cwd, '@scope/pkg', { ecosystem: 'npm' })
+await reg.packument('@scope/pkg')
+
+// Bulk security audit — the graph's registry packages → RAW npm advisories
+// (no normalization; severity / fix-selection stay the caller's):
+const advisories = await reg.audit(registryPackages(graph))
+```
+
+Auth follows the npm/yarn taxonomy (Bearer `_authToken` / `npmAuthToken`; Basic
+`_auth`, `username`+`_password`, `npmAuthIdent`), bound to the declaring host —
+`always-auth` is deliberately not honoured (it would send a credential beyond its
+host prefix). Pass `env: {}` to ignore environment config entirely.
+
 ### Sub-imports
 
 | Surface | Importable as | Contains |
@@ -137,9 +168,9 @@ ships as opt-in adapters (see [Sub-imports](#sub-imports)).
 | Root | `@antongolub/lockfile` | `detect`, `check`, `parse`, `stringify`, `convert`, `modify`, `optimize`, `overridesOf`, plus types `Graph`, `FormatId`, `ParseOptions`, `StringifyOptions`, `ConvertOptions`, `Manifest` |
 | Modifiers | `@antongolub/lockfile/modify` | the individual `Primitive` functions behind `modify` (audit-fix, override-pin, license-filter) |
 | Complete | `@antongolub/lockfile/complete` | `completeTransitives` — registry-backed tree completion that wires the transitive deps a modify introduced |
-| Optimize | `@antongolub/lockfile/optimize` | `optimize` (reachability orphan GC) and `pruneOrphans` (reference-count orphan GC) |
+| Optimize | `@antongolub/lockfile/optimize` | `optimize` (reachability orphan GC), `pruneOrphans` (reference-count orphan GC), `registryPackages` (the graph's registry deps as a `{name: versions[]}` audit input) |
 | Enrich | `@antongolub/lockfile/enrich` | `refurbish` — monotone field-fill (e.g. recomputes a yarn-berry zip `checksum` from a tarball source so a patched lock installs without `yarn install`) |
-| Registry | `@antongolub/lockfile/registry` | `frozenRegistry`, `liveRegistry`, `fsCache`, `npmCache`, `pnpmCache` |
+| Registry | `@antongolub/lockfile/registry` | `frozenRegistry`, `liveRegistry` (+ `.fromConfig`, `.audit`), `resolveRegistry`, `npmCache`, `pnpmCache`, `yarnBerryCache` |
 | Per-format | `@antongolub/lockfile/formats/<id>` | a single adapter directly (test surface; not a primary user API) |
 
 ### Errors
