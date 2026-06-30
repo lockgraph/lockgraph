@@ -85,6 +85,32 @@ describe('registry/config — resolveRegistry', () => {
     expect(resolve(files, { env: { npm_config_registry: 'https://from-env.example.com/' } }).registryFor('x')).toBe('https://from-env.example.com')
     expect(resolve(files, { registry: 'https://from-flag.example.com/' }).registryFor('x')).toBe('https://from-flag.example.com')
   })
+
+  it('bare `_authToken` binds to the default registry host only (yaf #5)', () => {
+    const c = resolve({ '.npmrc': 'registry=https://reg.example.com/\n_authToken=BARE\n' })
+    expect(c.tokenFor('https://reg.example.com')).toBe('BARE')
+    expect(c.tokenFor('https://elsewhere.example.com')).toBeUndefined()
+  })
+
+  it('drops a non-http(s) registry (ftp) → falls back to the default (yaf #6)', () => {
+    const c = resolve({ '.npmrc': 'registry=ftp://nope.example.com/\n' })
+    expect(c.registryFor('x')).toBe(DEFAULT_REGISTRY)
+  })
+
+  it('project config wins over global ~/.npmrc — first writer wins (yaf #9)', () => {
+    const home = mkdir({ '.npmrc': 'registry=https://global.example.com/\n' })
+    const c = resolveRegistry(mkdir({ '.npmrc': 'registry=https://project.example.com/\n' }), { ecosystem: 'npm', home, env: {} })
+    expect(c.registryFor('x')).toBe('https://project.example.com')
+  })
+
+  it('yarn .yarnrc.yml — npmScopes routing + npmRegistries `//host` token together (yaf #7)', () => {
+    const c = resolve(
+      { '.yarnrc.yml': 'npmScopes:\n  acme:\n    npmRegistryServer: "https://npm.acme.com"\nnpmRegistries:\n  "//npm.acme.com":\n    npmAuthToken: "YML_TOKEN"\n' },
+      { ecosystem: 'yarn-berry' },
+    )
+    expect(c.registryFor('@acme/x')).toBe('https://npm.acme.com')
+    expect(c.tokenFor('https://npm.acme.com')).toBe('YML_TOKEN')
+  })
 })
 
 describe('registry/config — auth taxonomy (§2)', () => {

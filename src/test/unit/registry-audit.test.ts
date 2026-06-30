@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { liveRegistry } from '../../main/ts/registry/live.ts'
 
-type SpyInit = { method?: string; body?: string; headers?: Record<string, string> }
+type SpyInit = { method?: string; body?: string; headers?: Record<string, string>; redirect?: string }
 const okJson = (value: unknown) => ({ ok: true, status: 200, json: async () => value })
 
 describe('registry/liveRegistry.audit (raw bulk-advisory)', () => {
@@ -46,5 +46,22 @@ describe('registry/liveRegistry.audit (raw bulk-advisory)', () => {
     const reg = liveRegistry({ fetch: fetchSpy })
     expect(await reg.audit({})).toEqual({})
     expect(called).toBe(false)
+  })
+})
+
+describe('registry/liveRegistry — token-attach safety (yaf rules B)', () => {
+  it('never attaches auth over http — https-only', async () => {
+    const seen: Array<string | undefined> = []
+    const spy = (async (_u: string, init?: SpyInit) => { seen.push(init?.headers?.authorization); return okJson({}) }) as unknown as typeof fetch
+    await liveRegistry({ url: 'http://insecure.example.com', authHeader: 'Bearer T', fetch: spy }).audit({ a: ['1.0.0'] })
+    await liveRegistry({ url: 'https://secure.example.com', authHeader: 'Bearer T', fetch: spy }).audit({ a: ['1.0.0'] })
+    expect(seen).toEqual([undefined, 'Bearer T'])
+  })
+
+  it('rejects a redirect (>=300) on the bulk POST instead of following it', async () => {
+    const calls: SpyInit[] = []
+    const spy = (async (_u: string, init?: SpyInit) => { calls.push(init!); return { ok: false, status: 302, json: async () => ({}) } }) as unknown as typeof fetch
+    await expect(liveRegistry({ url: 'https://reg.example.com', fetch: spy }).audit({ a: ['1.0.0'] })).rejects.toThrow(/302/)
+    expect(calls[0]!.redirect).toBe('manual')
   })
 })

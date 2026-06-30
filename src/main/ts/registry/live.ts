@@ -76,6 +76,10 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
   }
 
   const authHeader = opts.authHeader ?? (opts.auth !== undefined ? `Bearer ${opts.auth}` : undefined)
+  // Never send a credential over a plaintext channel — matches resolveRegistry's
+  // https-only `authHeaderFor`, and defends the raw `liveRegistry({ url, authHeader })`
+  // path too (yaf token-attach rule B: "https only").
+  const authIsSafe = authHeader !== undefined && baseUrl.startsWith('https:')
 
   return {
     async packument(name) {
@@ -83,7 +87,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       const headers: Record<string, string> = {
         accept: INSTALL_ACCEPT,
       }
-      if (authHeader !== undefined) headers.authorization = authHeader
+      if (authIsSafe) headers.authorization = authHeader
 
       const response = await fetchImpl(url, { headers })
       if (response.status === 404) return undefined
@@ -118,14 +122,17 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       const chunkSize = opts.chunkSize ?? 250
       const url = `${baseUrl}/-/npm/v1/security/advisories/bulk`
       const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' }
-      if (authHeader !== undefined) headers.authorization = authHeader
+      if (authIsSafe) headers.authorization = authHeader
 
       const names = Object.keys(pkgs)
       const out: Record<string, RawAdvisory[]> = {}
       for (let i = 0; i < names.length; i += chunkSize) {
         const batch: Record<string, string[]> = {}
         for (const name of names.slice(i, i + chunkSize)) batch[name] = pkgs[name]!
-        const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(batch) })
+        // `redirect: 'manual'` → a 3xx surfaces as a non-ok response and throws below,
+        // rather than re-POSTing the package list to a redirect target (yaf rule B:
+        // "advisory POST rejects on >=300").
+        const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(batch), redirect: 'manual' })
         if (!response.ok) throw new Error(`liveRegistry.audit: ${response.status} ${url}`)
         const body = (await response.json()) as Record<string, unknown>
         for (const [name, advisories] of Object.entries(body)) {
