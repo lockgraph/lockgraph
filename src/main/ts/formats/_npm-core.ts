@@ -1338,6 +1338,13 @@ function collectManifestBlocks(
   }
 }
 
+// Aligns with npm's package-entry key order for the fields where its output is
+// consistent — `license` before `engines`, `bundleDependencies` before
+// `dependencies` — so a parse→stringify round-trip is byte-identical for those.
+// npm's FULL order is version-dependent (some older locks order `funding` before
+// `engines`, others after), so byte-identity is not guaranteed for every entry;
+// `npm ci` accepts ANY key order regardless — field order is cosmetic, never a
+// freeze-mode input.
 const ENTRY_FIELD_ORDER = [
   'name',
   'version',
@@ -1348,20 +1355,20 @@ const ENTRY_FIELD_ORDER = [
   'optional',
   'peer',
   'inBundle',
+  'bundleDependencies',
   'dependencies',
   'devDependencies',
   'peerDependencies',
   'optionalDependencies',
   'bin',
+  'license',
   'engines',
   'funding',
-  'license',
   'deprecated',
   'cpu',
   'os',
   'libc',
   'workspaces',
-  'bundleDependencies',
   'hasShrinkwrap',
 ] as const
 

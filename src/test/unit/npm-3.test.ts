@@ -16,6 +16,18 @@ const SPEC: FlatFamilySpec = {
 
 registerFlatFamilySuite(SPEC)
 
+describe('npm-3 — stringify field order (round-trip fidelity)', () => {
+  // ENTRY_FIELD_ORDER matches npm for its consistent fields: `license` before
+  // `engines`, `bundleDependencies` before `dependencies`. Guards against a
+  // silent reorder. (npm's full order is version-dependent — bundled-deps' older
+  // `funding`-before-`engines` is intentionally NOT byte-identical; npm ci accepts
+  // any order regardless.)
+  it('git-github-tarball round-trips byte-identical (license before engines)', () => {
+    const raw = fixture('git-github-tarball/npm-3.lock')
+    expect(stringify(parse(raw))).toBe(raw)
+  })
+})
+
 // --- npm-3-only deltas -----------------------------------------------------
 
 describe('npm-3 — parse deltas', () => {
