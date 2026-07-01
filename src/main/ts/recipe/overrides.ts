@@ -25,14 +25,14 @@
 // (`OVERRIDE_PARENT_REF_DROPPED` / `OVERRIDE_GLOB_NARROWED` /
 // `OVERRIDE_TRANSITIVE_HINT_DROPPED`) fire at stringify (Phase-1c), NOT here.
 
-import type { Diagnostic, Manifest, OverrideConstraint } from '../graph.ts'
+import type { Diagnostic, Manifest, OverrideConstraint, OverridePM } from '../graph.ts'
 import {
   interopOverrideNotProjected,
   overrideParentRefDropped,
   recipeOverrideNormalised,
 } from './diagnostics.ts'
 
-export type OverridePM = 'npm' | 'yarn' | 'pnpm'
+export type { OverridePM } from '../graph.ts'
 
 export interface CapturedOverrides {
   canonical: OverrideConstraint[]
@@ -115,6 +115,16 @@ export function captureOverrides(
       break
     }
   }
+
+  // Stamp PM origin + declaration order for a PM-faithful tie-break (npm
+  // first-match needs declaration order, which mergeOverrides' key-sort loses).
+  // NON-ENUMERABLE: pure tie-break metadata, invisible to toEqual / JSON /
+  // overrideKey, so constraints stay "compare-clean" (same intent as the
+  // constraint() factory omitting empty optionals).
+  canonical.forEach((c, i) => {
+    Object.defineProperty(c, 'origin', { value: pm, enumerable: false, configurable: true, writable: true })
+    Object.defineProperty(c, 'captureIndex', { value: i, enumerable: false, configurable: true, writable: true })
+  })
 
   onDiagnostic?.(recipeOverrideNormalised(pm, canonical.length))
   return { canonical, native }

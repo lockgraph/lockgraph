@@ -15,11 +15,13 @@ import {
   type Graph,
   type Node,
   type NodeId,
+  type OverrideConstraint,
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
 import type { PackumentVersion, RegistryAdapter } from '../registry/types.ts'
 import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
+import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
 import {
   completionEdgeResolved,
   completionNodeAdded,
@@ -71,6 +73,11 @@ export interface CompletionOptions {
   /** New-descriptor version-selection policy (default `'highest'` — the
    *  frozen/CI-clean path). Pass `'prefer-existing'` only for non-CI flows. */
   resolution?:   ResolutionStrategy
+  /** Project-declared overrides (canonical — e.g. from `overridesOf(graph)`).
+   *  When set, a NEW descriptor governed by an override binds the override's
+   *  forced target VERBATIM (and outranks reuse), so the completed closure
+   *  honours the project's pins (frozen-acceptance). */
+  overrides?:    readonly OverrideConstraint[]
 }
 
 const EMPTY_SEED: CompletionSeed = {
@@ -103,6 +110,7 @@ export async function completeTransitives(
   const seed         = options.seed ?? EMPTY_SEED
   const onDiagnostic = options.onDiagnostic
   const resolution   = options.resolution ?? 'highest'
+  const overrides    = options.overrides ?? []
 
   const visited:    Set<NodeId>  = new Set()
   const added:      NodeId[]      = []
@@ -216,16 +224,32 @@ export async function completeTransitives(
         const depRange = deps[depName]!
         if (alreadyWired(currentGraph, nodeId, depName, kind)) continue
 
+        // Override gate (Rung-2 parity): an active project override redirects
+        // this NEW descriptor to its forced target BEFORE anything else — dedup,
+        // reuse, AND registry — so the completed closure honours the pin
+        // (frozen-acceptance). The `to` binds VERBATIM (a non-satisfying pin is
+        // intentional) and OUTRANKS the prefer-existing reuse rungs. Everything
+        // downstream keys on the EFFECTIVE descriptor `depName@(to|range)`, so an
+        // override-redirected resolution NEVER poisons the plain-range descriptor
+        // cache: a consumer OUTSIDE a scoped override still resolves normally
+        // (two versions under a scoped override, exactly as the PM emits).
+        // consumerPath = [node.name] (immediate parent; deeper-scoped overrides
+        // under-match, matching the yarn rungs' scoping).
+        const overrideTo = overrides.length > 0
+          ? overrideTargetFor(depName, depRange, [node.name], overrides)
+          : undefined
+        const effectiveRange = overrideTo ?? depRange
+
         // STEP 0 — descriptor-identity dedup (BOTH strategies, before any
-        // version selection). A descriptor STRING resolves to ONE version
-        // project-wide: if this exact `name@range` is already bound (an existing
-        // edge OR an earlier-wired completion edge), reuse that resolution.
-        // Without this, `highest` re-resolves an already-present range to a newer
-        // version and emits a SECOND entry for it → a double-bound descriptor
-        // `yarn install --immutable` rejects (yaf .77 semver). Peers keep their
-        // dedicated incomplete-handling on the paths below.
+        // version selection). The EFFECTIVE descriptor resolves to ONE version
+        // project-wide: if `name@effective` is already bound (an existing edge OR
+        // an earlier-wired completion edge), reuse that resolution. Without this,
+        // `highest` re-resolves an already-present range to a newer version and
+        // emits a SECOND entry for it → a double-bound descriptor `yarn install
+        // --immutable` rejects (yaf .77 semver). Peers keep their dedicated
+        // incomplete-handling on the paths below.
         if (kind !== 'peer') {
-          const boundId = descriptorResolution.get(descriptorKey(depName, depRange))
+          const boundId = descriptorResolution.get(descriptorKey(depName, effectiveRange))
           if (boundId !== undefined && boundId !== nodeId && currentGraph.getNode(boundId) !== undefined) {
             const triple: EdgeTriple = { src: nodeId, dst: boundId, kind }
             const resolvedDiag = completionEdgeResolved(triple)
@@ -240,10 +264,10 @@ export async function completeTransitives(
           }
         }
 
-        // Hoist-aware ancestor reuse — `prefer-existing` only. `highest` skips it:
-        // yarn binds a new descriptor to the registry's highest match, not to a
-        // hoistable older sibling.
-        const targetId = resolution === 'prefer-existing'
+        // Hoist-aware ancestor reuse — `prefer-existing` only, and not when an
+        // override governs. `highest` skips it: yarn binds a new descriptor to
+        // the registry's highest match, not to a hoistable older sibling.
+        const targetId = resolution === 'prefer-existing' && overrideTo === undefined
           ? resolveFindUp(currentGraph, nodeId, depName, depRange, kind)
           : undefined
         if (targetId !== undefined) {
@@ -280,7 +304,7 @@ export async function completeTransitives(
         // (the consumer itself satisfying its own range) is never reused.
         // `highest` skips this reuse entirely (registry's highest match wins,
         // matching yarn — the `--immutable`-fidelity path).
-        if (resolution === 'prefer-existing' && kind !== 'peer') {
+        if (resolution === 'prefer-existing' && overrideTo === undefined && kind !== 'peer') {
           const reuseId = bestExistingSatisfying(currentGraph, depName, depRange)
           if (reuseId !== undefined && reuseId !== nodeId) {
             const triple: EdgeTriple = { src: nodeId, dst: reuseId, kind }
@@ -298,8 +322,10 @@ export async function completeTransitives(
           }
         }
 
-        // Nothing already present fits: query registry for a fresh resolution.
-        const resolved = await registry.resolve(depName, depRange)
+        // Nothing already present fits: query registry for the EFFECTIVE range
+        // (the override target when one governs, else the declared range) — the
+        // EDGE keeps `depRange`; only the resolved version changes.
+        const resolved = await registry.resolve(depName, effectiveRange)
         if (resolved === undefined) {
           if (kind === 'peer') {
             emitAndLand(completionPeerContextIncomplete(nodeId, depName, depRange))
@@ -350,7 +376,7 @@ export async function completeTransitives(
         const triple: EdgeTriple = { src: nodeId, dst: newId, kind }
         wired.push(triple)
         if (!visited.has(newId)) frontier.push(newId)
-        descriptorResolution.set(descriptorKey(depName, depRange), newId)
+        descriptorResolution.set(descriptorKey(depName, effectiveRange), newId)
       }
     }
 

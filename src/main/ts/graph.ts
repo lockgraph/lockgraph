@@ -122,6 +122,10 @@ export interface Diagnostic {
   subject?: NodeId | EdgeTriple
   severity: 'info' | 'warning' | 'error'
   message:  string
+  /** Optional structured payload for machine consumers (e.g. a pinned-override
+   *  record `{ package, to }` that `overridesOf` folds back). Absent on
+   *  human-only diagnostics — never affects equality of those. */
+  data?:    Record<string, unknown>
 }
 
 export interface LayoutHints {
@@ -150,7 +154,17 @@ export interface OverrideConstraint {
   to: string
   /** `to` is an npm `$name` self-ref (no yarn/pnpm equivalent). */
   selfRef?: boolean
+  /** Source PM grammar (stamped at capture). Drives the PM-faithful override
+   *  tie-break: npm/bun = first-match in declaration order, yarn/pnpm =
+   *  most-specific. */
+  origin?: OverridePM
+  /** Declaration order within its capture (0-based) — carries npm's
+   *  first-match ordering through `mergeOverrides`' key-sort. */
+  captureIndex?: number
 }
+
+/** Package-manager grammar an override was declared in (ADR-0025). */
+export type OverridePM = 'npm' | 'yarn' | 'pnpm'
 
 /**
  * L1 Manifest — declared constraints from a `package.json` (ADR-0001 §L1,

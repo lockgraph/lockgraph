@@ -109,6 +109,9 @@ export function modifyOverridePinned(name: string, resolved: string): ModifyDiag
     severity: 'info',
     subject:  'graph',
     message:  `pinned override ${name} → ${resolved}`,
+    // Structured record so `overridesOf` folds the pin into the re-emitted
+    // overrides block (pnpm/npm frozen-acceptance) without parsing the message.
+    data:     { package: name, to: resolved },
   }
 }
 

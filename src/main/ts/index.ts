@@ -333,8 +333,11 @@ function captureManifestOverrides(
  * READ-BEFORE-MODIFY: reflects parse-time sources read off the parsed-graph
  * handle; NOT guaranteed to survive `graph.mutate()` / modify / optimize.
  * Capture it right after `parse`, then thread into
- * `stringify(to, g, { overrides: overridesOf(g) })`. After a bare `mutate` it
- * returns `[]` — BOTH manifest-F6 and the (also-sidecar-borne) lock-borne sources
+ * `stringify(to, g, { overrides: overridesOf(g) })`. A `pinOverride`
+ * (MODIFY_OVERRIDE_PINNED) DOES survive `mutate` — diagnostic-borne, not a
+ * parse-carrier — and folds in as a winner, so a post-pin `overridesOf` reflects
+ * it (pnpm/npm frozen-acceptance). The parse-time sources do NOT survive: after a
+ * bare `mutate` they return `[]` — BOTH manifest-F6 and the lock-borne sources
  * drop with the rebuilt graph; re-attachment fires only inside an adapter's own
  * enrich/optimize/stringify, never from `mutate()`. Cross-PM is the intended use:
  * for a SAME-PM round-trip prefer plain `parse → stringify` (the verbatim carrier
@@ -348,8 +351,29 @@ export function overridesOf(graph: Graph): OverrideConstraint[] {
     getPnpmOverridesCanonical(graph) ??
     bunText.getBunOverridesCanonical(graph) ??
     []
-  return mergeOverrides(lockBorne, manifest)
+  return mergeOverrides(mergeOverrides(lockBorne, manifest), pinnedOverrides(graph))
 }
+
+// `pinOverride` survives `mutate` as a MODIFY_OVERRIDE_PINNED diagnostic carrying
+// `{ package, to }` — fold those as global override winners so a post-modify
+// `overridesOf` reflects the pin (pnpm/npm frozen-acceptance: the re-emitted
+// `overrides:` block then matches the forced resolution).
+function pinnedOverrides(graph: Graph): OverrideConstraint[] {
+  const out: OverrideConstraint[] = []
+  for (const d of graph.diagnostics()) {
+    if (d.code !== 'MODIFY_OVERRIDE_PINNED') continue
+    const pkg = d.data?.package
+    const to = d.data?.to
+    if (typeof pkg === 'string' && typeof to === 'string') out.push({ package: pkg, to })
+  }
+  return out
+}
+
+// `governingOverrideFor(dep, consumerPath, overrides, declaredRange?)` — the
+// override governing a dep (or undefined), for a consumer policy layer to ask
+// "does an override already govern X, and to what?". PM-faithful tie-break;
+// full doc on the definition in recipe/descriptor-resolve.
+export { governingOverrideFor } from './recipe/descriptor-resolve.ts'
 
 export function stringify(format: FormatId, graph: Graph, options: StringifyOptions = {}): string {
   return stringifyOne(format, graph, options)

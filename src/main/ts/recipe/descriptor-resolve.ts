@@ -232,10 +232,10 @@ export function catalogResolve(range: string, candidates: readonly SemverCandida
  * skipped so the caller falls through to semver / drop, never binding a literal
  * `$name` descriptor.
  *
- * On a tie (≥2 constraints matching the same descriptor) the MOST SPECIFIC wins:
- * a version-conditioned constraint beats an unconditional one, and a longer
- * `parentPath` beats a shorter one. This mirrors yarn's "more specific
- * resolutions key wins" precedence.
+ * On a tie (≥2 constraints matching the same descriptor) the winner is
+ * PM-faithful (by `origin`): npm = first-match in declaration order (RFC 0036),
+ * yarn/pnpm = most-specific. The tie-break lives in {@link governingOverrideFor},
+ * which this delegates to.
  */
 export function overrideTargetFor(
   depName: string,
@@ -243,25 +243,57 @@ export function overrideTargetFor(
   consumerPath: readonly string[],
   overrides: readonly OverrideConstraint[],
 ): string | undefined {
-  let best: OverrideConstraint | undefined
-  let bestScore = -1
+  return governingOverrideFor(depName, consumerPath, overrides, declaredRange)?.to
+}
+
+/**
+ * The OverrideConstraint that governs `depName` reached under `consumerPath`
+ * (or undefined). Matches on `package`, on `parentPath` being a suffix of
+ * `consumerPath`, and — when `declaredRange` is given — on `versionCondition`;
+ * skips npm `$name` self-refs. On a tie the winner is PM-FAITHFUL by `origin`:
+ * npm (+ bun) → FIRST-MATCH in declaration order (`captureIndex`; npm RFC 0036 /
+ * Arborist `getMatchingRule` returns the first matching rule, NOT the most
+ * specific); yarn / pnpm / unstamped → MOST-SPECIFIC (version condition outranks
+ * parent depth — yarn's "more specific key wins").
+ */
+export function governingOverrideFor(
+  depName: string,
+  consumerPath: readonly string[],
+  overrides: readonly OverrideConstraint[],
+  declaredRange?: string,
+): OverrideConstraint | undefined {
+  const matches: OverrideConstraint[] = []
   for (const c of overrides) {
     if (c.package !== depName) continue
     if (c.selfRef === true) continue // $name back-ref — needs npm parent version
-    if (c.versionCondition !== undefined && !conditionMatches(c.versionCondition, declaredRange)) continue
-    const parentPath = c.parentPath ?? []
-    if (!parentPathMatches(parentPath, consumerPath)) continue
-    // Specificity: version condition (2) outranks parent depth so a
-    // `csstype@npm:^3.1.3` pin beats a bare `csstype` global; among equal
-    // condition-presence, a deeper parentPath wins.
-    const score = (c.versionCondition !== undefined ? 1000 : 0) + parentPath.length
-    if (score > bestScore) {
-      best = c
-      bestScore = score
-    }
+    if (declaredRange !== undefined && c.versionCondition !== undefined &&
+        !conditionMatches(c.versionCondition, declaredRange)) continue
+    if (!parentPathMatches(c.parentPath ?? [], consumerPath)) continue
+    matches.push(c)
   }
-  return best?.to
+  if (matches.length <= 1) return matches[0]
+  // npm first-match ONLY for a FULLY npm-stamped set (RFC 0036 / Arborist
+  // getMatchingRule — the first matching rule wins, not the most specific). ANY
+  // yarn/pnpm OR unstamped constraint (hand-built literal / folded pin — "unknown
+  // PM") falls back to the conservative most-specific, preserving overrideTargetFor's
+  // generic contract (recipe-descriptor-resolve.test §"MORE SPECIFIC ... on a tie").
+  if (matches.every(c => c.origin === 'npm')) {
+    // npm first-match: the earliest-declared (lowest captureIndex) match wins.
+    return matches.reduce((a, b) =>
+      (b.captureIndex ?? Infinity) < (a.captureIndex ?? Infinity) ? b : a)
+  }
+  // yarn / pnpm / any unstamped: most specific (version condition beats parent depth).
+  let best = matches[0]!
+  let bestScore = specificity(best)
+  for (let i = 1; i < matches.length; i++) {
+    const s = specificity(matches[i]!)
+    if (s > bestScore) { best = matches[i]!; bestScore = s }
+  }
+  return best
 }
+
+const specificity = (c: OverrideConstraint): number =>
+  (c.versionCondition !== undefined ? 1000 : 0) + (c.parentPath?.length ?? 0)
 
 // Compare a captured override `versionCondition` against a consumer's declared
 // range, protocol-insensitively. yarn `resolutions` keys carry the descriptor
