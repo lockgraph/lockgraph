@@ -29,7 +29,21 @@
 
 import zlib, { gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
+// pako's DEFLATE match-finding hash decides the exact compressed bytes, and we
+// require the LEGACY hash to reproduce yarn's cache-zip bytes for cacheKey 7/8
+// (yarn used that variant). pako 2.2.0 added a faster "nodejs-compatible" hash
+// (opt-in; `legacyHash` default `true`); pako 3.0.0 flipped that default to
+// `false`. So the compressed output is version-default-DEPENDENT — we pin it down
+// by passing `legacyHash: true` EXPLICITLY at the deflateRaw call below (verified
+// byte-identical on pako 2.x AND 3.x; without it, v3 diverges → wrong checksum →
+// YN0018). Do not drop that flag. (We ship on pako 3.x, whose DEFAULT is the
+// nodejs-compatible hash — the explicit flag is precisely what keeps us
+// yarn-stable; byte-identity verified on both pako 2.x and 3.x.)
 import { deflateRaw } from 'pako'
+
+// pako 2.2.0's bundled .d.ts omits `legacyHash` (a real runtime option it added);
+// declare it in so the explicit flag below type-checks.
+type DeflateOpts = NonNullable<Parameters<typeof deflateRaw>[1]> & { legacyHash: boolean }
 
 // MS-DOS mtime fields folded into every entry. The fixed constant changed
 // across cache eras: cacheKey 8+ uses @yarnpkg/fslib SAFE_TIME = 456789000
@@ -123,7 +137,7 @@ function buildZip(entries: ZipEntry[], compress: boolean, dosTime: number, dosDa
     let vn = e.dir ? 20 : 10                                    // version-needed: 2.0 dir / 1.0 file
     let stored = raw
     if (compress && !e.dir && raw.length > 0) {
-      const def = Buffer.from(deflateRaw(raw, { level: 9, strategy: 0, memLevel: 9 }))
+      const def = Buffer.from(deflateRaw(raw, { level: 9, strategy: 0, memLevel: 9, legacyHash: true } as DeflateOpts))
       if (def.length < raw.length) { method = 8; gp = 2; vn = 20; stored = def }  // DEFLATE iff it shrinks
     }
     const ext = e.dir ? 0x41ed0000                             // 0o40755 << 16
