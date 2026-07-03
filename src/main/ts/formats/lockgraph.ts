@@ -419,6 +419,9 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
   //      present only when ≥1 holds (NO `-` placeholder);
   //   2. `alias=<EdgeAttrs.alias>` — present iff alias is set (alias is part of
   //      edge identity);
+  //   2b. `or=<EdgeAttrs.overrideRange>` — the override/`resolutions` pin the yarn
+  //      adapters key the entry by; present iff a completed edge is override-governed
+  //      (NOT edge identity, but must round-trip or `--immutable` re-breaks);
   //   3. `rv=<workspaceRange.resolvedVersion>` — the concrete target version;
   //   4. `sp=<workspaceRange.specifier>` — ONLY when specifier ≠ descriptor (a
   //      fallback for adapters — e.g. bun-text — that canonicalise the specifier
@@ -441,6 +444,12 @@ export function stringify(graph: Graph, options: LockgraphStringifyOptions = {})
     if (flags !== '') cols.push(flags)
     // 2 — alias= (alias participates in edge identity)
     if (e.attrs?.alias !== undefined) cols.push(`alias=${escapeTsv(e.attrs.alias)}`)
+    // 2b — or= (overrideRange; the override/`resolutions` pin the yarn adapters key
+    // the entry by). NOT part of edge identity, but it MUST round-trip: a governed
+    // edge that loses it re-emits its raw declared range as a second descriptor and
+    // re-breaks yarn `--immutable` (YN0028) — the very loss the stamp prevents. See
+    // `EdgeAttrs.overrideRange` in graph.ts.
+    if (e.attrs?.overrideRange !== undefined) cols.push(`or=${escapeTsv(e.attrs.overrideRange)}`)
     // 3/4 — workspaceRange decomposed onto rv= / sp=. specifier IS the
     // descriptor (the round-trip oracle proves this on the corpus); store sp=
     // only when an adapter canonicalised them apart, so the common w-edge carries
@@ -731,6 +740,7 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
       const skey = slot.slice(0, eq)
       const sval = unescapeTsv(slot.slice(eq + 1))
       if (skey === 'alias') attrs.alias = sval
+      else if (skey === 'or') attrs.overrideRange = sval
       else if (skey === 'rv') rv = sval
       else if (skey === 'sp') sp = sval
       // unknown slots are ignored (forward-compat)

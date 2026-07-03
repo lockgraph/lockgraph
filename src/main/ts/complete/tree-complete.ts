@@ -239,6 +239,12 @@ export async function completeTransitives(
           ? overrideTargetFor(depName, depRange, [node.name], overrides)
           : undefined
         const effectiveRange = overrideTo ?? depRange
+        // Stamp the override-forced range on the edge so the yarn adapters key the
+        // entry by the pin (collapsing like `yarn install`), while `range` stays
+        // the DECLARED range for npm/pnpm's parent-deps block (EdgeAttrs.overrideRange).
+        const edgeAttrs = overrideTo === undefined
+          ? { range: depRange }
+          : { range: depRange, overrideRange: overrideTo }
 
         // STEP 0 — descriptor-identity dedup (BOTH strategies, before any
         // version selection). The EFFECTIVE descriptor resolves to ONE version
@@ -254,7 +260,7 @@ export async function completeTransitives(
             const triple: EdgeTriple = { src: nodeId, dst: boundId, kind }
             const resolvedDiag = completionEdgeResolved(triple)
             currentGraph = currentGraph.mutate(m => {
-              m.addEdge(nodeId, boundId, kind, { range: depRange })
+              m.addEdge(nodeId, boundId, kind, edgeAttrs)
               m.diagnostic(resolvedDiag)
             }).graph
             wired.push(triple)
@@ -283,7 +289,7 @@ export async function completeTransitives(
           const triple: EdgeTriple = { src: nodeId, dst: targetId, kind }
           const resolvedDiag = completionEdgeResolved(triple)
           const result = currentGraph.mutate(m => {
-            m.addEdge(nodeId, targetId, kind, { range: depRange })
+            m.addEdge(nodeId, targetId, kind, edgeAttrs)
             m.diagnostic(resolvedDiag)
           })
           currentGraph = result.graph
@@ -310,7 +316,7 @@ export async function completeTransitives(
             const triple: EdgeTriple = { src: nodeId, dst: reuseId, kind }
             const resolvedDiag = completionEdgeResolved(triple)
             const result = currentGraph.mutate(m => {
-              m.addEdge(nodeId, reuseId, kind, { range: depRange })
+              m.addEdge(nodeId, reuseId, kind, edgeAttrs)
               m.diagnostic(resolvedDiag)
             })
             currentGraph = result.graph
@@ -364,7 +370,7 @@ export async function completeTransitives(
           } else {
             alreadyAdded = true
           }
-          m.addEdge(nodeId, newId, kind, { range: depRange })
+          m.addEdge(nodeId, newId, kind, edgeAttrs)
         })
         currentGraph = result.graph
 

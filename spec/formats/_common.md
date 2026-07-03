@@ -934,6 +934,24 @@ kind-labelled edges, plus a tarball surface
 | `optional` | parent → child | resolution may legitimately fail |
 | `peer` | parent → expected-child | resolved against ancestor scope |
 
+**Edge attribute carriers (`EdgeAttrs`).** Beyond `range` (the declared
+descriptor range) and the `optional` / `workspace` markers, two carriers steer
+how the yarn family keys an entry-key descriptor:
+
+- `alias` — an npm-alias consumer descriptor name (`<alias>@npm:<target>@<range>`).
+  It **participates in edge identity**, so a canonical *and* an aliased edge from
+  one parent to one target coexist.
+- `overrideRange` — the pin an override / yarn `resolutions` forced onto a
+  **completed** edge (stamped by completion/remediation when an override governs
+  the edge; absent otherwise). It does **not** participate in identity.
+
+The yarn adapters key a **non-aliased** entry-key descriptor by
+`overrideRange ?? range` — reproducing yarn's collapse of a bare-`resolutions`
+pin (see the yarn-classic / yarn-berry resolution-collapse quirk). Every other
+carrier and every other emitter keys by `range`, so the *declared* range always
+survives into the npm / pnpm / bun deps blocks — `overrideRange` never leaks
+outside yarn entry keys.
+
 **Workspaces** are nodes with a known layout position
 (`Node.workspacePath !== undefined`, where the empty string is the root
 workspace) and are roots of the non-workspace subgraph. Cross-workspace

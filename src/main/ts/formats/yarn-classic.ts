@@ -122,11 +122,6 @@ export interface YarnClassicParseOptions {
 export interface YarnClassicStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
-  // Canonical overrides (ADR-0025), threaded from the public `stringify`. A bare
-  // `resolutions` pin rewrites matching entry-key descriptors to the pin (yarn
-  // collapses `foo@^1` + `foo@1.0` → `foo@1.0`) — `entrySpecsOfNode` applies it so
-  // a completed/mutated lock matches yarn's output (else `--immutable` YN0028).
-  overrides?: OverrideConstraint[]
 }
 
 export interface YarnClassicManifest {
@@ -471,7 +466,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
     // letters) would otherwise cluster all quoted keys ahead of bare ones instead of
     // interleaving by descriptor. `entrySpecsOfNode` is already sortAlpha-ordered, so
     // its first element is yarn's entry sort key (raw, unquoted).
-    const specs = entrySpecsOfNode(graph, node, options.overrides ?? [])
+    const specs = entrySpecsOfNode(graph, node)
     const key = stringifyEntryKey(specs)
     const entrySortKey = specs[0] ?? key
     const lines = [
@@ -1497,7 +1492,7 @@ function isWorkspaceProtocolRange(range: string): boolean {
   return range.startsWith('workspace:')
 }
 
-function entrySpecsOfNode(graph: Graph, node: Node, overrides: readonly OverrideConstraint[]): string[] {
+function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   // F6 (#93) — an npm-aliased incoming edge keys its entry-key descriptor under
   // the ALIAS, not the node's actual name (`<alias>@npm:<target>@<range>`); the
   // range already carries the `npm:<target>@…` locator. A canonical edge keys
@@ -1506,15 +1501,13 @@ function entrySpecsOfNode(graph: Graph, node: Node, overrides: readonly Override
     .filter(edge => edge.kind === 'dep' || edge.kind === 'optional')
     .filter(edge => edge.attrs?.range !== undefined)
     .map(edge => {
-      // A bare yarn `resolutions` pin rewrites matching descriptors to the pin
-      // (yarn collapses `minimist@^1.2.5` + `minimist@1.2.5` → one). Apply it so a
-      // completed/mutated edge matches yarn's output (else the stale range
-      // descriptor → `--immutable` YN0028). Non-aliased edges only.
-      const range = edge.attrs!.range!
-      const pinned = edge.attrs!.alias === undefined && overrides.length > 0
-        ? overrideTargetFor(node.name, range, [nameOf(edge.src)], overrides)
-        : undefined
-      return `${edge.attrs!.alias ?? node.name}@${pinned ?? range}`
+      // A completed/mutated edge governed by an override carries the pin as
+      // `overrideRange`; key by it (yarn collapses `foo@^1` + `foo@1.0` → the pin),
+      // not the raw declared range (else `--immutable` YN0028). Non-aliased only.
+      const range = edge.attrs!.alias === undefined
+        ? (edge.attrs!.overrideRange ?? edge.attrs!.range!)
+        : edge.attrs!.range!
+      return `${edge.attrs!.alias ?? node.name}@${range}`
     })
 
   // C-KEYDROP — UNION the live-edge-reconstructed descriptors with the verbatim

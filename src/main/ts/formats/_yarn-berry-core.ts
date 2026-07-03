@@ -156,12 +156,6 @@ export interface YarnBerryFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   cacheKey?: string
   onDiagnostic?: (diagnostic: Diagnostic) => void
-  // Canonical overrides (ADR-0025), threaded from the public `stringify`. yarn
-  // writes no lock-borne overrides block, but a bare `resolutions` pin REWRITES
-  // matching entry-key descriptors to the pin (yarn collapses `foo@^1` + `foo@1.0`
-  // → `foo@1.0`). `entryKeyOfNode` applies it so a completed/mutated lock matches
-  // yarn's own output (else the stale descriptor → `--immutable` YN0028).
-  overrides?: OverrideConstraint[]
 }
 
 export interface YarnBerryFamilyEnrichOptions {
@@ -749,7 +743,7 @@ export function stringifyFamily(
   const root: SymlMap = { __metadata: metadata }
   const entries = Array.from(graph.nodes(), node => ({
     nodeId: node.id,
-    key: entryKeyOfNode(graph, node, options.overrides ?? []),
+    key: entryKeyOfNode(graph, node),
     value: entryOfNode(graph, node, config, emitDiagnostic, cacheKey),
   })).sort((a, b) => cmpStr(a.key, b.key))
 
@@ -1372,7 +1366,7 @@ function validateMetadata(ast: SymlMap, config: YarnBerryFamilyConfig): SymlMap 
   return Object.keys(extras).length > 0 ? extras : undefined
 }
 
-function entryKeyOfNode(graph: Graph, node: Node, overrides: readonly OverrideConstraint[]): string {
+function entryKeyOfNode(graph: Graph, node: Node): string {
   // B-EXACT — same-format round-trip: re-emit the VERBATIM source key descriptors
   // (captured at parse) so the key is byte-identical to what yarn wrote (an
   // ordinary range entry stays range-only; a genuine resolutions-pin keeps its
@@ -1408,16 +1402,11 @@ function entryKeyOfNode(graph: Graph, node: Node, overrides: readonly OverrideCo
       // alias lookup correctly. Canonical (non-aliased) edges keep the
       // node's actual name.
       const specName = edge.attrs.alias ?? node.name
-      // A yarn `resolutions`/override rewrites the DESCRIPTOR to the pin — yarn
-      // collapses e.g. `minimist@npm:^1.2.5` → `minimist@npm:1.2.5` for a bare
-      // `resolutions: { minimist: 1.2.5 }`. Apply it so a completed/mutated edge's
-      // descriptor matches yarn's own output (else the extra range descriptor →
-      // `yarn install --immutable` YN0028). Canonical (non-aliased) edges only —
-      // the override keys on the resolved package name.
-      const pinned = edge.attrs.alias === undefined && overrides.length > 0
-        ? overrideTargetFor(node.name, edge.attrs.range, [nameOf(edge.src)], overrides)
-        : undefined
-      const secondary = `${specName}@${entryKeyRangeOf(pinned ?? edge.attrs.range)}`
+      // A completed/mutated edge governed by an override carries the pin as
+      // `overrideRange`; yarn keys the entry by the pin (collapsing the descriptor),
+      // not the raw declared range (else `--immutable` YN0028). Non-aliased only.
+      const keyRange = edge.attrs.alias === undefined ? (edge.attrs.overrideRange ?? edge.attrs.range) : edge.attrs.range
+      const secondary = `${specName}@${entryKeyRangeOf(keyRange)}`
       // Bug #90 — a `link:`/`portal:`/`file:` consumer records the dep BARE
       // (`link:packages/x`) in its dependencies block while yarn keys the
       // resolved entry with a `::locator=<consumer>` qualifier
@@ -2974,7 +2963,11 @@ function incomingKeyDescriptors(graph: Graph, dst: NodeId, dstName: string): Set
   const out = new Set<string>()
   for (const e of graph.in(dst)) {
     if (e.kind === 'peer' || e.attrs?.range === undefined) continue
-    out.add(`${e.attrs.alias ?? dstName}@${entryKeyRangeOf(e.attrs.range)}`)
+    // A governed edge carries the override pin as `overrideRange` — key by it
+    // (yarn collapses `foo@^1` → `foo@<pin>` for a bare resolution), not the raw
+    // declared range. Non-aliased edges only (the override keys on the package).
+    const keyRange = e.attrs.alias === undefined ? (e.attrs.overrideRange ?? e.attrs.range) : e.attrs.range
+    out.add(`${e.attrs.alias ?? dstName}@${entryKeyRangeOf(keyRange)}`)
   }
   return out
 }

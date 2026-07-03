@@ -87,6 +87,15 @@ export interface TarballPayload {
 
 export type EdgeAttrs = {
   range?:          string
+  // The override-FORCED descriptor range for this edge (ADR-0025), set by
+  // completion/replace when a project override/resolution redirected this edge's
+  // resolution. `range` stays the DECLARED range (what npm/pnpm write in the
+  // parent's deps); the yarn adapters emit `overrideRange` as the ENTRY-KEY
+  // descriptor instead — yarn rewrites `foo@^1` → `foo@<pin>` for a bare
+  // resolution and collapses the entry, so a completed edge must key by the pin,
+  // not its raw range (else `--immutable` YN0028). Opaque per-instance metadata,
+  // NOT part of edge identity (unlike `alias`). Absent = no override governs.
+  overrideRange?:  string
   optional?:       boolean
   workspace?:      boolean
   // Local descriptor name when it differs from the target node's actual

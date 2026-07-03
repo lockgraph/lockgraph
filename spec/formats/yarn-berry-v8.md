@@ -255,6 +255,18 @@ v8-specific deltas inherited on top of the shared contract are:
   reparse can recover the name). This is the inverse of the F7/#99 ladder — the
   ladder RESOLVES a range descriptor to its node on parse; emit must not invent a
   resolved-version descriptor on the way back.
+- **A completed edge to a `resolutions`-pinned node keys by the pin, not its raw
+  range.** When a bare `resolutions` pin rewrote a package's descriptors to the
+  exact version, yarn collapsed every matching descriptor onto the one pinned key.
+  A **completed / remediated** edge that later reaches the same node (an
+  `audit-fix` bump re-introducing the dep) must NOT contribute its raw
+  `<name>@npm:<range>` descriptor — that extra descriptor is exactly what
+  `yarn install --immutable` rejects (YN0028). Completion stamps the pin on the
+  edge as [`EdgeAttrs.overrideRange`](./_common.md#44-graph); both key paths honour
+  it — when a mutate adds the edge to a node **already in the lock**, the
+  sidecar-maintenance diff folds the *pinned* descriptor (which already equals the
+  sidecar entry → zero drift), and when the sidecar is **absent** (a minted node)
+  the reconstruction keys by `overrideRange ?? range`. Non-aliased edges only.
 
 ## Degradation rules
 
