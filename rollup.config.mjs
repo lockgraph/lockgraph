@@ -4,10 +4,17 @@ import { builtinModules } from 'node:module'
 // Runtime deps stay EXTERNAL (the consumer installs them); only the library's
 // own `src/main/ts` modules are emitted.
 const pkgDeps = ['semver', 'pako', 'node-fetch-native']
+// Optional peer backend — reached only via a soft `await import('@yarnpkg/libzip')`
+// in berry-pack-libzip.ts (v9/v10 berry checksum recompute). Declared external so it
+// stays LAZY and UNBUNDLED: absent at runtime → the packer defers, so the library runs
+// fine without it installed. (Without this line rollup auto-externalises it and warns;
+// the emitted `import()` is identical either way — this just silences the noise.)
+const optionalPeers = ['@yarnpkg/libzip']
 const external = (id) =>
   id.startsWith('node:') ||
   builtinModules.includes(id) ||
-  pkgDeps.some((d) => id === d || id.startsWith(`${d}/`))
+  pkgDeps.some((d) => id === d || id.startsWith(`${d}/`)) ||
+  optionalPeers.some((d) => id === d || id.startsWith(`${d}/`))
 
 const SRC = 'src/main/ts'
 const adapters = [
