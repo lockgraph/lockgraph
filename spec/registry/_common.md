@@ -193,6 +193,17 @@ Load-bearing differences from the full form:
   `preinstall` / `postinstall` script present) — a corgi-only convenience standing
   in for the stripped `scripts` map.
 - `dist` is **identical** to the full form (integrity / signatures intact).
+- **`libc` is DROPPED by npm's corgi in practice — even when the package declares it.**
+  Despite `libc` appearing in the nominal field list above, `registry.npmjs.org`'s
+  abbreviated form omits it (re-probed 2026-07-04: `@napi-rs/nice-linux-x64-gnu@1.0.1`
+  corgi → no `libc`; full doc → `libc: ["glibc"]`), while `os` / `cpu` ARE retained. So
+  the "conditional fields appear only when the package has them" rule has a **`libc`
+  exception**: the package has it, corgi still strips it. A consumer needing
+  libc-accurate platform metadata — a yarn-berry `conditions:` emitter, where a missing
+  `& libc=<glibc|musl>` on a linux entry fails `yarn install --immutable` (YN0028) —
+  MUST backfill from the FULL single-version manifest (`GET /{name}/{version}`, ~1–2 KB).
+  `liveRegistry.resolve()` does this for linux versions (non-linux carry no libc → corgi
+  is already complete → no extra fetch).
 
 > A registry that ignores the `Accept` header and always returns the full
 > document is **conformant but wasteful**; one that returns a *malformed*

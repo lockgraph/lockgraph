@@ -1604,6 +1604,7 @@ function entryOfNode(
 
   const peerDependencies = extraBlockOfNode(node, 'peerDependencies')
     ?? rawPeerDependenciesBlockOfNode(graph, node.id)
+    ?? coerceSymlMap(payload?.peerDependencies)                 // completion-added node
     ?? edgeBlockOfKinds(graph, node, ['peer'], config, { skipMissingRange: true })
   if (peerDependencies !== undefined) entry['peerDependencies'] = peerDependencies
 
@@ -1621,7 +1622,7 @@ function entryOfNode(
   )
   if (dependenciesMeta !== undefined) entry['dependenciesMeta'] = dependenciesMeta
 
-  const peerDependenciesMeta = peerDependenciesMetaOfNode(graph, node)
+  const peerDependenciesMeta = peerDependenciesMetaOfNode(graph, node, payload)
   if (peerDependenciesMeta !== undefined) entry['peerDependenciesMeta'] = peerDependenciesMeta
 
   const bin = binBlockOfNode(node, payload)
@@ -1644,7 +1645,9 @@ function entryOfNode(
   // scalar wins; a string node-field hint is the hand-built fallback. The syml
   // writer would quote it (spaces/`&`), so `stringifyFamily` post-unquotes the
   // `conditions:` lines to match yarn's bare emit (corrects ADR-0018 §A.v5).
-  const conditions = rawConditionsScalarOfNode(graph, node.id) ?? scalarConditionsHintOfNode(node)
+  const conditions = rawConditionsScalarOfNode(graph, node.id)
+    ?? scalarConditionsHintOfNode(node)
+    ?? composeConditionsFromPayload(payload)
   if (conditions !== undefined) {
     if (config.conditionsAllowed) {
       entry['conditions'] = conditions
@@ -1959,6 +1962,46 @@ function scalarConditionsHintOfNode(node: Node): string | undefined {
   return typeof raw === 'string' ? raw : undefined
 }
 
+// Compose the yarn-berry `conditions:` SCALAR from a node's STRUCTURED platform
+// constraints (`os`/`cpu`/`libc` on the TarballPayload) — the only source for a
+// COMPLETION-added platform-optional package (`@napi-rs/nice-*`, `@esbuild/*`,
+// `@rollup/rollup-*`, `@swc/*`, lightningcss, …). Such a node carries os/cpu/libc
+// from its packument but has NEITHER a parse-captured `conditions` sidecar NOR a
+// pre-composed node-field scalar, so without this yarn re-ADDS `conditions:` on
+// `install --immutable` (YN0028 — the pijma/napi-rs break). Faithful port of
+// `@yarnpkg/core` Manifest.getConditions: axes in FIXED order os → cpu → libc, a
+// single value is bare (`os=darwin`), multiple are OR-grouped in parens
+// (`(os=linux | os=android)`), present axes `&`-joined. Verified byte-identical to
+// the real-world corpus on the single-value case (`os=darwin & cpu=arm64`,
+// `os=linux & cpu=x64 & libc=musl`).
+// Faithful port of yarn's `toConditionToken` (@yarnpkg/core Manifest): a value's
+// LEADING `!` run migrates to a prefix BEFORE the axis name — `!win32` → `!os=win32`,
+// NOT `os=!win32` — and an EVEN-length run cancels (`!!win32` → `os=win32`). Getting
+// this wrong is itself a YN0028: yarn recomputes the canonical token on `install
+// --immutable`, sees `os=!win32` ≠ its `!os=win32`, and rewrites. Real trigger:
+// `eiows` publishes `os: ["!win32"]`. Verbatim slice math (incl. the JS `search`
+// returning -1 for an all-`!` value) mirrors yarn byte-for-byte.
+function conditionToken(name: string, raw: string): string {
+  const index = raw.search(/[^!]/)
+  const prefix = index % 2 === 0 ? '' : '!'
+  const value = raw.slice(index)
+  return `${prefix}${name}=${value}`
+}
+
+function composeConditionsFromPayload(payload: TarballPayload | undefined): string | undefined {
+  if (payload === undefined) return undefined
+  const parts: string[] = []
+  const push = (name: string, values: string[] | undefined): void => {
+    if (values === undefined || values.length === 0) return
+    const tokens = values.map(v => conditionToken(name, v))
+    parts.push(tokens.length === 1 ? tokens[0]! : `(${tokens.join(' | ')})`)
+  }
+  push('os', payload.os)
+  push('cpu', payload.cpu)
+  push('libc', payload.libc)
+  return parts.length > 0 ? parts.join(' & ') : undefined
+}
+
 /**
  * Re-derive the `peerDependenciesMeta` block (task #86, extended by #89). Mirrors
  * the pnpm reference emitter (`_pnpm-flat-core.ts` `entryOfNode`): scan
@@ -1979,7 +2022,7 @@ function scalarConditionsHintOfNode(node: Node): string | undefined {
  * `peerDependencies` key. A `Set` of names dedupes, so a peer that is optional
  * in BOTH the edge and the hint is emitted exactly once (no double-emit).
  */
-function peerDependenciesMetaOfNode(graph: Graph, node: Node): SymlMap | undefined {
+function peerDependenciesMetaOfNode(graph: Graph, node: Node, payload: TarballPayload | undefined): SymlMap | undefined {
   const optionalPeers = new Set<string>()
   for (const edge of graph.out(node.id, 'peer')) {
     if (edge.attrs?.optional !== true) continue
@@ -1988,12 +2031,15 @@ function peerDependenciesMetaOfNode(graph: Graph, node: Node): SymlMap | undefin
     optionalPeers.add(edge.attrs.alias ?? dst.name)
   }
 
-  // Verbatim hint: sidecar (real-lock round-trip) preferred over the node field.
+  // Verbatim hint: sidecar (real-lock round-trip) preferred over the node field,
+  // then the payload block a COMPLETION-added node carries (a minted node has no
+  // sidecar/edges — the payload is its only peer-meta source).
   // Carried through to emit so any NON-`optional` key yarn might write (today it
   // only writes `optional`) survives unmodelled, per task #89's preserve-via-
   // sidecar requirement.
   const hint = rawPeerDependenciesMetaBlockOfNode(graph, node.id)
     ?? extraBlockOfNode(node, 'peerDependenciesMeta')
+    ?? coerceSymlMap(payload?.peerDependenciesMeta)
   if (hint !== undefined) {
     for (const [peerName, m] of Object.entries(hint)) {
       if (isOptionalMetaEntry(m)) optionalPeers.add(peerName)

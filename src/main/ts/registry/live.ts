@@ -81,6 +81,22 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
   // path too (yaf token-attach rule B: "https only").
   const authIsSafe = authHeader !== undefined && baseUrl.startsWith('https:')
 
+  // Fetch the FULL single-version manifest (`<registry>/<pkg>/<version>`, ~1-2 KB) —
+  // used to backfill fields the abbreviated (corgi) packument omits, notably `libc`.
+  // Returns undefined on any failure so the caller falls back to the corgi version.
+  const fetchVersionManifest = async (name: string, version: string): Promise<PackumentVersion | undefined> => {
+    const url = `${baseUrl}/${encodePackageName(name)}/${version}`
+    const headers: Record<string, string> = { accept: 'application/json' }
+    if (authIsSafe) headers.authorization = authHeader
+    try {
+      const response = await fetchImpl(url, { headers })
+      if (!response.ok) return undefined
+      return normaliseVersion(name, version, await response.json())
+    } catch {
+      return undefined
+    }
+  }
+
   return {
     async packument(name) {
       const url = `${baseUrl}/${encodePackageName(name)}`
@@ -103,19 +119,33 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       const packument = await this.packument(name)
       if (packument === undefined) return undefined
 
-      const exact = packument.versions[range]
-      if (exact !== undefined) return exact
-
-      const tagged = packument.distTags[range]
-      if (tagged !== undefined) return packument.versions[tagged]
-
-      try {
-        const versions = Object.keys(packument.versions)
-        const resolved = semver.maxSatisfying(versions, range)
-        return resolved === null ? undefined : packument.versions[resolved]
-      } catch {
-        return undefined
+      let version: string | undefined
+      if (packument.versions[range] !== undefined) {
+        version = range
+      } else if (packument.distTags[range] !== undefined) {
+        version = packument.distTags[range]
+      } else {
+        try {
+          version = semver.maxSatisfying(Object.keys(packument.versions), range) ?? undefined
+        } catch {
+          return undefined
+        }
       }
+      if (version === undefined) return undefined
+      const base = packument.versions[version]
+      if (base === undefined) return undefined
+
+      // The abbreviated (corgi) packument DROPS `libc`, so a linux platform package
+      // would emit `conditions: os=linux & cpu=x64` MISSING `& libc=<glibc|musl>` —
+      // which yarn re-adds on `install --immutable` (YN0028; the pijma napi-rs break).
+      // Backfill a linux version from the light single-version manifest (full
+      // os/cpu/libc). Non-linux platform packages carry no libc, so corgi is already
+      // complete for them (verified byte-identical vs pijma for os+cpu-only entries).
+      if (base.os?.includes('linux') === true && base.libc === undefined) {
+        const full = await fetchVersionManifest(name, version)
+        if (full !== undefined) return full
+      }
+      return base
     },
 
     async audit(pkgs, opts = {}) {

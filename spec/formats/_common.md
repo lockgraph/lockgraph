@@ -195,6 +195,31 @@ storybook, yarnpkg-berry).
   > and broke byte-fidelity (and `yarn install --immutable`) on monorepos that
   > link local packages (#95).
 
+**Completion-minted entries SOURCE `conditions:` / `peerDependencies:` /
+`peerDependenciesMeta:` from STRUCTURED metadata, not a parse sidecar** (version-
+invariant; the composer lives in the shared core, so it holds for every generation).
+A node minted by completion/remediation — not parsed from a lock — has no per-node
+verbatim sidecar, so these blocks are composed from the node's own metadata rather
+than replayed:
+
+- `conditions:` from the payload's `os` / `cpu` / `libc`, in yarn's
+  `Manifest.getConditions` form: axis order **os → cpu → libc**, a single value bare
+  (`os=darwin`), multiple OR-grouped in parens (`(os=linux | os=android)`), present
+  axes `&`-joined, array order preserved; a value's leading `!` run migrates to a
+  prefix BEFORE the axis (`!win32` → `!os=win32`, NOT `os=!win32`) and an even run
+  cancels — yarn's `toConditionToken`. Gated by the per-generation `conditionsAllowed`
+  (v5–v10; **v4 drops `conditions:`** as unsupported, with a diagnostic). `libc`
+  fidelity depends on the resolver: npm's abbreviated (corgi) packument OMITS `libc`
+  ([registry `_common.md` §5](../registry/_common.md#5-abbreviated-packument-corgi)),
+  so a live resolver must backfill from the full single-version manifest or a linux
+  `conditions:` loses its `& libc=<glibc|musl>` (YN0028).
+- `peerDependencies:` / `peerDependenciesMeta:` from the node's declared peer manifest
+  (carried on the payload): a minted node wires NO `peer` edge for an unresolved /
+  optional peer, so the payload is the only source. Every generation.
+
+Parsed entries always re-emit their verbatim sidecar; these composers fire ONLY when
+it is absent, so a same-format round-trip is byte-unchanged.
+
 ### 1.5 Quoting — the SYML quoting predicate
 
 A SYML key or value scalar is emitted **unquoted iff it matches the single

@@ -267,6 +267,13 @@ v8-specific deltas inherited on top of the shared contract are:
   sidecar-maintenance diff folds the *pinned* descriptor (which already equals the
   sidecar entry → zero drift), and when the sidecar is **absent** (a minted node)
   the reconstruction keys by `overrideRange ?? range`. Non-aliased edges only.
+- **Completion-minted nodes compose `conditions:` / `peerDependencies:` /
+  `peerDependenciesMeta:` from STRUCTURED metadata, not a sidecar** (e.g. `audit-fix`
+  pulling a platform-optional closure — `@napi-rs/*`, `@esbuild/*`, `@rollup/rollup-*`).
+  This is version-invariant shared-core behaviour — the composition rules (yarn's
+  `conditions` format incl. `!`-negation, the `conditionsAllowed` gate, the peer-block
+  payload source, and the corgi `libc` backfill) are normative in
+  [`_common.md` §1.4](./_common.md#14-entry-internal-field-schedule).
 
 ## Degradation rules
 

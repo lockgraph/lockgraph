@@ -434,6 +434,11 @@ function projectPackumentVersion(pv: PackumentVersion): {
       bin:                 pv.bin,
       bundledDependencies: pv.bundledDependencies,
       deprecated:          pv.deprecated,
+      // Peer blocks ride the payload so a berry emit of THIS completion-added node
+      // re-derives `peerDependencies:` / `peerDependenciesMeta:` (an unresolved peer
+      // has no edge to reconstruct from; a minted node has no parse sidecar).
+      peerDependencies:     pv.peerDependencies,
+      peerDependenciesMeta: pv.peerDependenciesMeta,
       resolution:          pv.tarball === undefined ? undefined : { type: 'tarball', url: pv.tarball },
       // license intentionally undefined — not carried on PackumentVersion;
       // recipe-layer enrich may refine later per §4.2 footnote.

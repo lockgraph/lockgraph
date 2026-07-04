@@ -236,3 +236,39 @@ describe('registry/live — option handling', () => {
     expect(() => liveRegistry({ fetch: 123 as unknown as typeof fetch })).toThrow(/fetch/)
   })
 })
+
+describe('registry/live — resolve() libc enrichment (corgi drops libc → YN0028 without this)', () => {
+  const corgiOf = (name: string, extra: Record<string, unknown>) => ({
+    name, 'dist-tags': { latest: '1.0.1' },
+    versions: { '1.0.1': { name, version: '1.0.1', dist: { tarball: 't', integrity: 'sha512-x==' }, ...extra } },
+  })
+
+  it('enriches a LINUX platform version with libc from the single-version manifest', async () => {
+    const corgi = corgiOf('native-linux', { os: ['linux'], cpu: ['x64'] })          // corgi: NO libc
+    const full  = { name: 'native-linux', version: '1.0.1', os: ['linux'], cpu: ['x64'], libc: ['glibc'], dist: { tarball: 't', integrity: 'sha512-x==' } }
+    const spy = vi.fn(async (url: string) => mockResponse({ body: String(url).endsWith('/1.0.1') ? full : corgi }))
+    const reg = liveRegistry(buildOpts(spy as unknown as typeof fetch))
+    const pv = await reg.resolve('native-linux', '^1.0.0')
+    expect(pv?.libc).toEqual(['glibc'])
+    expect(spy.mock.calls.some(c => String(c[0]).endsWith('/1.0.1'))).toBe(true)     // single-version doc consulted
+  })
+
+  it('does NOT extra-fetch for a NON-linux platform version (corgi already complete)', async () => {
+    const corgi = corgiOf('native-darwin', { os: ['darwin'], cpu: ['arm64'] })
+    const spy = vi.fn(async () => mockResponse({ body: corgi }))
+    const reg = liveRegistry(buildOpts(spy as unknown as typeof fetch))
+    const pv = await reg.resolve('native-darwin', '^1.0.0')
+    expect(pv?.os).toEqual(['darwin'])
+    expect(pv?.libc).toBeUndefined()
+    expect(spy.mock.calls.every(c => !String(c[0]).endsWith('/1.0.1'))).toBe(true)   // no enrichment fetch
+  })
+
+  it('falls back to the corgi version when the single-version manifest fetch fails', async () => {
+    const corgi = corgiOf('native-linux', { os: ['linux'], cpu: ['x64'] })
+    const spy = vi.fn(async (url: string) => String(url).endsWith('/1.0.1') ? mockResponse({ status: 500 }) : mockResponse({ body: corgi }))
+    const reg = liveRegistry(buildOpts(spy as unknown as typeof fetch))
+    const pv = await reg.resolve('native-linux', '^1.0.0')
+    expect(pv?.os).toEqual(['linux'])                                               // still resolves, degraded (no libc, no throw)
+    expect(pv?.libc).toBeUndefined()
+  })
+})

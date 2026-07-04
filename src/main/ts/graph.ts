@@ -69,6 +69,15 @@ export interface TarballPayload {
   os?:                  string[]
   libc?:                string[]
   bundledDependencies?: string[]
+  // Declared peer requirements from the package manifest (ADR-0023 §4.2). Carried
+  // on the payload so a COMPLETION-added yarn-berry node can re-emit its
+  // `peerDependencies:` / `peerDependenciesMeta:` blocks: completion cannot wire a
+  // `peer` EDGE for an unresolved/optional peer (there is no target node in the
+  // graph), and a minted node has no parse sidecar, so without this the berry emit
+  // drops both blocks and `yarn install --immutable` re-adds them (YN0028). Parsed
+  // berry nodes round-trip via the berry sidecar instead; non-yarn emitters ignore these.
+  peerDependencies?:     Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   // ADR-0014 §4.F3 — typed canonical resolution. Distinct from
   // `nativeResolution` (PM-native verbatim string sidecar per ADR-0013): this
   // carrier holds the 4-case discriminated union (tarball | git | directory |
