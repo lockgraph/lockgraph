@@ -255,7 +255,7 @@ describe('registry/live — resolve() libc enrichment (corgi drops libc → YN00
 
   it('does NOT extra-fetch for a NON-linux platform version (corgi already complete)', async () => {
     const corgi = corgiOf('native-darwin', { os: ['darwin'], cpu: ['arm64'] })
-    const spy = vi.fn(async () => mockResponse({ body: corgi }))
+    const spy = vi.fn(async (_url: string) => mockResponse({ body: corgi }))
     const reg = liveRegistry(buildOpts(spy as unknown as typeof fetch))
     const pv = await reg.resolve('native-darwin', '^1.0.0')
     expect(pv?.os).toEqual(['darwin'])

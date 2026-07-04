@@ -20,6 +20,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import type { PackumentVersion, RegistryAdapter } from '../registry/types.ts'
+import { payloadOfPackumentVersion } from '../registry/payload.ts'
 import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
 import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
 import {
@@ -425,24 +426,7 @@ function projectPackumentVersion(pv: PackumentVersion): {
       version: pv.version,
       // patch is always undefined per §4.2 — completion does not synthesise patches.
     },
-    payload: {
-      integrity:           pv.integrity,
-      engines:             pv.engines,
-      os:                  pv.os,
-      cpu:                 pv.cpu,
-      libc:                pv.libc,
-      bin:                 pv.bin,
-      bundledDependencies: pv.bundledDependencies,
-      deprecated:          pv.deprecated,
-      // Peer blocks ride the payload so a berry emit of THIS completion-added node
-      // re-derives `peerDependencies:` / `peerDependenciesMeta:` (an unresolved peer
-      // has no edge to reconstruct from; a minted node has no parse sidecar).
-      peerDependencies:     pv.peerDependencies,
-      peerDependenciesMeta: pv.peerDependenciesMeta,
-      resolution:          pv.tarball === undefined ? undefined : { type: 'tarball', url: pv.tarball },
-      // license intentionally undefined — not carried on PackumentVersion;
-      // recipe-layer enrich may refine later per §4.2 footnote.
-    },
+    payload: payloadOfPackumentVersion(pv),
   }
 }
 

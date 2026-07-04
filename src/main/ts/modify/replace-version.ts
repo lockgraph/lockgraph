@@ -21,10 +21,9 @@ import {
   type MutateResult,
   type Node,
   type NodeId,
-  type TarballPayload,
 } from '../graph.ts'
-import type { Integrity } from '../recipe/integrity.ts'
 import { isSentinelPatch } from '../recipe/patch.ts'
+import { payloadOfPackumentVersion } from '../registry/payload.ts'
 import type { ModifyContext } from './context.ts'
 import {
   modifyEdgeRewired,
@@ -148,7 +147,7 @@ export async function replaceVersion(
       })
       currentGraph = result.graph
       // setTarball with the registry-supplied payload — preserves integrity / engines / etc.
-      const payload = makeTarballPayload(target)
+      const payload = payloadOfPackumentVersion(target)
       currentGraph = currentGraph.mutate(m => {
         m.setTarball({ name: target.name, version: target.version, patch: node.patch }, payload)
       }).graph
@@ -236,30 +235,6 @@ function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind, alias?:
     if (e.dst === dst && e.attrs?.alias === alias) return true
   }
   return false
-}
-
-function makeTarballPayload(pv: {
-  integrity?:           Integrity
-  engines?:             Record<string, string>
-  os?:                  string[]
-  cpu?:                 string[]
-  libc?:                string[]
-  bin?:                 string | Record<string, string>
-  bundledDependencies?: string[]
-  deprecated?:          string
-  tarball?:             string
-}): TarballPayload {
-  return {
-    integrity:           pv.integrity,
-    engines:             pv.engines,
-    os:                  pv.os,
-    cpu:                 pv.cpu,
-    libc:                pv.libc,
-    bin:                 pv.bin,
-    bundledDependencies: pv.bundledDependencies,
-    deprecated:          pv.deprecated,
-    resolution:          pv.tarball === undefined ? undefined : { type: 'tarball', url: pv.tarball },
-  }
 }
 
 function emptyResult(graph: Graph): ReplaceVersionResult {

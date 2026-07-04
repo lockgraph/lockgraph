@@ -14,11 +14,10 @@ import {
   type Graph,
   type Node,
   type NodeId,
-  type TarballPayload,
 } from '../graph.ts'
-import type { Integrity } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import { resolveFindUp } from '../complete/find-up.ts'
+import { payloadOfPackumentVersion } from '../registry/payload.ts'
 import type { ModifyContext } from './context.ts'
 import {
   modifyEdgeRewired,
@@ -128,7 +127,7 @@ export async function addDependency(
       version:     resolved.version,
       peerContext: [],
     }
-    const payload = makeTarballPayload(resolved)
+    const payload = payloadOfPackumentVersion(resolved)
     const addedDiag = modifyNodeAdded(parentId, newId)
     const result = graph.mutate(m => {
       m.addNode(newNode)
@@ -171,26 +170,3 @@ function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind): boolea
   return false
 }
 
-function makeTarballPayload(pv: {
-  integrity?:           Integrity
-  engines?:             Record<string, string>
-  os?:                  string[]
-  cpu?:                 string[]
-  libc?:                string[]
-  bin?:                 string | Record<string, string>
-  bundledDependencies?: string[]
-  deprecated?:          string
-  tarball?:             string
-}): TarballPayload {
-  return {
-    integrity:           pv.integrity,
-    engines:             pv.engines,
-    os:                  pv.os,
-    cpu:                 pv.cpu,
-    libc:                pv.libc,
-    bin:                 pv.bin,
-    bundledDependencies: pv.bundledDependencies,
-    deprecated:          pv.deprecated,
-    resolution:          pv.tarball === undefined ? undefined : { type: 'tarball', url: pv.tarball },
-  }
-}
