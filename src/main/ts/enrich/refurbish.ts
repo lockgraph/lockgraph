@@ -9,7 +9,7 @@
 
 import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
-import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
+import { berryCacheKeyReproducible, cacheKeyCompressionLevel, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
 import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
 
@@ -166,13 +166,18 @@ export async function refurbish(
   // forces a foreign prefix into a bare lock. An indeterminable cacheKey
   // (`undefined`) defers everything rather than guess.
   const pakoOk = cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)
-  // cacheKey 9/10 `mixed` (+ explicit `cN`) vendor a non-portable zlib pako
-  // can't match. The OPTIONAL `@yarnpkg/libzip` backend (§berry-pack-libzip) MAY
-  // cover them — but the installed libzip reproduces ONLY its own cache
-  // generation (3.x → cacheKey 10, not 9), and a wrong digest hard-fails
-  // `--immutable`. So trust it ONLY after CALIBRATION: reproduce one existing
-  // sibling checksum and compare. Absent libzip / no anchor / mismatch → defer.
-  const useLibzip = cacheKey !== undefined && !pakoOk
+  // cacheKey 9/10 `mixed` (+ explicit `cN`) vendor a non-portable zlib pako can't
+  // match. The OPTIONAL `@yarnpkg/libzip` backend (§berry-pack-libzip) reproduces a
+  // FIXED level (cN) — every file compresses identically, so calibrating ONE anchor
+  // validates all — but it CANNOT reliably reproduce yarn's `mixed` heuristic
+  // (per-FILE: deflate iff smaller). One-anchor calibration is UNSOUND for `mixed`:
+  // a small / STORE-able anchor calibrates PASS while a larger DEFLATE'd target
+  // mis-hashes → `yarn install --immutable` YN0018 (yaf pijma `selfsigned` under
+  // `compressionLevel: mixed`). So libzip ONLY a NON-mixed (fixed-level) cacheKey,
+  // and only after CALIBRATION (reproduce a sibling checksum, compare). A `mixed`
+  // cacheKey pako can't do (v9/10) DEFERS — a clean omit yarn recomputes on install,
+  // never a wrong value `--immutable` rejects. Absent libzip / no anchor / mismatch → defer.
+  const useLibzip = cacheKey !== undefined && !pakoOk && cacheKeyCompressionLevel(cacheKey) !== -1
     ? await calibrateLibzip(graph, cacheKey, source)
     : false
   const reproducible = pakoOk || useLibzip

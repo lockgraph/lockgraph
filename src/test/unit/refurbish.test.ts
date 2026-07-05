@@ -213,4 +213,26 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     expect(r.enriched).toEqual(['ms@2.1.3'])
     expect(r.graph.tarballOf('is-buffer@2.0.5')?.integrity).toBeUndefined()
   })
+
+  it('DEFERS a `mixed` cacheKey — never writes a wrong berry checksum (yaf pijma compressionLevel: mixed)', async () => {
+    // pijma pins `compressionLevel: mixed` → cacheKey `10` (no `cN` suffix). pako
+    // can't reproduce v10 mixed and libzip's one-anchor calibration is unsound for
+    // the per-file heuristic, so a gap must DEFER: a wrong value hard-fails
+    // `yarn install --immutable` (YN0018), a clean omit yarn recomputes on install.
+    // The source must not even be consulted (a defer candidate skips fetch + fast-path).
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'app',        version: '0.0.0', workspacePath: '.' })
+      addPackage(b, { name: 'selfsigned', version: '5.5.0' })
+    })
+    let consulted = false
+    const source: TarballSource = {
+      async tarball() { consulted = true; return undefined },
+      async berryChecksum() { consulted = true; return 'ab'.repeat(64) },
+    }
+    const r = await refurbish(graph, 'yarn-berry-v10', source, { cacheKey: '10' })
+
+    expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('selfsigned@5.5.0')?.integrity).toBeUndefined()
+    expect(consulted).toBe(false)
+  })
 })
