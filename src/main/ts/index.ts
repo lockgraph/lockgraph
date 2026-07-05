@@ -44,7 +44,7 @@ export type { Diagnostic, Graph } from './graph.ts'
 // honour the same registry/cache adapter shapes.
 export { frozenRegistry } from './registry/frozen.ts'
 export { liveRegistry, type LiveRegistryOptions } from './registry/live.ts'
-export { yarnBerryCache, type YarnBerryCacheOptions } from './registry/cache-yarn-berry.ts'
+export { yarnBerryCache, withYarnCacheChecksums, type YarnBerryCacheOptions } from './registry/cache-yarn-berry.ts'
 export { npmCache, type NpmCacheOptions } from './registry/cache-npm.ts'
 export { pnpmCache, type PnpmCacheOptions } from './registry/cache-pnpm.ts'
 export type {

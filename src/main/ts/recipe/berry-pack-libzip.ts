@@ -74,7 +74,13 @@ export async function computeBerryChecksumViaLibzip(
       if (rel === '') continue
       const full = `${prefix}/${rel}`
       zipFs.mkdirpSync(full.slice(0, full.lastIndexOf('/')), { chmod: 0o755, utimes: [SAFE_TIME, SAFE_TIME] })
-      zipFs.writeFileSync(full, f.data, { mode: f.mode })
+      // yarn NORMALIZES the entry mode — 0o755 if any execute bit, else 0o644 — it
+      // does NOT preserve the raw tar mode. Passing `f.mode` verbatim diverges the
+      // zip bytes for a file with a non-standard mode (e.g. selfsigned@5.5.0's
+      // `test/ec-keys.js` is 0o600 → wrong checksum → `--immutable` YN0018). Mirrors
+      // the pako path's `(mode & 0o111) ? 0o755 : 0o644` (berry-checksum.ts).
+      const mode = (f.mode & 0o111) !== 0 ? 0o755 : 0o644
+      zipFs.writeFileSync(full, f.data, { mode })
       zipFs.utimesSync(full, SAFE_TIME, SAFE_TIME)
     }
     return createHash('sha512').update(Buffer.from(zipFs.getBufferAndClose())).digest('hex')

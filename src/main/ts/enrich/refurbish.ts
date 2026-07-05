@@ -9,7 +9,7 @@
 
 import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
-import { berryCacheKeyReproducible, cacheKeyCompressionLevel, computeBerryChecksum } from '../recipe/berry-checksum.ts'
+import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
 import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
 
@@ -167,17 +167,15 @@ export async function refurbish(
   // (`undefined`) defers everything rather than guess.
   const pakoOk = cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)
   // cacheKey 9/10 `mixed` (+ explicit `cN`) vendor a non-portable zlib pako can't
-  // match. The OPTIONAL `@yarnpkg/libzip` backend (§berry-pack-libzip) reproduces a
-  // FIXED level (cN) — every file compresses identically, so calibrating ONE anchor
-  // validates all — but it CANNOT reliably reproduce yarn's `mixed` heuristic
-  // (per-FILE: deflate iff smaller). One-anchor calibration is UNSOUND for `mixed`:
-  // a small / STORE-able anchor calibrates PASS while a larger DEFLATE'd target
-  // mis-hashes → `yarn install --immutable` YN0018 (yaf pijma `selfsigned` under
-  // `compressionLevel: mixed`). So libzip ONLY a NON-mixed (fixed-level) cacheKey,
-  // and only after CALIBRATION (reproduce a sibling checksum, compare). A `mixed`
-  // cacheKey pako can't do (v9/10) DEFERS — a clean omit yarn recomputes on install,
-  // never a wrong value `--immutable` rejects. Absent libzip / no anchor / mismatch → defer.
-  const useLibzip = cacheKey !== undefined && !pakoOk && cacheKeyCompressionLevel(cacheKey) !== -1
+  // match. The OPTIONAL `@yarnpkg/libzip` backend (§berry-pack-libzip) DOES reproduce
+  // them — INCLUDING `mixed` (yarn's per-file deflate-iff-smaller heuristic, driven by
+  // the same ZipFS + a normalized entry mode) byte-exact when the INSTALLED libzip
+  // matches the lock's cache generation (libzip 3.x → cacheKey 10; verified 60/60 real
+  // cacheKey-10 mixed zips + the selfsigned@5.5.0 mode edge). A wrong digest hard-fails
+  // `--immutable`, so trust libzip ONLY after CALIBRATION: reproduce one existing
+  // sibling checksum and compare. Absent libzip / no anchor / mismatch (e.g. a
+  // cacheKey-9 lock against a libzip-3 install) → defer (or the oracle supplies below).
+  const useLibzip = cacheKey !== undefined && !pakoOk
     ? await calibrateLibzip(graph, cacheKey, source)
     : false
   const reproducible = pakoOk || useLibzip
@@ -194,16 +192,25 @@ export async function refurbish(
   type Cand =
     | { kind: 'defer'; id: NodeId }
     | { kind: 'fetch'; node: Node; payload: TarballPayload; cacheKey: string }
+  // A caller-supplied oracle (`source.berryChecksum`) can hand us yarn's OWN digest
+  // for a cacheKey we CAN'T byte-reproduce — the security-preserving path for a
+  // `mixed` bump when yarn is installed: PIN the real integrity instead of omitting
+  // it. So a non-reproducible node is still a `fetch` candidate when an oracle exists
+  // (the resolved step asks it first, and DEFERS only if it can't supply).
+  const canSupply = source.berryChecksum !== undefined
   const cands: Cand[] = []
   for (const node of graph.nodes()) {
     if (seed !== undefined && !seed.has(node.id)) continue
     if (node.workspacePath !== undefined) continue
     const payload: TarballPayload = graph.tarballOf(node.id) ?? {}
     if (emitBerryChecksum(payload.integrity ?? emptyIntegrity()) !== undefined) continue
-    // `reproducible` ⟹ `cacheKey` is defined; a patch or a non-reproducible
-    // (or indeterminable) cacheKey defers.
-    if (node.patch !== undefined || !reproducible) { cands.push({ kind: 'defer', id: node.id }); continue }
-    cands.push({ kind: 'fetch', node, payload, cacheKey: cacheKey as string })
+    // Fetch iff there is SOME way to a CORRECT digest — byte-reproduce it OR ask the
+    // oracle for yarn's own. A patch, an indeterminable cacheKey, or neither → defer
+    // (never a wrong value).
+    if (node.patch !== undefined || cacheKey === undefined || (!reproducible && !canSupply)) {
+      cands.push({ kind: 'defer', id: node.id }); continue
+    }
+    cands.push({ kind: 'fetch', node, payload, cacheKey })
   }
 
   // 2) Recompute CONCURRENTLY — the bottleneck is the per-tarball fetch (network),
@@ -219,11 +226,20 @@ export async function refurbish(
       ? await source.berryChecksum(c.node.name, c.node.version, c.cacheKey)
       : undefined
     if (hex === undefined) {
+      // The oracle couldn't supply. RECOMPUTE only when byte-reproducible; a
+      // non-reproducible `mixed`/`cN` cacheKey DEFERS rather than write a wrong value
+      // (yarn recomputes on install). The candidate existed because the oracle MIGHT
+      // have supplied — it didn't, so fall back to reproduce-or-defer.
+      if (!reproducible) return { kind: 'defer', id: c.node.id }
       const tgz = await source.tarball(c.node.name, c.node.version)
       if (tgz === undefined) return { kind: 'defer', id: c.node.id }   // no fetchable tarball
-      hex = pakoOk
-        ? computeBerryChecksum(tgz, c.node.name, c.cacheKey)           // pinned pako (STORE / mixed 7,8)
-        : await computeBerryChecksumViaLibzip(tgz, c.node.name, c.cacheKey)  // calibrated libzip (9/10)
+      try {
+        hex = pakoOk
+          ? computeBerryChecksum(tgz, c.node.name, c.cacheKey)         // pinned pako (STORE / mixed 7,8)
+          : await computeBerryChecksumViaLibzip(tgz, c.node.name, c.cacheKey)  // calibrated libzip (9/10)
+      } catch {
+        return { kind: 'defer', id: c.node.id }   // e.g. parseTar rejected an unsupported entry (symlink) → defer
+      }
       if (hex === undefined) return { kind: 'defer', id: c.node.id }   // libzip couldn't pack — defer
     }
     const integrity = mergeIntegrity(

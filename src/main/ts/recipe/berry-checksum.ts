@@ -89,9 +89,13 @@ const tarField = (b: Buffer, off: number, len: number): string => {
   return slice.toString('latin1', 0, nul === -1 ? len : nul)
 }
 
-// Minimal ustar reader: regular files only (`typeflag` '0'/''), honouring the
-// `prefix` long-path field. Directory and metadata entries are skipped — the
-// zip's directory entries are synthesised by mkdirp (§zip below). Exported for
+// Minimal ustar reader: regular files (`typeflag` '0'/''), honouring the `prefix`
+// long-path field. Directory ('5') and PAX/global ('x'/'g') entries are skipped —
+// dirs are synthesised by mkdirp (§zip below) and PAX metadata is carried by the
+// ustar fields for these tarballs. Any OTHER type — symlink ('2'), hardlink ('1'),
+// device, GNU-long-name — carries content/naming yarn PUTS IN the cache zip that we
+// do NOT reproduce; SILENTLY skipping it would mis-hash (a wrong checksum hard-fails
+// `--immutable`, worse than a miss), so we THROW and the packer DEFERS. Exported for
 // the optional `berry-pack-libzip` backend (drives `@yarnpkg/libzip` for the
 // cacheKeys pako can't reproduce).
 export function parseTar(tar: Buffer): TarFile[] {
@@ -108,7 +112,12 @@ export function parseTar(tar: Buffer): TarFile[] {
     const mode = parseInt(tarField(header, 100, 8).trim() || '0', 8) || 0
     const type = String.fromCharCode(header[156] ?? 0)
     o += 512
-    if (type === '0' || type === '\0' || type === '') out.push({ name, mode, data: tar.subarray(o, o + size) })
+    if (type === '0' || type === '\0' || type === '') {
+      out.push({ name, mode, data: tar.subarray(o, o + size) })
+    } else if (type !== '5' && type !== 'x' && type !== 'g') {
+      // symlink / hardlink / device / GNU-long — not reproduced; defer, never mis-hash.
+      throw new Error(`berry-checksum: unsupported tar entry type '${type}' for '${name}'`)
+    }
     o += Math.ceil(size / 512) * 512
   }
   return out

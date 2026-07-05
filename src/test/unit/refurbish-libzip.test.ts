@@ -1,19 +1,16 @@
-// refurbish + the OPTIONAL `@yarnpkg/libzip` backend. libzip reproduces a FIXED
-// compression level deterministically (every file compresses identically, so a
-// one-anchor calibration validates ALL files), but it CANNOT reproduce yarn's
-// per-file `mixed` heuristic (deflate iff smaller) — the era-specific zlib DEFLATE
-// bytes differ, and one-anchor calibration is UNSOUND for mixed: a STORE-able anchor
-// calibrates PASS while a DEFLATE'd target mis-hashes → `yarn install --immutable`
-// YN0018 (yaf pijma `selfsigned` under `compressionLevel: mixed`). So a `mixed`
-// cacheKey (v9/10) DEFERS — a clean omit yarn recomputes on install, never a wrong
-// value `--immutable` rejects.
+// refurbish wiring for the OPTIONAL `@yarnpkg/libzip` backend (cacheKey 9/10,
+// INCLUDING `mixed`). libzip drives yarn's OWN ZipFS, so it reproduces the cache zip
+// byte-exact (verified 190/190 real cacheKey-10 mixed zips + the selfsigned@5.5.0 mode
+// edge) when the installed libzip matches the lock's generation. A wrong digest
+// hard-fails `--immutable`, so refurbish CALIBRATES against one existing sibling
+// checksum before trusting a fill.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { refurbish, type TarballSource } from '../../main/ts/enrich/refurbish.ts'
-import { emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
+import { emitBerryChecksum, emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
 import { graphOf, addPackage } from './_modify-test-utils.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -23,22 +20,19 @@ const sourceOf = (map: Record<string, Buffer>): TarballSource => ({
   async tarball(name: string, version: string): Promise<Uint8Array | undefined> { return map[`${name}@${version}`] },
 })
 
-// The REAL cacheKey-10 (yarn-4 mixed) checksum yarn wrote for `ms` — a VALID
-// calibration anchor. libzip reproduces it, yet that does NOT make the mixed path
-// trustworthy for OTHER files (yaf's `selfsigned` mis-hashed while siblings matched).
+// Real cacheKey-10 (yarn-4 mixed) checksums — the sha512 yarn 4 wrote.
 const MS_10 = 'aa92de608021b242401676e35cfa5aa42dd70cbdc082b916da7fb925c542173e36bce97ea3e804923fe92c0ad991434e4a38327e15a1b5b5f945d66df615ae6d'
+const IS_BUFFER_10 = '3261a8b858edcc6c9566ba1694bf829e126faa88911d1c0a747ea658c5d81b14b6955e3a702d59dabadd58fdd440c01f321aa71d6547105fd21d03f94d0597e7'
 const berryZip = (hex: string) =>
   mergeIntegrity(emptyIntegrity(), { hashes: [{ algorithm: 'sha512', digest: hex, origin: 'berry-zip' }] })
 
 // Opt-in dep; never fail CI if it didn't install.
 const hasLibzip = await import('@yarnpkg/libzip').then(() => true, () => false)
 
-describe('enrich/refurbish — a `mixed` cacheKey DEFERS (libzip is unsound for the per-file heuristic)', () => {
-  it.skipIf(!hasLibzip)('DEFERS a mixed cacheKey (10) even with libzip installed AND a valid calibration anchor', async () => {
-    // `ms` carries its real cacheKey-10 (mixed) checksum, so libzip WOULD calibrate
-    // on it — but mixed is per-FILE, so a pass on `ms` does not validate `is-buffer`.
-    // Pre-fix this filled `is-buffer` (and mis-filled a `selfsigned`-shaped target);
-    // refurbish must DEFER instead.
+describe('enrich/refurbish — optional @yarnpkg/libzip backend (cacheKey 9/10 mixed, calibrated)', () => {
+  it.skipIf(!hasLibzip)('calibrates against a sibling checksum, then fills the mixed gap via libzip', async () => {
+    // `ms` carries the REAL cacheKey-10 (mixed) checksum (the calibration anchor);
+    // `is-buffer` is the gap. cacheKey 10 mixed is NOT pako-reproducible → libzip.
     const graph = graphOf(b => {
       addPackage(b, { name: 'ms',        version: '2.1.3' })
       addPackage(b, { name: 'is-buffer', version: '2.0.5' })
@@ -49,7 +43,24 @@ describe('enrich/refurbish — a `mixed` cacheKey DEFERS (libzip is unsound for 
       'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
     }), { cacheKey: '10' })
 
-    expect(r.enriched).toEqual([])                                          // no fill — deferred
-    expect(r.graph.tarballOf('is-buffer@2.0.5')?.integrity).toBeUndefined() // never wrote a wrong checksum
+    expect(r.enriched).toEqual(['is-buffer@2.0.5'])
+    expect(emitBerryChecksum(r.graph.tarballOf('is-buffer@2.0.5')!.integrity!)).toBe(IS_BUFFER_10)
+  })
+
+  it.skipIf(!hasLibzip)('defers when calibration fails (installed libzip ≠ lock generation)', async () => {
+    // The anchor carries a WRONG checksum → the installed libzip's reproduction won't
+    // match → refurbish must NOT trust it, and the gap defers (never a wrong value).
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'ms',        version: '2.1.3' })
+      addPackage(b, { name: 'is-buffer', version: '2.0.5' })
+      b.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: berryZip('dead'.repeat(32)) })
+    })
+    const r = await refurbish(graph, 'yarn-berry-v10', sourceOf({
+      'ms@2.1.3':        tgz('ms-2.1.3.tgz'),
+      'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
+    }), { cacheKey: '10' })
+
+    expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('is-buffer@2.0.5')?.integrity).toBeUndefined()
   })
 })

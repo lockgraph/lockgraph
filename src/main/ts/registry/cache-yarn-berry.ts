@@ -26,9 +26,11 @@
 // that and treat the trailing `-<cacheKey>` as optional. We accept
 // both filename shapes — v1 does not need to disambiguate them.
 
+import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { CacheAdapter, Packument, PackumentVersion } from './types.ts'
+import type { TarballSource } from '../enrich/refurbish.ts'
 
 export interface YarnBerryCacheOptions {
   /**
@@ -108,6 +110,9 @@ interface CacheEntry {
   readonly filename: string
   readonly name:     string
   readonly version:  string
+  /** The trailing `-<cacheKey>` from a version-based (format A) filename, else
+   *  undefined for a checksum-based (format B) name. */
+  readonly cacheKey: string | undefined
 }
 
 function resolveCacheFolder(opts: YarnBerryCacheOptions): string {
@@ -152,7 +157,7 @@ async function scanCacheFolder(folder: string, name: string): Promise<CacheEntry
     const version = m.groups.rest
     if (version === undefined || version.length === 0) continue
 
-    matches.push({ filename, name, version })
+    matches.push({ filename, name, version, cacheKey: m.groups.cacheKey })
   }
   return matches
 }
@@ -165,4 +170,47 @@ function slugifyIdent(name: string): string {
   const slash = name.indexOf('/')
   if (slash === -1) return name
   return `${name.slice(0, slash)}-${name.slice(slash + 1)}`
+}
+
+/**
+ * The berry `checksum:` digest for a cached package — `sha512` of yarn's OWN cache
+ * `.zip` (the checksum IS that hash, ADR-0035). This READS yarn's actual output
+ * rather than REPRODUCING it, so it is correct for EVERY compression — including
+ * `compressionLevel: mixed`, which is not reproducible off-Node. Prefers a zip whose
+ * filename cacheKey matches the requested one, else a checksum-based (format B) name;
+ * undefined when the cache has no matching zip (→ refurbish defers).
+ */
+async function cacheZipChecksum(folder: string, name: string, version: string, cacheKey: string): Promise<string | undefined> {
+  const entries = await scanCacheFolder(folder, name)
+  const hit = entries.find(e => e.version === version && e.cacheKey === cacheKey)
+    ?? entries.find(e => e.version === version && e.cacheKey === undefined)
+  if (hit === undefined) return undefined
+  try {
+    const bytes = await readFile(path.join(folder, hit.filename))
+    return createHash('sha512').update(bytes).digest('hex')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Wrap a base `TarballSource` so `refurbish` fills a berry `checksum:` from yarn's OWN
+ * `.yarn/cache/` zip — the SECURITY-preserving path for a `mixed` / unreproducible
+ * cacheKey when yarn is installed: PIN the exact integrity instead of omitting it.
+ * The base's own `berryChecksum` (if any) wins; otherwise the cache zip is hashed.
+ * `tarball` passes through to the base (the reproducible-recompute fallback). The
+ * cache must hold the package's zip — populated by any `yarn install` / `--immutable`
+ * fetch; a not-yet-fetched package returns undefined and refurbish defers as before.
+ */
+export function withYarnCacheChecksums(base: TarballSource, opts: YarnBerryCacheOptions = {}): TarballSource {
+  const folder = resolveCacheFolder(opts)
+  return {
+    tarball: (name, version) => base.tarball(name, version),
+    async berryChecksum(name, version, cacheKey) {
+      const fromBase = base.berryChecksum !== undefined
+        ? await base.berryChecksum(name, version, cacheKey)
+        : undefined
+      return fromBase ?? await cacheZipChecksum(folder, name, version, cacheKey)
+    },
+  }
 }
