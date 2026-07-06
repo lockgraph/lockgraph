@@ -3,13 +3,16 @@
 //
 // Graph-canonical integrity is `Integrity { hashes: Hash[] }`: every algorithm
 // present on disk and every member of a space-joined SRI is preserved verbatim,
-// each digest tagged with its ORIGIN. `origin` distinguishes a TARBALL digest
-// (re-encodable into an SRI — `sri`/`registry`/`recomputed`/`url-fragment`) from
-// a `berry-zip` digest: Yarn Berry's `checksum` is a digest of its post-processed
-// zip-cache, NOT the tarball, so it is re-encodable only within the yarn family.
+// each digest tagged with its ORIGIN. `origin` distinguishes an SRI-emittable
+// TARBALL digest (`sri`/`registry`/`recomputed`) from the two field-specific
+// digests: `berry-zip` (Yarn Berry's `checksum` — a digest of the post-processed
+// zip-cache, NOT the tarball) and `url-fragment` (the yarn-classic `resolved#<sha1>`
+// tarball sha1, which rides the resolved URL fragment). Both are excluded from the
+// SRI field and from SRI equivalence.
 //
-// Emit is origin-aware: a tarball digest is never written into a berry `checksum`,
-// and a `berry-zip` digest is never written into an SRI field. When no
+// Emit is origin-aware: a tarball SRI digest is never written into a berry
+// `checksum`, a `berry-zip` digest is never written into an SRI field, and the
+// `url-fragment` sha1 is written only into the yarn-classic resolved URL. When no
 // compatible-origin digest exists the field is OMITTED (the adapter emits a soft
 // `RECIPE_INTEGRITY_INCOMPLETE`), never fabricated — a tarball sha512 re-encoded
 // into a berry `checksum` is a value real yarn rejects on install.
@@ -22,7 +25,7 @@
 export type HashOrigin =
   | 'sri'          // member of an SRI field (npm / pnpm / bun / yarn-classic integrity). Tarball digest.
   | 'berry-zip'    // Yarn Berry `checksum` — digest of the zip-cache, NOT the tarball.
-  | 'url-fragment' // yarn-classic `resolved#<sha1>` tarball sha1 (reserved; unwired in Phase 1).
+  | 'url-fragment' // yarn-classic `resolved#<sha1>` tarball sha1 — rides the resolved URL fragment, NOT the SRI field.
   | 'registry'     // fetched from registry metadata (`dist.integrity` / `dist.shasum`). Tarball digest.
   | 'recomputed'   // recomputed from tarball bytes (Phase 2). Tarball digest.
 
@@ -66,12 +69,23 @@ export function isEmptyIntegrity(i: Integrity): boolean {
  * digest and is re-encodable only within the yarn family.
  */
 export function isTarballOrigin(origin: HashOrigin): boolean {
-  return origin !== 'berry-zip'
+  // Two origins are NOT SRI-field-scoped: `berry-zip` is the yarn-berry checksum
+  // (its own field), and `url-fragment` is the yarn-classic `resolved#<sha1>` tarball
+  // sha1 — it rides the RESOLVED URL fragment, never an SRI field, and stays out of
+  // SRI equivalence (a display artifact, not the cross-family compare digest).
+  return origin !== 'berry-zip' && origin !== 'url-fragment'
 }
 
 /** The subset of hashes whose origin is tarball-scoped (SRI-emittable). */
 export function tarballHashes(i: Integrity): Hash[] {
   return i.hashes.filter(h => isTarballOrigin(h.origin))
+}
+
+/** The yarn-classic `resolved#<sha1>` fragment digest — a tarball sha1 tagged
+ *  `url-fragment` (from `dist.shasum` on mint, or a parsed `#<sha1>` on round-trip).
+ *  Lowercase hex, or `undefined`. Emitted into the resolved URL, never the SRI. */
+export function urlFragmentSha1(i: Integrity): string | undefined {
+  return i.hashes.find(h => h.algorithm === 'sha1' && h.origin === 'url-fragment')?.digest
 }
 
 /** First hash for `algorithm` (any origin), or `undefined`. */

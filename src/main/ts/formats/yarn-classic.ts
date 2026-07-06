@@ -16,7 +16,7 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { parseSri, emitSri, isEmptyIntegrity, type Integrity } from '../recipe/integrity.ts'
+import { parseSri, emitSri, isEmptyIntegrity, urlFragmentSha1, type Integrity } from '../recipe/integrity.ts'
 import {
   ambiguousResolutionDiagnostic,
   emitDropped as patchEmitDropped,
@@ -476,7 +476,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
 
     const payload = graph.tarballOf(node.id)
     const resolved = formatResolution(payload?.nativeResolution)
-      ?? deriveResolvedFromCanonical(payload?.resolution)
+      ?? deriveResolvedFromCanonical(payload?.resolution, payload?.integrity)
     if (resolved !== undefined) {
       lines.push(`  resolved "${escapeQuoted(resolved)}"`)
     }
@@ -1831,9 +1831,16 @@ function formatResolution(input: string | undefined): string | undefined {
 // entries, not via `resolved`).
 function deriveResolvedFromCanonical(
   canonical: import('../recipe/resolution.ts').ResolutionCanonical | undefined,
+  integrity?: Integrity,
 ): string | undefined {
   if (canonical === undefined) return undefined
-  const candidate = stringifyForYarnClassic(canonical)
+  // A MINTED tarball node carries the tarball sha1 as a `url-fragment` hash (from the
+  // registry's `dist.shasum`); yarn-classic writes it as the `resolved#<sha1>` fragment,
+  // matching yarn 1's convention so a bumped entry stays `--frozen-lockfile`-clean.
+  // (Round-tripped nodes take the verbatim `nativeResolution` sidecar; this path is the
+  // mint fallback.)
+  const sha1Fragment = integrity !== undefined ? urlFragmentSha1(integrity) : undefined
+  const candidate = stringifyForYarnClassic(canonical, sha1Fragment !== undefined ? { sha1Fragment } : {})
   // `unknown` canonical returns its raw verbatim — for yarn-berry locators
   // (`<n>@patch:...`, `<n>@npm:<ver>`, etc.) this is NOT a re-parseable
   // yarn-classic `resolved` shape and the parse rejects on reparse. Filter the

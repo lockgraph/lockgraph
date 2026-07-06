@@ -113,6 +113,35 @@ const WORKSPACE_MANIFESTS = {
   },
 } as const
 
+describe('yarn-classic — minted resolved URL carries the #<sha1> fragment (yaf frozen-clean)', () => {
+  it('a minted registry node emits resolved "…#<sha1>" from the url-fragment sha1, WITHOUT leaking it into the SRI', () => {
+    // yaf bumps a dep → the lib mints a node from the registry. yarn 1 writes the
+    // tarball sha1 as the `resolved#<sha1>` fragment (from `dist.shasum`) — a mint
+    // that omits it (or writes an npmjs host) desyncs the lock → `--frozen-lockfile`
+    // rewrites. The sha1 rides the RESOLVED fragment, never the `integrity` SRI field.
+    const sha1     = 'a'.repeat(40)                              // dist.shasum (tarball sha1)
+    const sha512   = 'b'.repeat(128)                            // dist.integrity (sha512)
+    const url      = 'https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz'
+    const b = newBuilder()
+    b.addNode({ id: 'ms@2.1.3', name: 'ms', version: '2.1.3', peerContext: [] })
+    b.setTarball({ name: 'ms', version: '2.1.3' }, {
+      resolution: { type: 'tarball', url },                     // minted: NO nativeResolution sidecar
+      integrity:  { hashes: [
+        { algorithm: 'sha512', digest: sha512, origin: 'registry' },
+        { algorithm: 'sha1',   digest: sha1,   origin: 'url-fragment' },
+      ] },
+    })
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+
+    // the resolved URL carries the raw-hex sha1 fragment (yarn-1 convention)…
+    expect(lockfile).toContain(`resolved "${url}#${sha1}"`)
+    // …and the `integrity` field is sha512-only — the url-fragment sha1 never enters an SRI.
+    const integrityLine = lockfile.split('\n').find(l => l.trimStart().startsWith('integrity'))
+    expect(integrityLine).toBeDefined()
+    expect(integrityLine).not.toContain('sha1-')
+  })
+})
+
 describe('yarn-classic — discriminant and isolation', () => {
   it('accepts the classic header and rejects yarn-berry headers', () => {
     const classic = fixture('simple/yarn-classic.lock')

@@ -115,12 +115,14 @@ describe('integrity — anti-fabrication invariants', () => {
 })
 
 describe('integrity/queries', () => {
-  it('isTarballOrigin is true for every origin except berry-zip', () => {
+  it('isTarballOrigin excludes the two field-specific origins (berry-zip, url-fragment)', () => {
     expect(isTarballOrigin('sri')).toBe(true)
     expect(isTarballOrigin('registry')).toBe(true)
-    expect(isTarballOrigin('url-fragment')).toBe(true)
     expect(isTarballOrigin('recomputed')).toBe(true)
+    // `berry-zip` rides the yarn-berry `checksum`; `url-fragment` rides the yarn-classic
+    // `resolved#<sha1>` — neither is SRI-field-scoped, so both are excluded.
     expect(isTarballOrigin('berry-zip')).toBe(false)
+    expect(isTarballOrigin('url-fragment')).toBe(false)
   })
   it('tarballHashes excludes berry-zip', () => {
     const i = mergeIntegrity(parseSri(MS_NPM_SRI), parseBerryChecksum(MS_YARN_CKEY).integrity)

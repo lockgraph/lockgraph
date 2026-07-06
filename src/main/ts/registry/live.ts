@@ -24,7 +24,7 @@
 
 import semver from 'semver'
 import { fetch as nodeFetchNative } from 'node-fetch-native'
-import { parseSri, isEmptyIntegrity } from '../recipe/integrity.ts'
+import { parseSri, isEmptyIntegrity, mergeIntegrity, emptyIntegrity } from '../recipe/integrity.ts'
 import { resolveRegistry, type ResolveRegistryOptions } from './config.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 
@@ -209,6 +209,14 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
   if (typeof dist.integrity === 'string') {
     const integrity = parseSri(dist.integrity, 'registry')
     if (!isEmptyIntegrity(integrity)) out.integrity = integrity
+  }
+  // yarn-classic's `resolved#<sha1>` fragment is the TARBALL sha1; npm serves it as
+  // `dist.shasum` (a raw 40-hex sha1, distinct from the sha512 SRI in `dist.integrity`).
+  // Tag it `url-fragment` so a minted yarn-classic node re-emits the fragment WITHOUT the
+  // sha1 leaking into any SRI field (`isTarballOrigin` excludes `url-fragment`).
+  if (typeof dist.shasum === 'string' && /^[0-9a-f]{40}$/i.test(dist.shasum)) {
+    out.integrity = mergeIntegrity(out.integrity ?? emptyIntegrity(),
+      { hashes: [{ algorithm: 'sha1', digest: dist.shasum.toLowerCase(), origin: 'url-fragment' }] })
   }
   if (typeof dist.tarball   === 'string') out.tarball   = dist.tarball
   if (isStringMap(raw?.dependencies))         out.dependencies         = { ...raw.dependencies }
