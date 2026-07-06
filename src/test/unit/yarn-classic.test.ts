@@ -113,32 +113,99 @@ const WORKSPACE_MANIFESTS = {
   },
 } as const
 
-describe('yarn-classic — minted resolved URL carries the #<sha1> fragment (yaf frozen-clean)', () => {
-  it('a minted registry node emits resolved "…#<sha1>" from the url-fragment sha1, WITHOUT leaking it into the SRI', () => {
-    // yaf bumps a dep → the lib mints a node from the registry. yarn 1 writes the
-    // tarball sha1 as the `resolved#<sha1>` fragment (from `dist.shasum`) — a mint
-    // that omits it (or writes an npmjs host) desyncs the lock → `--frozen-lockfile`
-    // rewrites. The sha1 rides the RESOLVED fragment, never the `integrity` SRI field.
-    const sha1     = 'a'.repeat(40)                              // dist.shasum (tarball sha1)
-    const sha512   = 'b'.repeat(128)                            // dist.integrity (sha512)
-    const url      = 'https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz'
-    const b = newBuilder()
+describe('yarn-classic — minted resolved URL: yarn-1 host + #<sha1> fragment (yaf frozen-clean)', () => {
+  // yaf bumps a dep → the lib mints a node from the registry (npmjs `dist.tarball` +
+  // `dist.shasum`). yarn 1 writes the `resolved` host as ITS registry (not npmjs) and
+  // appends the tarball sha1 as `#<sha1>` — a mint that keeps the npmjs host or drops the
+  // fragment desyncs the lock → `yarn --frozen-lockfile` rewrites it.
+  const sha1   = 'a'.repeat(40)                                 // dist.shasum
+  const sha512 = 'b'.repeat(128)                                // dist.integrity
+  const mintedIntegrity = () => ({ hashes: [
+    { algorithm: 'sha512', digest: sha512, origin: 'registry' as const },
+    { algorithm: 'sha1',   digest: sha1,   origin: 'url-fragment' as const },
+  ] })
+  // a MINTED node: registry `dist.tarball` (npmjs by default) + NO nativeResolution sidecar.
+  const addMinted = (b: ReturnType<typeof newBuilder>, host = 'https://registry.npmjs.org') => {
     b.addNode({ id: 'ms@2.1.3', name: 'ms', version: '2.1.3', peerContext: [] })
     b.setTarball({ name: 'ms', version: '2.1.3' }, {
-      resolution: { type: 'tarball', url },                     // minted: NO nativeResolution sidecar
-      integrity:  { hashes: [
-        { algorithm: 'sha512', digest: sha512, origin: 'registry' },
-        { algorithm: 'sha1',   digest: sha1,   origin: 'url-fragment' },
-      ] },
+      resolution: { type: 'tarball', url: `${host}/ms/-/ms-2.1.3.tgz` },
+      integrity:  mintedIntegrity(),
     })
-    const { lockfile } = stringifyWithDiagnostics(b.seal())
+  }
+  // a NATIVE round-tripped sibling on `base` (verbatim `nativeResolution` — what inference reads).
+  const addNativeSibling = (b: ReturnType<typeof newBuilder>, base: string) => {
+    b.addNode({ id: 'chalk@2.4.2', name: 'chalk', version: '2.4.2', peerContext: [] })
+    const url = `${base}/chalk/-/chalk-2.4.2.tgz`
+    b.setTarball({ name: 'chalk', version: '2.4.2' }, {
+      resolution: { type: 'tarball', url }, nativeResolution: `${url}#${'c'.repeat(40)}`,
+    })
+  }
 
-    // the resolved URL carries the raw-hex sha1 fragment (yarn-1 convention)…
-    expect(lockfile).toContain(`resolved "${url}#${sha1}"`)
-    // …and the `integrity` field is sha512-only — the url-fragment sha1 never enters an SRI.
+  it('rehosts npmjs dist.tarball → yarn-1 default + appends #<sha1>; SRI stays sha512-only', () => {
+    const b = newBuilder(); addMinted(b)                        // npmjs, no native sibling → default
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+    expect(lockfile).toContain(`resolved "https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz#${sha1}"`)
+    expect(lockfile).not.toContain('registry.npmjs.org')       // host rewritten off npmjs
     const integrityLine = lockfile.split('\n').find(l => l.trimStart().startsWith('integrity'))
     expect(integrityLine).toBeDefined()
-    expect(integrityLine).not.toContain('sha1-')
+    expect(integrityLine).not.toContain('sha1-')               // url-fragment sha1 never enters the SRI
+  })
+
+  it('rehosts to the base the lock ALREADY uses (native siblings), not the default', () => {
+    const b = newBuilder(); addNativeSibling(b, 'https://registry.yarnpkg.com'); addMinted(b)
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+    expect(lockfile).toContain(`resolved "https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz#${sha1}"`)
+  })
+
+  it('preserves a private-mirror base inferred from native siblings — no host hardcode imposed', () => {
+    const mirror = 'https://nexus.corp/repository/npm'
+    const b = newBuilder(); addNativeSibling(b, mirror); addMinted(b)
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+    expect(lockfile).toContain(`resolved "${mirror}/ms/-/ms-2.1.3.tgz#${sha1}"`)
+  })
+
+  it('routes PER-SCOPE — a minted @scope pkg keeps its scope registry, NOT the global majority (@scope:registry)', () => {
+    // The lock's MAJORITY is the public registry (unscoped `chalk`), but `@mycorp` is pinned
+    // to a private one. A blind majority-rehost would drag `@mycorp/new` onto the public
+    // registry (yarn would reject it). Scope-aware routing keeps `@mycorp/*` on nexus.
+    const priv = 'https://nexus.corp/repository/npm'
+    const b = newBuilder()
+    addNativeSibling(b, 'https://registry.yarnpkg.com')        // unscoped majority = public
+    b.addNode({ id: '@mycorp/util@1.0.0', name: '@mycorp/util', version: '1.0.0', peerContext: [] })
+    b.setTarball({ name: '@mycorp/util', version: '1.0.0' }, {  // native `@mycorp` sibling on the private registry
+      resolution: { type: 'tarball', url: `${priv}/@mycorp/util/-/util-1.0.0.tgz` },
+      nativeResolution: `${priv}/@mycorp/util/-/util-1.0.0.tgz#${'d'.repeat(40)}`,
+    })
+    b.addNode({ id: '@mycorp/new@2.0.0', name: '@mycorp/new', version: '2.0.0', peerContext: [] })
+    b.setTarball({ name: '@mycorp/new', version: '2.0.0' }, {   // MINTED (npmjs dist.tarball)
+      resolution: { type: 'tarball', url: 'https://registry.npmjs.org/@mycorp/new/-/new-2.0.0.tgz' },
+      integrity:  mintedIntegrity(),
+    })
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+    expect(lockfile).toContain(`resolved "${priv}/@mycorp/new/-/new-2.0.0.tgz#${sha1}"`)
+    expect(lockfile).not.toContain('yarnpkg.com/@mycorp')      // NOT dragged onto the public registry
+    expect(lockfile).not.toContain('npmjs.org/@mycorp')
+  })
+
+  it('config `registryFor` routes a BRAND-NEW private scope the lock has no sibling for', () => {
+    // The lock has no `@newcorp` entry, so lock-inference has no signal for it. The caller's
+    // config (`@newcorp:registry`) supplies the base → the minted node routes to the private
+    // registry; without config it falls back to the public default.
+    const priv = 'https://nexus.corp/repository/npm'
+    const b = newBuilder()
+    addNativeSibling(b, 'https://registry.yarnpkg.com')        // only PUBLIC siblings — no @newcorp
+    b.addNode({ id: '@newcorp/pkg@1.0.0', name: '@newcorp/pkg', version: '1.0.0', peerContext: [] })
+    b.setTarball({ name: '@newcorp/pkg', version: '1.0.0' }, { // MINTED, no @newcorp sibling to learn from
+      resolution: { type: 'tarball', url: 'https://registry.npmjs.org/@newcorp/pkg/-/pkg-1.0.0.tgz' },
+      integrity:  mintedIntegrity(),
+    })
+    const graph = b.seal()
+
+    // no config → no signal for @newcorp → falls back to the public default
+    expect(stringify(graph)).toContain('registry.yarnpkg.com/@newcorp/pkg/-/pkg-1.0.0.tgz')
+    // config routes it to the private registry (authoritative over inference)
+    const withCfg = stringify(graph, { registryFor: name => name.startsWith('@newcorp/') ? priv : undefined })
+    expect(withCfg).toContain(`resolved "${priv}/@newcorp/pkg/-/pkg-1.0.0.tgz#${sha1}"`)
   })
 })
 

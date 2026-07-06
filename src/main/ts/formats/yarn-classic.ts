@@ -122,6 +122,17 @@ export interface YarnClassicParseOptions {
 export interface YarnClassicStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
+  /**
+   * Scope-aware registry base for a MINTED tarball's `resolved` host — yarn 1 writes its
+   * CONFIGURED registry per `@scope:registry`, NOT the packument's `dist.tarball` host.
+   * Return the registry base for `name` (e.g. `https://registry.yarnpkg.com`, or a private
+   * `@mycorp` registry), or `undefined` to let the lib infer it from the lock's own
+   * entries. Supply the project config (`.yarnrc`/`.npmrc` `registry` + `@scope:registry`)
+   * to route a brand-new private scope the lock has no sibling for; return `undefined` (NOT
+   * a default) for an unconfigured scope so the lock-inference / yarn-1 default applies.
+   * Round-tripped (native) entries keep their verbatim host regardless.
+   */
+  registryFor?: (name: string) => string | undefined
 }
 
 export interface YarnClassicManifest {
@@ -456,6 +467,12 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
   }
 
   const emitSidecar = sidecarByGraph.get(graph)
+  // Scope-aware registry base to rehost MINTED tarballs onto: the caller's config
+  // (`options.registryFor`, authoritative — routes a brand-new private scope), else the
+  // lock's own base for the package's scope (`@scope:registry`-respecting inference), else
+  // yarn 1's default.
+  const inferBase = inferRegistryBases(graph)
+  const registryBaseFor = (name: string): string => options.registryFor?.(name) ?? inferBase(name)
   const entries = dedupedNodes.map(node => {
     warnPatchDrop(node, warnedPatches, emitDiagnostic)
     warnPeerContextFlatten(node, warnedPeerContexts, emitDiagnostic)
@@ -476,7 +493,7 @@ export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {
 
     const payload = graph.tarballOf(node.id)
     const resolved = formatResolution(payload?.nativeResolution)
-      ?? deriveResolvedFromCanonical(payload?.resolution, payload?.integrity)
+      ?? deriveResolvedFromCanonical(payload?.resolution, payload?.integrity, registryBaseFor(node.name))
     if (resolved !== undefined) {
       lines.push(`  resolved "${escapeQuoted(resolved)}"`)
     }
@@ -1829,18 +1846,78 @@ function formatResolution(input: string | undefined): string | undefined {
 // `resolved` URL when PM-native sidecar is absent. Workspace canonical
 // returns undefined (yarn-classic encodes workspaces as sentinel-version
 // entries, not via `resolved`).
+// yarn 1 writes a registry package's `resolved` host as ITS CONFIGURED registry
+// (`registry.yarnpkg.com` by default), NOT the packument's `dist.tarball` host — which
+// is ALWAYS `registry.npmjs.org`, even when fetched via yarnpkg.com (verified: the CDN
+// returns the upstream `dist.tarball` verbatim). A minted node that kept `dist.tarball`
+// desyncs the host vs the lock's native entries → `yarn --frozen-lockfile` rewrites it.
+// So on MINT we rehost the tarball to the registry base the lock ALREADY uses (inferred
+// from its own entries — matches a private mirror too, no hardcode), defaulting to yarn
+// 1's registry only when the lock has no registry sibling to learn from.
+const DEFAULT_YARN_CLASSIC_REGISTRY = 'https://registry.yarnpkg.com'
+const REGISTRY_TARBALL_TAIL = /\/(?:@[^/]+\/)?[^/]+\/-\/[^/]+\.tgz(?:#.*)?$/
+
+/** The registry base of a `<base>/<name>/-/<basename>-<ver>.tgz[#sha1]` URL (everything
+ *  before the package path), or `undefined` for a non-registry-tarball shape. */
+function registryBaseOf(url: string): string | undefined {
+  const m = REGISTRY_TARBALL_TAIL.exec(url)
+  return m !== null ? url.slice(0, m.index) : undefined
+}
+
+/** A package's scope key for registry routing: `@mycorp` for `@mycorp/pkg`, `''` (default)
+ *  for an unscoped name — mirrors yarn 1's `@scope:registry` config axis. */
+function scopeOf(name: string): string {
+  return name.startsWith('@') ? name.slice(0, Math.max(0, name.indexOf('/'))) : ''
+}
+
+/** PER-SCOPE registry bases the lock ALREADY uses (majority vote over NATIVE
+ *  `nativeResolution`-verbatim entries), so routing respects yarn 1's `@scope:registry`:
+ *  a private-scoped package inherits its scope-siblings' registry, unscoped packages the
+ *  default one — NOT a global override that would drag `@mycorp/*` onto the public
+ *  registry. ONLY native entries count (a cross-format convert has none → falls back
+ *  rather than learn npmjs from the source). `baseFor(name)` = the name's scope base, else
+ *  the unscoped base, else yarn 1's default. */
+function inferRegistryBases(graph: Graph): (name: string) => string {
+  const perScope = new Map<string, Map<string, number>>()   // scope → (base → count)
+  for (const node of graph.nodes()) {
+    const native = graph.tarballOf(node.id)?.nativeResolution
+    const base = native !== undefined ? registryBaseOf(native) : undefined
+    if (base === undefined) continue
+    const scope = scopeOf(node.name)
+    let counts = perScope.get(scope)
+    if (counts === undefined) { counts = new Map(); perScope.set(scope, counts) }
+    counts.set(base, (counts.get(base) ?? 0) + 1)
+  }
+  const majority = (counts: Map<string, number> | undefined): string | undefined => {
+    let best: string | undefined; let bestN = 0
+    for (const [b, n] of counts ?? []) if (n > bestN) { best = b; bestN = n }
+    return best
+  }
+  const unscoped = majority(perScope.get(''))
+  return (name: string): string =>
+    majority(perScope.get(scopeOf(name))) ?? unscoped ?? DEFAULT_YARN_CLASSIC_REGISTRY
+}
+
 function deriveResolvedFromCanonical(
   canonical: import('../recipe/resolution.ts').ResolutionCanonical | undefined,
   integrity?: Integrity,
+  registryBase?: string,
 ): string | undefined {
   if (canonical === undefined) return undefined
+  // Rehost a registry tarball to the lock's registry base (see above); leave git / file /
+  // non-`<registry>/<name>/-/…` tarballs untouched.
+  let canon = canonical
+  if (canonical.type === 'tarball' && registryBase !== undefined) {
+    const m = REGISTRY_TARBALL_TAIL.exec(canonical.url)
+    if (m !== null) canon = { ...canonical, url: registryBase + canonical.url.slice(m.index) }
+  }
   // A MINTED tarball node carries the tarball sha1 as a `url-fragment` hash (from the
   // registry's `dist.shasum`); yarn-classic writes it as the `resolved#<sha1>` fragment,
   // matching yarn 1's convention so a bumped entry stays `--frozen-lockfile`-clean.
   // (Round-tripped nodes take the verbatim `nativeResolution` sidecar; this path is the
   // mint fallback.)
   const sha1Fragment = integrity !== undefined ? urlFragmentSha1(integrity) : undefined
-  const candidate = stringifyForYarnClassic(canonical, sha1Fragment !== undefined ? { sha1Fragment } : {})
+  const candidate = stringifyForYarnClassic(canon, sha1Fragment !== undefined ? { sha1Fragment } : {})
   // `unknown` canonical returns its raw verbatim — for yarn-berry locators
   // (`<n>@patch:...`, `<n>@npm:<ver>`, etc.) this is NOT a re-parseable
   // yarn-classic `resolved` shape and the parse rejects on reparse. Filter the
