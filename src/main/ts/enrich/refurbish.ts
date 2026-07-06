@@ -4,8 +4,9 @@
 // fields a freshly-bumped node lacks so the round-tripped lockfile installs
 // without `yarn install`. v1's net-new fill is the yarn-berry `checksum`: for a
 // node with no `berry-zip` digest, recompute one from the npm tarball bytes
-// (ADR-0035, `computeBerryChecksum`, STORE cacheKeys), else defer with a
-// diagnostic. Never overwrites a present field; never fabricates.
+// (ADR-0035 — the pure-JS `pako` port for STORE + mixed cacheKey 7/8/9, the
+// optional `@yarnpkg/libzip` for cacheKey 10, each vetted by `calibrate`), else
+// defer with a diagnostic. Never overwrites a present field; never fabricates.
 
 import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
@@ -86,14 +87,24 @@ function berryCacheKeyFor(graph: Graph, format: string): string | undefined {
   return isPrefixEraFormat(format) ? '10c0' : undefined
 }
 
-/** Whether the INSTALLED `@yarnpkg/libzip` reproduces THIS lock's cache
- *  generation — verified by recomputing ONE existing sibling checksum and
- *  comparing. The optional libzip backend matches only its own generation
- *  (libzip 3.x → cacheKey 10, NOT 9) and a wrong digest hard-fails `yarn install
- *  --immutable`, so a libzip fill is trusted ONLY after this passes. Returns
- *  false when libzip is absent (`computeBerryChecksumViaLibzip` → undefined),
- *  no checksummed + fetchable anchor exists, or the reproduction mismatches. */
-async function calibrateLibzip(graph: Graph, cacheKey: string, source: TarballSource): Promise<boolean> {
+/** A `Recompute` reproduces yarn's cache-zip digest for `(tgz, name, cacheKey)`,
+ *  or `undefined` when its backend cannot (e.g. libzip not installed). Both the
+ *  pure-JS `pako` port (via `selectPakoProfile`) and the optional `@yarnpkg/libzip`
+ *  backend share this shape. */
+type Recompute = (tgz: Uint8Array, name: string, cacheKey: string) => Promise<string | undefined>
+
+/** Whether the OPTIONAL `@yarnpkg/libzip` backend reproduces THIS lock's cache
+ *  generation, proven by recomputing ONE existing sibling checksum byte-for-byte
+ *  (the `pako` port has its own order-aware selector, `selectPakoProfile`):
+ *    • `'match'`     — a fetchable anchor reproduced exactly → trust the backend.
+ *    • `'mismatch'`  — an anchor did NOT reproduce → the installed libzip's zlib-ng
+ *                      differs from the generation that wrote this lock (libzip 3.x
+ *                      reproduces cacheKey 10, not 8/9) → do NOT trust it.
+ *    • `'no-anchor'` — no checksummed + fetchable + reproducible sibling to vet
+ *                      against (a bare-era / fresh-convert lock, all gaps).
+ *  A wrong digest hard-fails `yarn install --immutable` (YN0018), so the caller
+ *  trusts the generation-specific libzip ONLY on a positive `match`. */
+async function calibrate(graph: Graph, cacheKey: string, source: TarballSource, recompute: Recompute): Promise<'match' | 'mismatch' | 'no-anchor'> {
   for (const node of graph.nodes()) {
     if (node.workspacePath !== undefined || node.patch !== undefined) continue
     const integrity = graph.tarballOf(node.id)?.integrity
@@ -101,9 +112,55 @@ async function calibrateLibzip(graph: Graph, cacheKey: string, source: TarballSo
     if (existing === undefined) continue                 // not an anchor (no berry-zip checksum)
     const tgz = await source.tarball(node.name, node.version)
     if (tgz === undefined) continue                      // unfetchable anchor — try another
-    return (await computeBerryChecksumViaLibzip(tgz, node.name, cacheKey)) === existing
+    let repro: string | undefined
+    try { repro = await recompute(tgz, node.name, cacheKey) } catch { continue }  // e.g. symlink entry — try another anchor
+    if (repro === undefined) continue                    // backend can't reproduce (libzip absent) — try another
+    return repro === existing ? 'match' : 'mismatch'
   }
-  return false                                           // no fetchable anchor → can't trust libzip
+  return 'no-anchor'                                      // nothing to calibrate against
+}
+
+/** Pick the pure-JS `pako` recompute whose container ENTRY ORDER reproduces THIS
+ *  lock's cache generation, or `undefined` when none does (→ the caller tries the
+ *  optional libzip backend, or the oracle supplies, else defer).
+ *
+ *  yarn builds vary in entry order — some emit each directory lazily before its
+ *  first file (tar order), others emit ALL directories first then all files — and
+ *  the order is NOT encoded in the cacheKey. So we CALIBRATE: recompute an existing
+ *  sibling checksum under BOTH orders and see which matches. Correctness hinges on a
+ *  DISCRIMINATING anchor — a package with nested directories, whose two orders yield
+ *  DIFFERENT digests; a single-directory package can't tell the orders apart:
+ *    • a discriminating anchor matches one order → that order (definitive).
+ *    • a discriminating (or any) anchor matches NEITHER → the lock's zlib/order is
+ *      outside our port (a foreign yarn build) → `undefined` (defer / try libzip).
+ *    • only non-discriminating anchors matched (all single-dir), or no fetchable
+ *      checksummed anchor exists (bare-era / fresh convert) → default to lazy/tar
+ *      order (the yarn 3.6+/4 convention, and this module's prior sole behaviour).
+ *  A wrong digest hard-fails `--immutable`, so an unresolvable order defers rather
+ *  than guess — never a wrong value. */
+async function selectPakoProfile(graph: Graph, cacheKey: string, source: TarballSource): Promise<Recompute | undefined> {
+  const mk = (dirsFirst: boolean): Recompute => (tgz, name, ck) => Promise.resolve(computeBerryChecksum(tgz, name, ck, dirsFirst))
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined || node.patch !== undefined) continue
+    const integrity = graph.tarballOf(node.id)?.integrity
+    const existing = integrity !== undefined ? emitBerryChecksum(integrity) : undefined
+    if (existing === undefined) continue                 // not an anchor (no berry-zip checksum)
+    const tgz = await source.tarball(node.name, node.version)
+    if (tgz === undefined) continue                      // unfetchable anchor — try another
+    let lazy: string, dirsFirst: string
+    try {
+      lazy      = computeBerryChecksum(tgz, node.name, cacheKey, false)
+      dirsFirst = computeBerryChecksum(tgz, node.name, cacheKey, true)
+    } catch { continue }                                 // unsupported entry (symlink) — try another anchor
+    if (lazy === dirsFirst) {                            // NON-discriminating (single-directory package)
+      if (lazy !== existing) return undefined            // neither order reproduces it → foreign build → defer
+      continue                                           // basics confirmed, order ambiguous — keep looking
+    }
+    if (existing === lazy)      return mk(false)         // discriminating → the lock's order is settled
+    if (existing === dirsFirst) return mk(true)
+    return undefined                                     // discriminating, matches neither → foreign build → defer
+  }
+  return mk(false)                                       // no discriminating anchor resolved it → lazy default
 }
 
 /** Bounded-concurrency map that preserves INPUT order in the result. The slow
@@ -157,28 +214,47 @@ export async function refurbish(
   }
 
   const cacheKey = opts.cacheKey ?? berryCacheKeyFor(graph, format)
-  // ADR-0035 byte-reproduces the `checksum` with the pinned `pako` path for
-  // STORE (`cN0`, any era) and `mixed` at cacheKey VERSION 7/8 (yarn 2.4 / yarn
-  // 3.0–3.x). The gate keys off the PER-LOCK cacheKey, NOT the lockfile format
-  // version: a bare-era v6 lock pinned at cacheKey 8 (yarn 3.8, qiwi/mware) IS
-  // fillable once `opts.cacheKey` supplies its `__metadata.cacheKey` — the bare-
-  // vs-`<cacheKey>/` emit is the format's job (`checksumPrefix`), so a fill never
-  // forces a foreign prefix into a bare lock. An indeterminable cacheKey
-  // (`undefined`) defers everything rather than guess.
-  const pakoOk = cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)
-  // cacheKey 9/10 `mixed` (+ explicit `cN`) vendor a non-portable zlib pako can't
-  // match. The OPTIONAL `@yarnpkg/libzip` backend (§berry-pack-libzip) DOES reproduce
-  // them — INCLUDING `mixed` (yarn's per-file deflate-iff-smaller heuristic, driven by
-  // the same ZipFS + a normalized entry mode) byte-exact when the INSTALLED libzip
-  // matches the lock's cache generation (libzip 3.x → cacheKey 10; verified 60/60 real
-  // cacheKey-10 mixed zips + the selfsigned@5.5.0 mode edge). A wrong digest hard-fails
-  // `--immutable`, so trust libzip ONLY after CALIBRATION: reproduce one existing
-  // sibling checksum and compare. Absent libzip / no anchor / mismatch (e.g. a
-  // cacheKey-9 lock against a libzip-3 install) → defer (or the oracle supplies below).
-  const useLibzip = cacheKey !== undefined && !pakoOk
-    ? await calibrateLibzip(graph, cacheKey, source)
-    : false
-  const reproducible = pakoOk || useLibzip
+  // ADR-0035 byte-reproduces the `checksum` with the pinned pure-JS `pako` port for
+  // STORE (`cN0`, any era) and `mixed` at cacheKey VERSION 7/8/9 (yarn 2.4 / 3.1–3.8
+  // legacy match-hash; yarn-4 RC window / lockfile v7 nodejs-compatible hash —
+  // `berryCacheKeyReproducible`).
+  // The gate keys off the PER-LOCK cacheKey, NOT the lockfile format version: a bare-
+  // era v6 lock pinned at cacheKey 8 (yarn 3.8, qiwi/mware) IS fillable once
+  // `opts.cacheKey` supplies its `__metadata.cacheKey` — the bare-vs-`<cacheKey>/` emit
+  // is the format's job (`checksumPrefix`), so a fill never forces a foreign prefix into
+  // a bare lock. An indeterminable cacheKey (`undefined`) defers everything.
+  //
+  // Pick the backend that reproduces THIS lock's cache generation, PROVEN against an
+  // existing sibling checksum:
+  //   • the pure-JS `pako` port (STORE + mixed 7/8/9) FIRST, via `selectPakoProfile` —
+  //     it also calibrates the container ENTRY ORDER (yarn builds vary: lazy tar order
+  //     vs all-directories-first; not encoded in the cacheKey). Returns the matching
+  //     order's recompute; `undefined` when a discriminating sibling matches neither
+  //     order (a foreign build) so the gap defers rather than mis-hash.
+  //   • the OPTIONAL `@yarnpkg/libzip` backend covers what pako can't (cacheKey 10 mixed,
+  //     explicit `cN`) by driving yarn's OWN ZipFS byte-exact — but only for the
+  //     generation its INSTALLED version was built for (libzip 3.x → cacheKey 10, its
+  //     zlib-ng), so it is trusted ONLY on a positive `match`. `@yarnpkg/libzip` is an
+  //     optional peer the consumer (e.g. yaf) installs; absent → this branch no-ops.
+  // On neither the gap defers — or the caller's oracle (`source.berryChecksum`) supplies
+  // yarn's own digest below. A wrong digest hard-fails `--immutable`, strictly worse than
+  // a clean omit yarn self-heals.
+  let recompute: Recompute | undefined
+  if (cacheKey !== undefined && berryCacheKeyReproducible(cacheKey)) {
+    // pako OWNS STORE + mixed 7/8/9 (order-calibrated). Its verdict is FINAL: an
+    // `undefined` here is an ACTIVE "this lock is foreign to pako" defer (a
+    // discriminating anchor matched neither order) — NOT a cue to try a
+    // different-generation backend. libzip 3.x is zlib-ng / cacheKey-10; letting it
+    // fill a 7/8/9 lock (which it can license off a generation-independent STORE
+    // sibling) writes cacheKey-10 bytes yarn rejects (YN0018). So NO libzip fallback
+    // for a pako-reproducible cacheKey — pako refuses ⇒ defer.
+    recompute = await selectPakoProfile(graph, cacheKey, source)
+  } else if (cacheKey !== undefined) {
+    // ONLY a cacheKey pako can't reproduce (mixed 10 = zlib-ng, explicit `cN`) may
+    // fall to the OPTIONAL `@yarnpkg/libzip` — trusted solely on a positive `match`.
+    if ((await calibrate(graph, cacheKey, source, computeBerryChecksumViaLibzip)) === 'match') recompute = computeBerryChecksumViaLibzip
+  }
+  const reproducible = recompute !== undefined
 
   // 1) Gather fill candidates in content-sorted node order (deterministic).
   // A `defer` candidate carries no async work; a `fetch` candidate needs its
@@ -226,21 +302,19 @@ export async function refurbish(
       ? await source.berryChecksum(c.node.name, c.node.version, c.cacheKey)
       : undefined
     if (hex === undefined) {
-      // The oracle couldn't supply. RECOMPUTE only when byte-reproducible; a
+      // The oracle couldn't supply. RECOMPUTE only with a calibrated backend; a
       // non-reproducible `mixed`/`cN` cacheKey DEFERS rather than write a wrong value
       // (yarn recomputes on install). The candidate existed because the oracle MIGHT
       // have supplied — it didn't, so fall back to reproduce-or-defer.
-      if (!reproducible) return { kind: 'defer', id: c.node.id }
+      if (recompute === undefined) return { kind: 'defer', id: c.node.id }
       const tgz = await source.tarball(c.node.name, c.node.version)
       if (tgz === undefined) return { kind: 'defer', id: c.node.id }   // no fetchable tarball
       try {
-        hex = pakoOk
-          ? computeBerryChecksum(tgz, c.node.name, c.cacheKey)         // pinned pako (STORE / mixed 7,8)
-          : await computeBerryChecksumViaLibzip(tgz, c.node.name, c.cacheKey)  // calibrated libzip (9/10)
+        hex = await recompute(tgz, c.node.name, c.cacheKey)           // calibrated pako (STORE / mixed 7/8/9) or libzip (10)
       } catch {
         return { kind: 'defer', id: c.node.id }   // e.g. parseTar rejected an unsupported entry (symlink) → defer
       }
-      if (hex === undefined) return { kind: 'defer', id: c.node.id }   // libzip couldn't pack — defer
+      if (hex === undefined) return { kind: 'defer', id: c.node.id }   // backend couldn't pack — defer
     }
     const integrity = mergeIntegrity(
       c.payload.integrity ?? emptyIntegrity(),

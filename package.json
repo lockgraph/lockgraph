@@ -168,7 +168,7 @@
     "vitest": "^2.1.9"
   },
   "peerDependencies": {
-    "@yarnpkg/libzip": ">=2.0.0"
+    "@yarnpkg/libzip": ">=3.0.0"
   },
   "peerDependenciesMeta": {
     "@yarnpkg/libzip": {

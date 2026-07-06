@@ -3,11 +3,12 @@
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { gzipSync } from 'node:zlib'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { refurbish, type TarballSource } from '../../main/ts/enrich/refurbish.ts'
 import { computeBerryChecksum } from '../../main/ts/recipe/berry-checksum.ts'
-import { emitBerryChecksum } from '../../main/ts/recipe/integrity.ts'
+import { emitBerryChecksum, emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
 import { sentinelHashOf } from '../../main/ts/recipe/patch.ts'
 import { graphOf, addPackage } from './_modify-test-utils.ts'
 
@@ -20,6 +21,28 @@ const sourceOf = (map: Record<string, Buffer>): TarballSource => ({
     return map[`${name}@${version}`]
   },
 })
+
+// A `berry-zip` sha512 as an integrity carrier — used to seed a sibling ANCHOR
+// checksum that `calibrate` vets the pure-JS port against.
+const berryZip = (hex: string) =>
+  mergeIntegrity(emptyIntegrity(), { hashes: [{ algorithm: 'sha512', digest: hex, origin: 'berry-zip' }] })
+
+// A synthetic gzipped ustar with the given regular-file entries — lets a test build a
+// MULTI-DIRECTORY package (a nested `lib/`), so the two container entry orders (lazy vs
+// dirs-first) yield DIFFERENT digests and `selectPakoProfile` has a discriminating anchor.
+const ustarFile = (name: string, data: Buffer): Buffer => {
+  const h = Buffer.alloc(512)
+  h.write(name, 0, 'utf8')
+  h.write('0000644\0', 100); h.write(data.length.toString(8).padStart(11, '0') + '\0', 124); h.write('0', 156)
+  h.write('ustar\0', 257); h.write('00', 263)
+  return Buffer.concat([h, data, Buffer.alloc(Math.ceil(data.length / 512) * 512 - data.length)])
+}
+// index.js (STORE-tiny) + a nested lib/deep.js (DEFLATE-compressible) → discriminating + mixed.
+const multiDirTgz = (): Buffer => gzipSync(Buffer.concat([
+  ustarFile('package/index.js', Buffer.from('module.exports = 1\n')),
+  ustarFile('package/lib/deep.js', Buffer.from('a'.repeat(400))),
+  Buffer.alloc(1024),
+]))
 
 describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
   it('recomputes a missing berry checksum from the tarball (STORE)', async () => {
@@ -94,6 +117,100 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     )
     // no forced prefix → the v6 (bare-era) emit renders the hex without `8/`.
     expect(r.graph.tarballOf('ms@2.1.3')?.berryChecksumCacheKey).toBeUndefined()
+  })
+
+  it('fills a `mixed` cacheKey 9 (yarn 3.6+) via the pure-JS nodejs-hash port — NO libzip', async () => {
+    // cacheKey 9 `mixed` is pure-JS reproducible: pako's "nodejs-compatible" match-hash
+    // (`legacyHash:false`), the ONLY delta from cacheKey 7/8. Verified byte-exact over
+    // the real yarn-3.6+ cache (40/40). No `@yarnpkg/libzip` involved.
+    const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }), { cacheKey: '9' })
+
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '9'),
+    )
+  })
+
+  it('CALIBRATES the pure-JS port — a reproducible sibling gates the fills (mixed 9)', async () => {
+    // A real sibling checksum the port reproduces PROVES pako matches this lock's yarn
+    // zlib → trust the fills. `is-buffer` is the anchor (real cacheKey-9 checksum),
+    // `ms` the gap.
+    const anchor = computeBerryChecksum(tgz('is-buffer-2.0.5.tgz'), 'is-buffer', '9')
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'is-buffer', version: '2.0.5' })
+      addPackage(b, { name: 'ms',        version: '2.1.3' })
+      b.setTarball({ name: 'is-buffer', version: '2.0.5' }, { integrity: berryZip(anchor) })
+    })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
+      'ms@2.1.3':        tgz('ms-2.1.3.tgz'),
+    }), { cacheKey: '9' })
+
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '9'),
+    )
+  })
+
+  it('DEFERS when the pure-JS port MISCALIBRATES — a sibling it cannot reproduce blocks all fills', async () => {
+    // The @algolia hazard: a cacheKey the port nominally covers, but the lock was
+    // written by a yarn whose vendored zlib pako does NOT match. A sibling carrying a
+    // checksum pako can't reproduce → calibration MISMATCH → defer the whole set rather
+    // than emit wrong digests (a wrong value hard-fails `--immutable`; a clean omit
+    // yarn self-heals). Never a wrong value.
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'is-buffer', version: '2.0.5' })
+      addPackage(b, { name: 'ms',        version: '2.1.3' })
+      b.setTarball({ name: 'is-buffer', version: '2.0.5' }, { integrity: berryZip('dead'.repeat(32)) })
+    })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
+      'ms@2.1.3':        tgz('ms-2.1.3.tgz'),
+    }), { cacheKey: '9' })
+
+    expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
+  })
+
+  it('CALIBRATES container ENTRY ORDER — a dirs-first sibling makes the gap fill use dirs-first', async () => {
+    // yarn builds vary in entry order (lazy tar-order vs all-directories-first), not
+    // encoded in the cacheKey. A DISCRIMINATING anchor (a multi-dir package) written
+    // dirs-first must steer the gap fill to dirs-first, NOT the default lazy.
+    const anchorTgz = multiDirTgz(), gapTgz = multiDirTgz()
+    const anchorDirsFirst = computeBerryChecksum(anchorTgz, 'anchor-pkg', '8', true)
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'anchor-pkg', version: '1.0.0' })
+      addPackage(b, { name: 'gap-pkg',    version: '1.0.0' })
+      b.setTarball({ name: 'anchor-pkg', version: '1.0.0' }, { integrity: berryZip(anchorDirsFirst) })
+    })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'anchor-pkg@1.0.0': anchorTgz, 'gap-pkg@1.0.0': gapTgz,
+    }), { cacheKey: '8' })
+
+    expect(r.enriched).toEqual(['gap-pkg@1.0.0'])
+    // the fill used DIRS-FIRST (the anchor's order) — which is DISTINCT from lazy here.
+    expect(computeBerryChecksum(gapTgz, 'gap-pkg', '8', true))
+      .not.toBe(computeBerryChecksum(gapTgz, 'gap-pkg', '8', false))
+    expect(emitBerryChecksum(r.graph.tarballOf('gap-pkg@1.0.0')!.integrity!))
+      .toBe(computeBerryChecksum(gapTgz, 'gap-pkg', '8', true))
+  })
+
+  it('DEFERS when a discriminating sibling matches NEITHER entry order (foreign yarn build)', async () => {
+    // A multi-dir anchor whose checksum neither order reproduces = the lock was written
+    // by a build outside our port. selectPakoProfile returns undefined → the gap DEFERS
+    // rather than fill with a guessed order (a wrong digest hard-fails --immutable).
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'anchor-pkg', version: '1.0.0' })
+      addPackage(b, { name: 'gap-pkg',    version: '1.0.0' })
+      b.setTarball({ name: 'anchor-pkg', version: '1.0.0' }, { integrity: berryZip('beef'.repeat(32)) })
+    })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'anchor-pkg@1.0.0': multiDirTgz(), 'gap-pkg@1.0.0': multiDirTgz(),
+    }), { cacheKey: '8' })
+
+    expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('gap-pkg@1.0.0')?.integrity).toBeUndefined()
   })
 
   it('recomputes CONCURRENTLY — parallel tarball fetch, not one-at-a-time', async () => {

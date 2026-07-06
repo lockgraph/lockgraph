@@ -364,31 +364,111 @@ enrich phase MAY **recompute** one from the package tarball — but only when th
 result is byte-identical to what yarn would write. A divergent digest raises
 `YN0018 (CACHE_CHECKSUM_MISMATCH)` and fails a frozen install (§1.1.1), which is
 strictly worse than a missing checksum (yarn fills a blank one cleanly on the
-next install). Reproducibility depends on the cacheKey's compression mode and
-the yarn line that wrote it:
+next install).
 
-| cacheKey | yarn line | recompute |
-|---|---|---|
-| `<n>c0` — STORE, n≥8 | yarn 3.1+ / yarn-4 default | reproduced byte-exact |
-| `7` / `8` — `mixed` | yarn 2.4 / 3.0–3.x | reproduced byte-exact |
-| `9` — `mixed` | yarn 3.6+ | deferred by default; opt-in `@yarnpkg/libzip` |
-| `10` — `mixed` | yarn 4.x | deferred by default; opt-in `@yarnpkg/libzip` |
+**The algorithm.** A yarn-berry `checksum` is `sha512(cache.zip)` in lowercase
+hex, where `cache.zip` is yarn's re-pack of the npm tarball into its content-
+addressable cache. Reproducing the digest is reproducing that zip byte-for-byte:
 
-STORE has no compressed stream to match. The `mixed` modes DEFLATE each file
-that shrinks; cacheKey 7/8 use a zlib build a pinned pure-JS port reproduces
-exactly, while cacheKey 9/10 use a later zlib whose output is not portably
-reproducible — those defer by default rather than emit a wrong digest. An
-OPTIONAL `@yarnpkg/libzip` backend covers cacheKey 9/10 when installed: it drives
-yarn's own packer, reproducing whatever cache generation the installed libzip
-matches (libzip 3.x → cacheKey 10). Because that match is generation-specific (a
-libzip reproduces ONLY its own cacheKey), it is trusted only after CALIBRATION —
-reproducing one existing sibling checksum in the same lock and confirming the
-byte match; on mismatch, or with libzip absent, the gap defers. A bare-era lock
-(v4–v7, whose checksums carry no `<cacheKey>/` prefix to infer from) must have
-its `__metadata.cacheKey` supplied as the recompute target; absent it the
-recompute defers. A recomputed checksum is rendered in the format's native shape
-(bare for v4–v7, `<cacheKey>/<hex>` for v8+ — §1.4), never forcing a foreign
-prefix into a bare lock.
+1. **gunzip** the npm tarball to its `tar` bytes.
+2. **Read** the `ustar` entries, keeping regular files (typeflag `0` or NUL) and
+   stripping the leading `package/` path component (the 155-byte `prefix` field is
+   honoured for long paths). A directory (`5`) or PAX header (`x`/`g`) entry is
+   SKIPPED (directories are re-synthesised in step 3; PAX metadata is redundant for
+   these tarballs). Any OTHER typeflag — symlink (`2`), hardlink (`1`), device,
+   GNU-long — is content yarn packs differently and the recompute does NOT
+   reproduce; it ABORTS (and the caller defers) rather than silently skip it and
+   mis-hash.
+3. **Build** the zip container — a standard ZIP (a local file record per entry, a
+   central directory, an end-of-central-directory record) written with libzip's
+   specific field conventions, proven byte-identical to yarn's own output. The
+   field conventions below are shared across generations; the entry ORDER
+   additionally varies by yarn build (see Paths):
+   - **Paths and entry order.** Each file is placed at `node_modules/<ident>/<path>`;
+     a scoped `<ident>` keeps its slash (`@scope/name` → `node_modules/@scope/name/…`,
+     NOT slugged or percent-encoded). Every parent directory is synthesised as its own
+     zero-byte entry named with a trailing `/` — including the top-level
+     `node_modules/` and, for a scope, `node_modules/@scope/`. Two entry ORDERS occur
+     across yarn builds (NOT encoded in the cacheKey): the *lazy* order emits each
+     file preceded by its as-yet-unseen ancestor directories (tar order); the
+     *dirs-first* order emits ALL directories first (discovery order), then all files.
+     The two diverge only for a package with nested directories — so the recompute is
+     calibrated against a discriminating sibling to pick the lock's order (Calibration
+     below). The central directory preserves whichever order the local records used.
+   - **mtime.** A fixed DOS-packed date/time per cache era, in BOTH the local and
+     central records: cacheKey 7 (yarn 2.x) uses the DOS epoch — date `0x0021`,
+     time `0x0000` (1980-01-01 00:00:00); cacheKey 8 and up use `@yarnpkg/fslib`'s
+     `SAFE_TIME` — date `0x08D6`, time `0xAE40` (1984-06-22T21:50:00Z).
+   - **Mode.** The Unix mode occupies the HIGH 16 bits of the central record's
+     external-attributes field (low 16 bits and internal-attributes are 0),
+     normalised — NOT the raw tar mode: a file `(S_IFREG|0o644)<<16` = `0x81A40000`,
+     or `(S_IFREG|0o755)<<16` = `0x81ED0000` when any execute bit is set; a directory
+     `(S_IFDIR|0o755)<<16` = `0x41ED0000`. (A `0o600`/`0o640` source file is written
+     `0o644` — the observed `selfsigned@5.5.0` divergence.)
+   - **Per-record fields.** version-made-by `0x033F` (Unix host `3` << 8 | ZIP spec
+     6.3); no extra field, no comment; the CRC-32 and the compressed/uncompressed
+     sizes are written INLINE in the local header (general-purpose bit 3 = 0, no data
+     descriptor). version-needed / general-purpose flag / method follow the entry's
+     storage: STORE file → `10` / `0` / `0`, a directory → `20` / `0` / `0`, DEFLATE
+     → `20` / `2` / `8`. Signatures are the standard `0x04034B50` (local),
+     `0x02014B50` (central), `0x06054B50` (end-of-central-directory).
+4. **Compress** per the cacheKey's `compressionLevel`:
+   - **STORE** (`<n>c0`): every file stored uncompressed.
+   - **`mixed`** (no `cN` suffix): each non-empty file is raw-DEFLATE'd
+     (`level 9, strategy 0, memLevel 9`) and kept compressed iff that stream is
+     STRICTLY smaller than the input, else STORE'd. Empty files and directories
+     are always STORE'd.
+5. **sha512** the resulting bytes.
+
+The container (steps 1–3) is generation-invariant. The ONLY variable across the
+`mixed` generations is the DEFLATE match-finding hash — a pinned pure-JS `pako`
+port reproduces it for three generations, yarn-4's libzip-vendored zlib for the
+fourth:
+
+| cacheKey | yarn line | compression | recompute |
+|---|---|---|---|
+| `<n>c0` — STORE, n≥8 | yarn 3.1+ / yarn-4 default | STORE (container only) | pure-JS, byte-exact |
+| `7` — `mixed` | yarn 2.4 | mixed, legacy hash, DOS-epoch mtime | pure-JS, byte-exact |
+| `8` — `mixed` | yarn 3.1–3.8 | mixed, legacy hash, SAFE_TIME | pure-JS, byte-exact |
+| `9` — `mixed` | yarn 4.0.0-rc.27…4.0.0 (RC window, lockfile v7) | mixed, nodejs-compatible hash, SAFE_TIME | pure-JS, byte-exact |
+| `10` — `mixed` | yarn 4.0+ (stable) | mixed, libzip-vendored zlib-ng | opt-in `@yarnpkg/libzip`, else defer |
+
+STORE has no compressed stream to match, so it reproduces on any host. For
+`mixed`, the DEFLATE bytes depend on the exact match-hash the writing yarn used:
+cacheKey 7/8 match `pako`'s LEGACY hash, cacheKey 9 its "nodejs-compatible" hash —
+both selected purely in-port (portable and deterministic; NOT `node:zlib`, whose
+bundled zlib varies across the Node 14–24 floor). cacheKey 10 uses a zlib the
+port matches at NEITHER hash; it reproduces only via the OPTIONAL `@yarnpkg/libzip`
+backend, which drives yarn's own packer and reproduces whatever generation the
+INSTALLED libzip was built for (libzip 3.x → cacheKey 10), else the gap defers.
+
+**Calibration.** Even for a generation a backend nominally covers, a specific
+cache zip may have been written by a yarn build whose vendored zlib the backend
+does not match (observed for some registry-mirror-republished cacheKey-8 zips,
+which reproduce at neither hash). Because a wrong digest hard-fails
+`--immutable`, a recompute is gated on CALIBRATION: reproduce ONE existing sibling
+checksum in the same lock and compare byte-for-byte. The pure-JS port (STORE +
+mixed 7/8/9) additionally calibrates the container ENTRY ORDER (lazy vs
+dirs-first, above): it recomputes a sibling under BOTH orders and adopts whichever
+reproduces a DISCRIMINATING anchor — a nested-directory package, whose two orders
+yield different digests (a flat package cannot tell them apart). It is trusted on
+a positive match, or — when no sibling discriminates (all flat, or a bare-era /
+fresh-convert fill with no anchor) — on the lazy default (the yarn 3.6+/4
+convention); a discriminating anchor that matches NEITHER order drops it (a
+foreign build). The generation-specific libzip backend is trusted ONLY on a
+positive match. On neither, the gap defers — or a caller-supplied oracle
+(`source.berryChecksum`, e.g. yarn's own `.yarn/cache` filename, where the digest
+is the filename) pins yarn's real digest with no recompute at all.
+
+The table above is the DIGEST algorithm — which cacheKeys reproduce byte-exact.
+Whether enrich actually WRITES a recomputed value is separately gated by the
+write-policy of [§3.4](#34-omit-never-fabricate): a bare-era lock (v4–v7, whose
+checksums carry no `<cacheKey>/` prefix to infer from) is filled only when its
+`__metadata.cacheKey` is supplied as the recompute target; absent a determinable
+cacheKey the recompute defers rather than guess. A recomputed checksum is rendered
+in the format's native shape (bare for v4–v7, `<cacheKey>/<hex>` for v8+ — the
+`checksumPrefix` rule of [§3.3](#33-the-berry-zip--tarball-sri-boundary)), never
+forcing a foreign prefix into a bare lock.
 
 ### 1.8 Non-goals (explicit)
 
@@ -694,22 +774,25 @@ missing checksum that yarn self-heals beats a wrong one it rejects.
 
 This omission is the **convert-time** posture — a source lock supplies a
 tarball SRI, not the tarball *bytes*. The explicit **enrich** phase
-([§3.6](#36-how-to-verify), `computeBerryChecksum`), given the bytes,
-synthesises a STORE-`cacheKey` `berry-zip` checksum byte-exact and fills the
-slot rather than omitting it; DEFLATE `cacheKey`s stay omitted. The omission
-is thus the default for a hash-only source, not a permanent ceiling — the
+([§1.7.1](#171-checksum-recompute-reproducibility), `computeBerryChecksum`), given
+the bytes, synthesises a `berry-zip` checksum byte-exact — STORE at any era, and
+`mixed` (DEFLATE-iff-smaller) at cacheKey 7/8/9 via the pure-JS `pako` port
+(cacheKey 10 via the optional `@yarnpkg/libzip` backend) — and fills the slot
+rather than omitting it; an explicit DEFLATE level (`cN`, N≥1) stays omitted. The
+omission is thus the default for a hash-only source, not a permanent ceiling — the
 recompute fills it, a relabelled tarball SRI never does.
 
-**Reproducible only in the yarn-4 prefix era (v8+).** The recompute targets
-the `10c0` STORE form that v8–v10 use (`checksumPrefix: true`). A **bare-era**
-lock (v4–v7 = yarn 2.x/3.x, `checksumPrefix: false`) is left **untouched even
-when bytes are available**: its on-disk `checksum` is a no-prefix digest over a
-`compressionLevel: mixed` (DEFLATE) zip, so a synthesised `10c0/<hex>` would be
-doubly foreign — wrong prefix **and** wrong compression — and `yarn install`
-would reject every filled line and rewrite the whole lock (observed on a real
-yarn-3 project). The enrich gate (`berryChecksumReproducible`) therefore defers
-the entire bare era to `yarn install`, which fills the blank natively. A blank
-yarn self-heals beats a `10c0/` digest yarn churns.
+**Gated on a determinable cacheKey.** The recompute reproduces the digest for
+STORE (any era) and `mixed` at cacheKey 7/8/9 ([§1.7.1](#171-checksum-recompute-reproducibility)).
+What a **bare-era** lock (v4–v7 = yarn 2.x/3.x, `checksumPrefix: false`) lacks is
+not reproducibility but an in-lock cacheKey: its checksums carry no `<cacheKey>/`
+prefix to read the generation from. So it is filled only when `__metadata.cacheKey`
+is supplied (`opts.cacheKey`) — the value then renders bare (`checksumPrefix: false`,
+§3.3), never forcing a foreign `10c0/` prefix in. Absent a determinable cacheKey the
+enrich gate (`berryCacheKeyReproducible`, keyed on the PER-LOCK cacheKey — not the
+format version) defers rather than guess a `10c0/` STORE digest a yarn-3 project
+would reject and rewrite (observed on a real yarn-3 project). A blank yarn
+self-heals beats a wrong digest yarn churns.
 
 **Comparison digest.** When a tarball-origin sha512 is present it is the
 canonical compare digest; otherwise the strongest shared algorithm.
@@ -780,15 +863,16 @@ To verify a package against a carrier:
    and hash the resulting cache entry. This is why a `berry-zip` digest is
    never substituted into, or compared against, a tarball SRI
    ([§3.3](#33-the-berry-zip--tarball-sri-boundary)). That reproduction is
-   implemented for the **STORE** compression (`cacheKey` ending `c0` — the
-   Yarn-4 default) in
+   implemented in
    [`recipe/berry-checksum.ts`](../../src/main/ts/recipe/berry-checksum.ts)
    `computeBerryChecksum`: gunzip the tarball, re-pack it under
-   `node_modules/<ident>/` with yarn's libzip conventions (STORE, `SAFE_TIME`
-   mtime, fixed mode/version/order), then sha512 the zip — byte-exact vs yarn's
-   own output. DEFLATE `cacheKey`s (`cN`, N≥1) are not yet reproducible
-   byte-exact (they need zlib parity with yarn's vendored libzip). So a
-   `berry-zip` digest CAN be **synthesised** for a STORE node from the tarball
+   `node_modules/<ident>/` with yarn's libzip conventions (era `mtime`, normalised
+   mode, fixed version/order), then sha512 the zip — byte-exact vs yarn's own
+   output for STORE (any era) and `mixed` (DEFLATE-iff-smaller) at cacheKey 7/8/9
+   (the pure-JS `pako` port; [§1.7.1](#171-checksum-recompute-reproducibility)).
+   cacheKey 10 (yarn-4 `mixed`) reproduces via the optional `@yarnpkg/libzip`
+   backend; an explicit DEFLATE level (`cN`, N≥1) is not reproducible. So a
+   `berry-zip` digest CAN be **synthesised** for those nodes from the tarball
    — but only by this reproduction, never by relabelling a tarball SRI
    ([§3.4](#34-omit-never-fabricate)).
 

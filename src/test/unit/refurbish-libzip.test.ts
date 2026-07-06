@@ -1,15 +1,17 @@
-// refurbish wiring for the OPTIONAL `@yarnpkg/libzip` backend (cacheKey 9/10,
-// INCLUDING `mixed`). libzip drives yarn's OWN ZipFS, so it reproduces the cache zip
-// byte-exact (verified 190/190 real cacheKey-10 mixed zips + the selfsigned@5.5.0 mode
-// edge) when the installed libzip matches the lock's generation. A wrong digest
-// hard-fails `--immutable`, so refurbish CALIBRATES against one existing sibling
-// checksum before trusting a fill.
+// refurbish wiring for the OPTIONAL `@yarnpkg/libzip` backend (cacheKey 10 `mixed` —
+// the one the pure-JS pako path can't reproduce; pako owns STORE + mixed 7/8/9).
+// libzip drives yarn's OWN ZipFS, so it reproduces the cache zip byte-exact (verified
+// 190/190 real cacheKey-10 mixed zips + the selfsigned@5.5.0 mode edge) when the
+// installed libzip matches the lock's generation. A wrong digest hard-fails
+// `--immutable`, so refurbish CALIBRATES against one existing sibling checksum before
+// trusting a fill.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { refurbish, type TarballSource } from '../../main/ts/enrich/refurbish.ts'
+import { computeBerryChecksumViaLibzip } from '../../main/ts/recipe/berry-pack-libzip.ts'
 import { emitBerryChecksum, emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
 import { graphOf, addPackage } from './_modify-test-utils.ts'
 
@@ -29,7 +31,7 @@ const berryZip = (hex: string) =>
 // Opt-in dep; never fail CI if it didn't install.
 const hasLibzip = await import('@yarnpkg/libzip').then(() => true, () => false)
 
-describe('enrich/refurbish — optional @yarnpkg/libzip backend (cacheKey 9/10 mixed, calibrated)', () => {
+describe('enrich/refurbish — optional @yarnpkg/libzip backend (cacheKey 10 mixed, calibrated)', () => {
   it.skipIf(!hasLibzip)('calibrates against a sibling checksum, then fills the mixed gap via libzip', async () => {
     // `ms` carries the REAL cacheKey-10 (mixed) checksum (the calibration anchor);
     // `is-buffer` is the gap. cacheKey 10 mixed is NOT pako-reproducible → libzip.
@@ -61,6 +63,29 @@ describe('enrich/refurbish — optional @yarnpkg/libzip backend (cacheKey 9/10 m
     }), { cacheKey: '10' })
 
     expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('is-buffer@2.0.5')?.integrity).toBeUndefined()
+  })
+
+  it.skipIf(!hasLibzip)('a pako-reproducible cacheKey (9) NEVER falls through to libzip — pako refuses ⇒ defer', async () => {
+    // Regression for the adversary's Finding A. cacheKey 9 is pako's lane. When pako
+    // REFUSES a lock (a sibling foreign to its zlib/order), refurbish must DEFER — NOT
+    // consult libzip. libzip 3.x is zlib-ng / cacheKey-10; it would license itself off
+    // this very sibling (its `mixed` digest is version-independent) and write a
+    // cacheKey-10 digest into a cacheKey-9 lock → the exact YN0018 the gate prevents.
+    // Here `ms` carries libzip's OWN digest (a value pako cannot produce), so pako's
+    // calibration refuses; the gap `is-buffer` must stay unfilled.
+    const libzipDigest = await computeBerryChecksumViaLibzip(tgz('ms-2.1.3.tgz'), 'ms', '9')
+    const graph = graphOf(b => {
+      addPackage(b, { name: 'ms',        version: '2.1.3' })
+      addPackage(b, { name: 'is-buffer', version: '2.0.5' })
+      b.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: berryZip(libzipDigest!) })
+    })
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'ms@2.1.3':        tgz('ms-2.1.3.tgz'),
+      'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
+    }), { cacheKey: '9' })
+
+    expect(r.enriched).toEqual([])                                          // NOT ['is-buffer@2.0.5']
     expect(r.graph.tarballOf('is-buffer@2.0.5')?.integrity).toBeUndefined()
   })
 })

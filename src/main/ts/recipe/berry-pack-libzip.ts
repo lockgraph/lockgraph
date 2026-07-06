@@ -1,5 +1,6 @@
 // OPTIONAL byte-exact recompute backend for the yarn-berry `checksum` cacheKeys
-// the pinned `pako` path can't reproduce (mixed cacheKey 9/10, explicit `cN`).
+// the pinned pure-JS `pako` path can't reproduce (mixed cacheKey 10, explicit
+// `cN`). The `pako` path owns STORE + mixed cacheKey 7/8/9.
 //
 // It drives `@yarnpkg/libzip`'s `ZipFS` — yarn's OWN packer — so it reproduces,
 // CORRECT-BY-CONSTRUCTION, whatever cache generation the INSTALLED
@@ -8,12 +9,12 @@
 // caller defers exactly as it would without this module — so the lib's core
 // keeps ZERO mandatory `@yarnpkg` dependency.
 //
-// CRITICAL: the installed libzip matches only ITS OWN generation (libzip 3.x
-// does NOT reproduce cacheKey 9). The caller (`refurbish`) MUST CALIBRATE —
-// reproduce one EXISTING lock checksum with this backend and compare — before
-// trusting any fill; otherwise a cacheKey-9 lock refurbished against a
-// cacheKey-10 libzip would get wrong digests (and a wrong digest hard-fails
-// `yarn install --immutable`, strictly worse than a missing one).
+// CRITICAL: the installed libzip matches only ITS OWN generation. The caller
+// (`refurbish`) MUST CALIBRATE — reproduce one EXISTING lock checksum with this
+// backend and compare — before trusting any fill; otherwise a lock from a cache
+// generation other than the installed libzip's would get wrong digests (and a
+// wrong digest hard-fails `yarn install --immutable`, strictly worse than a
+// missing one).
 //
 // Orchestration mirrors yarn's `tgzUtils.extractArchiveTo`: stripComponents:1,
 // re-root under `node_modules/<ident>`, fixed SAFE_TIME mtime, mkdirp parents at
