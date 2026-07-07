@@ -15,6 +15,7 @@ import {
   type OverrideConstraint,
   type TarballKeyInputs,
 } from '../graph.ts'
+import semver from 'semver'
 import { LockfileError } from '../errors.ts'
 import { parseSri, emitSri, isEmptyIntegrity, urlFragmentSha1, type Integrity } from '../recipe/integrity.ts'
 import {
@@ -717,6 +718,7 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
 function remapSidecar(
   sidecar: YarnClassicSidecar,
   nextNodes: Map<string, Node>,
+  bumpedNodes: Map<string, Node>,
   graph: Graph,
 ): YarnClassicSidecar {
   const remap = <T>(m: Map<string, T[]>, clone: (v: T) => T): Map<string, T[]> => {
@@ -729,11 +731,35 @@ function remapSidecar(
   }
   const identityStr = (s: string): string => s
   const entrySpecs = remap(sidecar.entrySpecs, identityStr)
+  // Carry entry-key DESCRIPTORS across a same-name version BUMP when the range still
+  // SATISFIES the new version. A caret/tilde range applies to a RANGE of versions
+  // (`lodash@^4.17.0` survives 4.17.11→4.18.0), so dropping it ORPHANS the consumer's
+  // declared range → the key resets to `name@version` and yarn's `--frozen-lockfile`
+  // re-resolves (the yaf bug). An exact pin (`lodash@4.17.11`) does NOT satisfy 4.18.0
+  // and correctly does not carry (the manifest pin changed too). Only the entry-KEY set
+  // carries; other sidecar fields (extras / unresolvedDeps) stay version-scoped and reset.
+  for (const [oldId, newNode] of bumpedNodes) {
+    if (graph.getNode(newNode.id) === undefined) continue
+    const carried = (sidecar.entrySpecs.get(oldId) ?? []).filter(d => descriptorSatisfies(d, newNode.version))
+    if (carried.length === 0) continue
+    const merged = new Set(entrySpecs.get(newNode.id) ?? [])
+    for (const d of carried) merged.add(d)
+    entrySpecs.set(newNode.id, [...merged])
+  }
   const entryExtras = sidecar.entryExtras !== undefined ? remap(sidecar.entryExtras, identityStr) : undefined
   const unresolvedDeps = sidecar.unresolvedDeps !== undefined
     ? remap(sidecar.unresolvedDeps, (r: UnresolvedDepRef) => ({ ...r }))
     : undefined
   return buildSidecar(entrySpecs, entryExtras, unresolvedDeps)
+}
+
+/** Whether an entry-key descriptor `<name-or-alias>@<range>` still resolves to `version` —
+ *  the range is the tail after the LAST `@` (scoped names / npm-aliases keep the range
+ *  after their final `@`). A non-semver range (unparseable) does not carry. */
+function descriptorSatisfies(descriptor: string, version: string): boolean {
+  const at = descriptor.lastIndexOf('@')
+  if (at <= 0) return false
+  try { return semver.satisfies(version, descriptor.slice(at + 1)) } catch { return false }
 }
 
 // Assemble a YarnClassicSidecar, omitting the optional carriers when they are
@@ -820,18 +846,22 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
       // its entry membership-prunes (the old version's descriptors do not apply to
       // the new node — it resets to a key reconstructed from live edges). Surviving
       // (non-renamed) NodeIds map to themselves and keep their verbatim descriptors.
-      const nextNodes = new Map<string, Node>()
+      const nextNodes  = new Map<string, Node>()   // identity-preserving → carry verbatim
+      const bumpedNodes = new Map<string, Node>()   // same-name version bump → carry in-range descriptors
       for (const rec of result.applied) {
         if (rec.kind !== 'node-replaced' && rec.kind !== 'peer-context-replaced') continue
         const oldId = rec.oldSubject
         if (oldId === undefined) continue // id unchanged — no remap needed
-        if (stripPeerContextFromNodeId(oldId) !== stripPeerContextFromNodeId(rec.subject)) {
-          continue // identity/version change — reset, do not carry the old sidecar
-        }
         const newNode = result.graph.getNode(rec.subject)
-        if (newNode !== undefined) nextNodes.set(oldId, newNode)
+        if (newNode === undefined) continue
+        if (stripPeerContextFromNodeId(oldId) === stripPeerContextFromNodeId(rec.subject)) {
+          nextNodes.set(oldId, newNode)              // peerContext shift — carry the full descriptor set
+        } else if (nameOf(oldId) === newNode.name) {
+          bumpedNodes.set(oldId, newNode)            // version BUMP of the same package — carry ranges that still satisfy
+        }
+        // else: a genuine name/identity change — the old descriptors do not apply; drop.
       }
-      const nextSidecar = remapSidecar(sidecar, nextNodes, result.graph)
+      const nextSidecar = remapSidecar(sidecar, nextNodes, bumpedNodes, result.graph)
       rememberSidecar(result.graph, nextSidecar)
       // Re-wrap the new graph so a SUBSEQUENT mutate propagates the sidecar too
       // (the modify primitives chain several mutate calls).
