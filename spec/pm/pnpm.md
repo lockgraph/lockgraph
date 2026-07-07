@@ -526,6 +526,11 @@ scripts** — unlike npm, a dependency's `preinstall`/`install`/`postinstall` do
   fetched tarballs are unpacked into the **CAS** (§2.1), then linked. The
   advisory/audit axis (the audit-fix driver feature) is the registry's, not
   pnpm's — [`spec/registry/_common.md §8`](../registry/_common.md#8-advisories--audit-api).
+  Note pnpm queries the **legacy `/audits`** endpoint (tree POST), NOT the npm-7
+  bulk path (verified 6 / 9 / 10). Its **remediation** model is distinctive:
+  `pnpm audit --fix` writes `pnpm.overrides` pins to `package.json` rather than
+  bumping declared ranges — the **override-pin** model, with no `--force`.
+  Source-derived mechanics in [`audit-fix.md §4.3`](./audit-fix.md#43-pnpm--override-pin).
 
 ### Integrity verification
 

@@ -148,7 +148,9 @@ How a monorepo install scopes, and the `node_modules` it leaves behind.
 - Bun honours **both** npm's `"overrides"` **and** yarn's `"resolutions"` in
   `package.json` for forcing a transitive dependency's version.
   [bun.com/docs/cli/install] This is the channel an **audit-fix** uses to pin a
-  vulnerable transitive onto a safe version.
+  vulnerable transitive onto a safe version — an **override-pin** done by hand,
+  since bun ships `bun audit` (scan) but **no `bun audit fix`**. Cross-PM
+  remediation models (and where bun sits): [`audit-fix.md §4.5`](./audit-fix.md#45-bun--scan-only).
 - In `bun.lock` the forced versions surface as a top-level **`overrides`** block
   (npm-shaped) regardless of which input field declared them — see
   [`bun-text.md`](../formats/bun-text.md) for the on-disk encoding and the

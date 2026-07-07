@@ -618,6 +618,9 @@ bulk path documented in [`_common.md` §8](../registry/_common.md#8-advisories--
 not "Deno can't fix vulns natively." (The Bun status is the inverse: Bun's native
 remediation is blunt, so the project's value-add there is remediation itself.)
 
+Where deno sits among the cross-PM remediation models — native constraint-preserving
+fix, no `--force` — is [`audit-fix.md §4.6`](./audit-fix.md#46-deno--native-constraint-preserving-fix).
+
 ---
 
 ## Capabilities (vs the Node substrate)

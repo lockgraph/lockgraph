@@ -80,8 +80,27 @@ How each PM checks that fetched bytes match the lock. Details + citations in eac
 | bun | SRI `sha512` | `bun.lock` / `bun.lockb` | pre-extraction (`skip_verify` gate) | fetched / cached tarball | `IntegrityCheckFailed` |
 | deno *(frontier)* | `sha256` (remote / `jsr:`), SRI `sha512` (`npm:`) | `deno.lock` | on fetch / cache-read; `--frozen` / `deno ci` | fetched source / tarball | lockfile verification error |
 
+## Remediation — `audit fix` (the driver feature)
+
+Every PM's `audit`/`fix` surface — how advisories become manifest+lock edits, and
+what `--force` changes — is documented ONCE, cross-PM, in
+**[`audit-fix.md`](./audit-fix.md)** (it spans all six axes' §6 lockfile+registry
+row and is this library's reason to exist). The headline is that PMs split into
+**two structurally different remediation models**:
+
+| model | PMs | edit | `--force` |
+|---|---|---|---|
+| **range-bump** | npm, yarn-classic / berry (via `yarn-audit-fix`) | bump the declared **range** in the manifest + lockfile | needed to cross the range / apply a SemVer-major fix |
+| **override-pin** | pnpm; bun (manual) | write an **`overrides`** entry pinning the vulnerable package | absent — the pin is unconditional |
+
+Getting a fix that survives the target PM's own frozen install means reproducing
+*its* model, not a generic "bump the version." Full pipeline, per-PM mechanics
+(source-derived from real npm 6 / 10 / 11 + pnpm 6 / 9 / 10 + yaf), the `--force`
+matrix, and the frozen-install tie-in are in the doc.
+
 ## Cross-references
 
+- **Remediation mechanics** (audit-fix, `--force`, the two models) live in [`audit-fix.md`](./audit-fix.md) — the cross-PM driver-feature doc.
 - **Lockfile encodings** live in [`spec/formats/`](../formats/) — these docs cite them for *what* is persisted, they don't re-document the byte grammar.
 - **Registry wire contracts** live in [`spec/registry/`](../registry/) — cited for *how* artefacts are fetched.
 - The end-to-end chain (runtime ↔ PM ↔ lockfile ↔ FS-projection ↔ registries) is the subject of the planned relationships doc.

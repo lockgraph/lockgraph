@@ -85,12 +85,12 @@ Berry formalizes resolution into three objects
 - **Locator** — ident + **reference**, e.g. `lodash@npm:1.2.3`. Identifies
   a *single unique* package (the output of resolution). Locators carry an
   extra comparator hash, which is how virtual instances stay distinct
-  ([§1.5](#15-peer-dependency-virtualization-virtual-locators)).
+  ([§1.6](#16-peer-dependency-virtualization-virtual-locators)).
 
 A **Resolver** turns descriptors into locators and extracts manifests; a
 **Fetcher** turns a locator's reference into package data
 ([Lexicon](https://yarnpkg.com/advanced/lexicon)). Each protocol
-([§1.4](#14-protocols)) plugs in its own resolver+fetcher pair.
+([§1.4](#14-protocols-berry)) plugs in its own resolver+fetcher pair.
 
 ### 1.3 `resolutions` field
 
@@ -659,6 +659,14 @@ The npm-shape read/advisory contract is
 fetcher speaks exactly that surface. Non-default registries are where
 `__archiveUrl` binds appear ([§1.5](#15--bind-modifiers-and-__archiveurl)).
 
+**Remediation.** Neither yarn lineage ships a fix command — `yarn audit`
+(classic, tree POST to full `/audits`) and `yarn npm audit` (berry, tree POST to
+`/audits/quick` — **not** the npm-7 bulk endpoint; verified in the 2.4.3 bundle) are
+**scan-only**. Automatic remediation is supplied by **`yarn-audit-fix`**, which
+implements the npm-parity **range-bump** model (default in-range; `--force` for
+SemVer-major + declared-range rewrite; `resolutions` pins left intact). Cross-PM
+mechanics: [`audit-fix.md §4.4`](./audit-fix.md#44-yarn--no-native-fix--yarn-audit-fix).
+
 ### 6.3 Integrity verification
 
 Both lineages record a per-package content hash in the lockfile and verify
@@ -783,7 +791,7 @@ The byte-level grammar of `integrity` / `checksum` (and the per-schema
 | lockfile reader | `yarn-classic` parser | `yarn-berry-vN` (SYML) parser |
 | layout the graph implies | hoisted `node_modules` | PnP map (default) / `node-modules` / `pnpm` store |
 | resolver model | stock Node walk | PnP table (locator→deps), virtual peer contexts |
-| protocol set | semver + `link:`/`file:`/git | full berry protocol matrix ([§1.4](#14-protocols)) |
+| protocol set | semver + `link:`/`file:`/git | full berry protocol matrix ([§1.4](#14-protocols-berry)) |
 | registry adapter | `live` (yarn-mirror = npm) | `live`, plus `::__archiveUrl=` carry-through |
 | modifier locus | `resolutions` | `resolutions` + `packageExtensions` + `::` binds |
 

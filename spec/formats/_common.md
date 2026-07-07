@@ -22,7 +22,7 @@ These rules govern `stringify(graph, options?)` for **every** yarn-berry
 `yarn.lock` schema version (v3–v10 inclusive). They are version-invariant:
 an individual yarn-berry-vN spec records only the field-level diffs of its
 schema, and inherits everything below. The crown-jewel **SYML quoting
-predicate** ([§1.5](#15-quoting-the-syml-quoting-predicate)) lives here
+predicate** ([§1.5](#15-quoting--the-syml-quoting-predicate)) lives here
 once precisely so it never drifts across the family.
 
 > **Scope.** §1 is the **yarn-berry-family** emit contract — it is
@@ -318,7 +318,7 @@ i.e. the `? ` marker + the (quoted) key on one line, a bare `:` value-indicator
 line at the key's own indentation, then the value. The threshold is `> 1024` on
 the **already-quoted** key string (the surrounding `"` count toward the length —
 keys are stringified by the same `stringifyString` as values per
-[§1.5](#15-quoting-the-syml-quoting-predicate)), transcribed verbatim from the
+[§1.5](#15-quoting--the-syml-quoting-predicate)), transcribed verbatim from the
 upstream writer (`yarnpkg-parsers/sources/syml.ts`, `stringifyValue`):
 
 ```

@@ -596,6 +596,12 @@ npm is the **reference client** for that contract: it issues the canonical
 `dist.integrity` + `dist.signatures` against `/-/npm/v1/keys`. **Not
 re-documented here** — see the registry specs.
 
+The **remediation** half — how `npm audit fix` turns those advisories into
+manifest+lockfile edits, `fixAvailable` states, the `npm-pick-manifest` avoid-ladder,
+and what `--force` changes (Arborist, source-derived) — is in the cross-PM
+[`audit-fix.md §4.1`](./audit-fix.md#41-npm-7--arborist-client-computed-range-bump).
+npm is the reference implementation of the **range-bump** remediation model.
+
 ---
 
 ## Quirks (npm-specific, not obvious from "it makes a `node_modules`")

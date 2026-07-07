@@ -327,7 +327,13 @@ advisory DB was migrated to GHSA). Two generations of endpoint exist:
 
 ### 8.1 Bulk advisories — `POST /-/npm/v1/security/advisories/bulk` (npm 7+)
 
-The modern path, used by `npm audit`, `pnpm audit`, `yarn npm audit`.
+The modern path — **the only first-hand-verified client is `npm audit` (npm 7+)**.
+`pnpm audit`, yarn-classic `yarn audit`, AND yarn-berry `yarn npm audit` do **not**
+use this endpoint — they all POST a tree to the legacy
+[§8.2](#82-quick--full-audit--post--npmv1securityauditsquick-npm-6) `/audits` family
+(pnpm 6 / 9 / 10 + yarn-classic 1.22.22 → full `/audits`; yarn-berry 2.4.3 →
+`/audits/quick`). Client split by endpoint, not by age; see
+[`spec/pm/audit-fix.md §2`](../pm/audit-fix.md#2-advisory-transport--which-client-hits-which-endpoint).
 
 - **Request** (gzipped JSON): `{ "<name>": ["<version>", …], … }` — the flat set
   of installed name→versions.
@@ -359,8 +365,13 @@ line-delimited form in npm's API is the [§18](#18-replication--mirror-sync)
 The legacy path. Request is a **lockfile-shaped tree** (`{ name, version,
 requires, dependencies }`, gzipped). `/quick` returns advisories only; the full
 `/audits` additionally returns a **remediation `actions` plan** the server
-computes. Modern clients prefer [§8.1](#81-bulk-advisories--post--npmv1securityadvisoriesbulk-npm-7);
-we treat the npm-6 endpoints as a fallback for old registries.
+computes. This is **not** a mere legacy fallback: besides npm 6, **`pnpm audit`
+(all versions, verified 6 / 9 / 10) and yarn-classic `yarn audit`** post the tree to
+full `/audits`, and **yarn-berry `yarn npm audit`** posts it to `/audits/quick`
+(verified 2.4.3) — all first-hand from the installed PM source, none use the §8.1
+bulk path. `pnpm` ignores the server `actions` plan and computes its
+own overrides ([`spec/pm/audit-fix.md §4.3`](../pm/audit-fix.md#43-pnpm--override-pin));
+npm 6 consumes it. npm 11 dropped only the `/quick` variant.
 
 #### 8.2.1 Full-audit response envelope
 
