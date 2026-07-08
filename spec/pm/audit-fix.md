@@ -126,11 +126,27 @@ writes only the manifest; a follow-up `pnpm install` rewrites the lockfile / sto
 Neither yarn lineage ships a remediation command: yarn-classic has `yarn audit`
 (scan) and berry has `yarn npm audit` (scan) — both query-only. Remediation is
 supplied by **`yarn-audit-fix`** (yaf), which implements the **range-bump** model in
-npm parity across every lockfile format this library reads: default applies only
-semver-compatible (in-range) fixes and flags the rest; `--force` applies SemVer-major
-upgrades and rewrites the declared range in `package.json`. Like npm, yaf leaves an
-`overrides` / `resolutions` pin untouched even under `--force` (an override is authority,
-not a range to widen).
+npm parity. yaf targets a **`yarn.lock` only** — **yarn-classic and berry** — and
+does not drive npm / pnpm / bun locks, so its entire scope is the range-bump family
+(no ecosystem branching). Behaviour:
+
+- **default** — applies only semver-compatible (in-range) fixes; flags a fix that
+  would need a major / out-of-range bump, or that breaks a surviving consumer's
+  declared range.
+- **`--force`** — rewrites the declaring `package.json` range **preserving the
+  operator** (`^`→`^fixed`, `~`→`~fixed`, an exact pin stays a pin, a complex range
+  collapses to `^fixed`), then applies the bump.
+- like npm, an `overrides` / `resolutions` pin is left untouched even under `--force`
+  (a user pin is authority, not a range to widen), and git / file / url / workspace
+  specs are skipped (no registry version to move to).
+
+**yarn-classic direct-dep subtlety.** A yarn-classic lock records no root→direct
+edge (the same manifest-blindness behind the entry-key version-bump case — see
+[`yarn.md` Quirks](./yarn.md#quirks)). An audit-fixer therefore cannot decide in-range vs
+out-of-range for a *direct* dependency from lockfile edges alone; it must read the
+declared range from the **manifest** directly. Without that, a yarn-classic default
+would silently apply out-of-range direct-dep bumps that npm's edge-aware default
+withholds. (berry locks embed the workspace deps, so they are not blind this way.)
 
 ### 4.5 bun — scan only
 
@@ -215,7 +231,7 @@ re-reads it as already-satisfied."
 - npm 7+: `@npmcli/arborist` `lib/audit-report.js`, `lib/vuln.js`, `lib/arborist/build-ideal-tree.js`, `lib/arborist/reify.js`, `lib/arborist/index.js`; `npm-pick-manifest/lib/index.js`; npm `lib/commands/audit.js`; `@npmcli/config` force definition. Read from `pm-npm-10` (Arborist 8) + `pm-npm-11` (Arborist 9) — fix path byte-identical bar npm 11 dropping the `/audits/quick` fallback.
 - npm 6: `lib/audit.js`, `lib/install/audit.js`, `lib/install/save.js` (`pm-npm-6`, 6.14.18).
 - pnpm: bundled `dist/pnpm.cjs` `audit/lib/fix.js` + `audit/lib/audit.js` (`pm-pnpm-6` / `-9` / `-10`).
-- yarn: no native fix; remediation model read from `yarn-audit-fix` (`src/main/ts/lockfile.ts`, `cli.ts`).
+- yarn: no native fix; yaf implements the range-bump model for `yarn.lock` (classic + berry) only — `yarn-audit-fix` `src/main/ts/{lockfile.ts,stages.ts,cli.ts}`.
 - bun: `bun audit` surface — [`spec/pm/bun.md`](./bun.md); no fix command.
 - **Advisory endpoints (§2), verified first-hand from installed source:** npm-10 `advisories/bulk` + `/audits/quick` fallback, npm-11 `advisories/bulk` only (arborist / npm-audit-report); pnpm `${registry}-/npm/v1/security/audits` (`pnpm.cjs`, pnpm 6.35 / 9.15 / 10.0); yarn-classic `${registry}/-/npm/v1/security/audits` (`pm-yarn-1` 1.22.22 `lib/cli.js`); yarn-berry `/-/npm/v1/security/audits/quick` (`pm-yarn-2` 2.4.3 `bin/yarn.js`).
 - Advisory transport (registry side): [`spec/registry/_common.md §8`](../registry/_common.md#8-advisories--audit-api).

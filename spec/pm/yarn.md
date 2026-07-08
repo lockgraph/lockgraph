@@ -781,6 +781,16 @@ The byte-level grammar of `integrity` / `checksum` (and the per-schema
   `git clone` (no fetch), and on mismatch the default `checksumBehavior:
   throw` raises `YN0018` rather than silently refetching
   ([§6.3](#63-integrity-verification)).
+- **A v1 lock is manifest-blind about direct deps** — because entries are
+  keyed by descriptor-set→resolution ([§1.1](#11-classic-v1)), not by install
+  path, a yarn-classic lock does not encode which descriptors are the
+  *project's own* direct dependencies (no root→direct edge). A tool that needs
+  the declared range of a direct dep — a version bump that must preserve the
+  entry-key descriptor, or an audit-fixer deciding in-range vs out-of-range —
+  must read `package.json` directly; the lockfile alone is not enough. berry
+  locks embed the workspace deps and are not blind this way. This is the shared
+  root cause of the entry-key version-bump handling and the audit-fix
+  default-gate ([`audit-fix.md §4.4`](./audit-fix.md#44-yarn--no-native-fix--yarn-audit-fix)).
 
 ---
 
