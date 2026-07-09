@@ -34,6 +34,7 @@ import {
   completionVersionUnknown,
 } from './diagnostics.ts'
 import { selectConstrained, type Condition, type OnUnevaluable } from './constraints.ts'
+import { probeAlternativeParent, type BudgetCounter, type CompletionBudget } from './backtrack.ts'
 
 export interface CompletionSeed {
   /** NodeIds the modifier added in the just-completed mutate phase. */
@@ -93,6 +94,14 @@ export interface CompletionOptions {
    *  adapter with no `manifest()`): `'reject'` (default) folds it into
    *  `NO_CANDIDATE`; `'accept'` skips the check. */
   onUnevaluable?: OnUnevaluable
+  /** OPT-IN combinatorial budget for the bounded-backtracking DISCOVERY probe
+   *  (ADR-0037 v2). Absent (default) → v1 node-local behaviour verbatim. When
+   *  set AND a dep hits `NO_CANDIDATE`, the resolver searches (bounded by
+   *  `maxCombinations`) for a LOWER version of the consumer whose closure is
+   *  constraint-clean and attaches it to the diagnostic as a `suggestion` (the
+   *  override to pin) — read-only, the emitted lock is unchanged. Requires
+   *  non-empty `constraints`. */
+  budget?: CompletionBudget
 }
 
 const EMPTY_SEED: CompletionSeed = {
@@ -128,6 +137,11 @@ export async function completeTransitives(
   const overrides     = options.overrides ?? []
   const constraints   = options.constraints ?? []
   const onUnevaluable = options.onUnevaluable ?? 'reject'
+  // Shared combinatorial-budget counter for the opt-in backtracking probe (a
+  // single global pool across the whole pass). Undefined ⇒ v1 (no escalation).
+  const budgetCounter: BudgetCounter | undefined = options.budget !== undefined
+    ? { max: options.budget.maxCombinations, spent: 0 }
+    : undefined
 
   const visited:    Set<NodeId>  = new Set()
   const added:      NodeId[]      = []
@@ -361,7 +375,19 @@ export async function completeTransitives(
               const first = sel.rejected[0]!
               emitAndLand(completionOverrideConstraintConflict(nodeId, depName, overrideTo, first.by, first.reason))
             } else {
-              emitAndLand(completionNoCandidate(nodeId, depName, effectiveRange, sel.rejected))
+              // Bounded-backtracking DISCOVERY (ADR-0037 v2, opt-in via budget):
+              // search for a LOWER version of THIS consumer whose closure clears
+              // the cliff, and attach it to the diagnostic as the durable fix.
+              // Read-only — the emitted graph is unchanged.
+              let extra: { suggestion?: { consumer: string; version: string; range: string }; budgetExhausted?: boolean } | undefined
+              if (budgetCounter !== undefined) {
+                const probe = await probeAlternativeParent(currentGraph, nodeId, {
+                  registry, constraints, onUnevaluable, overrides, budget: budgetCounter,
+                })
+                if (probe.kind === 'found') extra = { suggestion: probe.suggestion }
+                else if (probe.kind === 'exhausted') extra = { budgetExhausted: true }
+              }
+              emitAndLand(completionNoCandidate(nodeId, depName, effectiveRange, sel.rejected, extra))
             }
             continue
           }

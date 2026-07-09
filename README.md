@@ -161,13 +161,83 @@ Auth follows the npm/yarn taxonomy (Bearer `_authToken` / `npmAuthToken`; Basic
 `always-auth` is deliberately not honoured (it would send a credential beyond its
 host prefix). Pass `env: {}` to ignore environment config entirely.
 
+### Constraint-aware completion
+
+`completeTransitives(graph, registry, { constraints })` (from
+`@antongolub/lockfile/complete`) selects each newly-introduced transitive as the
+**highest range-satisfying version that also passes every constraint** — so a
+post-bump closure stays compatible with the target environment, not merely
+semver-valid. Constraints are pluggable acceptance gates; `engines` and `license`
+ship built-in:
+
+```ts
+import { completeTransitives, engines, license } from '@antongolub/lockfile/complete'
+
+const { graph: completed, unresolved } = await completeTransitives(graph, registry, {
+  constraints: [
+    engines({ node: '>=18' }),                        // reject a version needing a newer node than your floor
+    license({ allow: ['MIT', 'Apache-2.0', 'ISC'] }), // needs a manifest()-capable registry (liveRegistry)
+  ],
+})
+```
+
+`engines` accepts a version whose declared engines support the **minimum** of the
+target (so a discrete `^16 || ^18 || ^20` passes for `>=18`, while a version
+needing `>=20` is rejected); a point target degrades to npm-exact `satisfies`. When
+no in-range version passes, completion leaves that edge unwired and emits a
+**recoverable** `COMPLETION_NO_CANDIDATE` (a `warning` in `unresolved`) carrying a
+per-candidate `{ version, by, reason }` payload — the caller decides whether to skip
+that fix or stop (`onUnevaluable: 'reject' | 'accept'` governs the missing-`manifest()`
+case).
+
+**Bounded-backtracking discovery (opt-in).** Pass `budget: { maxCombinations }` and, when
+a dep hits `NO_CANDIDATE`, completion searches — bounded by that combinatorial budget — for
+a *lower* version of the **consumer** whose closure is constraint-clean (the `foo@1.9→bar`
+cliff that `foo@1.4→bar` clears), attaching it to the diagnostic as a `suggestion` (the
+override to pin — durable across installs). It is **read-only**: the emitted lock is
+byte-identical to the no-budget run, so it only ever *advises*, never rewrites.
+
+**Custom constraints.** A constraint is any `{ kind, cost?, evaluate(ctx) }` object, so
+any per-package decision becomes a gate. `evaluate` is sync or async and returns
+`{ ok: true } | { ok: false, reason? } | { ok: 'unevaluable', reason? }`; `ctx` gives
+`{ name, version, corgi, manifest() }`. Example — reject an ESM-only package for a
+CommonJS consumer:
+
+```ts
+const commonjsCompatible = (registry = 'https://registry.npmjs.org') => ({
+  kind: 'commonjs',
+  cost: 20,                                                  // its own fetch → runs after the cheap gates
+  async evaluate(ctx) {
+    const enc = ctx.name.startsWith('@') ? ctx.name.replace('/', '%2F') : ctx.name
+    const m = await (await fetch(`${registry}/${enc}/${ctx.version}`)).json()
+    if (m.type !== 'module') return { ok: true }             // CJS by default → requireable
+    const hasCjsEntry = typeof m.main === 'string'
+      || /"(require|default)"\s*:/.test(JSON.stringify(m.exports ?? null))
+    return hasCjsEntry ? { ok: true } : { ok: false, reason: `${ctx.name}@${ctx.version} is ESM-only` }
+  },
+})
+
+await completeTransitives(graph, registry, { constraints: [engines({ node: '>=18' }), commonjsCompatible()] })
+```
+
+(A node-local *approximation*: true `require(ESM)` compatibility is per-edge and
+Node-version-gated, which is why module-format isn't a built-in — it belongs in
+user-land as a custom axis.)
+
+**`cost`** orders evaluation cheap-first and short-circuits on the first rejection —
+it is an **optimisation, never a priority**: every constraint must pass, and the
+verdict is identical regardless of order. Convention: `0` reads only the corgi
+packument already in hand (`engines`), `10` needs one full-manifest fetch (`license`),
+`20` an external call. So a version `engines` (cost 0) rejects never triggers a
+`license` (cost 10) manifest fetch. Default `0`; equal costs keep declaration order.
+
 ### Sub-imports
 
 | Surface | Importable as | Contains |
 |---------|---------------|----------|
 | Root | `@antongolub/lockfile` | `detect`, `check`, `parse`, `stringify`, `convert`, `modify`, `optimize`, `overridesOf`, plus types `Graph`, `FormatId`, `ParseOptions`, `StringifyOptions`, `ConvertOptions`, `Manifest` |
 | Modifiers | `@antongolub/lockfile/modify` | the individual `Primitive` functions behind `modify` (audit-fix, override-pin, license-filter) |
-| Complete | `@antongolub/lockfile/complete` | `completeTransitives` — registry-backed tree completion that wires the transitive deps a modify introduced |
+| Complete | `@antongolub/lockfile/complete` | `completeTransitives` — registry-backed tree completion that wires the transitive deps a modify introduced, with optional node-local `constraints` (`engines`, `license`) for engine/license-aware version selection |
 | Optimize | `@antongolub/lockfile/optimize` | `optimize` (reachability orphan GC), `pruneOrphans` (reference-count orphan GC), `registryPackages` (the graph's registry deps as a `{name: versions[]}` audit input) |
 | Enrich | `@antongolub/lockfile/enrich` | `refurbish` — monotone field-fill (e.g. recomputes a yarn-berry zip `checksum` from a tarball source so a patched lock installs without `yarn install`) |
 | Registry | `@antongolub/lockfile/registry` | `frozenRegistry`, `liveRegistry` (+ `.fromConfig`, `.audit`), `resolveRegistry`, `npmCache`, `pnpmCache`, `yarnBerryCache` |

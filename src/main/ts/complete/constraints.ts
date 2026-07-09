@@ -162,48 +162,98 @@ export async function selectConstrained(
   const pack = await registry.packument(name)
   if (pack === undefined) return { rejected: [] } // package unknown → caller emits UNRESOLVED
 
-  const ordered = [...constraints].sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))
+  const ordered = orderByCost(constraints)
   const rejected: RejectedCandidate[] = []
 
   for (const version of candidatesFor(pack, range)) {
     const corgi = pack.versions[version]
     if (corgi === undefined) continue
-    let manifestP: Promise<PackumentVersion | undefined> | undefined
-    const ctx: ConditionContext = {
-      name,
-      version,
-      corgi,
-      manifest: () => (manifestP ??= registry.manifest ? registry.manifest(name, version) : Promise.resolve(undefined)),
-    }
-
-    let passed = true
-    for (const c of ordered) {
-      let verdict: Verdict
-      try {
-        verdict = await c.evaluate(ctx)
-      } catch (cause) {
-        // Broken condition → hard fail the whole call (Node-14-safe: no Error `cause` opt).
-        throw new Error(`completion constraint '${c.kind}' threw for ${name}@${version}: ${errMessage(cause)}`)
-      }
-      if (verdict.ok === true) continue
-      if (verdict.ok === 'unevaluable' && onUnevaluable === 'accept') continue
-      rejected.push({ version, by: c.kind, ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}) })
-      passed = false
-      break
-    }
-    if (!passed) continue
-
-    // Winner. Mirror `liveRegistry.resolve`'s libc backfill so a constrained
-    // mint is byte-identical to an unconstrained one (corgi drops `libc`; a
-    // linux package missing it → YN0028 on `yarn install --immutable`).
-    if (corgi.os?.includes('linux') === true && corgi.libc === undefined) {
-      const full = await ctx.manifest()
-      if (full !== undefined) return { selected: full, rejected }
-    }
-    return { selected: corgi, rejected }
+    const ctx = makeContext(registry, name, version, corgi)
+    const verdict = await evaluateOne(ctx, ordered, onUnevaluable)
+    if (verdict.ok) return { selected: await mintReady(corgi, ctx), rejected }
+    rejected.push({ version, by: verdict.by, ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}) })
   }
 
   return { rejected } // exhausted: rejected.length > 0 ⇒ NO_CANDIDATE; === 0 ⇒ UNRESOLVED (no satisfying version)
+}
+
+/**
+ * Passing candidates for `name@range`, HIGHEST-first, each already mint-ready
+ * (libc-backfilled) — the on-demand alternative stream the bounded-backtracking
+ * escalation walks (ADR-0037 v2). Reuses the exact same enumeration + evaluation
+ * as `selectConstrained`, lazily: a consumer that only pulls the first item pays
+ * for one, exactly as v1 does.
+ */
+export async function* constrainedCandidates(
+  registry: RegistryAdapter,
+  name: string,
+  range: string,
+  constraints: readonly Condition[],
+  onUnevaluable: OnUnevaluable,
+): AsyncGenerator<{ version: string; node: PackumentVersion }> {
+  const pack = await registry.packument(name)
+  if (pack === undefined) return
+  const ordered = orderByCost(constraints)
+  for (const version of candidatesFor(pack, range)) {
+    const corgi = pack.versions[version]
+    if (corgi === undefined) continue
+    const ctx = makeContext(registry, name, version, corgi)
+    const verdict = await evaluateOne(ctx, ordered, onUnevaluable)
+    if (verdict.ok) yield { version, node: await mintReady(corgi, ctx) }
+  }
+}
+
+function orderByCost(constraints: readonly Condition[]): Condition[] {
+  return [...constraints].sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))
+}
+
+function makeContext(
+  registry: RegistryAdapter,
+  name: string,
+  version: string,
+  corgi: PackumentVersion,
+): ConditionContext {
+  let manifestP: Promise<PackumentVersion | undefined> | undefined
+  return {
+    name,
+    version,
+    corgi,
+    manifest: () => (manifestP ??= registry.manifest ? registry.manifest(name, version) : Promise.resolve(undefined)),
+  }
+}
+
+/** Evaluate every constraint (cost-ordered) against one candidate; first failure
+ *  wins. A condition that THROWS aborts the whole call (a broken checker must not
+ *  be silently skipped). */
+async function evaluateOne(
+  ctx: ConditionContext,
+  ordered: readonly Condition[],
+  onUnevaluable: OnUnevaluable,
+): Promise<{ ok: true } | { ok: false; by: string; reason?: string }> {
+  for (const c of ordered) {
+    let verdict: Verdict
+    try {
+      verdict = await c.evaluate(ctx)
+    } catch (cause) {
+      // Node-14-safe: no Error `cause` option.
+      throw new Error(`completion constraint '${c.kind}' threw for ${ctx.name}@${ctx.version}: ${errMessage(cause)}`)
+    }
+    if (verdict.ok === true) continue
+    if (verdict.ok === 'unevaluable' && onUnevaluable === 'accept') continue
+    return { ok: false, by: c.kind, ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}) }
+  }
+  return { ok: true }
+}
+
+/** The winner's mint-ready node: mirror `liveRegistry.resolve`'s libc backfill so
+ *  a constrained mint is byte-identical to an unconstrained one (corgi drops
+ *  `libc`; a linux package missing it → YN0028 on `yarn install --immutable`). */
+async function mintReady(corgi: PackumentVersion, ctx: ConditionContext): Promise<PackumentVersion> {
+  if (corgi.os?.includes('linux') === true && corgi.libc === undefined) {
+    const full = await ctx.manifest()
+    if (full !== undefined) return full
+  }
+  return corgi
 }
 
 /** Candidate versions for `range`, mirroring `resolve`'s selection: an exact

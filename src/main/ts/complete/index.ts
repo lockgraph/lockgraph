@@ -31,6 +31,7 @@ export {
 
 // ADR-0037 — node-local acceptance constraints.
 export {
+  constrainedCandidates,
   engines,
   license,
   selectConstrained,
@@ -41,3 +42,12 @@ export {
   type SelectResult,
   type Verdict,
 } from './constraints.ts'
+
+// ADR-0037 v2 — opt-in bounded-backtracking discovery.
+export {
+  probeAlternativeParent,
+  type BudgetCounter,
+  type CompletionBudget,
+  type ParentSuggestion,
+  type ProbeResult,
+} from './backtrack.ts'

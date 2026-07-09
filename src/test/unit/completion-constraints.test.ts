@@ -397,3 +397,87 @@ describe('complete/constraints — frozen-clean parity', () => {
     expect(a.graph.tarballOf('bar@1.5.0')).toEqual(b.graph.tarballOf('bar@1.5.0'))
   })
 })
+
+// ADR-0037 v2 — opt-in bounded-backtracking DISCOVERY. Read-only: finds a lower
+// consumer version that clears a cliff and suggests the override; never mutates
+// the emitted lock.
+describe('complete/constraints — bounded-backtracking discovery (v2)', () => {
+  // foo@1.9 → bar@^2 (only node>=20, cliffs on >=18); foo@1.4 → bar@^1 (node>=16, clean).
+  const pkgs = (): Record<string, Record<string, PackumentVersion>> => ({
+    foo: {
+      '1.4.0': { name: 'foo', version: '1.4.0', engines: { node: '>=16' }, dependencies: { bar: '^1.0.0' } },
+      '1.9.0': { name: 'foo', version: '1.9.0', engines: { node: '>=16' }, dependencies: { bar: '^2.0.0' } },
+    },
+    bar: {
+      '1.0.0': { name: 'bar', version: '1.0.0', engines: { node: '>=16' } },
+      '2.0.0': { name: 'bar', version: '2.0.0', engines: { node: '>=20' } },
+    },
+  })
+  // app(ws) → foo@1.9.0 (declared ^1.0.0); completion walks foo, mints its bar dep → cliff.
+  const seed = () => graphOf(builder => {
+    const app = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+    const foo = addPackage(builder, { name: 'foo', version: '1.9.0' })
+    addEdge(builder, app, foo, 'dep', '^1.0.0')
+  })
+
+  it('finds the lower consumer version that clears the cliff + suggests the override', async () => {
+    const result = await completeTransitives(seed(), mockRegistry(pkgs()), {
+      constraints: [engines({ node: '>=18' })],
+      budget: { maxCombinations: 10 },
+    })
+    const nc = result.unresolved.find(d => d.code === 'COMPLETION_NO_CANDIDATE')
+    expect(nc).toBeDefined()
+    expect((nc!.data as { suggestion?: { consumer: string; version: string } }).suggestion)
+      .toMatchObject({ consumer: 'foo', version: '1.4.0' })
+  })
+
+  it('without a budget → no suggestion (v1 behaviour unchanged)', async () => {
+    const result = await completeTransitives(seed(), mockRegistry(pkgs()), {
+      constraints: [engines({ node: '>=18' })],
+    })
+    const nc = result.unresolved.find(d => d.code === 'COMPLETION_NO_CANDIDATE')
+    expect(nc).toBeDefined()
+    expect((nc!.data as Record<string, unknown>).suggestion).toBeUndefined()
+  })
+
+  it('the probe is READ-ONLY — added/wired identical with vs without a budget', async () => {
+    const withB = await completeTransitives(seed(), mockRegistry(pkgs()), {
+      constraints: [engines({ node: '>=18' })], budget: { maxCombinations: 10 },
+    })
+    const withoutB = await completeTransitives(seed(), mockRegistry(pkgs()), {
+      constraints: [engines({ node: '>=18' })],
+    })
+    expect(withB.added).toEqual(withoutB.added)
+    expect(withB.wired).toEqual(withoutB.wired)
+  })
+
+  it('budget exhausted → flagged, no suggestion', async () => {
+    const result = await completeTransitives(seed(), mockRegistry(pkgs()), {
+      constraints: [engines({ node: '>=18' })],
+      budget: { maxCombinations: 0 },
+    })
+    const nc = result.unresolved.find(d => d.code === 'COMPLETION_NO_CANDIDATE')
+    expect((nc!.data as Record<string, unknown>).budgetExhausted).toBe(true)
+    expect((nc!.data as Record<string, unknown>).suggestion).toBeUndefined()
+  })
+
+  it('no lower consumer works → plain NO_CANDIDATE (no suggestion, not exhausted)', async () => {
+    const badPkgs: Record<string, Record<string, PackumentVersion>> = {
+      foo: {
+        '1.4.0': { name: 'foo', version: '1.4.0', engines: { node: '>=16' }, dependencies: { bar: '^1.0.0' } },
+        '1.9.0': { name: 'foo', version: '1.9.0', engines: { node: '>=16' }, dependencies: { bar: '^2.0.0' } },
+      },
+      bar: {
+        '1.0.0': { name: 'bar', version: '1.0.0', engines: { node: '>=20' } }, // foo@1.4's bar also dirty
+        '2.0.0': { name: 'bar', version: '2.0.0', engines: { node: '>=20' } },
+      },
+    }
+    const result = await completeTransitives(seed(), mockRegistry(badPkgs), {
+      constraints: [engines({ node: '>=18' })],
+      budget: { maxCombinations: 10 },
+    })
+    const nc = result.unresolved.find(d => d.code === 'COMPLETION_NO_CANDIDATE')
+    expect((nc!.data as Record<string, unknown>).suggestion).toBeUndefined()
+    expect((nc!.data as Record<string, unknown>).budgetExhausted).toBeUndefined()
+  })
+})

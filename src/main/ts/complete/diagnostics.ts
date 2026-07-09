@@ -98,13 +98,32 @@ export function completionNoCandidate(
   depName: string,
   range: string,
   rejected: readonly RejectedCandidate[],
+  extra?: {
+    /** A lower version of the CONSUMER whose closure IS constraint-clean, found
+     *  by the bounded backtracking probe (ADR-0037 v2). The durable fix. */
+    suggestion?: { consumer: string; version: string; range: string }
+    /** The probe hit the combinatorial budget before finding a fix. */
+    budgetExhausted?: boolean
+  },
 ): CompletionDiagnostic {
+  const suggestion = extra?.suggestion
+  const hint = suggestion !== undefined
+    ? ` — a lower ${suggestion.consumer} (${suggestion.version}) resolves it; pin overrides: { "${suggestion.consumer}": "${suggestion.version}" }`
+    : extra?.budgetExhausted === true
+      ? ' — search budget exhausted before a lower-consumer fix was found'
+      : ''
   return {
     code:     'COMPLETION_NO_CANDIDATE',
     severity: 'warning',
     subject:  consumer,
-    message:  `no version of ${depName} in ${range} passes all constraints (for consumer ${consumer})`,
-    data:     { depName, range, rejected: rejected.map(r => ({ ...r })) },
+    message:  `no version of ${depName} in ${range} passes all constraints (for consumer ${consumer})${hint}`,
+    data:     {
+      depName,
+      range,
+      rejected: rejected.map(r => ({ ...r })),
+      ...(suggestion !== undefined ? { suggestion } : {}),
+      ...(extra?.budgetExhausted === true ? { budgetExhausted: true } : {}),
+    },
   }
 }
 
