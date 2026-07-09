@@ -22,6 +22,12 @@ export interface PackumentVersion {
   deprecated?:          string
   bin?:                 string | Record<string, string>
   bundledDependencies?: string[]
+  /** SPDX license id (or expression). The abbreviated (corgi) packument OMITS
+   *  this — it is present only on a FULL single-version manifest (see
+   *  `RegistryAdapter.manifest`). Normalised from `license` string / legacy
+   *  `{ type }` / `licenses[]` forms. Consumed by the completion `license`
+   *  constraint. */
+  license?:             string
 }
 
 export interface Packument {
@@ -41,6 +47,16 @@ export interface RegistryAdapter {
    * `range` may be a semver range, dist-tag, or exact version.
    */
   resolve(name: string, range: string): Promise<PackumentVersion | undefined>
+
+  /**
+   * OPTIONAL — the FULL single-version manifest for `<name>@<version>`, carrying
+   * the fields the abbreviated (corgi) packument omits, notably `license`.
+   * `liveRegistry` implements it (it already fetches this doc to backfill
+   * `libc`). A corgi-only adapter (frozen / *Cache) may omit it — a
+   * full-manifest-tier constraint (e.g. `license`) then reports `unevaluable`.
+   * Undefined = version unknown / fetch failed.
+   */
+  manifest?(name: string, version: string): Promise<PackumentVersion | undefined>
 }
 
 export interface CacheAdapter {

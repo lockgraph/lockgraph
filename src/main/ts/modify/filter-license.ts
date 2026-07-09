@@ -17,6 +17,7 @@ import type {
   Graph,
   NodeId,
 } from '../graph.ts'
+import { isLicenseFlagged } from '../recipe/license.ts'
 import {
   modifyLicenseBlocked,
   modifyLicenseFlagged,
@@ -68,7 +69,7 @@ export async function filterLicense(
   for (const node of graph.nodes()) {
     if (node.workspacePath !== undefined) continue
     const license = graph.tarballOf(node.id)?.license
-    if (!isFlagged(license, allow, deny)) continue
+    if (!isLicenseFlagged(license, allow, deny)) continue
     offending.push({ id: node.id, license })
   }
 
@@ -156,19 +157,6 @@ export async function filterLicense(
     recentlyOrphaned,
     unresolved,
   }
-}
-
-function isFlagged(
-  license: string | undefined,
-  allow: readonly string[] | undefined,
-  deny:  readonly string[] | undefined,
-): boolean {
-  if (deny !== undefined && license !== undefined && deny.includes(license)) return true
-  if (allow !== undefined) {
-    if (license === undefined) return true
-    if (!allow.includes(license)) return true
-  }
-  return false
 }
 
 function gcOrphans(

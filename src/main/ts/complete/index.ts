@@ -17,11 +17,27 @@ export {
 
 export {
   completionEdgeResolved,
+  completionNoCandidate,
   completionNodeAdded,
   completionNodeUnknown,
+  completionOverrideConstraintConflict,
   completionPeerContextIncomplete,
   completionUnresolved,
   completionVersionUnknown,
   type CompletionDiagnostic,
   type CompletionDiagnosticCode,
+  type RejectedCandidate,
 } from './diagnostics.ts'
+
+// ADR-0037 — node-local acceptance constraints.
+export {
+  engines,
+  license,
+  selectConstrained,
+  type Awaitable,
+  type Condition,
+  type ConditionContext,
+  type OnUnevaluable,
+  type SelectResult,
+  type Verdict,
+} from './constraints.ts'

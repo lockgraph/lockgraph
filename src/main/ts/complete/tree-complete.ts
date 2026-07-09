@@ -25,12 +25,15 @@ import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
 import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
 import {
   completionEdgeResolved,
+  completionNoCandidate,
   completionNodeAdded,
   completionNodeUnknown,
+  completionOverrideConstraintConflict,
   completionPeerContextIncomplete,
   completionUnresolved,
   completionVersionUnknown,
 } from './diagnostics.ts'
+import { selectConstrained, type Condition, type OnUnevaluable } from './constraints.ts'
 
 export interface CompletionSeed {
   /** NodeIds the modifier added in the just-completed mutate phase. */
@@ -79,6 +82,17 @@ export interface CompletionOptions {
    *  forced target VERBATIM (and outranks reuse), so the completed closure
    *  honours the project's pins (frozen-acceptance). */
   overrides?:    readonly OverrideConstraint[]
+  /** Node-local acceptance constraints (ADR-0037). When set, a NEW transitive
+   *  node is the HIGHEST range-satisfying version passing EVERY constraint
+   *  (`engines`, `license`); none passes → a recoverable `COMPLETION_NO_CANDIDATE`
+   *  (edge left unwired, completion continues, caller decides skip/stop). Empty
+   *  (default) → the existing single-`resolve` path, unchanged. Peer edges are
+   *  never constrained (they are not minted at completion). */
+  constraints?:  readonly Condition[]
+  /** What an `unevaluable` verdict means (e.g. a `license` constraint on an
+   *  adapter with no `manifest()`): `'reject'` (default) folds it into
+   *  `NO_CANDIDATE`; `'accept'` skips the check. */
+  onUnevaluable?: OnUnevaluable
 }
 
 const EMPTY_SEED: CompletionSeed = {
@@ -108,10 +122,12 @@ export async function completeTransitives(
   registry: RegistryAdapter,
   options: CompletionOptions = {},
 ): Promise<CompletionResult> {
-  const seed         = options.seed ?? EMPTY_SEED
-  const onDiagnostic = options.onDiagnostic
-  const resolution   = options.resolution ?? 'highest'
-  const overrides    = options.overrides ?? []
+  const seed          = options.seed ?? EMPTY_SEED
+  const onDiagnostic  = options.onDiagnostic
+  const resolution    = options.resolution ?? 'highest'
+  const overrides     = options.overrides ?? []
+  const constraints   = options.constraints ?? []
+  const onUnevaluable = options.onUnevaluable ?? 'reject'
 
   const visited:    Set<NodeId>  = new Set()
   const added:      NodeId[]      = []
@@ -331,9 +347,29 @@ export async function completeTransitives(
 
         // Nothing already present fits: query registry for the EFFECTIVE range
         // (the override target when one governs, else the declared range) — the
-        // EDGE keeps `depRange`; only the resolved version changes.
-        const resolved = await registry.resolve(depName, effectiveRange)
+        // EDGE keeps `depRange`; only the resolved version changes. With
+        // constraints active (ADR-0037), select the highest EFFECTIVE-range
+        // version passing them all; peers are never constrained (not minted here).
+        let resolved: PackumentVersion | undefined
+        if (constraints.length > 0 && kind !== 'peer') {
+          const sel = await selectConstrained(registry, depName, effectiveRange, constraints, onUnevaluable)
+          resolved = sel.selected
+          if (resolved === undefined && sel.rejected.length > 0) {
+            // A satisfying version existed but every one was rejected by a
+            // constraint — recoverable (edge unwired, completion continues).
+            if (overrideTo !== undefined) {
+              const first = sel.rejected[0]!
+              emitAndLand(completionOverrideConstraintConflict(nodeId, depName, overrideTo, first.by, first.reason))
+            } else {
+              emitAndLand(completionNoCandidate(nodeId, depName, effectiveRange, sel.rejected))
+            }
+            continue
+          }
+        } else {
+          resolved = await registry.resolve(depName, effectiveRange)
+        }
         if (resolved === undefined) {
+          // No version satisfies the range at all (or package unknown).
           if (kind === 'peer') {
             emitAndLand(completionPeerContextIncomplete(nodeId, depName, depRange))
           } else {

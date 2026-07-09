@@ -148,6 +148,12 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       return base
     },
 
+    // Full single-version manifest — the fields corgi omits (notably `license`).
+    // Surfaces the same fetch `resolve` uses for its `libc` backfill.
+    manifest(name, version) {
+      return fetchVersionManifest(name, version)
+    },
+
     async audit(pkgs, opts = {}) {
       const chunkSize = opts.chunkSize ?? 250
       const url = `${baseUrl}/-/npm/v1/security/advisories/bulk`
@@ -229,6 +235,8 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
   if (Array.isArray(raw?.cpu))                out.cpu                  = raw.cpu.filter((v: any) => typeof v === 'string')
   if (Array.isArray(raw?.libc))               out.libc                 = raw.libc.filter((v: any) => typeof v === 'string')
   if (typeof raw?.deprecated === 'string')    out.deprecated           = raw.deprecated
+  const license = normaliseLicense(raw)
+  if (license !== undefined)                  out.license              = license
   if (typeof raw?.bin === 'string' || isStringMap(raw?.bin)) {
     out.bin = typeof raw.bin === 'string' ? raw.bin : { ...raw.bin }
   }
@@ -239,6 +247,28 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
     out.bundledDependencies = raw.bundleDependencies.filter((v: any) => typeof v === 'string')
   }
   return out
+}
+
+// Normalise npm's several `license` shapes to a single SPDX-id string (or an
+// expression, left verbatim for the constraint layer to treat as unevaluable):
+//   - `license: "MIT"`                     → `"MIT"`
+//   - `license: { type: "MIT", url }`      → `"MIT"` (deprecated object form)
+//   - `licenses: [{ type: "MIT" }, …]`     → `"MIT OR …"` (deprecated array form)
+// The abbreviated (corgi) packument omits `license` entirely, so this only
+// yields a value on a full single-version manifest.
+function normaliseLicense(raw: any): string | undefined {
+  const l = raw?.license
+  // Empty / whitespace-only license strings are "unknown", not the id "" —
+  // return undefined so a constraint treats them as unknown, not a comparable id.
+  if (typeof l === 'string') return l.trim() === '' ? undefined : l
+  if (isObject(l) && typeof l.type === 'string') return l.type.trim() === '' ? undefined : l.type
+  if (Array.isArray(raw?.licenses)) {
+    const types = raw.licenses
+      .map((e: any) => (typeof e === 'string' ? e : isObject(e) && typeof e.type === 'string' ? e.type : undefined))
+      .filter((v: unknown): v is string => typeof v === 'string')
+    if (types.length > 0) return types.join(' OR ')
+  }
+  return undefined
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
