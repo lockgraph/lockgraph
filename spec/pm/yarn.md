@@ -96,7 +96,23 @@ A **Resolver** turns descriptors into locators and extracts manifests; a
 
 Both lineages honour the top-level `resolutions` field in `package.json`
 to force a transitive dependency to a chosen version (a yarn extension that
-predates npm `overrides`). Berry additionally exposes
+predates npm `overrides`).
+
+Like npm's `overrides`
+([npm §`overrides`](./npm.md#overrides-manifest-driven-forced-replacement)),
+`resolutions` is **resolve-time manifest input, not lockfile output**: yarn reads
+it from `package.json` on every install and bakes the pin into the resolved graph
+— it is never written *into* `yarn.lock` as a re-emittable `resolutions` block.
+Classic collapses the matching consumer descriptors onto the **pinned entry key**;
+berry keys the entry by the pinned descriptor (reflected in `resolution:`). Either
+way the lock records only the resolved *result*, so a `resolutions` pin — in
+particular one whose forced version the declared range does **not** satisfy —
+cannot be reconstructed from a `yarn.lock` alone; recovering the block needs the
+root `package.json` (the converter's `manifests` input). The lockfile mechanics
+are specified in [yarn-classic Capabilities](../formats/yarn-classic.md) and the
+[descriptor→node ladder](../formats/_common.md#5-descriptornode-resolution-yarn-family-parse).
+
+Berry additionally exposes
 **`packageExtensions`** in `.yarnrc.yml` to *add* missing
 dependencies/peerDependencies to third-party manifests without forking them
 — the supported way to repair under-declared packages that PnP's

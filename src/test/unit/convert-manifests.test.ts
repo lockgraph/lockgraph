@@ -210,11 +210,12 @@ lodash@4.17.21:
   })
 })
 
-// The yarn-classic side of Bug #99 (the #102 berry case): root-edge synthesis in
-// `enrich` must honour a `resolutions` pin, not just semver. The captured overrides
-// are threaded into `enrich` so `resolveManifestTarget` can bridge a NON-satisfying
-// declared range to the pinned node — otherwise, with ≥2 same-name candidates and
-// no semver satisfier, the root edge is dropped and the dependency vanishes.
+// A yarn `resolutions` pin can force a version the declared range does NOT satisfy
+// (e.g. root declares csstype `^3.1.3` but resolutions pin `3.0.9`). yarn-classic
+// root-edge synthesis in `enrich` must honour that pin, not just semver: with ≥2
+// same-name candidates and no version the range satisfies, semver has no unique
+// target, so only the captured overrides can bind the edge to the pinned node —
+// otherwise the root edge is dropped and the dependency vanishes from the output.
 describe('yarn-classic root resolution honours a non-satisfying resolutions pin', () => {
   const YARN = `# yarn lockfile v1
 csstype@3.0.9:

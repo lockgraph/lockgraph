@@ -148,7 +148,8 @@ export interface YarnClassicEnrichOptions {
   manifests?: Record<string, YarnClassicManifest>
   // Canonical override constraints (ADR-0025), threaded from the same
   // `captureManifestOverrides` the public `parse` runs. Lets root-edge synthesis
-  // bridge a NON-satisfying `resolutions` pin to its node (Bug #99, enrich side).
+  // bind a `resolutions` pin whose forced version the declared range does NOT
+  // satisfy to its node, the same way the parse-time edge resolver does.
   overrides?: readonly OverrideConstraint[]
 }
 
@@ -1570,8 +1571,8 @@ function resolveManifestTarget(
   const exact = specIndex.get(`${name}@${range}`)
   if (exact !== undefined) return exact
 
-  // Override-map forced link — mirrors the parse-time Bug #99 bridge: an
-  // authoritative `resolutions` pin beats semver inference and bridges a
+  // Override-map forced link — the same rung the parse-time edge resolver uses: an
+  // authoritative `resolutions` pin beats semver inference and binds a
   // NON-satisfying declared range (e.g. `csstype@^3.1.3` pinned to `3.0.9`, which
   // `^3.1.3` does not satisfy) to the pinned node, instead of dropping the root
   // edge when ≥2 same-name candidates leave no unique semver target.

@@ -43,6 +43,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:                              # top-level, re-emittable (see Capabilities)
+  foo@1: 2.0.0
+
 importers:
   .:
     dependencies:
@@ -65,6 +68,19 @@ snapshots:
 
 Same as [pnpm-v6](./pnpm-v6.md#capabilities). The expressiveness ceiling is
 unchanged from the 6.x family; the v9 jump is structural, not capability-led.
+
+**Overrides — persisted in the lock (unlike npm/yarn).** pnpm writes a top-level
+`overrides:` block (selector → target, e.g. `parent>child`, `foo@1: 2.0.0`,
+removal `foo: '-'`, or a `patch:` directive) verbatim into `pnpm-lock.yaml`. This
+project captures it at parse and canonicalises it to `OverrideConstraint[]`
+(`_pnpm-flat-core.ts`, `captureOverrides('pnpm')`), so it **round-trips** and is
+recoverable from the lock alone via [`overridesOf(graph)`](../06-modifiers.md) —
+in contrast to npm `overrides` and yarn `resolutions`, which are resolve-time
+`package.json` input never written into their locks
+([npm §`overrides`](../pm/npm.md#overrides-manifest-driven-forced-replacement),
+[yarn §1.3](../pm/yarn.md#13-resolutions-field)). bun likewise persists a
+re-emittable `overrides` block; pnpm and bun are the two families where the pin
+survives in the lockfile.
 
 ## Integrity
 
