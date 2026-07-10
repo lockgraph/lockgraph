@@ -278,18 +278,34 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
     : undefined
   let graph = parseOne(format, input, options, overrides)
   // yarn-classic is the ONLY rootless source: a classic yarn.lock encodes no
-  // project root, so the root node + workspace-member classification can come only
-  // from `manifests`. Without this, parse promotes a top-of-DAG dependency to the
-  // `""` root and drops that dependency's own installable node — a lock that fails
-  // `npm ci` / `--frozen-lockfile`. The manifest-gated `enrich` synthesizes the
-  // declared root and classifies root/member edges; wiring it into the public parse
-  // lets `convert(yarnLock, { manifests })` inherit it. Every other format encodes
-  // its own root and is unaffected, so this stays scoped to `yarn-classic`.
+  // project root, so the declared root can come only from `manifests`. Without
+  // this, parse promotes a top-of-DAG dependency to the `""` root and drops that
+  // dependency's own installable node — a lock that fails `npm ci`. The
+  // manifest-gated `enrich` synthesizes the declared root and its edges; wiring it
+  // into the public parse lets `convert(yarnLock, { manifests })` inherit it. Every
+  // other format encodes its own root, so this stays scoped to `yarn-classic`.
+  //
+  // KNOWN GAP (multi-member workspaces): `enrich` synthesizes ROOT edges but not
+  // workspace-MEMBER dependency edges — a classic yarn.lock has no member dep
+  // blocks, so a member's deps live only in its own package.json and are not yet
+  // wired. A member entry then emits without its dependencies, which fails a frozen
+  // install. Warn so the incompleteness is VISIBLE rather than silent. The
+  // single-root case (the flagship `yarn.lock → package-lock.json` direction) is
+  // complete; member-edge synthesis is a follow-up.
   if (format === 'yarn-classic' && options.manifests !== undefined) {
     const enriched = yarnClassic.enrich(graph, undefined, { manifests: options.manifests })
     graph = enriched.graph
     if (options.onDiagnostic !== undefined) {
       for (const d of enriched.diagnostics) options.onDiagnostic(d)
+      if (hasWorkspaceMemberDeps(options.manifests)) {
+        options.onDiagnostic({
+          code:     'YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED',
+          severity: 'warning',
+          message:  'yarn-classic: workspace-member dependency edges are not synthesised from '
+            + 'manifests; member entries emit without their own dependencies, so a multi-member '
+            + 'conversion is incomplete and may fail a frozen install',
+        })
+      }
     }
   }
   if (overrides !== undefined && overrides.length > 0) {
@@ -299,6 +315,16 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
     for (const d of graph.diagnostics()) options.onDiagnostic(d)
   }
   return graph
+}
+
+// A multi-member yarn-classic workspace: a manifest under a NON-root path that
+// declares dependencies `enrich` does not yet wire (see the KNOWN GAP in `parse`).
+function hasWorkspaceMemberDeps(manifests: Record<string, Manifest>): boolean {
+  return Object.entries(manifests).some(([path, m]) =>
+    path !== ''
+    && (Object.keys(m.dependencies ?? {}).length
+      + Object.keys(m.devDependencies ?? {}).length
+      + Object.keys(m.optionalDependencies ?? {}).length) > 0)
 }
 
 /** Map a FormatId to its override grammar family (ADR-0025 §6 capture). */

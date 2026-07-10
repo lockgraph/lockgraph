@@ -144,4 +144,21 @@ ansi-styles@^3.2.1:
     const g = parse('yarn-classic', YARN)
     expect(Array.from(g.roots())).not.toContain('app@1.0.0')
   })
+
+  it('warns (not silently) when a multi-member workspace drops member dependencies', () => {
+    // KNOWN GAP: enrich synthesizes ROOT edges but not workspace-MEMBER dep edges.
+    // A multi-member conversion is incomplete; surface it as a warning rather than
+    // emit a silently-broken lock. (Single-root stays warning-free — covered above.)
+    const codes: string[] = []
+    convert(YARN, {
+      from: 'yarn-classic',
+      to: 'npm-3',
+      manifests: {
+        ...MAN,
+        'packages/a': { name: '@s/a', version: '0.0.0', dependencies: { lodash: '^4.0.0' } },
+      },
+      onDiagnostic: d => codes.push(d.code),
+    })
+    expect(codes).toContain('YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED')
+  })
 })

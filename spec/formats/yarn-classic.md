@@ -163,6 +163,20 @@ it, only `dep` and `optional` are derivable from the lockfile; `dev` and
 `peer` edges collapse to `dep`. No heuristic re-derives `dev` / `peer`
 from observed nesting — the information is simply not in the lockfile.
 
+Root synthesis and workspace-edge marking run on the public `parse` / `convert`
+path whenever `manifests` is supplied (the manifest-gated `enrich` step). The
+classification above applies to edges that already EXIST in the graph.
+
+> **Known gap — member dependency edges are not yet synthesised.** A workspace
+> *member*'s own dependency edges do not exist in a classic yarn.lock (members
+> carry no `dependencies:` block on disk) and are not yet synthesised from the
+> member `package.json`. A multi-member conversion therefore emits each member
+> entry WITHOUT its dependencies — incomplete for `npm ci` /
+> `--frozen-lockfile` — and signals it with a `warning`
+> `YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED`. The root's own edges and the
+> single-root (non-workspace) direction are complete; member-edge synthesis is a
+> follow-up.
+
 ### Descriptor→node resolution (shared)
 
 yarn-classic records **ranges**, not resolved versions: a
