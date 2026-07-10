@@ -145,20 +145,107 @@ ansi-styles@^3.2.1:
     expect(Array.from(g.roots())).not.toContain('app@1.0.0')
   })
 
-  it('warns (not silently) when a multi-member workspace drops member dependencies', () => {
-    // KNOWN GAP: enrich synthesizes ROOT edges but not workspace-MEMBER dep edges.
-    // A multi-member conversion is incomplete; surface it as a warning rather than
-    // emit a silently-broken lock. (Single-root stays warning-free — covered above.)
-    const codes: string[] = []
-    convert(YARN, {
+  it('synthesizes an INDEPENDENT member declared in manifests but absent from the lock', () => {
+    // yarn 1 records a member in the lock only when something depends on it; an
+    // independent member has no lock entry, so its node + declared dep edges are
+    // synthesized from its manifest. Here `@s/a` requires chalk, which IS in the
+    // lock, so the member converts completely (member entry + top-level symlink).
+    const out = JSON.parse(convert(YARN, {
       from: 'yarn-classic',
       to: 'npm-3',
       manifests: {
         ...MAN,
-        'packages/a': { name: '@s/a', version: '0.0.0', dependencies: { lodash: '^4.0.0' } },
+        'packages/a': { name: '@s/a', version: '1.0.0', dependencies: { chalk: '^2.4.2' } },
       },
-      onDiagnostic: d => codes.push(d.code),
-    })
-    expect(codes).toContain('YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED')
+    })) as { packages: Record<string, { link?: boolean; resolved?: string; dependencies?: Record<string, string> }> }
+    expect(out.packages['packages/a']?.dependencies).toEqual({ chalk: '^2.4.2' })
+    expect(out.packages['node_modules/@s/a']).toEqual({ resolved: 'packages/a', link: true })
+  })
+})
+
+// yarn 1 records each workspace member as a `file:` local entry, so members ARE in
+// the lock (with their own `dependencies:` block). `enrich` recognises the member
+// (its `resolved: file:…` surfaces as a `directory` resolution — NOT an external
+// tarball) and marks its `workspacePath`; the npm emit then re-emits it as a proper
+// npm workspace member: a `packages/<path>` entry carrying its deps + a top-level
+// `node_modules/<name>` symlink. Verified against a real yarn 1 workspace: the
+// converted lock passes `npm ci` byte-clean.
+describe('yarn-classic workspace members (file: entries) re-emit as npm workspace members', () => {
+  const YARN = `# yarn lockfile v1
+"@ws/a@1.0.0", "@ws/a@file:packages/a":
+  version "1.0.0"
+  resolved "file:packages/a"
+  dependencies:
+    lodash "4.17.21"
+"@ws/b@file:packages/b":
+  version "1.0.0"
+  resolved "file:packages/b"
+  dependencies:
+    "@ws/a" "1.0.0"
+lodash@4.17.21:
+  version "4.17.21"
+  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#679591c564c3bffaae8454cf0b3df370c3d6911c"
+  integrity sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvKw==
+`
+  const MAN: Record<string, Manifest> = {
+    '': { name: 'root', version: '1.0.0' },
+    'packages/a': { name: '@ws/a', version: '1.0.0', dependencies: { lodash: '4.17.21' } },
+    'packages/b': { name: '@ws/b', version: '1.0.0', dependencies: { '@ws/a': '1.0.0' } },
+  }
+
+  it('emits packages/<path> member entries + node_modules/<name> links, and does not warn', () => {
+    const codes: string[] = []
+    const out = JSON.parse(convert(YARN, {
+      from: 'yarn-classic', to: 'npm-3', manifests: MAN, onDiagnostic: d => codes.push(d.code),
+    })) as { packages: Record<string, { link?: boolean; resolved?: string; dependencies?: Record<string, string> }> }
+
+    // Member entries carry their own dependencies.
+    expect(out.packages['packages/a']?.dependencies).toEqual({ lodash: '4.17.21' })
+    expect(out.packages['packages/b']?.dependencies).toEqual({ '@ws/a': '1.0.0' })
+    // Top-level symlinks point at the member paths (npm's workspace shape).
+    expect(out.packages['node_modules/@ws/a']).toEqual({ resolved: 'packages/a', link: true })
+    expect(out.packages['node_modules/@ws/b']).toEqual({ resolved: 'packages/b', link: true })
+    // A member present in the lock is complete — no drop warning.
+    expect(codes).not.toContain('YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED')
+  })
+})
+
+// The yarn-classic side of Bug #99 (the #102 berry case): root-edge synthesis in
+// `enrich` must honour a `resolutions` pin, not just semver. The captured overrides
+// are threaded into `enrich` so `resolveManifestTarget` can bridge a NON-satisfying
+// declared range to the pinned node — otherwise, with ≥2 same-name candidates and
+// no semver satisfier, the root edge is dropped and the dependency vanishes.
+describe('yarn-classic root resolution honours a non-satisfying resolutions pin', () => {
+  const YARN = `# yarn lockfile v1
+csstype@3.0.9:
+  version "3.0.9"
+  resolved "https://registry.yarnpkg.com/csstype/-/csstype-3.0.9.tgz#aaaa"
+  integrity sha512-AAAA
+"csstype@^2.5.2":
+  version "2.6.21"
+  resolved "https://registry.yarnpkg.com/csstype/-/csstype-2.6.21.tgz#bbbb"
+  integrity sha512-BBBB
+`
+  // `^3.1.3` is satisfied by NEITHER 3.0.9 nor 2.6.21; the resolutions pin forces
+  // 3.0.9. Two candidates + no satisfier ⇒ only the override map can bridge it.
+  const MAN: Record<string, Manifest> = {
+    '': {
+      name: 'root', version: '1.0.0',
+      dependencies: { csstype: '^3.1.3' },
+      native: { yarnResolutions: { 'csstype@^3.1.3': '3.0.9' } },
+    },
+  }
+
+  it('binds the root edge to the pinned csstype 3.0.9 node (not dropped)', () => {
+    const g = parse('yarn-classic', YARN, { manifests: MAN })
+    expect(g.out('root@1.0.0').map(e => e.dst)).toEqual(['csstype@3.0.9'])
+  })
+
+  it('convert → npm-3 keeps the csstype dependency and its pinned node', () => {
+    const npm = JSON.parse(convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
+      packages: Record<string, { dependencies?: Record<string, string> }>
+    }
+    expect(npm.packages[''].dependencies).toEqual({ csstype: '^3.1.3' })
+    expect('node_modules/csstype' in npm.packages).toBe(true)
   })
 })

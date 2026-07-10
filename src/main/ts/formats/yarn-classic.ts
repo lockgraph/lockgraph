@@ -146,6 +146,10 @@ export interface YarnClassicManifest {
 
 export interface YarnClassicEnrichOptions {
   manifests?: Record<string, YarnClassicManifest>
+  // Canonical override constraints (ADR-0025), threaded from the same
+  // `captureManifestOverrides` the public `parse` runs. Lets root-edge synthesis
+  // bridge a NON-satisfying `resolutions` pin to its node (Bug #99, enrich side).
+  overrides?: readonly OverrideConstraint[]
 }
 
 export interface YarnClassicOptimizeOptions {}
@@ -581,7 +585,7 @@ export function enrich(
     ? `${rootManifest.name}@${rootManifest.version}`
     : undefined
   const specIndex = specIndexOfGraph(graph, sidecar)
-  const plan = planClassicEnrich(graph, rootNodeId, rootManifest, memberManifests, specIndex)
+  const plan = planClassicEnrich(graph, rootNodeId, rootManifest, memberManifests, specIndex, options.overrides ?? [])
 
   if (
     plan.rootNode === undefined
@@ -590,6 +594,8 @@ export function enrich(
     && plan.removeRootEdges.length === 0
     && plan.markWorkspaceEdges.length === 0
     && plan.memberNodeReplacements.length === 0
+    && plan.addMemberNodes.length === 0
+    && plan.addMemberEdges.length === 0
   ) {
     return { graph, diagnostics: [] }
   }
@@ -603,6 +609,23 @@ export function enrich(
     }
     for (const replacement of plan.memberNodeReplacements) {
       m.replaceNode(replacement.id, replacement)
+    }
+    // Synthesized independent members: add the node before its edges (addEdge
+    // requires both endpoints to exist; the dep endpoints already exist in graph).
+    for (const node of plan.addMemberNodes) {
+      m.addNode(node)
+      // Give it the SAME `directory` resolution yarn 1 records for a member that
+      // IS in the lock (a `file:` entry), so it re-emits as a valid yarn `file:`
+      // entry and round-trips idempotently — a bare entry would reparse with
+      // spurious MISSING_ENTRY/RESOLUTION_PIN diagnostics. The npm emit skips
+      // `resolved` for a workspacePath node, so the package-lock member stays clean.
+      m.setTarball(
+        { name: node.name, version: node.version },
+        { resolution: { type: 'directory', path: node.workspacePath! }, nativeResolution: `file:${node.workspacePath}` },
+      )
+    }
+    for (const edge of plan.addMemberEdges) {
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
     }
     for (const edge of plan.removeRootEdges) {
       m.removeEdge(edge.src, edge.dst, edge.kind)
@@ -1353,10 +1376,13 @@ function planClassicEnrich(
   rootManifest: YarnClassicManifest | undefined,
   memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
   specIndex: Map<string, string>,
+  overrides: readonly OverrideConstraint[],
 ): {
   rootNode: Node | undefined
   rootNodeReplacement: Node | undefined
   memberNodeReplacements: Node[]
+  addMemberNodes: Node[]
+  addMemberEdges: Edge[]
   addRootEdges: Edge[]
   removeRootEdges: Edge[]
   markWorkspaceEdges: Edge[]
@@ -1365,6 +1391,8 @@ function planClassicEnrich(
   const removeRootEdges: Edge[] = []
   const markWorkspaceEdges: Edge[] = []
   const memberNodeReplacements: Node[] = []
+  const addMemberNodes: Node[] = []
+  const addMemberEdges: Edge[] = []
   const existingRootNode = rootNodeId === undefined ? undefined : graph.getNode(rootNodeId)
 
   const rootNode = rootNodeId !== undefined
@@ -1394,23 +1422,44 @@ function planClassicEnrich(
   //
   // The version match permits both the `0.0.0-use.local` literal and the
   // manifest-declared version, but a same-name+version external published
-  // package would also satisfy that. Tarball presence discriminates: external
-  // published packages carry a tarball entry; workspace members are
-  // soft-linked and do not. `tarballOf(node.id)` is source-aware (keys by the
-  // node's full identity incl. any `+src=`/`+patch=` slot), so a non-registry
-  // or patched published package — keyed under a slotted tarball — is still found.
+  // package would also satisfy that. An EXTERNAL artifact discriminates: a
+  // registry/git/http tarball marks a published lookalike to exclude. A
+  // workspace member that yarn 1 recorded via a `file:`/`link:`/`portal:` local
+  // reference surfaces on `tarballOf` as a `directory` resolution — that IS the
+  // member, not an external package, so it must NOT be excluded (the earlier
+  // "any tarball ⇒ skip" test wrongly dropped these, leaving a real yarn 1
+  // workspace member emitted as a plain package → `npm ci` "Missing … from lock
+  // file"). `tarballOf(node.id)` is source-aware (keys by the node's full
+  // identity incl. any `+src=`/`+patch=` slot).
   for (const node of graph.nodes()) {
     if (node.workspacePath !== undefined) continue
     const member = memberManifests.get(node.name)
     if (member === undefined) continue
     if (node.version !== '0.0.0-use.local' && node.version !== member.manifest.version) continue
-    if (graph.tarballOf(node.id) !== undefined) continue
+    const tarball = graph.tarballOf(node.id)
+    if (tarball !== undefined && tarball.resolution?.type !== 'directory') continue
     memberNodeReplacements.push({ ...node, workspacePath: member.path })
+  }
+
+  // Synthesize INDEPENDENT workspace members. yarn 1 records a member in the lock
+  // (a `file:` entry) only when something else depends on it; a member nothing
+  // depends on has NO lock entry, so its node and its declared dep edges must be
+  // built from the member manifest. Without this the member is dropped and its
+  // deps have no consumer to nest under — the npm emit then falls back to a
+  // synthetic `node_modules/.lockfile-…` store key that no client can install.
+  for (const [name, { path, manifest }] of memberManifests) {
+    if (manifest.version === undefined) continue
+    if (graph.byName(name).length > 0) continue // already present in the lock — handled above
+    const memberId = `${name}@${manifest.version}`
+    addMemberNodes.push({ id: memberId, name, version: manifest.version, peerContext: [], workspacePath: path })
+    for (const edge of desiredManifestEdges(graph, memberId, manifest, memberManifests, specIndex, overrides)) {
+      addMemberEdges.push(edge)
+    }
   }
 
   const rootOut = rootNodeId === undefined ? [] : graph.out(rootNodeId)
   if (rootNodeId !== undefined && rootManifest !== undefined) {
-    const desired = desiredRootEdges(graph, rootNodeId, rootManifest, memberManifests, specIndex)
+    const desired = desiredManifestEdges(graph, rootNodeId, rootManifest, memberManifests, specIndex, overrides)
     const existingByDst = new Map<string, Edge[]>()
     for (const edge of rootOut) {
       const current = existingByDst.get(edge.dst)
@@ -1459,39 +1508,47 @@ function planClassicEnrich(
     }
   }
 
-  return { rootNode, rootNodeReplacement, memberNodeReplacements, addRootEdges, removeRootEdges, markWorkspaceEdges }
+  return { rootNode, rootNodeReplacement, memberNodeReplacements, addMemberNodes, addMemberEdges, addRootEdges, removeRootEdges, markWorkspaceEdges }
 }
 
-function desiredRootEdges(
+// Synthesize the outgoing edges a manifest declares, from `srcNodeId` (the root
+// OR a workspace member) onto their resolved nodes. Generic over the source so a
+// member's own deps wire the same way the root's do.
+function desiredManifestEdges(
   graph: Graph,
-  rootNodeId: string,
-  rootManifest: YarnClassicManifest,
+  srcNodeId: string,
+  manifest: YarnClassicManifest,
   memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
   specIndex: Map<string, string>,
+  overrides: readonly OverrideConstraint[],
 ): Edge[] {
   const edges: Edge[] = []
   for (const [kind, deps] of [
-    ['dep', rootManifest.dependencies],
-    ['dev', rootManifest.devDependencies],
-    ['optional', rootManifest.optionalDependencies],
+    ['dep', manifest.dependencies],
+    ['dev', manifest.devDependencies],
+    ['optional', manifest.optionalDependencies],
   ] as const) {
     if (deps === undefined) continue
     for (const [name, range] of Object.entries(deps).sort((a, b) => cmpUtf16(a[0], b[0]))) {
-      const dstId = resolveManifestTarget(graph, name, range, memberManifests, specIndex)
+      const dstId = resolveManifestTarget(graph, name, range, memberManifests, specIndex, overrides)
       if (dstId === undefined) continue
       if (isWorkspaceProtocolRange(range)) {
-        const dst = graph.getNode(dstId)
-        const workspaceRange = dst?.version !== undefined && dst.version !== ''
-          ? { specifier: range, resolvedVersion: dst.version }
+        // A member SYNTHESIZED in this same pass is not yet in the graph, so read
+        // its version from the manifest — otherwise the first enrich omits
+        // `resolvedVersion` while a lock round-trip re-adds it, breaking enrich
+        // idempotency (the workspace edge's attrs would differ).
+        const resolvedVersion = graph.getNode(dstId)?.version ?? memberManifests.get(name)?.manifest.version
+        const workspaceRange = resolvedVersion !== undefined && resolvedVersion !== ''
+          ? { specifier: range, resolvedVersion }
           : { specifier: range }
         edges.push({
-          src: rootNodeId,
+          src: srcNodeId,
           dst: dstId,
           kind,
           attrs: { range, workspace: true, workspaceRange },
         })
       } else {
-        edges.push({ src: rootNodeId, dst: dstId, kind, attrs: { range } })
+        edges.push({ src: srcNodeId, dst: dstId, kind, attrs: { range } })
       }
     }
   }
@@ -1504,6 +1561,7 @@ function resolveManifestTarget(
   range: string,
   memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
   specIndex: Map<string, string>,
+  overrides: readonly OverrideConstraint[],
 ): string | undefined {
   if (isWorkspaceProtocolRange(range)) {
     return resolveWorkspaceMemberNodeId(graph, name, memberManifests.get(name)?.manifest.version)
@@ -1511,6 +1569,29 @@ function resolveManifestTarget(
 
   const exact = specIndex.get(`${name}@${range}`)
   if (exact !== undefined) return exact
+
+  // Override-map forced link — mirrors the parse-time Bug #99 bridge: an
+  // authoritative `resolutions` pin beats semver inference and bridges a
+  // NON-satisfying declared range (e.g. `csstype@^3.1.3` pinned to `3.0.9`, which
+  // `^3.1.3` does not satisfy) to the pinned node, instead of dropping the root
+  // edge when ≥2 same-name candidates leave no unique semver target.
+  if (overrides.length > 0) {
+    const to = overrideTargetFor(name, range, [name], overrides)
+    if (to !== undefined) {
+      const viaOverride = specIndex.get(`${name}@${to}`)
+      if (viaOverride !== undefined) return viaOverride
+    }
+  }
+
+  // A SIBLING workspace member synthesized in THIS same enrich pass has no lock
+  // entry yet, so `specIndex`/`byName` miss it. Resolve to its known id when the
+  // declared range admits the member version (exact, or a satisfied semver range).
+  // Guards on `byName` being empty so a real lock entry always wins.
+  const member = memberManifests.get(name)
+  if (member?.manifest.version !== undefined && graph.byName(name).length === 0) {
+    const v = member.manifest.version
+    if (range === v || semver.satisfies(v, range)) return `${name}@${v}`
+  }
 
   const candidates = graph.byName(name)
   if (candidates.length === 1) return candidates[0]
@@ -1523,9 +1604,15 @@ function resolveWorkspaceMemberNodeId(
   manifestVersion: string | undefined,
 ): string | undefined {
   const candidates = graph.byName(name)
-  return candidates.find(id => graph.getNode(id)?.version === '0.0.0-use.local')
+  const found = candidates.find(id => graph.getNode(id)?.version === '0.0.0-use.local')
     ?? (manifestVersion === undefined ? undefined : candidates.find(id => graph.getNode(id)?.version === manifestVersion))
     ?? candidates[0]
+  if (found !== undefined) return found
+  // The member is being SYNTHESIZED in this same enrich pass (no lock entry yet),
+  // so it is not visible via `byName`. Resolve to its known id — `name@version`
+  // from the member manifest — so the root's `workspace:` edge binds to it now
+  // rather than only after a lock round-trip re-materialises the node.
+  return manifestVersion === undefined ? undefined : `${name}@${manifestVersion}`
 }
 
 function rootEdgeMatches(left: Edge, right: Edge): boolean {
@@ -1547,6 +1634,11 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   const liveSpecs = Array.from(graph.in(node.id))
     .filter(edge => edge.kind === 'dep' || edge.kind === 'optional')
     .filter(edge => edge.attrs?.range !== undefined)
+    // A `workspace:` edge range (workspace:* / workspace:^) is NOT a yarn-classic
+    // entry-key descriptor — yarn 1 has no workspace protocol; a member keys by its
+    // own `file:` resolution + version. Emitting `<name>@workspace:*` as a key
+    // reparses with MISSING_ENTRY/RESOLUTION_PIN diagnostics (breaking round-trip).
+    .filter(edge => edge.attrs?.workspace !== true)
     .map(edge => {
       // A completed/mutated edge governed by an override carries the pin as
       // `overrideRange`; key by it (yarn collapses `foo@^1` + `foo@1.0` → the pin),

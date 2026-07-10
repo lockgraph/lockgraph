@@ -285,27 +285,17 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
   // into the public parse lets `convert(yarnLock, { manifests })` inherit it. Every
   // other format encodes its own root, so this stays scoped to `yarn-classic`.
   //
-  // KNOWN GAP (multi-member workspaces): `enrich` synthesizes ROOT edges but not
-  // workspace-MEMBER dependency edges — a classic yarn.lock has no member dep
-  // blocks, so a member's deps live only in its own package.json and are not yet
-  // wired. A member entry then emits without its dependencies, which fails a frozen
-  // install. Warn so the incompleteness is VISIBLE rather than silent. The
-  // single-root case (the flagship `yarn.lock → package-lock.json` direction) is
-  // complete; member-edge synthesis is a follow-up.
+  // Workspace members. yarn 1 records a CROSS-DEPENDED member as a `file:` local
+  // entry (a `directory` resolution) that `enrich` recognises and marks; an
+  // INDEPENDENT member (nothing depends on it) has no lock entry and is
+  // SYNTHESIZED from its manifest — node + declared dep edges. Either way the npm
+  // emit re-emits it as a proper workspace member (`packages/<path>` +
+  // `node_modules/<name>` link) with its deps nested beneath it, frozen-clean.
   if (format === 'yarn-classic' && options.manifests !== undefined) {
-    const enriched = yarnClassic.enrich(graph, undefined, { manifests: options.manifests })
+    const enriched = yarnClassic.enrich(graph, undefined, { manifests: options.manifests, overrides })
     graph = enriched.graph
     if (options.onDiagnostic !== undefined) {
       for (const d of enriched.diagnostics) options.onDiagnostic(d)
-      if (hasWorkspaceMemberDeps(options.manifests)) {
-        options.onDiagnostic({
-          code:     'YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED',
-          severity: 'warning',
-          message:  'yarn-classic: workspace-member dependency edges are not synthesised from '
-            + 'manifests; member entries emit without their own dependencies, so a multi-member '
-            + 'conversion is incomplete and may fail a frozen install',
-        })
-      }
     }
   }
   if (overrides !== undefined && overrides.length > 0) {
@@ -315,16 +305,6 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
     for (const d of graph.diagnostics()) options.onDiagnostic(d)
   }
   return graph
-}
-
-// A multi-member yarn-classic workspace: a manifest under a NON-root path that
-// declares dependencies `enrich` does not yet wire (see the KNOWN GAP in `parse`).
-function hasWorkspaceMemberDeps(manifests: Record<string, Manifest>): boolean {
-  return Object.entries(manifests).some(([path, m]) =>
-    path !== ''
-    && (Object.keys(m.dependencies ?? {}).length
-      + Object.keys(m.devDependencies ?? {}).length
-      + Object.keys(m.optionalDependencies ?? {}).length) > 0)
 }
 
 /** Map a FormatId to its override grammar family (ADR-0025 §6 capture). */

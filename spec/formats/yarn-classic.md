@@ -164,18 +164,28 @@ it, only `dep` and `optional` are derivable from the lockfile; `dev` and
 from observed nesting — the information is simply not in the lockfile.
 
 Root synthesis and workspace-edge marking run on the public `parse` / `convert`
-path whenever `manifests` is supplied (the manifest-gated `enrich` step). The
-classification above applies to edges that already EXIST in the graph.
+path whenever `manifests` is supplied (the manifest-gated `enrich` step).
 
-> **Known gap — member dependency edges are not yet synthesised.** A workspace
-> *member*'s own dependency edges do not exist in a classic yarn.lock (members
-> carry no `dependencies:` block on disk) and are not yet synthesised from the
-> member `package.json`. A multi-member conversion therefore emits each member
-> entry WITHOUT its dependencies — incomplete for `npm ci` /
-> `--frozen-lockfile` — and signals it with a `warning`
-> `YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED`. The root's own edges and the
-> single-root (non-workspace) direction are complete; member-edge synthesis is a
-> follow-up.
+**Workspace members** reach the graph two ways, both handled by `enrich`:
+
+- **Cross-depended members** — yarn 1 records a member that something else depends
+  on as a `file:` local entry
+  (`"@scope/a@1.0.0", "@scope/a@file:packages/a": … resolved "file:packages/a"`)
+  that carries the member's own `dependencies:` block. It parses to a member node
+  whose `resolved: file:…` surfaces as a `directory` resolution (not an external
+  tarball), so `enrich` recognises it and marks `workspacePath`.
+- **Independent members** — a member nothing depends on has NO lock entry, so
+  `enrich` SYNTHESIZES its node (with the same `directory` resolution a `file:`
+  entry would carry, so it round-trips cleanly) and its declared dependency edges
+  from `manifests[<workspacePath>]`, resolving sibling members to each other.
+
+Either way the target emitter re-emits a proper workspace member: for npm, a
+`packages/<path>` entry carrying its deps plus a top-level `node_modules/<name>`
+symlink, with each member's unhoistable dependency versions nested beneath it
+(`packages/<member>/node_modules/<dep>`), never an internal `.lockfile-…` key. A
+real yarn 1 workspace converts to a `package-lock.json` that passes `npm ci`
+byte-clean. A synthesized member is a `directory`-resolved node, so a yarn→yarn
+round-trip re-emits it as a `file:` entry and `enrich` is idempotent.
 
 ### Descriptor→node resolution (shared)
 
