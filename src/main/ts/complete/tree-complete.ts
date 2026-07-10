@@ -19,7 +19,7 @@ import {
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
-import type { PackumentVersion, RegistryAdapter } from '../registry/types.ts'
+import type { Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
 import { payloadOfPackumentVersion } from '../registry/payload.ts'
 import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
 import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
@@ -189,14 +189,38 @@ export async function completeTransitives(
   // contract yaf relies on). With NO seed, complete the WHOLE graph from every
   // root. `recentlyOrphaned` is excluded from the frontier either way (the
   // optimize phase collects orphans).
+  // Parallel prefetch of packuments — a packument is an order-independent read
+  // (fetching `foo` yields the same bytes whenever), so fetching a whole frontier
+  // concurrently is determinism-safe: the resolution below stays STRICTLY
+  // SEQUENTIAL and in the same order, so which version wins a descriptor and the
+  // graph-mutation sequence are unchanged → a byte-identical lock. Prefetch only
+  // moves the I/O off the critical path. Memoised by name (one packument per name,
+  // all versions); concurrency is bounded by the registry's own `limit`.
+  const packCache = new Map<string, Promise<Packument | undefined>>()
+  const getPack = (name: string): Promise<Packument | undefined> => {
+    let p = packCache.get(name)
+    if (p === undefined) {
+      p = registry.packument(name)
+      packCache.set(name, p)
+      void p.catch(() => {}) // mark handled; the awaiting site re-throws the real error
+    }
+    return p
+  }
+  // Enqueue a node AND kick off its packument fetch immediately (max look-ahead:
+  // the fetch runs while earlier frontier nodes are still being resolved).
   const frontier: NodeId[] = []
+  const pushFrontier = (id: NodeId): void => {
+    frontier.push(id)
+    const n = currentGraph.getNode(id)
+    if (n !== undefined && n.workspacePath === undefined) void getPack(n.name)
+  }
   if (options.seed === undefined) {
     for (const root of currentGraph.roots()) {
-      if (!seed.recentlyOrphaned.has(root)) frontier.push(root)
+      if (!seed.recentlyOrphaned.has(root)) pushFrontier(root)
     }
   } else {
     for (const id of seed.recentlyAdded) {
-      if (!seed.recentlyOrphaned.has(id)) frontier.push(id)
+      if (!seed.recentlyOrphaned.has(id)) pushFrontier(id)
     }
   }
 
@@ -214,17 +238,17 @@ export async function completeTransitives(
     // targets onto the frontier so completion continues through workspaces.
     if (node.workspacePath !== undefined) {
       for (const edge of currentGraph.out(nodeId)) {
-        if (!visited.has(edge.dst)) frontier.push(edge.dst)
+        if (!visited.has(edge.dst)) pushFrontier(edge.dst)
       }
       continue
     }
 
-    const packument = await registry.packument(node.name)
+    const packument = await getPack(node.name)
     if (packument === undefined) {
       // Walk existing out-edges so completion does not stall on unknown
       // packuments; the diagnostic surfaces the gap without aborting.
       for (const edge of currentGraph.out(nodeId)) {
-        if (!visited.has(edge.dst)) frontier.push(edge.dst)
+        if (!visited.has(edge.dst)) pushFrontier(edge.dst)
       }
       emitAndLand(completionNodeUnknown(nodeId))
       continue
@@ -232,7 +256,7 @@ export async function completeTransitives(
     const pv = packument.versions[node.version]
     if (pv === undefined) {
       for (const edge of currentGraph.out(nodeId)) {
-        if (!visited.has(edge.dst)) frontier.push(edge.dst)
+        if (!visited.has(edge.dst)) pushFrontier(edge.dst)
       }
       emitAndLand(completionVersionUnknown(nodeId))
       continue
@@ -296,7 +320,7 @@ export async function completeTransitives(
             }).graph
             wired.push(triple)
             emit(resolvedDiag)
-            if (!visited.has(boundId)) frontier.push(boundId)
+            if (!visited.has(boundId)) pushFrontier(boundId)
             continue
           }
         }
@@ -326,7 +350,7 @@ export async function completeTransitives(
           currentGraph = result.graph
           wired.push(triple)
           emit(resolvedDiag)
-          if (!visited.has(targetId)) frontier.push(targetId)
+          if (!visited.has(targetId)) pushFrontier(targetId)
           descriptorResolution.set(descriptorKey(depName, depRange), targetId)
           continue
         }
@@ -353,7 +377,7 @@ export async function completeTransitives(
             currentGraph = result.graph
             wired.push(triple)
             emit(resolvedDiag)
-            if (!visited.has(reuseId)) frontier.push(reuseId)
+            if (!visited.has(reuseId)) pushFrontier(reuseId)
             descriptorResolution.set(descriptorKey(depName, depRange), reuseId)
             continue
           }
@@ -444,7 +468,7 @@ export async function completeTransitives(
 
         const triple: EdgeTriple = { src: nodeId, dst: newId, kind }
         wired.push(triple)
-        if (!visited.has(newId)) frontier.push(newId)
+        if (!visited.has(newId)) pushFrontier(newId)
         descriptorResolution.set(descriptorKey(depName, effectiveRange), newId)
       }
     }
@@ -452,7 +476,7 @@ export async function completeTransitives(
     // Walk existing out-edges so we surface their packument-derived
     // transitives too.
     for (const edge of currentGraph.out(nodeId)) {
-      if (!visited.has(edge.dst)) frontier.push(edge.dst)
+      if (!visited.has(edge.dst)) pushFrontier(edge.dst)
     }
   }
 

@@ -9,6 +9,12 @@
 // share the same registry/cache shapes so consumers can swap one for
 // the other without touching modifier / completion call sites.
 
+// The library's DEFAULT transport (node-fetch-native — native `fetch` on Node
+// 18+, polyfill on 14–17). Re-exported so a caller can WRAP the same floor-safe
+// fetch (retry / HTTP-cache) and pass it back as `liveRegistry({ fetch })`,
+// instead of adding node-fetch-native as their own dependency.
+export { fetch as defaultFetch } from 'node-fetch-native'
+
 export { frozenRegistry } from './frozen.ts'
 export {
   liveRegistry,
