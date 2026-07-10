@@ -276,7 +276,22 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
   const overrides = options.manifests !== undefined
     ? captureManifestOverrides(format, options.manifests, options.onDiagnostic)
     : undefined
-  const graph = parseOne(format, input, options, overrides)
+  let graph = parseOne(format, input, options, overrides)
+  // yarn-classic is the ONLY rootless source: a classic yarn.lock encodes no
+  // project root, so the root node + workspace-member classification can come only
+  // from `manifests`. Without this, parse promotes a top-of-DAG dependency to the
+  // `""` root and drops that dependency's own installable node — a lock that fails
+  // `npm ci` / `--frozen-lockfile`. The manifest-gated `enrich` synthesizes the
+  // declared root and classifies root/member edges; wiring it into the public parse
+  // lets `convert(yarnLock, { manifests })` inherit it. Every other format encodes
+  // its own root and is unaffected, so this stays scoped to `yarn-classic`.
+  if (format === 'yarn-classic' && options.manifests !== undefined) {
+    const enriched = yarnClassic.enrich(graph, undefined, { manifests: options.manifests })
+    graph = enriched.graph
+    if (options.onDiagnostic !== undefined) {
+      for (const d of enriched.diagnostics) options.onDiagnostic(d)
+    }
+  }
   if (overrides !== undefined && overrides.length > 0) {
     rememberManifestOverrides(graph, overrides)
   }

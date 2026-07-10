@@ -75,6 +75,7 @@ import {
   cmpStr,
   edgeTripleKey,
   sortRecord,
+  stringifyNpmLock,
   type NpmEntry,
   type NpmFamilyConfig,
   type NpmFamilyEnrichOptions,
@@ -559,7 +560,7 @@ export function stringifyFamily(
   // mirror reconstructed from the same graph by `_npm-2-mirror.ts`).
   config.hooks?.enrichStringifyOut?.({ graph, rootNode, sidecar, out })
 
-  const text = JSON.stringify(out, null, 2) + '\n'
+  const text = stringifyNpmLock(out)
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
@@ -818,6 +819,8 @@ function hasTarballPayload(entry: NpmEntry): boolean {
     || entry.cpu !== undefined
     || entry.os !== undefined
     || entry.libc !== undefined
+    || entry.peerDependenciesMeta !== undefined
+    || entry.hasInstallScript !== undefined
     || entry.resolved !== undefined
 }
 
@@ -851,6 +854,11 @@ function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnos
   if (entry.cpu !== undefined) payload.cpu = entry.cpu.slice()
   if (entry.os !== undefined) payload.os = entry.os.slice()
   if (entry.libc !== undefined) payload.libc = entry.libc.slice()
+  if (entry.peerDependenciesMeta !== undefined) {
+    payload.peerDependenciesMeta = Object.fromEntries(
+      Object.entries(entry.peerDependenciesMeta).map(([peer, meta]) => [peer, { ...meta }]))
+  }
+  if (entry.hasInstallScript !== undefined) payload.hasInstallScript = entry.hasInstallScript
   // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL.
   if (typeof entry.resolved === 'string' && !entry.link) {
     const canonical = parseResolutionRecipe(entry.resolved, { sourceKind: 'npm-resolved' })
@@ -1158,7 +1166,7 @@ function buildRootEntry(
   else if (rootMeta?.optionalDependencies !== undefined) body.optionalDependencies = sortRecord(rootMeta.optionalDependencies)
   if (rootMeta?.workspaces !== undefined) body.workspaces = rootMeta.workspaces
   if (rootMeta?.bundleDependencies !== undefined) body.bundleDependencies = rootMeta.bundleDependencies
-  return reorderEntry(body)
+  return body
 }
 
 function buildSyntheticRootEntry(rootMeta: NpmRootMeta): Record<string, unknown> {
@@ -1167,7 +1175,7 @@ function buildSyntheticRootEntry(rootMeta: NpmRootMeta): Record<string, unknown>
   if (rootMeta.version !== undefined) body.version = rootMeta.version
   if (rootMeta.workspaces !== undefined) body.workspaces = rootMeta.workspaces
   if (rootMeta.bundleDependencies !== undefined) body.bundleDependencies = rootMeta.bundleDependencies
-  return reorderEntry(body)
+  return body
 }
 
 function buildWorkspaceMemberEntry(
@@ -1187,7 +1195,7 @@ function buildWorkspaceMemberEntry(
   if (Object.keys(blocks.peer).length > 0) body.peerDependencies = blocks.peer
   else if (nodeSide?.peerDependencies !== undefined) body.peerDependencies = sortRecord(nodeSide.peerDependencies)
   if (Object.keys(blocks.optional).length > 0) body.optionalDependencies = blocks.optional
-  return reorderEntry(body)
+  return body
 }
 
 function buildNodeModulesEntry(
@@ -1249,8 +1257,10 @@ function buildNodeModulesEntry(
   if (tarball?.cpu !== undefined) body.cpu = tarball.cpu
   if (tarball?.os !== undefined) body.os = tarball.os
   if (tarball?.libc !== undefined) body.libc = tarball.libc
+  if (tarball?.peerDependenciesMeta !== undefined) body.peerDependenciesMeta = tarball.peerDependenciesMeta
+  if (tarball?.hasInstallScript !== undefined) body.hasInstallScript = tarball.hasInstallScript
 
-  return reorderEntry(body)
+  return body
 }
 
 // ADR-0014 §4.F3 — project canonical resolution → npm `resolved` URL for
@@ -1336,51 +1346,6 @@ function collectManifestBlocks(
     peer: sortRecord(peer),
     optional: sortRecord(optional),
   }
-}
-
-// Aligns with npm's package-entry key order for the fields where its output is
-// consistent — `license` before `engines`, `bundleDependencies` before
-// `dependencies` — so a parse→stringify round-trip is byte-identical for those.
-// npm's FULL order is version-dependent (some older locks order `funding` before
-// `engines`, others after), so byte-identity is not guaranteed for every entry;
-// `npm ci` accepts ANY key order regardless — field order is cosmetic, never a
-// freeze-mode input.
-const ENTRY_FIELD_ORDER = [
-  'name',
-  'version',
-  'resolved',
-  'integrity',
-  'link',
-  'dev',
-  'optional',
-  'peer',
-  'inBundle',
-  'bundleDependencies',
-  'dependencies',
-  'devDependencies',
-  'peerDependencies',
-  'optionalDependencies',
-  'bin',
-  'license',
-  'engines',
-  'funding',
-  'deprecated',
-  'cpu',
-  'os',
-  'libc',
-  'workspaces',
-  'hasShrinkwrap',
-] as const
-
-function reorderEntry(body: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const key of ENTRY_FIELD_ORDER) {
-    if (key in body) out[key] = body[key]
-  }
-  for (const key of Object.keys(body)) {
-    if (!(key in out)) out[key] = body[key]
-  }
-  return out
 }
 
 function warnPeerContextFlatten(

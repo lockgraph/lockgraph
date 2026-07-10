@@ -68,6 +68,11 @@ export interface TarballPayload {
   cpu?:                 string[]
   os?:                  string[]
   libc?:                string[]
+  // npm computes `hasInstallScript: true` for a package with install/preinstall/
+  // postinstall scripts. Carried verbatim so an npm round-trip re-emits it and a
+  // mutable `npm install` does not re-add it (byte-identity). Manifest-derived,
+  // like `funding`/`deprecated`; non-npm emitters ignore it.
+  hasInstallScript?:    boolean
   bundledDependencies?: string[]
   // Declared peer requirements from the package manifest (ADR-0023 §4.2). Carried
   // on the payload so a COMPLETION-added yarn-berry node can re-emit its

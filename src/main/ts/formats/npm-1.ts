@@ -57,6 +57,7 @@ import {
   cmpStr,
   edgeTripleKey,
   sortRecord,
+  stringifyNpmLock,
   type NpmFlatSidecar,
   type NpmSidecar,
 } from './_npm-flat-types.ts'
@@ -440,7 +441,7 @@ export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): str
     delete out.requires
   }
 
-  const text = JSON.stringify(out, null, 2) + '\n'
+  const text = stringifyNpmLock(out)
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
@@ -910,38 +911,14 @@ function buildEntry(
     entry.dependencies = buildLayer(nestedLayer, installPath, graph, sidecar, treeByParent)
   }
 
-  return reorderEntry(entry)
+  return entry
 }
-
-const NPM1_ENTRY_FIELD_ORDER: ReadonlyArray<keyof Npm1Entry> = [
-  'version',
-  'resolved',
-  'integrity',
-  'from',
-  'dev',
-  'optional',
-  'bundled',
-  'requires',
-  'dependencies',
-] as const
 
 // ADR-0014 §4.F3 — project canonical resolution → npm-1 `resolved` URL.
 // Workspace canonical returns undefined (npm-1 predates workspaces).
 function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
   if (canonical === undefined) return undefined
   return stringifyForNpm(canonical)
-}
-
-function reorderEntry(entry: Npm1Entry): Npm1Entry {
-  const out: Record<string, unknown> = {}
-  for (const key of NPM1_ENTRY_FIELD_ORDER) {
-    if (entry[key] !== undefined) out[key] = entry[key]
-  }
-  // Surface any extra keys (e.g. peerDependencies in newer fixtures) after.
-  for (const key of Object.keys(entry)) {
-    if (!(key in out)) out[key] = (entry as Record<string, unknown>)[key]
-  }
-  return out as Npm1Entry
 }
 
 function parentPathFromInstall(installPath: string): string | undefined {

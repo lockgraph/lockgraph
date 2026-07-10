@@ -112,6 +112,10 @@ Mostly self-contained: the lockfile encodes the full hoisted tree.
 - `requires: true` at the root is a marker, not a value.
 - `optional: true` is *inherited* down the subtree without being re-emitted —
   detection is non-local.
+- **Emitted in `json-stringify-nice` key order** — the same serialiser arborist
+  uses for v2/v3 (npm's `swKeyOrder` was designed to match npm 5/6's historical
+  order), so a generated v1 lock is byte-identical to what npm 6 writes. See
+  [npm-2 Quirks](./npm-2.md#quirks).
 
 ## Degradation rules
 

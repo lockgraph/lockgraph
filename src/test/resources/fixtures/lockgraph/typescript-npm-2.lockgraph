@@ -952,7 +952,7 @@ F 287
 47	engines.node=^20.19.0 || ^22.13.0 || >=24
 48	engines.node=^20.19.0 || ^22.13.0 || >=24
 49	engines.node=^20.19.0 || ^22.13.0 || >=24
-50	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://eslint.org/donate
+50	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependenciesMeta.eslint.optional=true	funding.url=https://eslint.org/donate
 51	engines.node=^20.19.0 || ^22.13.0 || >=24
 52	engines.node=^20.19.0 || ^22.13.0 || >=24
 53	engines.node=>=18.18.0
@@ -1024,7 +1024,7 @@ F 287
 139	engines.node=>=8	funding.url=https://github.com/sponsors/sindresorhus
 141	engines.node=18 || 20 || >=22
 142	engines.node=>=8
-145	engines.node=>=18	bin.c8=bin/c8.js
+145	engines.node=>=18	peerDependenciesMeta.monocart-coverage-reports.optional=true	bin.c8=bin/c8.js
 146	engines.node=>= 0.4
 147	engines.node=>= 0.4	funding.url=https://github.com/sponsors/ljharb
 148	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
@@ -1038,24 +1038,24 @@ F 287
 158	engines.node=>=20
 159	engines.node=>= 12.0.0
 162	engines.node=>= 8
-163	engines.node=>=6.0
+163	engines.node=>=6.0	peerDependenciesMeta.supports-color.optional=true
 164	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
 165	engines.node=>=6
 168	engines.node=>=0.3.1
 169	engines.node=>=0.3.1
-170	bin.dprint=bin.js
+170	hasInstallScript=true	bin.dprint=bin.js
 171	engines.node=>= 0.4
 176	engines.node=>= 0.4
 177	engines.node=>= 0.4
 178	engines.node=>= 0.4
-179	engines.node=>=18	bin.esbuild=bin/esbuild
+179	engines.node=>=18	hasInstallScript=true	bin.esbuild=bin/esbuild
 180	engines.node=>=6
 181	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
 182	engines.node=^20.19.0 || ^22.13.0 || >=24
 183	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://opencollective.com/eslint
 184	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	funding.url=https://opencollective.com/eslint
 185	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://opencollective.com/eslint
-186	engines.node=^20.19.0 || ^22.13.0 || >=24	bin.eslint=bin/eslint.js	funding.url=https://eslint.org/donate
+186	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependenciesMeta.jiti.optional=true	bin.eslint=bin/eslint.js	funding.url=https://eslint.org/donate
 187	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://opencollective.com/eslint
 188	engines.node=>=0.10
 189	engines.node=>=4.0
@@ -1066,7 +1066,7 @@ F 287
 197	funding.0.type=github	funding.0.url=https://github.com/sponsors/NaturalIntelligence
 198	bin.fxparser=src/cli/cli.js	funding.0.type=github	funding.0.url=https://github.com/sponsors/NaturalIntelligence
 199	engines.node=>= 4.9.1
-202	engines.node=>=12.0.0
+202	engines.node=>=12.0.0	peerDependenciesMeta.picomatch.optional=true
 203	engines.node=>=16.0.0
 204	engines.node=>=8
 205	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
@@ -1074,7 +1074,7 @@ F 287
 207	bin.flat=cli.js
 209	engines.node=>=14	funding.url=https://github.com/sponsors/isaacs
 210	engines.node=>=18.3.0	bin.formatly=bin/index.mjs
-212	os.0=darwin	engines.node=^8.16.0 || ^10.6.0 || >=11.0.0
+212	os.0=darwin	engines.node=^8.16.0 || ^10.6.0 || >=11.0.0	hasInstallScript=true
 213	funding.url=https://github.com/sponsors/ljharb
 214	engines.node=6.* || 8.* || >= 10.*
 215	engines.node=*

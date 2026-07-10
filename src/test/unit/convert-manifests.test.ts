@@ -91,3 +91,57 @@ describe('#102 — convert() honours a resolutions pin via manifests', () => {
     expect(viaConvert).toBe(viaPipeline)
   })
 })
+
+// A classic yarn.lock encodes NO project root (unlike npm's `""` entry, berry's
+// `root@workspace:.`, pnpm importers, bun workspaces). Its root identity can come
+// only from `manifests`, so the public `parse`/`convert` must run the
+// manifest-driven `enrich` to synthesize the declared root — otherwise a
+// top-of-DAG dependency is promoted to the `""` root and its own installable node
+// is dropped, producing a lock that fails `npm ci`. Reported externally against
+// snapshot.92 (the flagship synp `yarn.lock → package-lock.json` direction).
+describe('rootless yarn-classic source is re-rooted from manifests', () => {
+  const YARN = `# yarn lockfile v1
+chalk@^2.4.2:
+  version "2.4.2"
+  resolved "https://registry.yarnpkg.com/chalk/-/chalk-2.4.2.tgz#cd42541677a54333cf541a49108c1432b44c9424"
+  integrity sha512-Mti+
+  dependencies:
+    ansi-styles "^3.2.1"
+ansi-styles@^3.2.1:
+  version "3.2.1"
+  resolved "https://registry.yarnpkg.com/ansi-styles/-/ansi-styles-3.2.1.tgz#41fbb642"
+  integrity sha512-VT0Z
+`
+  const MAN: Record<string, Manifest> = {
+    '': { name: 'app', version: '1.0.0', dependencies: { chalk: '^2.4.2' } },
+  }
+
+  it('convert → npm-3 synthesizes the declared root, keeping the dependency as its own node', () => {
+    const npm3 = JSON.parse(convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
+      name: string
+      packages: Record<string, { name?: string; dependencies?: Record<string, string> }>
+    }
+    expect(npm3.name).toBe('app')                                  // root is the declared project, not `chalk`
+    expect(npm3.packages[''].dependencies).toEqual({ chalk: '^2.4.2' })
+    expect('node_modules/chalk' in npm3.packages).toBe(true)      // the promoted dep no longer vanishes
+  })
+
+  it('parse().roots() is the synthesized root', () => {
+    const g = parse('yarn-classic', YARN, { manifests: MAN })
+    expect(Array.from(g.roots())).toEqual(['app@1.0.0'])
+  })
+
+  it('the pnpm importer lists the real root dependency (chalk), not a transitive', () => {
+    const out = convert(YARN, { from: 'yarn-classic', to: 'pnpm-v9', manifests: MAN })
+    const importer = out.slice(out.indexOf('importers:'), out.indexOf('\npackages:'))
+    expect(importer).toMatch(/chalk:/)
+    expect(importer).not.toMatch(/ansi-styles:/)
+  })
+
+  it('synthesis is manifest-gated — without manifests the rootless source is left as-is', () => {
+    // No manifests ⇒ no root invention (the pre-existing degenerate behaviour is
+    // deliberately unchanged; there is no declared identity to root from).
+    const g = parse('yarn-classic', YARN)
+    expect(Array.from(g.roots())).not.toContain('app@1.0.0')
+  })
+})

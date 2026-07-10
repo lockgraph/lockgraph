@@ -1433,6 +1433,21 @@ function parseSlots(fields: string[], tarballKey: TarballKey): TarballPayload {
         }
         out.bin = rec
       }
+    } else if (root === 'hasInstallScript') {
+      const s = slots[0]!
+      if (slots.length !== 1 || s.path.length !== 1) {
+        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed hasInstallScript slot (${tarballKey})` })
+      }
+      out.hasInstallScript = s.value === 'true'
+    } else if (root === 'peerDependenciesMeta') {
+      const rec: Record<string, { optional?: boolean }> = {}
+      for (const s of slots) {
+        if (s.path.length !== 3 || s.path[2] !== 'optional') {
+          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed peerDependenciesMeta slot (${tarballKey})` })
+        }
+        ;(rec[s.path[1]!] ??= {}).optional = s.value === 'true'
+      }
+      out.peerDependenciesMeta = rec
     } else if (root === 'funding') {
       out.funding = rebuildFunding(slots, tarballKey)
     } else if (root === 'resolution') {
@@ -1571,6 +1586,23 @@ function flattenToSlots(payload: TarballPayload, name: string, version: string):
   if (payload.engines !== undefined) {
     for (const k of Object.keys(payload.engines).sort(cmpStr)) {
       out.push(emitSlot(['engines', k], payload.engines[k]!))
+    }
+  }
+
+  // hasInstallScript: boolean → bare `hasInstallScript=<bool>` (npm only ever
+  // emits `true`, but the round-trip is value-faithful either way).
+  if (payload.hasInstallScript !== undefined) {
+    out.push(emitSlot(['hasInstallScript'], String(payload.hasInstallScript)))
+  }
+
+  // peerDependenciesMeta: Record<peer, {optional?}> → `peerDependenciesMeta.<peer>.optional=<bool>`,
+  // peers cmpStr-sorted. npm's only sub-key is `optional`; a peer without it emits nothing.
+  if (payload.peerDependenciesMeta !== undefined) {
+    for (const peer of Object.keys(payload.peerDependenciesMeta).sort(cmpStr)) {
+      const optional = payload.peerDependenciesMeta[peer]!.optional
+      if (optional !== undefined) {
+        out.push(emitSlot(['peerDependenciesMeta', peer, 'optional'], String(optional)))
+      }
     }
   }
 

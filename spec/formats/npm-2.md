@@ -102,6 +102,17 @@ this is only how npm-2 *carries* it.
   for npm to skip optional/incompatible installs.
 - Workspaces appear under their on-disk path (`packages/foo`) **and** as
   symlinks at `node_modules/<name>` with `link: true, resolved: "packages/foo"`.
+- **Serialization key order is `json-stringify-nice`, not `JSON.stringify`.** npm
+  (via arborist's `lib/shrinkwrap.js`) orders every object's keys so scalar/array
+  values precede nested objects, with a fixed
+  `name, version, lockfileVersion, resolved, integrity, requires, packages,
+  dependencies` prefix and the remainder alphabetical by `localeCompare('en')` —
+  the `packages`/`dependencies` MAP keys included. The emitter reproduces this
+  exactly, so a generated lock is byte-identical to npm's own and a MUTABLE
+  `npm install` (not only the order-insensitive `npm ci`) leaves it unrewritten.
+- `peerDependenciesMeta` (optional-peer markers) and `hasInstallScript` are
+  preserved verbatim per entry — manifest-derived metadata npm re-adds on install
+  if absent, which would otherwise force a rewrite.
 
 ## Degradation rules
 

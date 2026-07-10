@@ -936,8 +936,12 @@ ends the dotpath.
 Slots for **one** field are emitted **contiguously** and in a **deterministic
 order**: object keys in `cmpStr` order, array indices ascending. Across fields, a
 **fixed field order**:
-`license`, `deprecated`, `cpu`, `os`, `libc`, `bundled`, `engines`, `bin`,
-`funding`, `resolution`, `nativeResolution`. Parse is keyed (by dotpath
+`license`, `deprecated`, `cpu`, `os`, `libc`, `bundled`, `engines`,
+`hasInstallScript`, `peerDependenciesMeta`, `bin`, `funding`, `resolution`,
+`nativeResolution`. `hasInstallScript` is a bare boolean slot
+(`hasInstallScript=true`); `peerDependenciesMeta` flattens to
+`peerDependenciesMeta.<peer>.optional=<bool>` (peers `cmpStr`-sorted) — both are
+npm-manifest metadata carried so an npm round-trip stays byte-identical. Parse is keyed (by dotpath
 root), so inbound order is **not** load-bearing; **emit** order is fixed for
 byte-stability. The `nativeResolution` root is the PM-native sidecar — only the
 verbatim `nativeResolution=<string>` form is an `F` slot; the canonical-URL shape

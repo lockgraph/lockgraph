@@ -28,6 +28,57 @@ export function sortRecord<V>(record: Record<string, V>): Record<string, V> {
   return out
 }
 
+// npm serialises `package-lock.json` via `json-stringify-nice` (see arborist
+// `lib/shrinkwrap.js`), NOT plain `JSON.stringify`. Its key order is: keys whose
+// value is a nested object sort AFTER keys whose value is scalar/array; within
+// each group a preferred-key prefix (`NPM_SW_KEY_ORDER`) leads, then the
+// remainder is alphabetical by `localeCompare('en')`. Emitting in that exact
+// order lets a generated lock survive a MUTABLE `npm install` unchanged, not only
+// `npm ci` (which is order-insensitive). Validated byte-identical against npm's
+// own output. The same ordering applies recursively, so it also fixes the
+// `packages`/`dependencies` MAP key order (npm sorts those by `localeCompare`,
+// not the codepoint `cmpStr` used elsewhere in this module).
+const NPM_SW_KEY_ORDER = [
+  'name', 'version', 'lockfileVersion', 'resolved', 'integrity',
+  'requires', 'packages', 'dependencies',
+]
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v)
+
+const compareNpmKeys = (a: string, b: string): number => {
+  const ai = NPM_SW_KEY_ORDER.indexOf(a)
+  const bi = NPM_SW_KEY_ORDER.indexOf(b)
+  if (ai !== -1 && bi === -1) return -1
+  if (bi !== -1 && ai === -1) return 1
+  if (ai !== -1 && bi !== -1) return ai - bi
+  return a.localeCompare(b, 'en')
+}
+
+// Recursively reorder object keys to match json-stringify-nice. Scalars/arrays
+// precede nested objects; within each group NPM_SW_KEY_ORDER leads, then
+// localeCompare. Arrays are mapped so any object elements are reordered too.
+// `out` is a fresh acyclic plain-object tree, so no cycle guard is needed.
+const npmNiceOrder = (val: unknown): unknown => {
+  if (Array.isArray(val)) return val.map(npmNiceOrder)
+  if (!isPlainObject(val)) return val
+  const entries = Object.entries(val)
+  entries.sort(([ak, av], [bk, bv]) => {
+    const aObj = isPlainObject(av)
+    const bObj = isPlainObject(bv)
+    return aObj === bObj ? compareNpmKeys(ak, bk) : aObj ? 1 : -1
+  })
+  const ordered: Record<string, unknown> = {}
+  for (const [k, v] of entries) ordered[k] = npmNiceOrder(v)
+  return ordered
+}
+
+// Serialise an npm lock object exactly as npm would: json-stringify-nice key
+// order, two-space indent, trailing newline. Drop-in for `JSON.stringify(out,
+// null, 2) + '\n'` at every npm-family emit site.
+export const stringifyNpmLock = (out: unknown): string =>
+  JSON.stringify(npmNiceOrder(out), null, 2) + '\n'
+
 export const NPM_EDGE_RANGE_ATTR = 'range'
 
 export function edgeTripleKey(src: string, kind: EdgeKind, dst: string): string {
@@ -122,6 +173,7 @@ export interface NpmEntry {
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   optionalDependencies?: Record<string, string>
   bin?: string | Record<string, string>
   engines?: Record<string, string>
@@ -129,6 +181,7 @@ export interface NpmEntry {
   license?: string
   workspaces?: string[]
   bundleDependencies?: string[] | boolean
+  hasInstallScript?: boolean
   hasShrinkwrap?: boolean
   deprecated?: string
   cpu?: string[]
