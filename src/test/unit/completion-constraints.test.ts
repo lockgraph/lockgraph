@@ -18,8 +18,9 @@ import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+const stubRegistry: RegistryAdapter = { async packument() { return undefined }, async resolve() { return undefined } }
 const ctxOf = (corgi: PackumentVersion, full?: PackumentVersion): ConditionContext => ({
-  name: corgi.name, version: corgi.version, corgi, manifest: async () => full, limit: task => task(),
+  name: corgi.name, version: corgi.version, corgi, manifest: async () => full, registry: stubRegistry,
 })
 
 interface MockOpts {
@@ -479,5 +480,32 @@ describe('complete/constraints — bounded-backtracking discovery (v2)', () => {
     const nc = result.unresolved.find(d => d.code === 'COMPLETION_NO_CANDIDATE')
     expect((nc!.data as Record<string, unknown>).suggestion).toBeUndefined()
     expect((nc!.data as Record<string, unknown>).budgetExhausted).toBeUndefined()
+  })
+})
+
+// ctx.registry (the configured client) + type/exports on the full manifest — so a
+// custom module-format constraint uses ctx.manifest()/ctx.registry, not a raw fetch.
+describe('complete/constraints — ctx.registry + manifest module-format fields', () => {
+  it('a custom constraint reads type via ctx.manifest(); ctx.registry is the configured client', async () => {
+    let sawClient = false
+    const commonjs: Condition = {
+      kind: 'commonjs', cost: 10,
+      async evaluate(ctx) {
+        sawClient = typeof ctx.registry?.packument === 'function' && typeof ctx.registry?.manifest === 'function'
+        const m = await ctx.manifest()
+        return m?.type === 'module' ? { ok: false, reason: 'ESM-only' } : { ok: true }
+      },
+    }
+    const registry = mockRegistry(
+      {
+        foo: { '1.0.0': { name: 'foo', version: '1.0.0', dependencies: { bar: '^1.0.0' } } },
+        bar: { '1.0.0': { name: 'bar', version: '1.0.0' } }, // corgi: no `type`
+      },
+      { manifests: { bar: { '1.0.0': { name: 'bar', version: '1.0.0', type: 'module' } } } }, // full: ESM-only
+    )
+    const result = await completeTransitives(seedFooGraph(), registry, { constraints: [commonjs] })
+    expect(sawClient).toBe(true)                                       // the whole client is on ctx.registry
+    expect(result.added).not.toContain('bar@1.0.0')                   // ESM-only bar rejected via ctx.manifest().type
+    expect(result.unresolved.some(d => d.code === 'COMPLETION_NO_CANDIDATE')).toBe(true)
   })
 })

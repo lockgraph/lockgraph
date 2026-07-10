@@ -257,6 +257,11 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
   if (typeof raw?.deprecated === 'string')    out.deprecated           = raw.deprecated
   const license = normaliseLicense(raw)
   if (license !== undefined)                  out.license              = license
+  // Module-format fields (full manifest only; corgi omits them) — for custom
+  // module-format constraints via ctx.manifest().
+  if (typeof raw?.type === 'string')          out.type                 = raw.type
+  if (typeof raw?.main === 'string')          out.main                 = raw.main
+  if (raw?.exports !== undefined)             out.exports              = raw.exports
   if (typeof raw?.bin === 'string' || isStringMap(raw?.bin)) {
     out.bin = typeof raw.bin === 'string' ? raw.bin : { ...raw.bin }
   }

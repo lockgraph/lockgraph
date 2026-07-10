@@ -129,7 +129,7 @@ type LiveRegistryOptions = {
   url?:        string                         // registry URL (default registry.npmjs.org)
   auth?:       string                         // Bearer token (authHeader? for a verbatim 'Bearer …' / 'Basic …')
   fetch?:      typeof fetch                   // transport — proxy/CA, and where RETRY + HTTP cache belong (compose your own)
-  limit?:      Limiter                        // scheduler — concurrency pool / rate-limit / debounce; re-surfaced as ctx.limit
+  limit?:      Limiter                        // scheduler — concurrency pool / rate-limit / debounce; re-surfaced as reg.limit / ctx.registry
 }
 type Limiter = <T>(task: () => Promise<T>) => Promise<T>
 
@@ -188,8 +188,9 @@ supply your own, and it's the integration's job to compose them:
   retried/cached GET must return the same bytes (frozen-clean); the POST audit is
   retry-safe for availability only — never cache it (advisories are time-varying).
 - **`limit`** — the scheduler (concurrency pool / rate-limit / debounce): `liveRegistry({ fetch, limit })`
-  runs every registry call through it, and re-surfaces it as `reg.limit` / `ctx.limit`
-  so a custom completion constraint's own fetches share the same quota.
+  runs every registry call through it, and re-surfaces it as `reg.limit` — a custom
+  completion constraint gets the whole configured client as `ctx.registry`, so its own
+  registry calls share the same quota (and it never hand-rolls a `fetch`).
 
 ```ts
 import pLimit from 'p-limit'
@@ -236,17 +237,17 @@ byte-identical to the no-budget run, so it only ever *advises*, never rewrites.
 **Custom constraints.** A constraint is any `{ kind, cost?, evaluate(ctx) }` object, so
 any per-package decision becomes a gate. `evaluate` is sync or async and returns
 `{ ok: true } | { ok: false, reason? } | { ok: 'unevaluable', reason? }`; `ctx` gives
-`{ name, version, corgi, manifest() }`. Example — reject an ESM-only package for a
-CommonJS consumer:
+`{ name, version, corgi, manifest(), registry }` — use `ctx.manifest()` / `ctx.registry`
+(the configured client: URL / auth / `fetch` / `limit` / cache), never a hand-rolled
+`fetch`. Example — reject an ESM-only package for a CommonJS consumer:
 
 ```ts
-const commonjsCompatible = (registry = 'https://registry.npmjs.org') => ({
+const commonjsCompatible = () => ({
   kind: 'commonjs',
-  cost: 20,                                                  // its own fetch → runs after the cheap gates
+  cost: 10,                                                  // needs the full manifest → runs after the corgi gates
   async evaluate(ctx) {
-    const enc = ctx.name.startsWith('@') ? ctx.name.replace('/', '%2F') : ctx.name
-    // route the checker's own fetch through the registry's quota (ctx.limit)
-    const m = await ctx.limit(() => fetch(`${registry}/${enc}/${ctx.version}`).then(r => r.json()))
+    const m = await ctx.manifest()                           // the configured client — no URL/auth/fetch glue
+    if (m === undefined) return { ok: 'unevaluable', reason: 'no manifest()-capable registry' }
     if (m.type !== 'module') return { ok: true }             // CJS by default → requireable
     const hasCjsEntry = typeof m.main === 'string'
       || /"(require|default)"\s*:/.test(JSON.stringify(m.exports ?? null))

@@ -8,7 +8,7 @@
 // PM produces; see ADR-0037 / spec/bindings/constraints-api.md).
 
 import semver from 'semver'
-import type { Limiter, Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
+import type { Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
 import { isLicenseFlagged, isLicenseExpression } from '../recipe/license.ts'
 import type { RejectedCandidate } from './diagnostics.ts'
 
@@ -32,12 +32,14 @@ export interface ConditionContext {
   readonly name:    string
   readonly version: string
   readonly corgi:   PackumentVersion
+  /** The current candidate's FULL manifest (memoised) — `type` / `exports` /
+   *  `license` etc. Prefer this over a hand-rolled `fetch`. */
   manifest(): Promise<PackumentVersion | undefined>
-  /** The registry's scheduling policy (pool / rate-limit / debounce), or a
-   *  no-op if none was injected. Route a custom constraint's OWN async work
-   *  (e.g. a `fetch`) through it — `await ctx.limit(() => fetch(url))` — so it
-   *  shares the same quota as the registry's calls. */
-  limit: Limiter
+  /** The CONFIGURED registry client (URL / auth / `fetch` / `limit` / cache) a
+   *  custom constraint needing OTHER packages should use — `ctx.registry.packument(name)`
+   *  — instead of gluing a raw `fetch` + scheduler. Its calls already run through
+   *  the injected `limit`; use `ctx.registry.limit(fn)` to schedule non-registry work. */
+  readonly registry: RegistryAdapter
 }
 
 /** One acceptance gate. `cost` orders evaluation cheap-first (0 = corgi field,
@@ -224,7 +226,7 @@ function makeContext(
     version,
     corgi,
     manifest: () => (manifestP ??= registry.manifest ? registry.manifest(name, version) : Promise.resolve(undefined)),
-    limit: registry.limit ?? (task => task()),
+    registry,
   }
 }
 

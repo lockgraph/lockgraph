@@ -38,6 +38,14 @@ export interface PackumentVersion {
    *  `{ type }` / `licenses[]` forms. Consumed by the completion `license`
    *  constraint. */
   license?:             string
+  /** Module system — `'module'` (ESM) / `'commonjs'` (or absent = CJS). Full-
+   *  manifest only (corgi omits it). For custom module-format constraints. */
+  type?:                string
+  /** CJS entry point. Full-manifest only. */
+  main?:                string
+  /** The `exports` map (string | conditions object). Full-manifest only; shape
+   *  left open — a constraint inspects it. */
+  exports?:             unknown
 }
 
 export interface Packument {
