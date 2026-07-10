@@ -8,7 +8,7 @@
 // PM produces; see ADR-0037 / spec/bindings/constraints-api.md).
 
 import semver from 'semver'
-import type { Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
+import type { Limiter, Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
 import { isLicenseFlagged, isLicenseExpression } from '../recipe/license.ts'
 import type { RejectedCandidate } from './diagnostics.ts'
 
@@ -33,6 +33,11 @@ export interface ConditionContext {
   readonly version: string
   readonly corgi:   PackumentVersion
   manifest(): Promise<PackumentVersion | undefined>
+  /** The registry's scheduling policy (pool / rate-limit / debounce), or a
+   *  no-op if none was injected. Route a custom constraint's OWN async work
+   *  (e.g. a `fetch`) through it — `await ctx.limit(() => fetch(url))` — so it
+   *  shares the same quota as the registry's calls. */
+  limit: Limiter
 }
 
 /** One acceptance gate. `cost` orders evaluation cheap-first (0 = corgi field,
@@ -219,6 +224,7 @@ function makeContext(
     version,
     corgi,
     manifest: () => (manifestP ??= registry.manifest ? registry.manifest(name, version) : Promise.resolve(undefined)),
+    limit: registry.limit ?? (task => task()),
   }
 }
 

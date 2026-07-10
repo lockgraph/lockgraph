@@ -272,3 +272,41 @@ describe('registry/live — resolve() libc enrichment (corgi drops libc → YN00
     expect(pv?.libc).toBeUndefined()
   })
 })
+
+describe('registry/live — limit (scheduling seam)', () => {
+  it('routes every registry call through the injected limiter', async () => {
+    let scheduled = 0
+    const limit = <T,>(task: () => Promise<T>): Promise<T> => { scheduled++; return task() }
+    const spy = vi.fn(async () => mockResponse({ body: LODASH_BODY }))
+    const reg = liveRegistry(buildOpts(spy as unknown as typeof fetch, { limit }))
+    await reg.packument('lodash')
+    expect(scheduled).toBe(1)             // the fetch was scheduled through the limiter
+    expect(spy).toHaveBeenCalledTimes(1)  // and actually ran
+  })
+
+  it('surfaces the injected limiter on the adapter (.limit); a callable identity when unset', async () => {
+    const limit = <T,>(task: () => Promise<T>): Promise<T> => task()
+    expect(liveRegistry(buildOpts(vi.fn() as unknown as typeof fetch, { limit })).limit).toBe(limit)
+    // unset ⇒ a bound identity limiter, always callable (no NPE for a direct registry.limit(task))
+    const unset = liveRegistry(buildOpts(vi.fn() as unknown as typeof fetch)).limit
+    expect(unset).toBeTypeOf('function')
+    expect(await unset!(async () => 42)).toBe(42)
+  })
+
+  it('bounds concurrency — a pool of 1 serialises overlapping calls (peak = 1)', async () => {
+    let active = 0, peak = 0, chain: Promise<unknown> = Promise.resolve()
+    const limit = <T,>(task: () => Promise<T>): Promise<T> => {
+      const run = chain.then(async () => {
+        active++; peak = Math.max(peak, active)
+        try { return await task() } finally { active-- }
+      })
+      chain = run.catch(() => undefined)
+      return run
+    }
+    const spy = vi.fn(async () => mockResponse({ body: LODASH_BODY }))
+    const reg = liveRegistry(buildOpts(spy as unknown as typeof fetch, { limit }))
+    await Promise.all([reg.packument('a'), reg.packument('b'), reg.packument('c')])
+    expect(peak).toBe(1)
+    expect(spy).toHaveBeenCalledTimes(3)
+  })
+})

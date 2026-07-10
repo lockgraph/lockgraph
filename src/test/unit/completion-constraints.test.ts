@@ -19,7 +19,7 @@ import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const ctxOf = (corgi: PackumentVersion, full?: PackumentVersion): ConditionContext => ({
-  name: corgi.name, version: corgi.version, corgi, manifest: async () => full,
+  name: corgi.name, version: corgi.version, corgi, manifest: async () => full, limit: task => task(),
 })
 
 interface MockOpts {

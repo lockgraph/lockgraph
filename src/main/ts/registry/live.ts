@@ -26,7 +26,7 @@ import semver from 'semver'
 import { fetch as nodeFetchNative } from 'node-fetch-native'
 import { parseSri, isEmptyIntegrity, mergeIntegrity, emptyIntegrity } from '../recipe/integrity.ts'
 import { resolveRegistry, type ResolveRegistryOptions } from './config.ts'
-import type { Packument, PackumentVersion, RegistryAdapter } from './types.ts'
+import type { Limiter, Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 
 export interface LiveRegistryOptions {
   /** Registry URL. Default: 'https://registry.npmjs.org'. */
@@ -40,9 +40,21 @@ export interface LiveRegistryOptions {
   /**
    * Fetch implementation. Default: node-fetch-native (native `fetch` on Node
    * 18+, polyfill on 14–17). Pass to mock in tests, or to supply a
-   * proxy / custom-CA-configured client.
+   * proxy / custom-CA-configured client. This is ALSO where RETRY (backoff) and
+   * an HTTP RESPONSE CACHE belong — compose your own (e.g. `make-fetch-happen`);
+   * the library ships no retry/cache policy. Guardrail: a retried or cached GET
+   * (packument / manifest) must return the SAME bytes — else the lock diverges
+   * (frozen-clean). The POST audit is retry-safe for availability only; NEVER
+   * cache it (advisories are time-varying — a stale cache under-remediates).
    */
   fetch?: typeof fetch
+  /**
+   * Scheduling policy for EVERY registry call (packument / manifest / audit) —
+   * a concurrency pool / rate limiter / debouncer. The library ships none; wrap
+   * with your own (e.g. `p-limit`). Also surfaced on the adapter as `.limit` so
+   * a custom completion constraint can share the same quota. Unset ⇒ immediate.
+   */
+  limit?: Limiter
 }
 
 /** A raw npm advisory object, passed through UNnormalized — audit semantics
@@ -74,6 +86,9 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
   if (typeof fetchImpl !== 'function') {
     throw new Error('liveRegistry: opts.fetch is not a function')
   }
+  // Every registry call runs through the caller's scheduler (pool / rate-limit /
+  // debounce). Unset ⇒ identity (immediate). Also surfaced on the adapter below.
+  const limit: Limiter = opts.limit ?? (task => task())
 
   const authHeader = opts.authHeader ?? (opts.auth !== undefined ? `Bearer ${opts.auth}` : undefined)
   // Never send a credential over a plaintext channel — matches resolveRegistry's
@@ -89,7 +104,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
     const headers: Record<string, string> = { accept: 'application/json' }
     if (authIsSafe) headers.authorization = authHeader
     try {
-      const response = await fetchImpl(url, { headers })
+      const response = await limit(() => fetchImpl(url, { headers }))
       if (!response.ok) return undefined
       return normaliseVersion(name, version, await response.json())
     } catch {
@@ -105,7 +120,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       }
       if (authIsSafe) headers.authorization = authHeader
 
-      const response = await fetchImpl(url, { headers })
+      const response = await limit(() => fetchImpl(url, { headers }))
       if (response.status === 404) return undefined
       if (!response.ok) {
         throw new Error(`liveRegistry: ${response.status} ${url}`)
@@ -168,7 +183,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
         // `redirect: 'manual'` → a 3xx surfaces as a non-ok response and throws below,
         // rather than re-POSTing the package list to a redirect target (yaf rule B:
         // "advisory POST rejects on >=300").
-        const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(batch), redirect: 'manual' })
+        const response = await limit(() => fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(batch), redirect: 'manual' }))
         if (!response.ok) throw new Error(`liveRegistry.audit: ${response.status} ${url}`)
         const body = (await response.json()) as Record<string, unknown>
         for (const [name, advisories] of Object.entries(body)) {
@@ -177,6 +192,11 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       }
       return out
     },
+
+    // Surface the BOUND scheduler (identity-defaulted, always callable) so a
+    // direct `registry.limit(task)` never NPEs, and completion can forward it to
+    // custom constraints (`ConditionContext.limit`) — one quota for registry + checkers.
+    limit,
   }
 }
 

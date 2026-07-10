@@ -30,6 +30,7 @@ export { npmCache, type NpmCacheOptions } from './cache-npm.ts'
 export { pnpmCache, type PnpmCacheOptions } from './cache-pnpm.ts'
 export type {
   CacheAdapter,
+  Limiter,
   Packument,
   PackumentVersion,
   RegistryAdapter,

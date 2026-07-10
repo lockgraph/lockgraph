@@ -3,6 +3,16 @@
 
 import type { Integrity } from '../recipe/integrity.ts'
 
+/**
+ * Caller-defined scheduling policy for registry API calls — a concurrency pool
+ * / rate limiter / debouncer. Runs ONE async task under the caller's scheduler
+ * and resolves to its result. The library ships NO policy: inject one via the
+ * registry factory (`liveRegistry({ limit })`). It is surfaced on the adapter so
+ * completion can forward it to a custom constraint (`ConditionContext.limit`),
+ * letting a checker's own fetches share the SAME quota. Unset ⇒ run immediately.
+ */
+export type Limiter = <T>(task: () => Promise<T>) => Promise<T>
+
 export interface PackumentVersion {
   name:                 string
   version:              string
@@ -57,8 +67,22 @@ export interface RegistryAdapter {
    * Undefined = version unknown / fetch failed.
    */
   manifest?(name: string, version: string): Promise<PackumentVersion | undefined>
+
+  /** The scheduling policy this adapter runs its API calls under, if one was
+   *  injected. Surfaced so completion can forward it to custom constraints via
+   *  `ConditionContext.limit` — one quota across the registry AND user checkers. */
+  limit?: Limiter
 }
 
+/**
+ * A cache keyed by package IDENTITY (name / name@version) — for OFFLINE / FROZEN
+ * resolution and reuse of a PM's on-disk store, NOT an HTTP response cache (that
+ * belongs in `LiveRegistryOptions.fetch`, keyed by URL). Read *instead of* the
+ * network. Returned bytes MUST match what the registry would serve for that
+ * identity — a cache that returns different bytes across runs breaks the
+ * frozen-clean invariant (a different lock). Not wired into `completeTransitives`
+ * today; consume it where reads happen (e.g. a future `cachedRegistry(cache, live)`).
+ */
 export interface CacheAdapter {
   /** Lookup packument by package name. Undefined = cache miss. */
   packument(name: string): Promise<Packument | undefined>

@@ -123,6 +123,25 @@ type StringifyOptions = {
   overrides?:    OverrideConstraint[]         // canonical overrides → native projection
   onDiagnostic?: (d: Diagnostic) => void
 }
+
+// @antongolub/lockfile/registry — liveRegistry({ … }); the transport seams:
+type LiveRegistryOptions = {
+  url?:        string                         // registry URL (default registry.npmjs.org)
+  auth?:       string                         // Bearer token (authHeader? for a verbatim 'Bearer …' / 'Basic …')
+  fetch?:      typeof fetch                   // transport — proxy/CA, and where RETRY + HTTP cache belong (compose your own)
+  limit?:      Limiter                        // scheduler — concurrency pool / rate-limit / debounce; re-surfaced as ctx.limit
+}
+type Limiter = <T>(task: () => Promise<T>) => Promise<T>
+
+// @antongolub/lockfile/complete — completeTransitives(graph, registry, { … }):
+type CompletionOptions = {
+  constraints?:   Condition[]                 // node-local acceptance gates (engines / license / custom); ADR-0037
+  budget?:        { maxCombinations: number } // opt-in bounded-backtracking discovery (suggests the override to pin)
+  onUnevaluable?: 'reject' | 'accept'         // an 'unevaluable' verdict → fold into NO_CANDIDATE (default) / skip the check
+  overrides?:     OverrideConstraint[]        // honour declared pins so the completed closure stays frozen-clean
+  resolution?:    'highest' | 'prefer-existing'
+  seed?:          CompletionSeed              // bound the frontier for incremental completion
+}
 ```
 
 `manifests` supplies the workspace/override context the lockfile bytes cannot
@@ -160,6 +179,23 @@ Auth follows the npm/yarn taxonomy (Bearer `_authToken` / `npmAuthToken`; Basic
 `_auth`, `username`+`_password`, `npmAuthIdent`), bound to the declaring host —
 `always-auth` is deliberately not honoured (it would send a credential beyond its
 host prefix). Pass `env: {}` to ignore environment config entirely.
+
+**Customising the transport.** The library ships no fetch policy — two seams let you
+supply your own, and it's the integration's job to compose them:
+
+- **`fetch`** — the transport. Proxy / custom-CA, and where **retry** (backoff) and
+  an **HTTP response cache** belong (compose your own, e.g. `make-fetch-happen`). A
+  retried/cached GET must return the same bytes (frozen-clean); the POST audit is
+  retry-safe for availability only — never cache it (advisories are time-varying).
+- **`limit`** — the scheduler (concurrency pool / rate-limit / debounce): `liveRegistry({ fetch, limit })`
+  runs every registry call through it, and re-surfaces it as `reg.limit` / `ctx.limit`
+  so a custom completion constraint's own fetches share the same quota.
+
+```ts
+import pLimit from 'p-limit'
+const pool = pLimit(8)
+const reg = liveRegistry({ fetch: fetchWithRetry, limit: task => pool(task) })
+```
 
 ### Constraint-aware completion
 
@@ -209,7 +245,8 @@ const commonjsCompatible = (registry = 'https://registry.npmjs.org') => ({
   cost: 20,                                                  // its own fetch → runs after the cheap gates
   async evaluate(ctx) {
     const enc = ctx.name.startsWith('@') ? ctx.name.replace('/', '%2F') : ctx.name
-    const m = await (await fetch(`${registry}/${enc}/${ctx.version}`)).json()
+    // route the checker's own fetch through the registry's quota (ctx.limit)
+    const m = await ctx.limit(() => fetch(`${registry}/${enc}/${ctx.version}`).then(r => r.json()))
     if (m.type !== 'module') return { ok: true }             // CJS by default → requireable
     const hasCjsEntry = typeof m.main === 'string'
       || /"(require|default)"\s*:/.test(JSON.stringify(m.exports ?? null))

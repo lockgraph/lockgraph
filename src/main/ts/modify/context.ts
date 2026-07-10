@@ -7,11 +7,10 @@
 
 import type { Diagnostic, Graph, Manifest } from '../graph.ts'
 import { frozenRegistry } from '../registry/frozen.ts'
-import type { CacheAdapter, RegistryAdapter } from '../registry/types.ts'
+import type { RegistryAdapter } from '../registry/types.ts'
 
 export interface ModifyContext {
   registry:   RegistryAdapter
-  cache?:     CacheAdapter
   /** Declared manifests keyed by workspace path (ADR-0025). Carries override
    *  declarations + workspace context for enrich / re-resolution. */
   manifests?: Record<string, Manifest>
