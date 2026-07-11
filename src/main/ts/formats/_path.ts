@@ -63,7 +63,7 @@ export function readWorkspaceFileBytes(
   }
 }
 
-function resolveWorkspacePath(
+export function resolveWorkspacePath(
   root: string,
   candidatePath: string,
   locator: string,
@@ -81,7 +81,7 @@ function resolveWorkspacePath(
   return { resolved, segments }
 }
 
-function resolveWorkspaceRoot(workspaceRoot: string): string | undefined {
+export function resolveWorkspaceRoot(workspaceRoot: string): string | undefined {
   try {
     return realpathSync.native(workspaceRoot)
   } catch (cause) {
@@ -91,7 +91,7 @@ function resolveWorkspaceRoot(workspaceRoot: string): string | undefined {
   }
 }
 
-function decodeWorkspacePath(candidatePath: string, locator: string): string {
+export function decodeWorkspacePath(candidatePath: string, locator: string): string {
   try {
     return decodeURIComponent(candidatePath)
   } catch (cause) {
@@ -99,7 +99,7 @@ function decodeWorkspacePath(candidatePath: string, locator: string): string {
   }
 }
 
-function normalizeWorkspacePath(candidatePath: string, locator: string): string {
+export function normalizeWorkspacePath(candidatePath: string, locator: string): string {
   const portable = candidatePath.startsWith('~/')
     ? `./${candidatePath.slice(2)}`
     : candidatePath
@@ -119,7 +119,7 @@ function normalizeWorkspacePath(candidatePath: string, locator: string): string 
   return normalized
 }
 
-function ensureNoSymlinksOnExistingPath(root: string, segments: string[], locator: string): void {
+export function ensureNoSymlinksOnExistingPath(root: string, segments: string[], locator: string): void {
   let current = root
 
   for (let i = 0; i < segments.length; i++) {
@@ -149,13 +149,13 @@ function ensureNoSymlinksOnExistingPath(root: string, segments: string[], locato
   }
 }
 
-function ensureRegularFile(stat: FileStat, locator: string): void {
+export function ensureRegularFile(stat: FileStat, locator: string): void {
   if (!stat.isFile()) {
     throw invalidWorkspacePath(locator, `patch path must resolve to a regular file`)
   }
 }
 
-function ensureOpenedPathStillContained(
+export function ensureOpenedPathStillContained(
   root: string,
   resolved: string,
   fd: number,
@@ -171,7 +171,7 @@ function ensureOpenedPathStillContained(
   ensureRealpathStillContained(root, resolved, openedStat, locator)
 }
 
-function fdPathOf(fd: number): string | undefined {
+export function fdPathOf(fd: number): string | undefined {
   if (process.platform !== 'linux') return undefined
 
   try {
@@ -184,7 +184,7 @@ function fdPathOf(fd: number): string | undefined {
   }
 }
 
-function ensureRealpathStillContained(
+export function ensureRealpathStillContained(
   root: string,
   resolved: string,
   openedStat: FileStat,
@@ -215,18 +215,18 @@ function ensureRealpathStillContained(
   }
 }
 
-function ensureDescendantOfWorkspace(root: string, candidate: string, locator: string): void {
+export function ensureDescendantOfWorkspace(root: string, candidate: string, locator: string): void {
   const relative = path.relative(root, candidate)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw invalidWorkspacePath(locator, `patch path escapes the workspace root`)
   }
 }
 
-function sameFileIdentity(left: FileStat, right: FileStat): boolean {
+export function sameFileIdentity(left: FileStat, right: FileStat): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
-function invalidWorkspacePath(locator: string, reason: string, cause?: unknown): LockfileError {
+export function invalidWorkspacePath(locator: string, reason: string, cause?: unknown): LockfileError {
   return new LockfileError({
     code: 'INVALID_INPUT',
     message: `${reason} (${locator})`,
@@ -234,7 +234,7 @@ function invalidWorkspacePath(locator: string, reason: string, cause?: unknown):
   })
 }
 
-function codeOf(error: unknown): string | undefined {
+export function codeOf(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error
     ? String((error as { code: unknown }).code)
     : undefined

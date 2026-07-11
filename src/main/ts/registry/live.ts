@@ -25,7 +25,7 @@
 import semver from 'semver'
 import { fetch as nodeFetchNative } from 'node-fetch-native'
 import { parseSri, isEmptyIntegrity, mergeIntegrity, emptyIntegrity } from '../recipe/integrity.ts'
-import { resolveRegistry, type ResolveRegistryOptions } from './config.ts'
+import { resolveRegistry, DEFAULT_REGISTRY, type ResolveRegistryOptions } from './config.ts'
 import type { Limiter, Packument, PackumentVersion, RegistryAdapter } from './types.ts'
 
 export interface LiveRegistryOptions {
@@ -77,7 +77,7 @@ export interface LiveRegistryAdapter extends RegistryAdapter {
   audit(pkgs: Record<string, string[]>, opts?: AuditOptions): Promise<Record<string, RawAdvisory[]>>
 }
 
-const DEFAULT_URL    = 'https://registry.npmjs.org'
+const DEFAULT_URL    = DEFAULT_REGISTRY
 const INSTALL_ACCEPT = 'application/vnd.npm.install-v1+json, application/json;q=0.8'
 
 export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapter {

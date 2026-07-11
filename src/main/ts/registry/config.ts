@@ -28,7 +28,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
+import { DEFAULT_NPM_REGISTRY } from '../recipe/resolution.ts'
+
+// The public npm registry — single source of truth in the F3 resolution
+// primitive (core). Re-exported under the registry adapter's public name.
+export const DEFAULT_REGISTRY = DEFAULT_NPM_REGISTRY
 
 /** Which package-manager config to read — selects the deterministic source set. */
 export type Ecosystem = 'npm' | 'pnpm' | 'yarn-classic' | 'yarn-berry'

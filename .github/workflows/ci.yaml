@@ -41,13 +41,10 @@ jobs:
         timeout-minutes: 12
         run: npm run test:coverage
 
-      - name: Publish coverage to Qlty
-        if: always()   # push lcov even if a test/threshold failed, so Qlty always has data
-        uses: qltysh/qlty-action/coverage@v1
-        with:
-          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
-          files: target/coverage/lcov.info
-
+      # This phase runs untrusted deps + code (npm ci, the full suite), so it holds
+      # NO secrets. It only *generates* the bundle and the coverage report and
+      # caches them as artifacts; publishing them (npm + Qlty) happens downstream
+      # in `release` — the only phase with secret access.
       - uses: actions/upload-artifact@v5
         with:
           name: build
@@ -56,11 +53,11 @@ jobs:
             package.json
           retention-days: 1
 
-      - name: Upload coverage HTML
+      - name: Cache coverage report for downstream publish
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: coverage-html
+          name: coverage
           path: target/coverage
           retention-days: 7
 
@@ -124,13 +121,25 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 26
-          cache: 'npm'
+          # no `cache: npm` — release installs nothing (see below)
 
       - uses: actions/download-artifact@v5
         with:
           name: build
 
-      - run: npm ci
+      - uses: actions/download-artifact@v5
+        with:
+          name: coverage
+          path: target/coverage
+
+      # NO `npm ci` here — release holds secrets (npm OIDC + the Qlty token), so it
+      # must not install or run untrusted dependency code. It only publishes the
+      # pre-built artifacts fetched above.
+      - name: Publish coverage to Qlty
+        uses: qltysh/qlty-action/coverage@v1
+        with:
+          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
+          files: target/coverage/lcov.info
 
       - name: Release via zx-semrel (OIDC scheme)
         env:

@@ -747,7 +747,7 @@ describe('mutate', () => {
       m.diagnostic({ code: 'WARN_X', severity: 'warning', subject: 'graph', message: 'warn' })
       m.diagnostic({ code: 'INFO_Y', severity: 'info',    subject: 'graph', message: 'info' })
     })
-    // MutateResult.unresolved filters to warning+ severity (graph.ts:812).
+    // MutateResult.unresolved filters to warning+ severity.
     expect(result.unresolved.map(d => d.code)).toEqual(['WARN_X'])
   })
 

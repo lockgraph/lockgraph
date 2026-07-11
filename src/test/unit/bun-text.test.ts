@@ -9,13 +9,33 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { toTarballKey, type Graph } from '../../main/ts/graph.ts'
+import {
+  GraphError,
+  newBuilder,
+  toTarballKey,
+  type Diagnostic,
+  type EdgeKind,
+  type Graph,
+} from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
 
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const MODIFIED_SRI = sriOf('modified-ms-integrity')
 const BUMPED_SRI = sriOf('bumped-ms-integrity')
-import { check, enrich, getBunOverridesCanonical, optimize, parse, stringify } from '../../main/ts/formats/bun-text.ts'
+import {
+  addBlockEdges,
+  buildInnerBlock,
+  buildWorkspaceManifest,
+  check,
+  enrich,
+  getBunOverridesCanonical,
+  optimize,
+  parse,
+  renderInlineValue,
+  renderValue,
+  resolveOverridesBlock,
+  stringify,
+} from '../../main/ts/formats/bun-text.ts'
 import { parse as parseNpm1 } from '../../main/ts/formats/npm-1.ts'
 import { parse as parseNpm3 } from '../../main/ts/formats/npm-3.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
@@ -681,5 +701,779 @@ describe('bun-text — top-level fidelity blocks (overrides / trusted / patched)
     // The fixture carries `{ "@types/node": "25.0.0", ... }` — must survive.
     expect(out).toContain('"overrides"')
     expect(out).toContain('"@types/node": "25.0.0"')
+  })
+})
+
+// === Coverage supplement: error paths, rare branches, internal helpers ======
+//
+// Every test feeds a KNOWN input and asserts a SPECIFIC correct observable: a
+// thrown LockfileError code, an emitted diagnostic, an exact emitted string, or
+// an exact helper return value.
+
+// A valid 88-char sha512 SRI (borrowed from the real `ms@2.1.3` fixture entry)
+// so integrity survives parse instead of being dropped as invalid-length.
+const MS_SRI =
+  'sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=='
+
+const lockJson = (extra: Record<string, unknown>): string =>
+  JSON.stringify({
+    lockfileVersion: 1,
+    workspaces: { '': { name: 'root', version: '0.0.0' } },
+    ...extra,
+  })
+
+describe('parse', () => {
+  it('rejects a lockfile with no `packages` block (FORMAT_MISMATCH)', () => {
+    let err: unknown
+    try {
+      parse(lockJson({ workspaces: { '': { name: 'root' } } }))
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(LockfileError)
+    expect((err as LockfileError).code).toBe('FORMAT_MISMATCH')
+    expect((err as LockfileError).message).toContain('missing required `packages` block')
+  })
+
+  it('rejects a non-object `packages` value (FORMAT_MISMATCH)', () => {
+    let err: unknown
+    try {
+      parse(JSON.stringify({ lockfileVersion: 1, workspaces: { '': {} }, packages: 5 }))
+    } catch (e) {
+      err = e
+    }
+    expect((err as LockfileError).code).toBe('FORMAT_MISMATCH')
+  })
+
+  it('rejects a top-level JSON array via parseJsonc (FORMAT_MISMATCH)', () => {
+    let err: unknown
+    try {
+      parse('[1, 2, 3]')
+    } catch (e) {
+      err = e
+    }
+    expect((err as LockfileError).code).toBe('FORMAT_MISMATCH')
+    expect((err as LockfileError).message).toContain('top-level value must be a JSON object')
+  })
+
+  it('rejects a top-level JSON scalar via parseJsonc (FORMAT_MISMATCH)', () => {
+    let err: unknown
+    try {
+      parse('42')
+    } catch (e) {
+      err = e
+    }
+    expect((err as LockfileError).code).toBe('FORMAT_MISMATCH')
+    expect((err as LockfileError).message).toContain('top-level value must be a JSON object')
+  })
+
+  it('emits one BUN_TEXT_BAD_ENTRY diagnostic per malformed `packages` shape with the correct message', () => {
+    const graph = parse(
+      lockJson({
+        packages: {
+          empty: [], // len 0 -> "is not a positional tuple"
+          numid: [42, '', {}, ''], // non-string id token -> "missing id token"
+          badws: ['@workspace:x'], // len 1, unparseable ws-ref (empty name) -> "unparseable; skipping"
+          noat: ['noatsign', '', {}, ''], // len 4, unparseable package id -> "unparseable; skipping"
+          lodash: ['lodash@4.17.21', '', {}, ''], // one good entry so the graph still seals
+        },
+      }),
+    )
+    const diags = graph
+      .diagnostics()
+      .filter((d) => d.code === 'BUN_TEXT_BAD_ENTRY')
+      .map((d) => d.message)
+      .sort()
+    expect(diags).toEqual(
+      [
+        'bun-text entry "empty" is not a positional tuple; skipping',
+        'bun-text entry "numid" missing id token',
+        'bun-text id "noatsign" unparseable; skipping',
+        'bun-text workspace-ref "@workspace:x" unparseable; skipping',
+      ].sort(),
+    )
+  })
+
+  it('marks all BAD_ENTRY diagnostics as warnings and still parses the good entry', () => {
+    const graph = parse(
+      lockJson({
+        packages: {
+          empty: [],
+          numid: [42, '', {}, ''],
+          badws: ['@workspace:x'],
+          noat: ['noatsign', '', {}, ''],
+          lodash: ['lodash@4.17.21', '', {}, ''],
+        },
+      }),
+    )
+    for (const d of graph.diagnostics().filter((x) => x.code === 'BUN_TEXT_BAD_ENTRY')) {
+      expect(d.severity).toBe('warning')
+    }
+    // The one well-formed entry became a node; the skipped ones did not.
+    expect(graph.getNode('lodash@4.17.21')).toBeDefined()
+    expect(graph.getNode('noatsign@')).toBeUndefined()
+  })
+
+  it('registers a workspace member that appears only in the workspaces map', () => {
+    // `lonely` has a manifest in `workspaces` but no `packages` entry: the
+    // pre-register loop must synthesise the node + tag its workspacePath.
+    const graph = parse(
+      lockJson({
+        workspaces: {
+          '': { name: 'root' },
+          'packages/lonely': { name: 'lonely', version: '2.0.0' },
+        },
+        packages: {},
+      }),
+    )
+    const node = graph.getNode('lonely@2.0.0')
+    expect(node).toBeDefined()
+    expect(node?.workspacePath).toBe('packages/lonely')
+    expect(node?.version).toBe('2.0.0')
+  })
+
+  it('skips a workspaces-map member whose manifest has no usable name', () => {
+    const graph = parse(
+      lockJson({
+        workspaces: {
+          '': { name: 'root' },
+          'packages/nameless': { name: '', version: '9.9.9' },
+        },
+        packages: {},
+      }),
+    )
+    expect(Array.from(graph.nodes(), (n) => n.id)).toEqual(['root@0.0.0'])
+  })
+
+  it('defaults a missing member version to 0.0.0', () => {
+    const graph = parse(
+      lockJson({
+        workspaces: {
+          '': { name: 'root' },
+          'packages/noversion': { name: 'noversion' },
+        },
+        packages: {},
+      }),
+    )
+    expect(graph.getNode('noversion@0.0.0')?.workspacePath).toBe('packages/noversion')
+  })
+
+  it('wraps a duplicate-edge seal failure as a PARSE_FAILED LockfileError', () => {
+    // The root's dep `lodash` is declared BOTH in `workspaces[''].dependencies`
+    // AND in a regular `root@0.0.0` packages entry's inner block. Both passes
+    // emit `root@0.0.0 -dep-> lodash@4.17.21`, so seal() throws a duplicate-edge
+    // GraphError, which parse() rewraps.
+    const input = JSON.stringify({
+      lockfileVersion: 1,
+      workspaces: { '': { name: 'root', version: '0.0.0', dependencies: { lodash: '4.17.21' } } },
+      packages: {
+        lodash: ['lodash@4.17.21', '', {}, ''],
+        root: ['root@0.0.0', '', { dependencies: { lodash: '4.17.21' } }, ''],
+      },
+    })
+    let err: unknown
+    try {
+      parse(input)
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(LockfileError)
+    expect((err as LockfileError).code).toBe('PARSE_FAILED')
+    expect((err as LockfileError).message).toContain('bun-text seal failed')
+    expect((err as LockfileError).message).toContain('duplicate edge')
+  })
+
+  it('strips line + block comments and honors escaped quotes inside strings', () => {
+    // The name `roo"t` carries an escaped quote that must survive the
+    // string-state machine intact.
+    const input = [
+      '{',
+      '  // a leading line comment',
+      '  "lockfileVersion": 1,',
+      '  /* a block',
+      '     comment spanning two lines */',
+      '  "workspaces": { "": { "name": "roo\\"t" } },', // escaped quote in the name
+      '  "packages": {',
+      '    "lodash": ["lodash@4.17.21", "", {}, ""],', // trailing comma before `}`
+      '  },',
+      '}',
+    ].join('\n')
+    const graph = parse(input)
+    // The escaped quote survived the strip: the root name is literally `roo"t`.
+    expect(graph.getNode('roo"t@0.0.0')?.name).toBe('roo"t')
+    expect(graph.getNode('lodash@4.17.21')).toBeDefined()
+  })
+
+  it('does not treat `//` or `/*` inside a string value as a comment', () => {
+    // A URL-ish range proves the string body is preserved verbatim.
+    const input = JSON.stringify({
+      lockfileVersion: 1,
+      workspaces: { '': { name: 'root', dependencies: { dep: 'https://x/*y' } } },
+      packages: { lodash: ['lodash@4.17.21', '', {}, ''] },
+    })
+    // The `https://x/*y` range contains both `//` and `/*`; parse must not
+    // mangle it (it surfaces as an unresolved-dep range verbatim).
+    const graph = parse(input)
+    const unresolved = graph
+      .diagnostics()
+      .find((d) => d.code === 'BUN_TEXT_UNRESOLVED_DEP')
+    expect(unresolved?.message).toContain('https://x/*y')
+  })
+})
+
+describe('stringify', () => {
+  it('preserves a nested-object override and emits it as a nested block', () => {
+    const input = JSON.stringify({
+      lockfileVersion: 1,
+      workspaces: { '': { name: 'root', dependencies: { lodash: '^4' } } },
+      overrides: { lodash: '4.17.21', nested: { foo: '1.0.0' } },
+      packages: { lodash: ['lodash@4.17.21', '', {}, ''] },
+    })
+    const out = stringify(parse(input))
+    // Flat scalar override.
+    expect(out).toContain('"lodash": "4.17.21"')
+    // Nested object override recurses through renderObject (not inlined).
+    expect(out).toMatch(/"nested":\s*\{\s*\n\s*"foo": "1\.0\.0",/)
+    // overrides sits between workspaces and packages.
+    expect(out.indexOf('"overrides"')).toBeGreaterThan(out.indexOf('"workspaces"'))
+    expect(out.indexOf('"overrides"')).toBeLessThan(out.indexOf('"packages"'))
+  })
+})
+
+describe('enrich', () => {
+  it('replaces a tarball-less regular node into a workspace member', () => {
+    // `mypkg` parses as a regular package WITHOUT integrity (no tarball). A
+    // manifest naming it a workspace member re-tags the existing node.
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: { '': { name: 'root', version: '0.0.0', dependencies: { mypkg: '2.0.0' } } },
+        packages: { mypkg: ['mypkg@2.0.0', '', {}, ''] },
+      }),
+    )
+    // Precondition: no tarball, so the replacement guard does NOT skip.
+    expect(graph.tarball({ name: 'mypkg', version: '2.0.0' })).toBeUndefined()
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root' },
+        'packages/mypkg': { name: 'mypkg', version: '2.0.0' },
+      },
+    })
+    expect(result.graph.getNode('mypkg@2.0.0')?.workspacePath).toBe('packages/mypkg')
+  })
+
+  it('adds a brand-new workspace member node absent from the graph', () => {
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: { '': { name: 'root', version: '0.0.0', dependencies: { lodash: '4.17.21' } } },
+        packages: { lodash: ['lodash@4.17.21', '', {}, MS_SRI] },
+      }),
+    )
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root' },
+        'packages/featx': { name: 'featx', version: '3.0.0' },
+      },
+    })
+    const added = result.graph.getNode('featx@3.0.0')
+    expect(added).toBeDefined()
+    expect(added?.workspacePath).toBe('packages/featx')
+    expect(added?.version).toBe('3.0.0')
+    // The tarball-bearing lodash node is untouched (the replacement guard skipped it).
+    expect(result.graph.getNode('lodash@4.17.21')?.workspacePath).toBeUndefined()
+  })
+
+  it('re-tags an existing member node whose manifest path differs', () => {
+    // `@case-ws/a` parses as a workspace member at `packages/a`. A manifest that
+    // maps the SAME name@version to a DIFFERENT path is skipped by the first
+    // loop and re-tagged by the second loop's existing-node branch.
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: {
+          '': { name: 'root', version: '0.0.0' },
+          'packages/a': { name: '@case-ws/a', version: '0.0.0' },
+        },
+        packages: { '@case-ws/a': ['@case-ws/a@workspace:packages/a'] },
+      }),
+    )
+    expect(graph.getNode('@case-ws/a@0.0.0')?.workspacePath).toBe('packages/a')
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root' },
+        // Same member name+version, relocated to `apps/a`.
+        'apps/a': { name: '@case-ws/a', version: '0.0.0' },
+      },
+    })
+    expect(result.graph.getNode('@case-ws/a@0.0.0')?.workspacePath).toBe('apps/a')
+  })
+
+  it('leaves an already-correctly-tagged member untouched', () => {
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: {
+          '': { name: 'root', version: '0.0.0' },
+          'packages/a': { name: '@case-ws/a', version: '0.0.0' },
+        },
+        packages: { '@case-ws/a': ['@case-ws/a@workspace:packages/a'] },
+      }),
+    )
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root' },
+        'packages/a': { name: '@case-ws/a', version: '0.0.0' }, // same path -> no-op
+      },
+    })
+    expect(result.graph.getNode('@case-ws/a@0.0.0')?.workspacePath).toBe('packages/a')
+  })
+
+  it('re-attaches the sidecar so a subsequent stringify still emits members', () => {
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: { '': { name: 'root', version: '0.0.0', dependencies: { lodash: '4.17.21' } } },
+        packages: { lodash: ['lodash@4.17.21', '', {}, MS_SRI] },
+      }),
+    )
+    const result = enrich(graph, {
+      manifests: { '': { name: 'root' }, 'packages/featx': { name: 'featx', version: '3.0.0' } },
+    })
+    const out = stringify(result.graph)
+    expect(out).toContain('["featx@workspace:packages/featx"]')
+  })
+})
+
+describe('optimize', () => {
+  it('prunes an unreachable mutual cycle from a fresh parse and keeps the reachable tree', () => {
+    // cyc-a<->cyc-b reference each other and nothing else references them; each
+    // has an incoming edge so neither is a root -> both unreachable from root.
+    // Parsing directly (no mutate) keeps the sidecar on the graph so optimize
+    // runs pruneSidecar.
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: { '': { name: 'root', version: '0.0.0', dependencies: { lodash: '4.17.21' } } },
+        packages: {
+          lodash: ['lodash@4.17.21', '', {}, MS_SRI],
+          'cyc-a': ['cyc-a@1.0.0', '', { dependencies: { 'cyc-b': '1.0.0' } }, MS_SRI],
+          'cyc-b': ['cyc-b@1.0.0', '', { dependencies: { 'cyc-a': '1.0.0' } }, MS_SRI],
+        },
+      }),
+    )
+    // Preconditions: cyc nodes are non-roots (they have incoming edges).
+    expect(Array.from(graph.roots())).toEqual(['root@0.0.0'])
+
+    const result = optimize(graph)
+    expect(result.graph.getNode('cyc-a@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('cyc-b@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('lodash@4.17.21')).toBeDefined()
+
+    // Sidecar re-attached: stringify still emits lodash, not the cycle.
+    const out = stringify(result.graph)
+    expect(out).toContain('lodash@4.17.21')
+    expect(out).not.toContain('cyc-a')
+  })
+
+  it('drops pruned-node peer declarations but keeps surviving ones', () => {
+    // cyc-a declares a peer dep -> peerDeclarations has `cyc-a@1.0.0|leftpad`.
+    // lodash declares a peer dep -> `lodash@4.17.21|tslib`. After pruning the
+    // cycle, pruneSidecar's peerDeclarations filter must drop the cyc-a entry
+    // (src unreachable) and keep the lodash entry (src survives). The kept
+    // declaration re-surfaces in lodash's emitted inner peerDependencies block.
+    const graph = parse(
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: { '': { name: 'root', version: '0.0.0', dependencies: { lodash: '4.17.21' } } },
+        packages: {
+          lodash: ['lodash@4.17.21', '', { peerDependencies: { tslib: '^2.0.0' } }, MS_SRI],
+          tslib: ['tslib@2.6.0', '', {}, MS_SRI],
+          'cyc-a': [
+            'cyc-a@1.0.0',
+            '',
+            { dependencies: { 'cyc-b': '1.0.0' }, peerDependencies: { leftpad: '^1.0.0' } },
+            MS_SRI,
+          ],
+          'cyc-b': ['cyc-b@1.0.0', '', { dependencies: { 'cyc-a': '1.0.0' } }, MS_SRI],
+        },
+      }),
+    )
+    const result = optimize(graph)
+    expect(result.graph.getNode('cyc-a@1.0.0')).toBeUndefined()
+
+    const out = stringify(result.graph)
+    // The surviving lodash peer declaration is preserved through the prune.
+    expect(out).toContain('"peerDependencies": { "tslib": "^2.0.0" }')
+    // The pruned cyc-a's peer declaration is gone (no leftpad anywhere).
+    expect(out).not.toContain('leftpad')
+  })
+})
+
+describe('resolveOverridesBlock', () => {
+  const collect = () => {
+    const diags: Diagnostic[] = []
+    return { diags, emit: (d: Diagnostic) => diags.push(d) }
+  }
+
+  it('projects a canonical-only sidecar (no nativeOverrides) via the npm grammar', () => {
+    // callerOverrides undefined, nativeOverrides undefined, but a
+    // canonicalOverrides carrier present -> project through npm grammar.
+    const { emit } = collect()
+    const block = resolveOverridesBlock(
+      undefined,
+      // Minimal sidecar shape: only canonicalOverrides set.
+      { canonicalOverrides: [{ package: 'lodash', to: '4.17.21' }] } as never,
+      emit,
+    )
+    expect(block).toEqual({ lodash: '4.17.21' })
+  })
+
+  it('lets caller overrides take precedence over any sidecar carrier', () => {
+    const { emit } = collect()
+    const block = resolveOverridesBlock(
+      [{ package: 'left-pad', to: '1.3.0' }],
+      { nativeOverrides: { lodash: '4.17.21' } } as never,
+      emit,
+    )
+    expect(block).toEqual({ 'left-pad': '1.3.0' })
+  })
+
+  it('suppresses the carrier on an explicit empty caller-overrides array', () => {
+    const { emit } = collect()
+    const block = resolveOverridesBlock(
+      [],
+      { nativeOverrides: { lodash: '4.17.21' } } as never,
+      emit,
+    )
+    expect(block).toBeUndefined()
+  })
+
+  it('returns the verbatim nativeOverrides when no caller override is given', () => {
+    const { emit } = collect()
+    const native = { lodash: '4.17.21', '@types/node': '20.0.0' }
+    const block = resolveOverridesBlock(undefined, { nativeOverrides: native } as never, emit)
+    expect(block).toBe(native)
+  })
+
+  it('returns undefined when nothing carries overrides', () => {
+    const { emit } = collect()
+    expect(resolveOverridesBlock(undefined, undefined, emit)).toBeUndefined()
+    expect(resolveOverridesBlock(undefined, {} as never, emit)).toBeUndefined()
+  })
+})
+
+describe('renderInlineValue', () => {
+  it('renders JSON scalars in their canonical inline form', () => {
+    expect(renderInlineValue(null)).toBe('null')
+    expect(renderInlineValue(true)).toBe('true')
+    expect(renderInlineValue(false)).toBe('false')
+    expect(renderInlineValue(42)).toBe('42')
+    expect(renderInlineValue('a"b')).toBe('"a\\"b"')
+  })
+
+  it('renders a non-finite number as null', () => {
+    // JSON cannot carry Infinity/NaN, so this defensive branch is only
+    // reachable by feeding the emitter a non-finite number directly.
+    expect(renderInlineValue(Number.POSITIVE_INFINITY)).toBe('null')
+    expect(renderInlineValue(Number.NaN)).toBe('null')
+  })
+
+  it('renders a nested array inline', () => {
+    expect(renderInlineValue([1, 'x', true])).toBe('[1, "x", true]')
+    expect(renderInlineValue([])).toBe('[]')
+  })
+
+  it('renders a nested object inline via renderInlineObject', () => {
+    expect(renderInlineValue({})).toBe('{}')
+    expect(renderInlineValue({ bin: 'cli.js', name: 'x' })).toBe(
+      '{ "bin": "cli.js", "name": "x" }',
+    )
+  })
+
+  it('renders an unsupported value type as null', () => {
+    // undefined / bigint fall through every typed branch to the trailing
+    // `return 'null'`.
+    expect(renderInlineValue(undefined)).toBe('null')
+    expect(renderInlineValue(10n)).toBe('null')
+  })
+})
+
+describe('renderValue', () => {
+  it('routes an array to the inline tuple emitter', () => {
+    expect(renderValue(['a@1.0.0', '', {}, ''], 0, false)).toBe('["a@1.0.0", "", {}, ""]')
+  })
+
+  it('routes an object to renderObject with trailing commas', () => {
+    // Non-top-level object -> multi-line, every entry trailing-comma terminated.
+    expect(renderValue({ a: 1 }, 0, false)).toBe('{\n  "a": 1,\n}')
+  })
+
+  it('routes a scalar to renderInlineValue', () => {
+    expect(renderValue('x', 0, false)).toBe('"x"')
+    expect(renderValue(7, 0, false)).toBe('7')
+    expect(renderValue(null, 0, false)).toBe('null')
+  })
+})
+
+describe('addBlockEdges', () => {
+  // Small helper: run addBlockEdges against a real builder + minimal node table.
+  // `srcNode` is the block-bearing source; `extraNodes` are the edge targets.
+  const runOnBuilder = (
+    srcNode: { id: string; name: string; version: string; peerContext?: string[]; workspacePath?: string },
+    blocks: Record<string, Record<string, string>>,
+    byName: Map<string, string>,
+    workspaceByPath: Map<string, string> | undefined,
+    extraNodes: Array<{ id: string; name: string; version: string; workspacePath?: string }>,
+  ) => {
+    const builder = newBuilder()
+    builder.addNode({ peerContext: [], ...srcNode })
+    for (const n of extraNodes) builder.addNode({ ...n, peerContext: [] })
+    const diags: Diagnostic[] = []
+    const peerDecls = new Map<string, string>()
+    addBlockEdges(builder, diags, srcNode.id, blocks, byName, workspaceByPath, peerDecls)
+    return { builder, diags, peerDecls }
+  }
+
+  it('stamps workspaceRange without resolvedVersion when the target version is empty', () => {
+    // A workspace member whose NodeId carries an EMPTY version (`member@`) makes
+    // nodeVersionOf return '' -> the else branch omits resolvedVersion. The src
+    // is itself a workspace node so the ws->ws edge is permitted at seal.
+    const workspaceByPath = new Map<string, string>([
+      ['', 'root@1.0.0'],
+      ['packages/m', 'member@'], // empty version segment
+    ])
+    const { builder } = runOnBuilder(
+      { id: 'root@1.0.0', name: 'root', version: '1.0.0', workspacePath: '' },
+      { dependencies: { member: 'workspace:*' } },
+      new Map(),
+      workspaceByPath,
+      [{ id: 'member@', name: 'member', version: '', workspacePath: 'packages/m' }],
+    )
+    const graph = builder.seal()
+    const edge = graph.out('root@1.0.0', 'dep').find((e) => e.dst === 'member@')
+    expect(edge).toBeDefined()
+    expect(edge?.attrs?.workspace).toBe(true)
+    // Empty target version -> coarse specifier, no resolvedVersion key.
+    expect(edge?.attrs?.workspaceRange).toEqual({ specifier: 'workspace:*' })
+  })
+
+  it('stamps resolvedVersion when the target version is present', () => {
+    const workspaceByPath = new Map<string, string>([
+      ['', 'root@1.0.0'],
+      ['packages/m', 'member@2.5.0'],
+    ])
+    const { builder } = runOnBuilder(
+      { id: 'root@1.0.0', name: 'root', version: '1.0.0', workspacePath: '' },
+      { dependencies: { member: 'workspace:^' } },
+      new Map(),
+      workspaceByPath,
+      [{ id: 'member@2.5.0', name: 'member', version: '2.5.0', workspacePath: 'packages/m' }],
+    )
+    const graph = builder.seal()
+    const edge = graph.out('root@1.0.0', 'dep').find((e) => e.dst === 'member@2.5.0')
+    expect(edge?.attrs?.workspaceRange).toEqual({
+      specifier: 'workspace:*',
+      resolvedVersion: '2.5.0',
+    })
+    // The verbatim source-side range survives in attrs.range for same-format roundtrip.
+    expect(edge?.attrs?.range).toBe('workspace:^')
+  })
+
+  it('emits BUN_TEXT_UNRESOLVED_DEP for a non-workspace dep with no index entry', () => {
+    // byName has no `ghost` mapping and the range is not workspace:.
+    const { diags } = runOnBuilder(
+      { id: 'host@1.0.0', name: 'host', version: '1.0.0' },
+      { dependencies: { ghost: '^1.0.0' } },
+      new Map(), // empty index
+      undefined,
+      [],
+    )
+    const unresolved = diags.filter((d) => d.code === 'BUN_TEXT_UNRESOLVED_DEP')
+    expect(unresolved).toHaveLength(1)
+    expect(unresolved[0]?.severity).toBe('warning')
+    expect(unresolved[0]?.subject).toBe('host@1.0.0')
+    expect(unresolved[0]?.message).toBe('host@1.0.0: unresolved dep ghost@^1.0.0')
+  })
+
+  it('swallows an INVARIANT_VIOLATION from addEdge and continues', () => {
+    // The real builder never throws INVARIANT_VIOLATION from addEdge (it defers
+    // to seal), so drive the defensive catch with a stub builder whose addEdge
+    // throws that exact code. The helper must NOT propagate it.
+    let calls = 0
+    const stub = {
+      addNode() {},
+      addEdge() {
+        calls++
+        throw new GraphError('INVARIANT_VIOLATION', 'synthetic duplicate edge')
+      },
+      setTarball() {},
+      diagnostic() {},
+      layoutHints() {},
+      seal() {
+        throw new Error('unused')
+      },
+    }
+    const diags: Diagnostic[] = []
+    expect(() =>
+      addBlockEdges(
+        stub as never,
+        diags,
+        'host@1.0.0',
+        { dependencies: { dep: '1.0.0' } },
+        new Map([['dep', 'dep@1.0.0']]),
+        undefined,
+        new Map(),
+      ),
+    ).not.toThrow()
+    expect(calls).toBe(1)
+  })
+
+  it('re-throws a non-INVARIANT_VIOLATION error from addEdge', () => {
+    // A PATCH_REJECTED (or any other) GraphError must propagate, not be swallowed.
+    const stub = {
+      addNode() {},
+      addEdge() {
+        throw new GraphError('PATCH_REJECTED', 'synthetic patch rejection')
+      },
+      setTarball() {},
+      diagnostic() {},
+      layoutHints() {},
+      seal() {
+        throw new Error('unused')
+      },
+    }
+    expect(() =>
+      addBlockEdges(
+        stub as never,
+        [],
+        'host@1.0.0',
+        { dependencies: { dep: '1.0.0' } },
+        new Map([['dep', 'dep@1.0.0']]),
+        undefined,
+        new Map(),
+      ),
+    ).toThrow(/synthetic patch rejection/)
+  })
+
+  it('stashes peer ranges declaratively instead of emitting peer edges', () => {
+    const { builder, peerDecls } = runOnBuilder(
+      { id: 'host@1.0.0', name: 'host', version: '1.0.0' },
+      { peerDependencies: { react: '^18.0.0' } },
+      new Map([['react', 'react@18.2.0']]),
+      undefined,
+      [{ id: 'react@18.2.0', name: 'react', version: '18.2.0' }],
+    )
+    // No peer EDGE emitted...
+    const graph = builder.seal()
+    expect(graph.out('host@1.0.0', 'peer')).toEqual([])
+    // ...but the range is recorded in the declarations map.
+    expect(peerDecls.get('host@1.0.0|react')).toBe('^18.0.0')
+  })
+})
+
+describe('buildWorkspaceManifest', () => {
+  const graphWith = (
+    nodes: Array<{ id: string; name: string; version: string; peerContext?: string[]; workspacePath?: string }>,
+    edges: Array<{ src: string; dst: string; kind: EdgeKind; attrs?: Record<string, unknown> }>,
+  ) => {
+    const b = newBuilder()
+    for (const n of nodes) b.addNode({ peerContext: [], ...n })
+    for (const e of edges) b.addEdge(e.src, e.dst, e.kind, e.attrs as never)
+    return b.seal()
+  }
+
+  it('falls back to the sidecar manifest name/version + dep blocks when the node is absent', () => {
+    // workspaceNode undefined but a sidecarManifest is present -> pull name,
+    // version, and every dep block straight from the sidecar.
+    const emptyGraph = graphWith(
+      [{ id: 'root@0.0.0', name: 'root', version: '0.0.0', workspacePath: '' }],
+      [],
+    )
+    const manifest = {
+      name: 'legacy-member',
+      version: '4.2.0',
+      dependencies: { lodash: '^4.17.0' },
+      devDependencies: { typescript: '^5.0.0' },
+      optionalDependencies: { fsevents: '^2.3.0' },
+      peerDependencies: { react: '^18.0.0' },
+    }
+    const out = buildWorkspaceManifest(emptyGraph, undefined, manifest)
+    expect(out).toEqual({
+      name: 'legacy-member',
+      version: '4.2.0',
+      dependencies: { lodash: '^4.17.0' },
+      devDependencies: { typescript: '^5.0.0' },
+      optionalDependencies: { fsevents: '^2.3.0' },
+      peerDependencies: { react: '^18.0.0' },
+    })
+  })
+
+  it('returns an empty manifest when neither a node nor a sidecar manifest is given', () => {
+    const g = graphWith([{ id: 'root@0.0.0', name: 'root', version: '0.0.0', workspacePath: '' }], [])
+    expect(buildWorkspaceManifest(g, undefined, undefined)).toEqual({})
+  })
+
+  it('emits a peerDependencies block from a peer edge and drops a bundled edge', () => {
+    // A workspace node with a peer edge -> the edge.kind==='peer' arm routes the
+    // range into the peerDependencies bucket. A `bundled` edge falls through to
+    // the `: undefined` arm (no bun manifest block for bundled) and is skipped.
+    const graph = graphWith(
+      [
+        { id: 'root@0.0.0', name: 'root', version: '0.0.0', workspacePath: '' },
+        { id: 'peerdep@1.0.0', name: 'peerdep', version: '1.0.0' },
+        { id: 'bundledep@1.0.0', name: 'bundledep', version: '1.0.0' },
+        {
+          id: 'wsa@1.0.0(peerdep@1.0.0)',
+          name: 'wsa',
+          version: '1.0.0',
+          peerContext: ['peerdep@1.0.0'],
+          workspacePath: 'packages/a',
+        },
+      ],
+      [
+        { src: 'wsa@1.0.0(peerdep@1.0.0)', dst: 'peerdep@1.0.0', kind: 'peer', attrs: { range: '^1.0.0' } },
+        { src: 'wsa@1.0.0(peerdep@1.0.0)', dst: 'bundledep@1.0.0', kind: 'bundled', attrs: { range: '1.0.0' } },
+      ],
+    )
+    const wsNode = graph.getNode('wsa@1.0.0(peerdep@1.0.0)')!
+    const out = buildWorkspaceManifest(graph, wsNode, undefined)
+    expect(out.name).toBe('wsa')
+    expect(out.version).toBe('1.0.0')
+    expect(out.peerDependencies).toEqual({ peerdep: '^1.0.0' })
+    // No dep/dev/optional blocks materialised; the bundled edge produced nothing.
+    expect(out.dependencies).toBeUndefined()
+    expect(out.devDependencies).toBeUndefined()
+    expect(out.optionalDependencies).toBeUndefined()
+  })
+})
+
+describe('buildInnerBlock', () => {
+  it('routes dep/peer edges into inner blocks and drops a bundled edge', () => {
+    const b = newBuilder()
+    b.addNode({ id: 'root@0.0.0', name: 'root', version: '0.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: 'peerdep@1.0.0', name: 'peerdep', version: '1.0.0', peerContext: [] })
+    b.addNode({ id: 'bundledep@1.0.0', name: 'bundledep', version: '1.0.0', peerContext: [] })
+    // A peer-virt node that is the sole entry for host@1.0.0, carrying a peer edge.
+    b.addNode({
+      id: 'host@1.0.0(peerdep@1.0.0)',
+      name: 'host',
+      version: '1.0.0',
+      peerContext: ['peerdep@1.0.0'],
+    })
+    b.addEdge('host@1.0.0(peerdep@1.0.0)', 'peerdep@1.0.0', 'peer', { range: '^1.0.0' })
+    b.addEdge('host@1.0.0(peerdep@1.0.0)', 'peerdep@1.0.0', 'dep', { range: '1.0.0' })
+    // A bundled edge hits the `: undefined` fallthrough and is skipped.
+    b.addEdge('host@1.0.0(peerdep@1.0.0)', 'bundledep@1.0.0', 'bundled', { range: '1.0.0' })
+    const graph = b.seal()
+
+    const node = graph.getNode('host@1.0.0(peerdep@1.0.0)')!
+    const inner = buildInnerBlock(graph, node, undefined)
+    // dep edge -> dependencies; peer edge -> peerDependencies (both to peerdep).
+    expect(inner.dependencies).toEqual({ peerdep: '1.0.0' })
+    expect(inner.peerDependencies).toEqual({ peerdep: '^1.0.0' })
+    // The bundled edge produced no inner block entry.
+    expect(inner.optionalDependencies).toBeUndefined()
+    expect(JSON.stringify(inner)).not.toContain('bundledep')
   })
 })

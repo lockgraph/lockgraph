@@ -244,7 +244,7 @@ function sortDeep(value: unknown): unknown {
 // literal TAB byte that reaches the value is escaped to `\t` by this layer. The
 // two layers compose unambiguously because the JSON escape runs first.
 
-function escapeTsv(s: string): string {
+export function escapeTsv(s: string): string {
   let out = ''
   for (const ch of s) {
     if (ch === '\\') out += '\\\\'
@@ -256,7 +256,7 @@ function escapeTsv(s: string): string {
   return out
 }
 
-function unescapeTsv(s: string): string {
+export function unescapeTsv(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; i++) {
     const ch = s[i]
@@ -952,7 +952,7 @@ function assembleNode(
 // parenthesised NodeIds — back into the peerContext array. The NodeIds may
 // themselves contain balanced parens (nested peer contexts), so we split on
 // DEPTH-0 `(`/`)` boundaries, not the first `)`.
-function parsePeerContext(s: string): NodeId[] {
+export function parsePeerContext(s: string): NodeId[] {
   const out: NodeId[] = []
   let depth = 0
   let start = -1
@@ -997,7 +997,7 @@ const SHA1_HEX_RE = /^[0-9a-f]{40}$/
 // fragment, so only a verbatim slot can occur). NOTE: the canonical berry npm
 // locator `<name>@npm:<version>` is NOT a lockgraph concern — the berry adapter
 // recomposes it at emit, so it never appears here as a stored native.
-function resolveNativeResolution(
+export function resolveNativeResolution(
   current: string | undefined,
   name: string,
   version: string,
@@ -1056,7 +1056,7 @@ function recomposeNpmTarballUrl(base: string, name: string, version: string): st
 //     keys on);
 //   - everything else verbatim, exactly as before (git/tarball/directory/
 //     unknown).
-function registrySourceOf(node: Node, payload: TarballPayload | undefined): { type: string; url: string } {
+export function registrySourceOf(node: Node, payload: TarballPayload | undefined): { type: string; url: string } {
   if (node.workspacePath !== undefined) return { type: 'workspace', url: NONE }
   const res = payload?.resolution as ResolutionCanonical | undefined
   if (res === undefined) return { type: 'npm', url: NONE }
@@ -1105,7 +1105,7 @@ function registrySourceOf(node: Node, payload: TarballPayload | undefined): { ty
 // 'url-fragment' violates that invariant and is REJECTED at emit (it would be
 // indistinguishable from the transport member and could not round-trip).
 
-function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: string | undefined, cacheKey: string | undefined): string {
+export function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: string | undefined, cacheKey: string | undefined): string {
   const members: string[] = []
   // The cacheKey folds onto the FIRST berry-zip member only — decode lifts a
   // single cacheKey (and rejects a second `/`-bearing z-member), so emitting it
@@ -1152,7 +1152,7 @@ function encodeIntegrityColumn(integrity: Integrity | undefined, fragment: strin
   return members.length > 0 ? members.join(';') : NONE
 }
 
-function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?: string; cacheKey?: string } {
+export function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?: string; cacheKey?: string } {
   if (raw === NONE) return {}
   const hashes: Hash[] = []
   let fragment: string | undefined
@@ -1216,7 +1216,7 @@ interface DecodedSlot { path: string[]; value: string }
 
 // Split `s` on the first UNESCAPED occurrence of `sep`. A `sep` preceded by an
 // odd run of backslashes is escaped. Returns [before, afterOrUndefined].
-function splitFirstUnescaped(s: string, sep: string): [string, string | undefined] {
+export function splitFirstUnescaped(s: string, sep: string): [string, string | undefined] {
   for (let i = 0; i < s.length; i++) {
     if (s[i] === sep) {
       // count preceding backslashes
@@ -1363,7 +1363,7 @@ function rebuildFunding(slots: DecodedSlot[], tarballKey: TarballKey): unknown {
 // (fields AFTER the positional TarballKey). Schema-driven: each field is rebuilt
 // by its MODEL TYPE (graph.ts:50-80). An unknown slot root, an array-index gap,
 // or both bin forms present are all PARSE_FAILED.
-function parseSlots(fields: string[], tarballKey: TarballKey): TarballPayload {
+export function parseSlots(fields: string[], tarballKey: TarballKey): TarballPayload {
   // group decoded slots by root segment (= field name)
   const groups = new Map<string, DecodedSlot[]>()
   for (const field of fields) {
@@ -1510,7 +1510,7 @@ function rebuildResolution(slots: DecodedSlot[], tarballKey: TarballKey): Resolu
 // check derives the npm-registry base from (url, name, version) and confirms it
 // is a hosted-npm canonical tarball URL — the same EXACT-MATCH predicate the
 // N-row uses, decided here per-tarball off the tarball's own (name, version).
-function isRecomposableTarballResolution(res: ResolutionCanonical, name: string, version: string): boolean {
+export function isRecomposableTarballResolution(res: ResolutionCanonical, name: string, version: string): boolean {
   return res.type === 'tarball'
     && Object.keys(res).length === 2
     && npmRegistryBaseOf(res.url, name, version) !== undefined
@@ -1561,7 +1561,7 @@ function flattenFunding(value: unknown, path: string[], out: string[]): void {
 // `[]` when the residual is empty (no F row for that tarball). Field order is
 // FIXED for byte-stability: license, deprecated, cpu, os, libc, bundled,
 // engines, bin, funding, resolution. An empty container ([] / {}) emits no slot.
-function flattenToSlots(payload: TarballPayload, name: string, version: string): string[] {
+export function flattenToSlots(payload: TarballPayload, name: string, version: string): string[] {
   const out: string[] = []
 
   if (payload.license !== undefined) out.push(emitSlot(['license'], payload.license))

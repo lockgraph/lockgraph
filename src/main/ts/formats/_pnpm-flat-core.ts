@@ -61,6 +61,7 @@ import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
+  DEFAULT_NPM_REGISTRY,
   parse as parseResolutionRecipe,
   stringifyForPnpm,
   type ResolutionCanonical,
@@ -1808,7 +1809,7 @@ function deriveRegistryTarballFromSubject(subject: string): string | undefined {
   if (name === '' || version === '') return undefined
   const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
   if (tail === '') return undefined
-  return `https://registry.npmjs.org/${name}/-/${tail}-${version}.tgz`
+  return `${DEFAULT_NPM_REGISTRY}/${name}/-/${tail}-${version}.tgz`
 }
 
 // ADR-0014 §4.F3 — project canonical resolution to pnpm `resolution:` block
@@ -2185,7 +2186,7 @@ export function derivePeerCandidates(graph: Graph, peerName: string, peerRange: 
  * The leading `npm:` protocol prefix on the version-half is accepted and
  * stripped (pnpm permits both `lodash@4.17.21` and `lodash@npm:4.17.21`).
  */
-type PatchMatcher =
+export type PatchMatcher =
   | { readonly kind: 'bare';  readonly name: string }
   | { readonly kind: 'range'; readonly name: string; readonly range: string }
   | { readonly kind: 'exact'; readonly name: string; readonly version: string }
@@ -2240,7 +2241,7 @@ function parseOverridePatches(
   return out
 }
 
-function parseOverrideKey(key: string): PatchMatcher | undefined {
+export function parseOverrideKey(key: string): PatchMatcher | undefined {
   if (key === '') return undefined
   // Scoped names start with `@scope/` — skip the leading `@` when locating
   // the name/spec separator.
@@ -2264,7 +2265,7 @@ function parseOverrideKey(key: string): PatchMatcher | undefined {
   return { kind: 'range', name, range: spec }
 }
 
-function matcherMatches(m: PatchMatcher, name: string, version: string): boolean {
+export function matcherMatches(m: PatchMatcher, name: string, version: string): boolean {
   if (m.name !== name) return false
   switch (m.kind) {
     case 'bare':  return true
@@ -2341,7 +2342,7 @@ function synthesiseOverridePatches(
 // conversion path: yarn-berry parse populates the per-tarball
 // `nativeResolution` with the patch locator; pnpm stringify reuses the same
 // workspace path so the emitted lockfile round-trips to the source patch bytes.
-function patchPathOfResolution(resolution: string | undefined): string | undefined {
+export function patchPathOfResolution(resolution: string | undefined): string | undefined {
   if (resolution === undefined) return undefined
   const patchIdx = resolution.indexOf('@patch:')
   const locator = patchIdx >= 0

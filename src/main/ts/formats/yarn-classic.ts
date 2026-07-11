@@ -780,7 +780,7 @@ function remapSidecar(
 /** Whether an entry-key descriptor `<name-or-alias>@<range>` still resolves to `version` —
  *  the range is the tail after the LAST `@` (scoped names / npm-aliases keep the range
  *  after their final `@`). A non-semver range (unparseable) does not carry. */
-function descriptorSatisfies(descriptor: string, version: string): boolean {
+export function descriptorSatisfies(descriptor: string, version: string): boolean {
   const at = descriptor.lastIndexOf('@')
   if (at <= 0) return false
   try { return semver.satisfies(version, descriptor.slice(at + 1)) } catch { return false }
@@ -923,7 +923,7 @@ function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, '\n')
 }
 
-function parseEntries(input: string): YarnClassicEntry[] {
+export function parseEntries(input: string): YarnClassicEntry[] {
   const entries: YarnClassicEntry[] = []
   const lines = input.split('\n')
   let current: YarnClassicEntry | undefined
@@ -1039,7 +1039,7 @@ function parseEntries(input: string): YarnClassicEntry[] {
 // lockfiles freely use (e.g. `"foo@1 || 2", foo@^2.0.0`).
 // Each descriptor is un-quoted individually; the result is rejoined with ', '
 // so that the downstream splitEntryKey(', ') split works on plain strings.
-function parseEntryKeyToken(token: string): string {
+export function parseEntryKeyToken(token: string): string {
   const parts = splitMixedDescriptorList(token)
   return parts
     .map(part => (part.startsWith('"') ? parseQuotedToken(part) : part))
@@ -1079,7 +1079,7 @@ function splitMixedDescriptorList(token: string): string[] {
   return parts
 }
 
-function parseDependencyLine(line: string): [string, string] {
+export function parseDependencyLine(line: string): [string, string] {
   const raw = line.slice(4)
   if (!DEP_PAIR_RE.test(raw)) {
     throw parseFailed(`malformed dependency line (${JSON.stringify(line)})`)
@@ -1118,7 +1118,7 @@ function splitDependencyPair(raw: string): number {
   throw parseFailed(`malformed dependency pair (${JSON.stringify(raw)})`)
 }
 
-function parseQuotedToken(token: string): string {
+export function parseQuotedToken(token: string): string {
   if (!token.startsWith('"') || !token.endsWith('"')) {
     throw parseFailed(`expected quoted token, got ${JSON.stringify(token)}`)
   }
@@ -1143,11 +1143,11 @@ function parseQuotedToken(token: string): string {
 
 // Mined from legacy/main/ts/formats/yarn-classic.ts:69-74 — same split on ', '
 // after stripping the top-level entry quotes.
-function splitEntryKey(key: string): string[] {
+export function splitEntryKey(key: string): string[] {
   return key.split(', ').filter(Boolean)
 }
 
-function parseSpec(spec: string): { name: string; spec: string } {
+export function parseSpec(spec: string): { name: string; spec: string } {
   const idx = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
   // A bare package-name entry key (`foo:` with no `@<range>`) is NOT a shape
   // yarn 1 emits — its lockfile writer always keys entries by `<name>@<range>`
@@ -1189,7 +1189,7 @@ function parseSpec(spec: string): { name: string; spec: string } {
 // Only the `npm:` protocol aliases an identity. A bare/`file:`/`link:`/`git…`
 // spec keeps its own name. The alias TARGET may itself be scoped
 // (`npm:@scope/pkg@^1`).
-function specIdentity(part: { name: string; spec: string }): {
+export function specIdentity(part: { name: string; spec: string }): {
   resolvedName: string
   aliasName?: string
   descriptorKey: string
@@ -1233,7 +1233,7 @@ interface ClassicEdgeLadderContext {
 // A classic descriptor range is a registry range (bare semver or `npm:`-aliased)
 // — the only class Rung-3 semver + the resolutions-pin INFO hint apply to. A
 // `file:`/`link:`/`git…`/URL range carries an explicit non-`npm:` protocol.
-function isClassicRegistryRange(range: string): boolean {
+export function isClassicRegistryRange(range: string): boolean {
   if (range.startsWith('npm:')) return true
   const colonIdx = range.indexOf(':')
   if (colonIdx <= 0) return true // bare semver / tag
@@ -1708,7 +1708,7 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
 // (per-descriptor) or `acorn@^8.15.0, acorn@^8.16.0:` (all bare), NEVER the
 // single-pair-wrapped `"a, b":` form. Wrapping the joined key was F9: it
 // produced yarn-unreadable output for every dedup'd package.
-function stringifyEntryKey(specs: string[]): string {
+export function stringifyEntryKey(specs: string[]): string {
   return specs
     .map(spec => (mustQuoteSpec(spec) ? `"${escapeQuoted(spec)}"` : spec))
     .join(', ')
@@ -1728,14 +1728,14 @@ function stringifyEntryKey(specs: string[]): string {
 // digit already fails `/^[a-zA-Z]/` — so it is intentionally folded into the
 // single `!ENTRY_KEY_LEADING_ALPHA_RE.test(spec)` term here. One regex, identical
 // outcome (a leading-digit descriptor like `7zip@^1` is quoted either way).
-function mustQuoteSpec(spec: string): boolean {
+export function mustQuoteSpec(spec: string): boolean {
   return spec.startsWith('true')
     || spec.startsWith('false')
     || ENTRY_KEY_WRAP_RE.test(spec)
     || !ENTRY_KEY_LEADING_ALPHA_RE.test(spec)
 }
 
-function quoteDepName(name: string): string {
+export function quoteDepName(name: string): string {
   return name.startsWith('@') || !BARE_DEP_NAME_RE.test(name)
     ? `"${escapeQuoted(name)}"`
     : name
@@ -1908,7 +1908,7 @@ function warnPatchDrop(
 // symmetric — anything `parseResolution` accepts off disk must round-trip back
 // out via `formatResolution` (else a git+ssh `resolved` line silently vanishes
 // on emit, producing a lockfile `yarn install --immutable` rejects).
-function isYarnClassicResolvableUrl(input: string): boolean {
+export function isYarnClassicResolvableUrl(input: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(input) || input.startsWith('git@')
 }
 
@@ -1918,14 +1918,14 @@ function isYarnClassicResolvableUrl(input: string): boolean {
 // not a usable specifier and falls through to the unsupported-shape throw.
 const YARN_CLASSIC_LOCAL_SPEC_RE = /^(?:file|link|portal):(?!\/\/)\S/
 
-function isYarnClassicLocalSpec(input: string): boolean {
+export function isYarnClassicLocalSpec(input: string): boolean {
   return YARN_CLASSIC_LOCAL_SPEC_RE.test(input)
 }
 
 // `<file|link|portal>:<path>` → { protocol, path }. Returns undefined for
 // non-local shapes (URLs). `path` keeps the body verbatim (leading `./` / `../`
 // preserved) so the directory canonical mirrors the on-disk specifier.
-function parseLocalSpec(
+export function parseLocalSpec(
   resolved: string,
 ): { protocol: 'file' | 'link' | 'portal'; path: string } | undefined {
   if (!isYarnClassicLocalSpec(resolved)) return undefined
@@ -1945,7 +1945,7 @@ function parseLocalSpec(
 // already maps to `directory` in the recipe, but is handled here too for a
 // single code path. Everything else delegates to the recipe (git / tarball /
 // codeload / …).
-function canonicalResolutionOfResolved(
+export function canonicalResolutionOfResolved(
   resolved: string,
 ): import('../recipe/resolution.ts').ResolutionCanonical {
   const local = parseLocalSpec(resolved)
@@ -1955,7 +1955,7 @@ function canonicalResolutionOfResolved(
   return parseResolutionRecipe(resolved, { sourceKind: 'yarn-classic-resolved' })
 }
 
-function parseResolution(input: string): string {
+export function parseResolution(input: string): string {
   // git deps are first-class in yarn-classic; a single git entry must not abort
   // the parse. Relative `file:` / `link:` / `portal:` local specifiers are
   // equally genuine (#83 finding 1). The opaque string is stored VERBATIM on
@@ -1976,7 +1976,7 @@ function parseResolution(input: string): string {
 // sources (yarn-berry locators, pnpm workspace `link:` etc.) are neither shape
 // → return undefined to delegate to the canonical-derived fallback instead of
 // throwing.
-function formatResolution(input: string | undefined): string | undefined {
+export function formatResolution(input: string | undefined): string | undefined {
   if (input === undefined) return undefined
   return isYarnClassicResolvableUrl(input) || isYarnClassicLocalSpec(input) ? input : undefined
 }
@@ -1998,14 +1998,14 @@ const REGISTRY_TARBALL_TAIL = /\/(?:@[^/]+\/)?[^/]+\/-\/[^/]+\.tgz(?:#.*)?$/
 
 /** The registry base of a `<base>/<name>/-/<basename>-<ver>.tgz[#sha1]` URL (everything
  *  before the package path), or `undefined` for a non-registry-tarball shape. */
-function registryBaseOf(url: string): string | undefined {
+export function registryBaseOf(url: string): string | undefined {
   const m = REGISTRY_TARBALL_TAIL.exec(url)
   return m !== null ? url.slice(0, m.index) : undefined
 }
 
 /** A package's scope key for registry routing: `@mycorp` for `@mycorp/pkg`, `''` (default)
  *  for an unscoped name — mirrors yarn 1's `@scope:registry` config axis. */
-function scopeOf(name: string): string {
+export function scopeOf(name: string): string {
   return name.startsWith('@') ? name.slice(0, Math.max(0, name.indexOf('/'))) : ''
 }
 
@@ -2016,7 +2016,7 @@ function scopeOf(name: string): string {
  *  registry. ONLY native entries count (a cross-format convert has none → falls back
  *  rather than learn npmjs from the source). `baseFor(name)` = the name's scope base, else
  *  the unscoped base, else yarn 1's default. */
-function inferRegistryBases(graph: Graph): (name: string) => string {
+export function inferRegistryBases(graph: Graph): (name: string) => string {
   const perScope = new Map<string, Map<string, number>>()   // scope → (base → count)
   for (const node of graph.nodes()) {
     const native = graph.tarballOf(node.id)?.nativeResolution
@@ -2037,7 +2037,7 @@ function inferRegistryBases(graph: Graph): (name: string) => string {
     majority(perScope.get(scopeOf(name))) ?? unscoped ?? DEFAULT_YARN_CLASSIC_REGISTRY
 }
 
-function deriveResolvedFromCanonical(
+export function deriveResolvedFromCanonical(
   canonical: import('../recipe/resolution.ts').ResolutionCanonical | undefined,
   integrity?: Integrity,
   registryBase?: string,

@@ -7,9 +7,23 @@ import { dirname, resolve } from 'node:path'
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const MODIFIED_SRI = sriOf('modified-ms-integrity')
 const BUMPED_SRI = sriOf('bumped-ms-integrity')
-import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
+// A valid 88-char sha512 SRI (ms@2.1.3) that survives parseSri without being
+// dropped as empty.
+const MS_SRI =
+  'sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=='
+import { newBuilder, type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/npm-1.ts'
+import {
+  buildDependenciesTree,
+  check,
+  enrich,
+  firstConsumerInstallPath,
+  optimize,
+  parentPathFromInstall,
+  parse,
+  stringify,
+} from '../../main/ts/formats/npm-1.ts'
+import { type NpmSidecar } from '../../main/ts/formats/_npm-core.ts'
 import { parse as parseV2 } from '../../main/ts/formats/npm-2.ts'
 import { parse as parseV3 } from '../../main/ts/formats/npm-3.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
@@ -636,5 +650,368 @@ describe('npm-1 — patch-yarn fixture (legacy fixture coverage)', () => {
     const text = stringify(graph)
     const reparsed = parse(text)
     expectEmptyGraphDiff(graph.diff(reparsed))
+  })
+})
+
+const v1Lock = (body: Record<string, unknown>): string =>
+  JSON.stringify({ name: 'root', version: '1.0.0', lockfileVersion: 1, requires: true, ...body })
+
+describe('parse', () => {
+  it('throws FORMAT_MISMATCH when the top-level JSON value is an array', () => {
+    const lock = '[1,2,3]'
+    // check() would reject (no lockfileVersion), but parse() is called directly
+    // here and its parseJson runs first. arrLock keeps a lockfileVersion while
+    // staying a top-level array.
+    const arrLock = '[{"lockfileVersion":1}]'
+    for (const input of [lock, arrLock]) {
+      try {
+        parse(input)
+        throw new Error('expected throw')
+      } catch (error) {
+        expect(error).toBeInstanceOf(LockfileError)
+        expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+      }
+    }
+  })
+
+  it('emits NPM_BAD_ENTRY (warning) + skips an entry missing "version"', () => {
+    const lock = v1Lock({
+      dependencies: {
+        good: { version: '1.0.0' },
+        bad: { resolved: 'https://registry.npmjs.org/bad/-/bad-1.0.0.tgz' },
+      },
+    })
+    const graph = parse(lock)
+    // The bad entry produced no node; the good one did.
+    expect(graph.getNode('good@1.0.0')).toBeDefined()
+    expect(Array.from(graph.nodes()).some(n => n.name === 'bad')).toBe(false)
+    const bad = graph.diagnostics().filter(d => d.code === 'NPM_BAD_ENTRY')
+    expect(bad).toHaveLength(1)
+    expect(bad[0]).toEqual(
+      expect.objectContaining({ code: 'NPM_BAD_ENTRY', severity: 'warning' }),
+    )
+  })
+
+  it('emits NPM_UNRESOLVED_DEP when a `requires` target is not in any scope', () => {
+    // `react` requires `nope`, which appears nowhere in the tree → the tree
+    // resolver returns undefined → NPM_UNRESOLVED_DEP warning, no edge.
+    const lock = v1Lock({
+      dependencies: {
+        react: {
+          version: '18.2.0',
+          resolved: 'https://registry.npmjs.org/react/-/react-18.2.0.tgz',
+          requires: { nope: '^1.0.0' },
+        },
+      },
+    })
+    const graph = parse(lock)
+    const diag = graph.diagnostics().filter(d => d.code === 'NPM_UNRESOLVED_DEP')
+    expect(diag).toHaveLength(1)
+    expect(diag[0]).toEqual(
+      expect.objectContaining({
+        code: 'NPM_UNRESOLVED_DEP',
+        severity: 'warning',
+        subject: 'react@18.2.0',
+      }),
+    )
+    // No react→nope edge was created.
+    expect(graph.out('react@18.2.0', 'dep').some(e => e.dst.startsWith('nope@'))).toBe(false)
+  })
+
+  it('captures an entry\'s peerDependencies into the sidecar', () => {
+    // npm v5/v6 lockfiles can carry peerDependencies inside an entry; the
+    // parser stashes it (elided on emit). We prove capture via enrich, which
+    // reads sidecar.peerDependencies to surface PEER diagnostics.
+    const lock = v1Lock({
+      dependencies: {
+        react: { version: '18.2.0', resolved: 'https://registry.npmjs.org/react/-/react-18.2.0.tgz' },
+        'react-dom': {
+          version: '18.2.0',
+          resolved: 'https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz',
+          peerDependencies: { react: '^18.0.0' },
+        },
+      },
+    })
+    const graph = parse(lock)
+    // enrich reads the captured peerDependencies; react@18.2.0 satisfies
+    // ^18.0.0 uniquely → outcome 'single' → NO diagnostic (proves the capture
+    // reached enrich without a false unsatisfied/ambiguous).
+    const result = enrich(graph)
+    expect(result.diagnostics.filter(d => d.code.startsWith('NPM_V1_PEER'))).toHaveLength(0)
+  })
+})
+
+describe('enrich', () => {
+  it('emits NPM_V1_PEER_UNSATISFIED when the captured peer range matches nothing', () => {
+    const lock = v1Lock({
+      dependencies: {
+        pkg: {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz',
+          peerDependencies: { 'missing-peer': '^1.0.0' },
+        },
+      },
+    })
+    const graph = parse(lock)
+    const result = enrich(graph)
+    const diag = result.diagnostics.filter(d => d.code === 'NPM_V1_PEER_UNSATISFIED')
+    expect(diag).toHaveLength(1)
+    expect(diag[0]).toEqual(
+      expect.objectContaining({
+        code: 'NPM_V1_PEER_UNSATISFIED',
+        severity: 'warning',
+        subject: 'pkg@1.0.0',
+      }),
+    )
+  })
+
+  it('emits NPM_V1_PEER_AMBIGUOUS when the captured peer range matches multiple versions', () => {
+    // Two versions of `dup` in the tree (one hoisted, one nested) both satisfy
+    // ^1 → ambiguous.
+    const lock = v1Lock({
+      dependencies: {
+        'dup': { version: '1.0.0', resolved: 'https://registry.npmjs.org/dup/-/dup-1.0.0.tgz' },
+        consumer: {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/consumer/-/consumer-1.0.0.tgz',
+          peerDependencies: { dup: '^1.0.0' },
+          dependencies: {
+            'dup': { version: '1.5.0', resolved: 'https://registry.npmjs.org/dup/-/dup-1.5.0.tgz' },
+          },
+        },
+      },
+    })
+    const graph = parse(lock)
+    // Sanity: both dup versions present.
+    expect(graph.getNode('dup@1.0.0')).toBeDefined()
+    expect(graph.getNode('dup@1.5.0')).toBeDefined()
+    const result = enrich(graph)
+    const diag = result.diagnostics.filter(d => d.code === 'NPM_V1_PEER_AMBIGUOUS')
+    expect(diag).toHaveLength(1)
+    expect(diag[0]!.message).toMatch(/matches multiple candidates/)
+  })
+
+  it('emits NPM_V1_NO_MANIFESTS when a non-root workspace node exists but no manifests are supplied', () => {
+    const base = parse(v1Lock({ dependencies: { ms: { version: '2.1.3' } } }))
+    // Inject a workspace-flavoured node (workspacePath !== '').
+    const withMember = base.mutate(m => {
+      m.addNode({
+        id: '@scope/member@0.0.0',
+        name: '@scope/member',
+        version: '0.0.0',
+        peerContext: [],
+        workspacePath: 'packages/member',
+      })
+    }).graph
+    const result = enrich(withMember) // no manifests
+    const diag = result.diagnostics.filter(d => d.code === 'NPM_V1_NO_MANIFESTS')
+    expect(diag).toHaveLength(1)
+    expect(diag[0]).toEqual(
+      expect.objectContaining({ code: 'NPM_V1_NO_MANIFESTS', severity: 'warning' }),
+    )
+  })
+
+  it('tags an existing untagged bare node as a workspace member and marks the consumer edge', () => {
+    // A consumer package `host` depends on `pkg-a`; `pkg-a` appears as a bare
+    // node WITH NO tarball, so the tag pass fires. The root manifest does NOT
+    // list `pkg-a`, so the workspace mark lands on the host→pkg-a edge.
+    const lock = v1Lock({
+      dependencies: {
+        host: {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/host/-/host-1.0.0.tgz',
+          requires: { 'pkg-a': '0.0.0' },
+        },
+        // member `pkg-a` as a top-level sibling with NO resolved/integrity →
+        // no tarball payload. host resolves `pkg-a` against this sibling scope.
+        'pkg-a': { version: '0.0.0' },
+      },
+    })
+    const graph = parse(lock)
+    expect(graph.tarballOf('pkg-a@0.0.0')).toBeUndefined()
+    // Parse wired a host→pkg-a dep edge.
+    expect(graph.out('host@1.0.0', 'dep').some(e => e.dst === 'pkg-a@0.0.0')).toBe(true)
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root', version: '1.0.0' },
+        'packages/a': { name: 'pkg-a', version: '0.0.0' },
+      },
+    })
+    // The existing bare node is tagged with its workspacePath.
+    const member = result.graph.getNode('pkg-a@0.0.0')
+    expect(member?.workspacePath).toBe('packages/a')
+    // The host→pkg-a edge is marked workspace:true.
+    const edge = result.graph.out('host@1.0.0', 'dep').find(e => e.dst === 'pkg-a@0.0.0')
+    expect(edge?.attrs?.workspace).toBe(true)
+  })
+
+  it('synthesises an absent workspace member node from the manifest', () => {
+    const graph = parse(v1Lock({ dependencies: { ms: { version: '2.1.3' } } }))
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root', version: '1.0.0', dependencies: { '@ws/b': 'workspace:*' } },
+        'packages/b': { name: '@ws/b', version: '3.4.5' },
+      },
+    })
+    const member = result.graph.getNode('@ws/b@3.4.5')
+    expect(member).toBeDefined()
+    expect(member?.workspacePath).toBe('packages/b')
+    // Root edge synthesised toward the prospective member and marked workspace:true.
+    const edge = result.graph.out('root@1.0.0', 'dep').find(e => e.dst === '@ws/b@3.4.5')
+    expect(edge?.attrs?.workspace).toBe(true)
+  })
+
+  it('resolves a plain (non-workspace) root manifest dep by (name,range) match', () => {
+    // A manifest dep whose name is NOT a workspace member and whose range is the
+    // exact version pin → resolveManifestTarget falls to the byName lookup.
+    // Two versions of `many` exist → the single-candidate short-circuit does
+    // NOT fire; the range-equality find selects the matching version.
+    const lock = v1Lock({
+      dependencies: {
+        many: {
+          version: '1.0.0',
+          resolved: 'https://registry.npmjs.org/many/-/many-1.0.0.tgz',
+          dependencies: {
+            many: { version: '2.0.0', resolved: 'https://registry.npmjs.org/many/-/many-2.0.0.tgz' },
+          },
+        },
+      },
+    })
+    const graph = parse(lock)
+    expect(graph.byName('many')).toHaveLength(2)
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root', version: '1.0.0', dependencies: { many: '2.0.0' } },
+      },
+    })
+    // A NEW root→many@2.0.0 dep edge is added (range-equality pick).
+    const edge = result.graph.out('root@1.0.0', 'dep').find(e => e.dst === 'many@2.0.0')
+    expect(edge).toBeDefined()
+    expect(edge?.attrs?.range).toBe('2.0.0')
+  })
+
+  it('is a no-op (returns the same graph) when the manifest plan has nothing to do', () => {
+    // Manifests present, but no root manifest ('' absent) and no member names →
+    // rootForEdges is undefined and every plan list is empty → early return.
+    const graph = parse(v1Lock({ dependencies: { ms: { version: '2.1.3' } } }))
+    const result = enrich(graph, { manifests: { 'packages/x': {} } })
+    expect(result.graph).toBe(graph)
+    expect(result.diagnostics).toEqual([])
+  })
+})
+
+describe('parentPathFromInstall', () => {
+  it('maps a top-level node_modules/<name> path to the "" parent', () => {
+    expect(parentPathFromInstall('node_modules/ms')).toBe('')
+  })
+
+  it('strips the trailing /node_modules/<name> segment for a nested path', () => {
+    expect(parentPathFromInstall('node_modules/a/node_modules/b')).toBe('node_modules/a')
+  })
+
+  it('returns undefined for a path that is not a node_modules install path', () => {
+    expect(parentPathFromInstall('packages/a')).toBeUndefined()
+  })
+})
+
+describe('buildDependenciesTree', () => {
+  it('returns {} when there are emittable nodes but NONE placed at the top level', () => {
+    // Build a graph with one non-root node whose ONLY sidecar install path is
+    // nested (`x/node_modules/y`), and that is NOT reachable from the root. Its
+    // parentPath is non-empty, so the top layer stays empty, yet emittableIds
+    // is non-empty → the empty-top-layer branch.
+    const b = newBuilder()
+    b.addNode({ id: 'root@1.0.0', name: 'root', version: '1.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: 'y@1.0.0', name: 'y', version: '1.0.0', peerContext: [] })
+    const graph = b.seal()
+    const sidecar: NpmSidecar = {
+      rootId: 'root@1.0.0',
+      rootMeta: { name: 'root', version: '1.0.0' },
+      edgeRanges: new Map(),
+      edgeDeclaredNames: new Map(),
+      nodes: new Map([['y@1.0.0', { installPaths: ['x/node_modules/y'] }]]),
+      workspaceByPath: new Map(),
+    }
+    const tree = buildDependenciesTree(graph, sidecar, 'root@1.0.0', new Set(['y@1.0.0']))
+    expect(tree).toEqual({})
+  })
+})
+
+describe('firstConsumerInstallPath', () => {
+  it('returns the first consumer install path + /node_modules/<name>', () => {
+    // consumer@1.0.0 (with a sidecar install path) depends on target@2.0.0.
+    const b = newBuilder()
+    b.addNode({ id: 'root@1.0.0', name: 'root', version: '1.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: 'consumer@1.0.0', name: 'consumer', version: '1.0.0', peerContext: [] })
+    b.addNode({ id: 'target@2.0.0', name: 'target', version: '2.0.0', peerContext: [] })
+    b.addEdge('consumer@1.0.0', 'target@2.0.0', 'dep', { range: '^2.0.0' })
+    const graph = b.seal()
+    const sidecar: NpmSidecar = {
+      rootId: 'root@1.0.0',
+      rootMeta: { name: 'root', version: '1.0.0' },
+      edgeRanges: new Map(),
+      edgeDeclaredNames: new Map(),
+      nodes: new Map([['consumer@1.0.0', { installPaths: ['node_modules/consumer'] }]]),
+      workspaceByPath: new Map(),
+    }
+    const emittable = new Set(['consumer@1.0.0', 'target@2.0.0'])
+    expect(firstConsumerInstallPath(graph, sidecar, 'target@2.0.0', emittable)).toBe(
+      'node_modules/consumer/node_modules/target',
+    )
+  })
+
+  it('returns undefined when the only consumer is the root (root is handled elsewhere)', () => {
+    const b = newBuilder()
+    b.addNode({ id: 'root@1.0.0', name: 'root', version: '1.0.0', peerContext: [], workspacePath: '' })
+    b.addNode({ id: 'target@2.0.0', name: 'target', version: '2.0.0', peerContext: [] })
+    b.addEdge('root@1.0.0', 'target@2.0.0', 'dep', { range: '^2.0.0' })
+    const graph = b.seal()
+    expect(firstConsumerInstallPath(graph, undefined, 'target@2.0.0', new Set(['target@2.0.0']))).toBeUndefined()
+  })
+})
+
+describe('optimize', () => {
+  it('drops an unreachable orphan and roundtrips the pruned graph cleanly', () => {
+    const base = parse(v1Lock({ dependencies: { ms: { version: '2.1.3', resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz', integrity: MS_SRI } } }))
+    const withOrphan = base.mutate(m => {
+      m.addNode({ id: 'orphan@9.9.9', name: 'orphan', version: '9.9.9', peerContext: [] })
+      m.addEdge('orphan@9.9.9', 'orphan@9.9.9', 'dep', { range: '9.9.9' })
+      m.setTarball({ name: 'orphan', version: '9.9.9' }, { integrity: sri(MS_SRI) })
+    }).graph
+    const result = optimize(withOrphan)
+    // The orphan (and its sidecar) is gone; the reachable ms node survives and
+    // still re-emits with its install path intact (proves the sidecar prune
+    // kept the right entries).
+    expect(result.graph.getNode('orphan@9.9.9')).toBeUndefined()
+    const out = JSON.parse(stringify(result.graph)) as {
+      dependencies?: Record<string, { version?: string }>
+    }
+    expect(out.dependencies?.ms?.version).toBe('2.1.3')
+    expect(out.dependencies?.orphan).toBeUndefined()
+  })
+
+  it('prunes an unreachable cycle parsed from a nested tree', () => {
+    // npm-1 tree where oa and ob nest under each other but neither hangs off
+    // the root. Add a mutually-referential orphan pair with tarballs so optimize
+    // can drop them without a missing-tarball error, then assert the shared
+    // prune keeps the reachable ms node.
+    const lock = v1Lock({
+      dependencies: {
+        ms: { version: '2.1.3', resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz', integrity: MS_SRI },
+      },
+    })
+    const base = parse(lock)
+    const withPair = base.mutate(m => {
+      m.addNode({ id: 'oa@1.0.0', name: 'oa', version: '1.0.0', peerContext: [] })
+      m.addNode({ id: 'ob@1.0.0', name: 'ob', version: '1.0.0', peerContext: [] })
+      m.addEdge('oa@1.0.0', 'ob@1.0.0', 'dep', { range: '1.0.0' })
+      m.addEdge('ob@1.0.0', 'oa@1.0.0', 'dep', { range: '1.0.0' })
+      m.setTarball({ name: 'oa', version: '1.0.0' }, { integrity: sri(MS_SRI) })
+      m.setTarball({ name: 'ob', version: '1.0.0' }, { integrity: sri(MS_SRI) })
+    }).graph
+    const result = optimize(withPair)
+    expect(result.graph.getNode('oa@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('ob@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('ms@2.1.3')).toBeDefined()
   })
 })

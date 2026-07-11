@@ -21,12 +21,28 @@ import { describe, expect, it } from 'vitest'
 import {
   newBuilder,
   serializeNodeId,
+  toTarballKey,
   type Graph,
   type Node,
   type TarballPayload,
 } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { parse, stringify, check } from '../../main/ts/formats/lockgraph.ts'
+import {
+  parse,
+  stringify,
+  check,
+  escapeTsv,
+  unescapeTsv,
+  parsePeerContext,
+  resolveNativeResolution,
+  registrySourceOf,
+  encodeIntegrityColumn,
+  decodeIntegrityColumn,
+  splitFirstUnescaped,
+  parseSlots,
+  flattenToSlots,
+  isRecomposableTarballResolution,
+} from '../../main/ts/formats/lockgraph.ts'
 import { parse as parseYarnBerryV8 } from '../../main/ts/formats/yarn-berry-v8.ts'
 import { parse as parsePnpmV9 } from '../../main/ts/formats/pnpm-v9.ts'
 import { check as detectAndCheck, detect, parse as dispatchParse, stringify as dispatchStringify } from '../../main/ts/index.ts'
@@ -1095,5 +1111,579 @@ describe('lockgraph §F — dispatcher integration', () => {
     const g2 = dispatchParse('lockgraph', text)
     expectEmptyGraphDiff(g.diff(g2))
     expect(graphSnapshot(g2)).toEqual(graphSnapshot(g))
+  })
+})
+
+// =====================================================================================
+// Internal codec helpers — error/throw paths, rare F-slot shapes, the
+// integrity-column codec, and document-level parse framing errors.
+// =====================================================================================
+
+const KEY = toTarballKey({ name: 'p', version: '1.0.0' })
+
+// Assert `fn` throws a LockfileError whose code is `code` and whose message
+// contains `msgFragment` (message asserted only where it encodes real behavior,
+// e.g. WHICH field / marker the parser rejected).
+function expectLockError(fn: () => unknown, code: string, msgFragment?: string): void {
+  try {
+    fn()
+    expect.unreachable(`expected a LockfileError(${code})`)
+  } catch (e) {
+    expect(e).toBeInstanceOf(LockfileError)
+    expect((e as LockfileError).code).toBe(code)
+    if (msgFragment !== undefined) expect((e as LockfileError).message).toContain(msgFragment)
+  }
+}
+
+describe('escapeTsv', () => {
+  it('escapes exactly the four framing bytes and leaves ordinary bytes', () => {
+    // `:` `/` `@` `+` `{` `}` `,` are ordinary value bytes (NOT escaped); only
+    // backslash / TAB / LF / CR are framing bytes.
+    expect(escapeTsv('a\\b\tc\nd\re:/@+{},')).toBe('a\\\\b\\tc\\nd\\re:/@+{},')
+  })
+
+  it('escapeTsv → unescapeTsv round-trips a value carrying every framing byte', () => {
+    const v = 'x\ty\nz\rw\\q'
+    expect(unescapeTsv(escapeTsv(v))).toBe(v)
+  })
+})
+
+describe('unescapeTsv', () => {
+  it('leaves an escape pair whose second byte is NOT n/r/t/\\ intact', () => {
+    expect(unescapeTsv('a\\bc')).toBe('a\\bc')
+  })
+
+  it('leaves a trailing lone backslash intact (no following byte)', () => {
+    expect(unescapeTsv('ab\\')).toBe('ab\\')
+  })
+})
+
+describe('splitFirstUnescaped', () => {
+  it('returns [whole, undefined] when the separator is absent', () => {
+    expect(splitFirstUnescaped('abc', '=')).toEqual(['abc', undefined])
+  })
+
+  it('splits on the first UNESCAPED separator, skipping an escaped one', () => {
+    // `a\=b=c`: the first `=` is escaped (odd backslash run) → split at the second.
+    expect(splitFirstUnescaped('a\\=b=c', '=')).toEqual(['a\\=b', 'c'])
+  })
+
+  it('treats a separator after an EVEN backslash run as unescaped', () => {
+    // `a\\=b`: two backslashes → the `=` is NOT escaped → split there.
+    expect(splitFirstUnescaped('a\\\\=b', '=')).toEqual(['a\\\\', 'b'])
+  })
+})
+
+describe('parsePeerContext', () => {
+  it('splits sibling peer NodeIds on depth-0 parens, keeping nested parens inside a member', () => {
+    // `(a@1.0.0(b@2.0.0))(c@3.0.0)` → two members; the inner `(b@2.0.0)` stays part
+    // of the first member (a nested peer context), split only at depth-0 boundaries.
+    expect(parsePeerContext('(a@1.0.0(b@2.0.0))(c@3.0.0)')).toEqual(['a@1.0.0(b@2.0.0)', 'c@3.0.0'])
+  })
+
+  it('returns [] for an empty peer slot', () => {
+    expect(parsePeerContext('')).toEqual([])
+  })
+})
+
+describe('registrySourceOf', () => {
+  const node = (extra: Record<string, unknown> = {}) =>
+    ({ id: 'x', name: 'x', version: '1', peerContext: [], ...extra }) as any
+
+  it('a workspace member is the `workspace` pseudo-source (no external URL)', () => {
+    expect(registrySourceOf(node({ workspacePath: 'pkg/a' }), undefined)).toEqual({ type: 'workspace', url: '-' })
+  })
+
+  it('no resolution at all → `npm` + `-` (npm-class, host unrecorded)', () => {
+    expect(registrySourceOf(node(), undefined)).toEqual({ type: 'npm', url: '-' })
+  })
+
+  it('a canonical registry tarball URL → `npm` + the derived base', () => {
+    const payload = { resolution: { type: 'tarball', url: 'https://registry.npmjs.org/x/-/x-1.tgz' } } as any
+    expect(registrySourceOf(node(), payload)).toEqual({ type: 'npm', url: 'https://registry.npmjs.org' })
+  })
+
+  it('a NON-canonical tarball URL is kept verbatim as a `tarball` source', () => {
+    const payload = { resolution: { type: 'tarball', url: 'https://custom.example/blob.tgz' } } as any
+    expect(registrySourceOf(node(), payload)).toEqual({ type: 'tarball', url: 'https://custom.example/blob.tgz' })
+  })
+
+  it('a git resolution uses hostingProvider as the type when present', () => {
+    const payload = { resolution: { type: 'git', url: 'https://g/x.git', sha: 'abc', hostingProvider: 'github' } } as any
+    expect(registrySourceOf(node(), payload)).toEqual({ type: 'github', url: 'https://g/x.git' })
+  })
+
+  it('a git resolution WITHOUT hostingProvider falls back to the `git` type', () => {
+    const payload = { resolution: { type: 'git', url: 'https://g/x.git', sha: 'abc' } } as any
+    expect(registrySourceOf(node(), payload)).toEqual({ type: 'git', url: 'https://g/x.git' })
+  })
+
+  it('a directory resolution maps to `directory` + the path', () => {
+    const payload = { resolution: { type: 'directory', path: '/foo' } } as any
+    expect(registrySourceOf(node(), payload)).toEqual({ type: 'directory', url: '/foo' })
+  })
+
+  it('an unknown resolution maps to `unknown` + the raw string', () => {
+    const payload = { resolution: { type: 'unknown', raw: 'weird:thing' } } as any
+    expect(registrySourceOf(node(), payload)).toEqual({ type: 'unknown', url: 'weird:thing' })
+  })
+})
+
+describe('isRecomposableTarballResolution', () => {
+  it('true for the bare 2-key {type:tarball,url} canonical shape', () => {
+    expect(isRecomposableTarballResolution(
+      { type: 'tarball', url: 'https://registry.npmjs.org/p/-/p-1.0.0.tgz' } as any, 'p', '1.0.0',
+    )).toBe(true)
+  })
+
+  it('false when an extra key is present (not the bare 2-key shape)', () => {
+    expect(isRecomposableTarballResolution(
+      { type: 'tarball', url: 'https://registry.npmjs.org/p/-/p-1.0.0.tgz', bind: 'x' } as any, 'p', '1.0.0',
+    )).toBe(false)
+  })
+
+  it('false when the URL is not the canonical registry-tarball shape', () => {
+    expect(isRecomposableTarballResolution(
+      { type: 'tarball', url: 'https://custom.example/p.tgz' } as any, 'p', '1.0.0',
+    )).toBe(false)
+  })
+})
+
+describe('resolveNativeResolution', () => {
+  it('recomposes <url>#<fragment> from an N-row u-member fragment + a hosted base', () => {
+    expect(resolveNativeResolution(undefined, 'p', '1.0.0', 'a'.repeat(40), 'https://registry.npmjs.org'))
+      .toBe('https://registry.npmjs.org/p/-/p-1.0.0.tgz#' + 'a'.repeat(40))
+  })
+
+  it('a verbatim F-slot native passes through untouched (fragment ignored)', () => {
+    expect(resolveNativeResolution('git+ssh://x#deadbeef', 'p', '1.0.0', undefined, undefined))
+      .toBe('git+ssh://x#deadbeef')
+  })
+
+  it('undefined when neither a verbatim native nor a fragment is present', () => {
+    expect(resolveNativeResolution(undefined, 'p', '1.0.0', undefined, 'https://registry.npmjs.org'))
+      .toBeUndefined()
+  })
+
+  it('throws PARSE_FAILED when a fragment is present but there is NO hosted npm base', () => {
+    expectLockError(
+      () => resolveNativeResolution(undefined, 'p', '1.0.0', 'a'.repeat(40), undefined),
+      'PARSE_FAILED',
+      'u-member requires a hosted npm registry row',
+    )
+  })
+})
+
+describe('encodeIntegrityColumn', () => {
+  it('folds the berryChecksumCacheKey INTO the berry-zip z-member on encode', () => {
+    const digest = 'a'.repeat(128)
+    expect(
+      encodeIntegrityColumn({ hashes: [{ algorithm: 'sha512', digest, origin: 'berry-zip' }] }, undefined, '10c0'),
+    ).toBe(`z10c0/sha512-${digest}`)
+  })
+
+  it('encode → decode round-trips a multi-origin multiset (s/z/r/c markers, source order)', () => {
+    const integrity = {
+      hashes: [
+        { algorithm: 'sha1', digest: '1'.repeat(40), origin: 'sri' as const },
+        { algorithm: 'sha512', digest: '2'.repeat(128), origin: 'berry-zip' as const },
+        { algorithm: 'sha512', digest: '3'.repeat(128), origin: 'registry' as const },
+        { algorithm: 'sha512', digest: '4'.repeat(128), origin: 'recomputed' as const },
+      ],
+    }
+    const col = encodeIntegrityColumn(integrity, undefined, undefined)
+    expect(col).toBe(
+      `ssha1-${'1'.repeat(40)};zsha512-${'2'.repeat(128)};rsha512-${'3'.repeat(128)};csha512-${'4'.repeat(128)}`,
+    )
+    expect(decodeIntegrityColumn(col)).toEqual({ integrity })
+  })
+
+  it('appends the transport u-member LAST and returns it as `fragment` (NOT in the multiset) on decode', () => {
+    const frag = 'b'.repeat(40)
+    const col = encodeIntegrityColumn(
+      { hashes: [{ algorithm: 'sha512', digest: 'a'.repeat(128), origin: 'sri' }] }, frag, undefined,
+    )
+    expect(col).toBe(`ssha512-${'a'.repeat(128)};usha1-${frag}`)
+    const decoded = decodeIntegrityColumn(col)
+    expect(decoded.fragment).toBe(frag)
+    expect(decoded.integrity).toEqual({ hashes: [{ algorithm: 'sha512', digest: 'a'.repeat(128), origin: 'sri' }] })
+  })
+
+  it('REJECTS a url-fragment-origin hash as a multiset member (INVARIANT_VIOLATION)', () => {
+    expectLockError(
+      () => encodeIntegrityColumn(
+        { hashes: [{ algorithm: 'sha1', digest: 'a'.repeat(40), origin: 'url-fragment' as any }] }, undefined, undefined,
+      ),
+      'INVARIANT_VIOLATION',
+      'url-fragment-origin hash must ride the resolution sidecar',
+    )
+  })
+
+  it('REJECTS an origin with no marker in {s,z,r,c,u} (INVARIANT_VIOLATION)', () => {
+    expectLockError(
+      () => encodeIntegrityColumn(
+        { hashes: [{ algorithm: 'sha1', digest: 'a'.repeat(40), origin: 'bogus' as any }] }, undefined, undefined,
+      ),
+      'INVARIANT_VIOLATION',
+      "unknown integrity hash origin 'bogus'",
+    )
+  })
+})
+
+describe('decodeIntegrityColumn', () => {
+  it('lifts the cacheKey back off the z-member on decode (split at the first `/`)', () => {
+    const digest = 'a'.repeat(128)
+    expect(decodeIntegrityColumn(`z10c0/sha512-${digest}`)).toEqual({
+      integrity: { hashes: [{ algorithm: 'sha512', digest, origin: 'berry-zip' }] },
+      cacheKey: '10c0',
+    })
+  })
+
+  it('a bare `-` column decodes to no integrity / fragment / cacheKey', () => {
+    expect(decodeIntegrityColumn('-')).toEqual({})
+  })
+
+  it('REJECTS two `/`-bearing z-members (duplicate cacheKey)', () => {
+    expectLockError(
+      () => decodeIntegrityColumn(`z10c0/sha512-${'a'.repeat(128)};z8/sha512-${'b'.repeat(128)}`),
+      'PARSE_FAILED',
+      'duplicate berry checksum-cache-key',
+    )
+  })
+
+  it('REJECTS a member with no algo/digest `-` separator', () => {
+    expectLockError(
+      () => decodeIntegrityColumn('ssha512' + 'a'.repeat(128)),
+      'PARSE_FAILED',
+      'malformed integrity member',
+    )
+  })
+
+  it('REJECTS a duplicate u (url-fragment) member', () => {
+    expectLockError(
+      () => decodeIntegrityColumn(`usha1-${'a'.repeat(40)};usha1-${'b'.repeat(40)}`),
+      'PARSE_FAILED',
+      'duplicate u (url-fragment) integrity member',
+    )
+  })
+
+  it('REJECTS a u member whose algorithm is not sha1', () => {
+    expectLockError(
+      () => decodeIntegrityColumn(`usha512-${'a'.repeat(128)}`),
+      'PARSE_FAILED',
+      "u (url-fragment) member must be sha1, got 'sha512'",
+    )
+  })
+
+  it('REJECTS an unknown origin marker', () => {
+    expectLockError(
+      () => decodeIntegrityColumn(`xsha512-${'a'.repeat(128)}`),
+      'PARSE_FAILED',
+      "unknown integrity origin marker 'x'",
+    )
+  })
+})
+
+describe('flattenToSlots', () => {
+  it('hasInstallScript emits a bare boolean-string slot', () => {
+    expect(flattenToSlots({ hasInstallScript: true } as TarballPayload, 'p', '1.0.0'))
+      .toEqual(['hasInstallScript=true'])
+  })
+
+  it('peerDependenciesMeta emits `<peer>.optional=<bool>`; a peer without `optional` emits nothing', () => {
+    const payload = { peerDependenciesMeta: { react: { optional: true }, vue: {} } } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0')).toEqual(['peerDependenciesMeta.react.optional=true'])
+  })
+
+  it('a bin MAP flattens per-entry (keys cmpStr-sorted), never collapsing a 1-entry map to a string', () => {
+    const payload = { bin: { zeta: 'z.js', alpha: 'a.js' } } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0')).toEqual(['bin.alpha=a.js', 'bin.zeta=z.js'])
+  })
+
+  it('a string bin emits the bare `bin=<v>` form', () => {
+    expect(flattenToSlots({ bin: 'cli.js' } as TarballPayload, 'p', '1.0.0')).toEqual(['bin=cli.js'])
+  })
+
+  it('funding OBJECT flattens to `funding.<key>=` slots, keys cmpStr-sorted', () => {
+    const payload = { funding: { url: 'https://x', type: 'oc' } } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0')).toEqual(['funding.type=oc', 'funding.url=https://x'])
+  })
+
+  it('funding ARRAY flattens to ascending `funding.<i>=` slots', () => {
+    const payload = { funding: ['https://a', 'https://b'] } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0')).toEqual(['funding.0=https://a', 'funding.1=https://b'])
+  })
+
+  it('funding SCALAR emits the bare `funding=<v>` slot', () => {
+    expect(flattenToSlots({ funding: 'https://x' } as TarballPayload, 'p', '1.0.0')).toEqual(['funding=https://x'])
+  })
+
+  it('a NON-recomposable resolution flattens the WHOLE union under resolution.* (cmpStr keys)', () => {
+    const payload = { resolution: { type: 'git', url: 'https://g/x.git', sha: 'abc' } } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0'))
+      .toEqual(['resolution.sha=abc', 'resolution.type=git', 'resolution.url=https://g/x.git'])
+  })
+
+  it('a recomposable {type:tarball} resolution emits NO resolution slot (omitted, recomposed from R)', () => {
+    const payload = { resolution: { type: 'tarball', url: 'https://registry.npmjs.org/p/-/p-1.0.0.tgz' } } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0')).toEqual([])
+  })
+
+  it('the full field order is fixed: license, deprecated, cpu, os, libc, bundled, engines', () => {
+    const payload = {
+      license: 'MIT',
+      deprecated: 'old',
+      cpu: ['x64'],
+      os: ['linux'],
+      libc: ['glibc'],
+      bundledDependencies: ['dep-a'],
+      engines: { node: '>=8' },
+    } as TarballPayload
+    expect(flattenToSlots(payload, 'p', '1.0.0')).toEqual([
+      'license=MIT', 'deprecated=old', 'cpu.0=x64', 'os.0=linux', 'libc.0=glibc',
+      'bundled.0=dep-a', 'engines.node=>=8',
+    ])
+  })
+
+  it('an empty residual yields no slots (no F row for that tarball)', () => {
+    expect(flattenToSlots({ integrity: { hashes: [] } } as TarballPayload, 'p', '1.0.0')).toEqual([])
+  })
+
+  it('a KEY containing `.`/`=` is key-segment-escaped (then TSV-escaped) and round-trips', () => {
+    // A funding-object key carrying the two structural key bytes exercises the
+    // key-segment escape (escapeKeySegment) on emit and its inverse
+    // (splitDotpath keeping the escape pair + unescapeKeySegment) on parse.
+    const payload = { funding: { 'weird.key=with': 'https://x' } } as TarballPayload
+    const slots = flattenToSlots(payload, 'p', '1.0.0')
+    expect(slots).toEqual(['funding.weird\\\\.key\\\\=with=https://x'])
+    expect(parseSlots(slots, KEY)).toEqual({ funding: { 'weird.key=with': 'https://x' } })
+  })
+})
+
+describe('parseSlots', () => {
+  it('engines slots rebuild a Record<string,string>', () => {
+    expect(parseSlots(['engines.node=>=8', 'engines.npm=>=6'], KEY))
+      .toEqual({ engines: { node: '>=8', npm: '>=6' } })
+  })
+
+  it('hasInstallScript decodes `true`/`false` to a real boolean', () => {
+    expect(parseSlots(['hasInstallScript=true'], KEY)).toEqual({ hasInstallScript: true })
+    expect(parseSlots(['hasInstallScript=false'], KEY)).toEqual({ hasInstallScript: false })
+  })
+
+  it('peerDependenciesMeta rebuilds nested `<peer>.optional`', () => {
+    expect(parseSlots(['peerDependenciesMeta.react.optional=true'], KEY))
+      .toEqual({ peerDependenciesMeta: { react: { optional: true } } })
+  })
+
+  it('a bin map rebuilds a Record; a bare bin rebuilds a string', () => {
+    expect(parseSlots(['bin.foo=cli.js', 'bin.bar=other.js'], KEY))
+      .toEqual({ bin: { foo: 'cli.js', bar: 'other.js' } })
+    expect(parseSlots(['bin=cli.js'], KEY)).toEqual({ bin: 'cli.js' })
+  })
+
+  it('a resolution.* union rebuilds the canonical resolution object', () => {
+    expect(parseSlots(['resolution.type=git', 'resolution.url=https://g', 'resolution.sha=abc'], KEY))
+      .toEqual({ resolution: { type: 'git', url: 'https://g', sha: 'abc' } })
+  })
+
+  it('funding rebuilds a scalar / an array / an object / an array-of-objects / a nested array by STRUCTURE', () => {
+    expect(parseSlots(['funding=https://x'], KEY)).toEqual({ funding: 'https://x' })
+    expect(parseSlots(['funding.0=https://a', 'funding.1=https://b'], KEY))
+      .toEqual({ funding: ['https://a', 'https://b'] })
+    expect(parseSlots(['funding.type=oc', 'funding.url=https://x'], KEY))
+      .toEqual({ funding: { type: 'oc', url: 'https://x' } })
+    expect(parseSlots(['funding.0.type=oc', 'funding.0.url=https://a', 'funding.1.url=https://b'], KEY))
+      .toEqual({ funding: [{ type: 'oc', url: 'https://a' }, { url: 'https://b' }] })
+    expect(parseSlots(['funding.sponsors.0=https://a', 'funding.sponsors.1=https://b'], KEY))
+      .toEqual({ funding: { sponsors: ['https://a', 'https://b'] } })
+  })
+
+  it('a verbatim nativeResolution slot round-trips its value', () => {
+    expect(parseSlots(['nativeResolution=react@npm:18.0.0'], KEY))
+      .toEqual({ nativeResolution: 'react@npm:18.0.0' })
+  })
+
+  it('an unknown F slot root is rejected', () => {
+    expectLockError(() => parseSlots(['bogusRoot=x'], KEY), 'PARSE_FAILED', "unknown F slot root 'bogusRoot'")
+  })
+
+  it('a leading `=` (empty key) is rejected as an unknown root', () => {
+    expectLockError(() => parseSlots(['=value'], KEY), 'PARSE_FAILED', "unknown F slot root ''")
+  })
+
+  it('a field with no `=` is rejected at slot-decode', () => {
+    expectLockError(() => parseSlots(['licensewithnoeq'], KEY), 'PARSE_FAILED', "malformed F slot (no '=')")
+  })
+
+  it('a scalar (license/deprecated) slot with a sub-path or a duplicate is rejected', () => {
+    expectLockError(() => parseSlots(['license.sub=MIT'], KEY), 'PARSE_FAILED', "malformed scalar 'license'")
+    expectLockError(() => parseSlots(['license=MIT', 'license=ISC'], KEY), 'PARSE_FAILED', "malformed scalar 'license'")
+  })
+
+  it('a string[] slot (cpu/os/libc/bundled) with a non-numeric index is rejected', () => {
+    expectLockError(() => parseSlots(['cpu.x=x64'], KEY), 'PARSE_FAILED', "malformed array 'cpu'")
+  })
+
+  it('a string[] slot with a GAP in indices is rejected (parser never hole-fills)', () => {
+    expectLockError(() => parseSlots(['cpu.0=x64', 'cpu.2=arm'], KEY), 'PARSE_FAILED', 'cpu array indices must be contiguous')
+  })
+
+  it('an engines slot at the wrong depth is rejected', () => {
+    expectLockError(() => parseSlots(['engines=x'], KEY), 'PARSE_FAILED', 'malformed engines slot')
+  })
+
+  it('bin carrying BOTH string and map forms is rejected', () => {
+    expectLockError(() => parseSlots(['bin=cli.js', 'bin.foo=cli.js'], KEY), 'PARSE_FAILED', 'bin carries both string and map forms')
+  })
+
+  it('a duplicate bare bin slot is rejected', () => {
+    expectLockError(() => parseSlots(['bin=a', 'bin=b'], KEY), 'PARSE_FAILED', 'duplicate bare bin slot')
+  })
+
+  it('a bin map slot at the wrong depth is rejected', () => {
+    expectLockError(() => parseSlots(['bin.a.b=c'], KEY), 'PARSE_FAILED', 'malformed bin map slot')
+  })
+
+  it('a hasInstallScript slot with a sub-path is rejected', () => {
+    expectLockError(() => parseSlots(['hasInstallScript.x=true'], KEY), 'PARSE_FAILED', 'malformed hasInstallScript slot')
+  })
+
+  it('a peerDependenciesMeta slot that is not `<peer>.optional` is rejected (both wrong depth and wrong leaf)', () => {
+    expectLockError(() => parseSlots(['peerDependenciesMeta.react=true'], KEY), 'PARSE_FAILED', 'malformed peerDependenciesMeta slot')
+    expectLockError(() => parseSlots(['peerDependenciesMeta.react.foo=true'], KEY), 'PARSE_FAILED', 'malformed peerDependenciesMeta slot')
+  })
+
+  it('duplicate nativeResolution slots are rejected', () => {
+    expectLockError(() => parseSlots(['nativeResolution=a', 'nativeResolution=b'], KEY), 'PARSE_FAILED', 'duplicate nativeResolution slot')
+  })
+
+  it('a nativeResolution slot with a sub-path is rejected', () => {
+    expectLockError(() => parseSlots(['nativeResolution.x=a'], KEY), 'PARSE_FAILED', 'malformed nativeResolution slot')
+  })
+
+  it('a resolution slot at the wrong depth is rejected', () => {
+    expectLockError(() => parseSlots(['resolution=x'], KEY), 'PARSE_FAILED', 'malformed resolution slot')
+  })
+
+  it('funding with an array/object shape conflict is rejected', () => {
+    expectLockError(() => parseSlots(['funding.0=a', 'funding.type=b'], KEY), 'PARSE_FAILED', "funding array/object shape conflict at 'type'")
+  })
+
+  it('funding descending from a SCALAR leaf into a container is rejected', () => {
+    expectLockError(() => parseSlots(['funding=scalar', 'funding.x=y'], KEY), 'PARSE_FAILED', "funding scalar/container conflict at 'x'")
+  })
+
+  it('a funding ARRAY with an index gap is rejected (contiguity check)', () => {
+    expectLockError(() => parseSlots(['funding.0=a', 'funding.2=b'], KEY), 'PARSE_FAILED', 'funding array indices must be contiguous')
+  })
+})
+
+// Assemble a minimal well-formed lockgraph document body around the caller's
+// region lines, for targeted framing-error tests.
+const DOC = (...bodyLines: string[]): string =>
+  ['@lockgraph 1', 'schema 1.0', 'generatedAt ' + PINNED, 'generator lockgraph@0.0.0', ...bodyLines].join('\n') + '\n'
+
+describe('parse', () => {
+  it('an unexpected end of input (document truncated before a region) is rejected', () => {
+    expectLockError(() => parse('@lockgraph 1\nschema 1.0'), 'PARSE_FAILED', 'unexpected end of input')
+  })
+
+  it('a missing @lockgraph magic is rejected', () => {
+    expectLockError(() => parse('@notlockgraph 1\nR 0\nN 0\nE 0\n'), 'PARSE_FAILED', 'missing @lockgraph magic')
+  })
+
+  it('a newer format GENERATION is rejected with CAPABILITY_LACK', () => {
+    expectLockError(() => parse('@lockgraph 2\nR 0\nN 0\nE 0\n'), 'CAPABILITY_LACK', 'format generation 2 newer than supported')
+  })
+
+  it('a newer SCHEMA major is rejected with CAPABILITY_LACK', () => {
+    expectLockError(() => parse('@lockgraph 1\nschema 2.0\nR 0\nN 0\nE 0\n'), 'CAPABILITY_LACK', 'schema major 2.0 newer than supported')
+  })
+
+  it('a region header with the wrong letter is rejected (expectHeader)', () => {
+    // R is consumed by the META boundary; the N header is then validated by
+    // expectHeader and a wrong letter is rejected with the region-header message.
+    expectLockError(() => parse('@lockgraph 1\nschema 1.0\nR 0\nBOGUS 0\nE 0\n'), 'PARSE_FAILED', "expected 'N <count>' region header")
+  })
+
+  it('a region header with a negative / non-integer count is rejected (expectHeader)', () => {
+    expectLockError(() => parse('@lockgraph 1\nschema 1.0\nR 0\nN -1\nE 0\n'), 'PARSE_FAILED', "expected 'N <count>' region header")
+    expectLockError(() => parse('@lockgraph 1\nschema 1.0\nR 0\nN abc\nE 0\n'), 'PARSE_FAILED', "expected 'N <count>' region header")
+  })
+
+  it('a malformed registry row (no url field) is rejected', () => {
+    expectLockError(() => parse(DOC('R 1', 'npm', 'N 0', 'E 0')), 'PARSE_FAILED', 'malformed registry row')
+  })
+
+  it('a malformed node row (fewer than 4 columns) is rejected', () => {
+    expectLockError(() => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0', 'E 0')), 'PARSE_FAILED', 'malformed node row')
+  })
+
+  it('a malformed node trailing slot (no `=`) is rejected', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr0\t-\tbadslot', 'E 0')),
+      'PARSE_FAILED', "malformed node slot (no '='): badslot",
+    )
+  })
+
+  it('a bad registry reference on an N row is rejected', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr9\t-', 'E 0')),
+      'PARSE_FAILED', "bad registry reference 'r9'",
+    )
+  })
+
+  it('a malformed edge row (fewer than 4 columns) is rejected', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr0\t-', 'E 1', '0\t0')),
+      'PARSE_FAILED', 'malformed edge row',
+    )
+  })
+
+  it('an unknown edge kind is rejected', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr0\t-', 'E 1', '0\t0\tbogus\t-')),
+      'PARSE_FAILED', "unknown edge kind 'bogus'",
+    )
+  })
+
+  it('an edge src index out of range is rejected (parseNodeIndex bound)', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr0\t-', 'E 1', '5\t0\tdep\t-')),
+      'PARSE_FAILED', 'edge src index 5 out of range [0, 1)',
+    )
+  })
+
+  it('an F row whose representative index is out of range is rejected', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr0\t-', 'E 0', 'F 1', '9\tlicense=MIT')),
+      'PARSE_FAILED', 'F row representative index 9 out of range [0, 1)',
+    )
+  })
+
+  it('an F row whose representative field is not an integer is rejected', () => {
+    expectLockError(
+      () => parse(DOC('R 1', 'npm\t-', 'N 1', 'foo\t1.0.0\tr0\t-', 'E 0', 'F 1', '\tlicense=MIT')),
+      'PARSE_FAILED', 'F row representative must be a non-negative integer',
+    )
+  })
+
+  it('forwards every re-derived seal diagnostic to the onDiagnostic callback', () => {
+    // A published (registry-range) dep resolving onto a co-located workspace makes
+    // the seal emit SEAL_PUBLISHED_SELF_LINK. Diagnostics are NOT persisted — they
+    // are re-derived by the seal and streamed via onDiagnostic.
+    const b = newBuilder()
+    const ws = serializeNodeId('@app/web', '1.0.0', [])
+    const dep = serializeNodeId('shared', '2.0.0', [])
+    b.addNode({ id: ws, name: '@app/web', version: '1.0.0', peerContext: [], workspacePath: 'packages/web' })
+    b.addNode({ id: dep, name: 'shared', version: '2.0.0', peerContext: [] })
+    b.addEdge(dep, ws, 'dep', { range: '^1.0.0' })
+    const g: Graph = b.seal()
+    const doc = stringify(g, { generatedAt: PINNED })
+
+    const seen: string[] = []
+    parse(doc, { onDiagnostic: (d) => seen.push(d.code) })
+    expect(seen).toContain('SEAL_PUBLISHED_SELF_LINK')
   })
 })

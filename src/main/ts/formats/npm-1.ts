@@ -712,7 +712,7 @@ function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | u
 // the `parse → stringify → parse` invariant for fixture inputs). Mutator-
 // added nodes have no install path; they get hoisted to the root level
 // unless that introduces a conflict.
-function buildDependenciesTree(
+export function buildDependenciesTree(
   graph: Graph,
   sidecar: NpmSidecar | undefined,
   rootId: string,
@@ -921,7 +921,7 @@ function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined)
   return stringifyForNpm(canonical)
 }
 
-function parentPathFromInstall(installPath: string): string | undefined {
+export function parentPathFromInstall(installPath: string): string | undefined {
   // Strip the trailing `/node_modules/<name>` segment.
   const idx = installPath.lastIndexOf('/node_modules/')
   if (idx < 0) {
@@ -982,7 +982,7 @@ function hoistedAtPath(
   return undefined
 }
 
-function firstConsumerInstallPath(
+export function firstConsumerInstallPath(
   graph: Graph,
   sidecar: NpmSidecar | undefined,
   id: string,

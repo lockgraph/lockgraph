@@ -1244,7 +1244,7 @@ function unresolvedDepRefsOfNode(
  * happily eats the URL's `@` at the host boundary, so the protocol-only
  * test is insufficient.
  */
-function nameFromResolutionLocator(resolution: string): string | undefined {
+export function nameFromResolutionLocator(resolution: string): string | undefined {
   // Bail on URL-shaped strings — only yarn-berry locators
   // (`<name>@<protocol>:...`) carry an authoritative package name.
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(resolution)) return undefined
@@ -1316,7 +1316,7 @@ function workspacePathOf(spec: string): string {
 //    `workspacePath` is the filesystem location, not a range;
 // 3. otherwise fall back to `first.spec` when `first.protocol === 'workspace'`
 //    — legacy single-spec workspace shape, kept for parity.
-function workspaceSpecOfEntry(
+export function workspaceSpecOfEntry(
   resolution: string | undefined,
   specs: SpecPart[],
   first: SpecPart,
@@ -1515,7 +1515,7 @@ function baseSpecOfPatchedNode(node: Node, native: string | undefined): string |
   return baseSpecOfPatchLocator(locator)
 }
 
-function baseSpecOfPatchLocator(locator: string): string | undefined {
+export function baseSpecOfPatchLocator(locator: string): string | undefined {
   if (!locator.startsWith('patch:')) return undefined
   const hashIdx = locator.indexOf('#')
   const encoded = hashIdx >= 0
@@ -1549,7 +1549,7 @@ function baseSpecOfPatchLocator(locator: string): string | undefined {
 // (e.g. `file:./vendor/x.tgz::locator=…`) is still recognised as an archive
 // (→ `hard`); without it the `::` tail fell through to the `soft` default.
 const ARCHIVE_PATH_RE = /\.(?:tgz|tar\.gz|tar)(?:$|[#?:])/i
-function linkTypeOfResolution(resolution: string | undefined): 'soft' | 'hard' {
+export function linkTypeOfResolution(resolution: string | undefined): 'soft' | 'hard' {
   if (resolution === undefined) return 'hard'
   let part: SpecPart
   try {
@@ -1981,14 +1981,14 @@ function scalarConditionsHintOfNode(node: Node): string | undefined {
 // --immutable`, sees `os=!win32` ≠ its `!os=win32`, and rewrites. Real trigger:
 // `eiows` publishes `os: ["!win32"]`. Verbatim slice math (incl. the JS `search`
 // returning -1 for an all-`!` value) mirrors yarn byte-for-byte.
-function conditionToken(name: string, raw: string): string {
+export function conditionToken(name: string, raw: string): string {
   const index = raw.search(/[^!]/)
   const prefix = index % 2 === 0 ? '' : '!'
   const value = raw.slice(index)
   return `${prefix}${name}=${value}`
 }
 
-function composeConditionsFromPayload(payload: TarballPayload | undefined): string | undefined {
+export function composeConditionsFromPayload(payload: TarballPayload | undefined): string | undefined {
   if (payload === undefined) return undefined
   const parts: string[] = []
   const push = (name: string, values: string[] | undefined): void => {
@@ -2094,7 +2094,7 @@ function cloneSymlValue(value: SymlValue | undefined): SymlValue | undefined {
   return coerceSymlMap(value)
 }
 
-function binBlockOfNode(node: Node, payload: TarballPayload | undefined): SymlMap | undefined {
+export function binBlockOfNode(node: Node, payload: TarballPayload | undefined): SymlMap | undefined {
   if (payload?.bin === undefined) return undefined
   if (typeof payload.bin === 'string') {
     // npm: a STRING `bin` declares ONE command whose name is the package's
@@ -2155,13 +2155,13 @@ function extractPatchFingerprint(
     : { patch }
 }
 
-function patchLocatorOfResolution(resolution: string): string | undefined {
+export function patchLocatorOfResolution(resolution: string): string | undefined {
   if (resolution.startsWith('patch:')) return resolution
   const idx = resolution.indexOf('@patch:')
   return idx >= 0 ? resolution.slice(idx + 1) : undefined
 }
 
-function patchSourceOfLocator(locator: string): string | undefined {
+export function patchSourceOfLocator(locator: string): string | undefined {
   const hashIdx = locator.indexOf('#')
   if (hashIdx < 0) return undefined
   const paramsIdx = locator.indexOf('::', hashIdx + 1)
@@ -2171,7 +2171,7 @@ function patchSourceOfLocator(locator: string): string | undefined {
   return isDegeneratePatchSource(source) ? undefined : source
 }
 
-function isDegeneratePatchSource(source: string): boolean {
+export function isDegeneratePatchSource(source: string): boolean {
   let decoded: string
   try {
     decoded = decodeURIComponent(source)
@@ -2215,7 +2215,7 @@ function sha512Hex(value: string | Uint8Array): string {
 // The hint is best-effort: when the prior entry can't be matched by raw
 // key (compound entry-keys split by `, `), we fall back to the legacy
 // generic hint that names all three known causes.
-function irreducibleCollisionMessage(
+export function irreducibleCollisionMessage(
   id: string,
   currentKey: string,
   priorEntries: ReadonlyArray<{ key: string; value: SymlMap; specs: SpecPart[] }>,
@@ -2268,7 +2268,7 @@ function stringRecordOfBlock(block: SymlMap | undefined): Record<string, string>
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-function sortPeerContext(peers: readonly string[]): string[] {
+export function sortPeerContext(peers: readonly string[]): string[] {
   return peers.slice().sort((a, b) => {
     const nameCmp = cmpStr(nameOf(a), nameOf(b))
     return nameCmp !== 0 ? nameCmp : cmpStr(a, b)
@@ -2550,7 +2550,7 @@ function resolvePatchAndLinkFallbacks(
 // A descriptor range is a registry range (`npm:`/bare) — the only class Rung-3
 // semver and the resolutions-pin INFO hint apply to. Any explicit non-`npm:`
 // protocol (`patch:`, `link:`, `portal:`, `file:`, `git…`, a URL scheme) is out.
-function isRegistryRange(range: string): boolean {
+export function isRegistryRange(range: string): boolean {
   if (range.startsWith('npm:')) return true
   return !hasExplicitProtocol(range)
 }
@@ -2579,7 +2579,7 @@ interface EdgeLadderContext {
 // become `optional` edges and the rest `dep`. The flag is read from the
 // verbatim per-node dependenciesMeta sidecar (a bare boolean captured as the
 // string 'true'). Other meta keys (built / unplugged) do NOT reclassify.
-function splitOptionalDeps(
+export function splitOptionalDeps(
   deps: SymlMap | undefined,
   meta: SymlMap | undefined,
 ): { regular: SymlMap | undefined; optional: SymlMap | undefined } {
@@ -2804,7 +2804,7 @@ function normalizedEdgeRange(kind: EdgeKind, range: string): string {
 // form-a Rung-0 bind onto a patch node (whose `+patch=` suffix is removed so the
 // lookup keys off the shared base `name@version`). `nameOf` is peerContext-depth-
 // aware; the version is the segment after the last depth-0 `@`, minus any `+slot`.
-function nodeNameVersion(id: string): string | undefined {
+export function nodeNameVersion(id: string): string | undefined {
   const name = nameOf(id)
   if (name.length >= id.length) return undefined
   let rest = id.slice(name.length + 1) // drop `name@`
@@ -2815,7 +2815,7 @@ function nodeNameVersion(id: string): string | undefined {
   return rest.length > 0 ? `${name}@${rest}` : undefined
 }
 
-function hasExplicitProtocol(range: string): boolean {
+export function hasExplicitProtocol(range: string): boolean {
   const colonIdx = range.indexOf(':')
   if (colonIdx <= 0) return false
   const prefix = range.slice(0, colonIdx)
@@ -2846,7 +2846,7 @@ function isPatchRange(range: string): boolean {
 // yarn percent-encodes the INNER locator's own `#`/`::` (`%23`/`%3A%3A`), so the
 // first literal `#`/`::` always belong to the OUTER patch. Returns undefined for
 // a non-patch input so callers can bail cheaply.
-function strippedPatchDescriptor(lookup: string): string | undefined {
+export function strippedPatchDescriptor(lookup: string): string | undefined {
   const patchIdx = lookup.indexOf('@patch:')
   if (patchIdx < 0) return undefined
   const hashIdx = lookup.indexOf('#', patchIdx)
@@ -2863,7 +2863,7 @@ function strippedPatchDescriptor(lookup: string): string | undefined {
 // specific consumer (`…::version=…&hash=…&locator=root%40workspace%3A.`); it
 // disambiguates the same patch applied from different workspaces. `spec` is the
 // post-`patch:` body (`<inner>#<patchPath>::params`).
-function locatorQualifierOfPatchSpec(spec: string): string | undefined {
+export function locatorQualifierOfPatchSpec(spec: string): string | undefined {
   const hashIdx = spec.indexOf('#')
   const paramsIdx = spec.indexOf('::', hashIdx >= 0 ? hashIdx + 1 : 0)
   if (paramsIdx < 0) return undefined

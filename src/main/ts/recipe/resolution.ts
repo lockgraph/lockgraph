@@ -43,10 +43,21 @@ export interface ParseOptions {
     | 'pnpm-tarball'          // `resolution.tarball` URL
   /** Node name — used by yarn-berry `npm:` alias spec to derive the registry URL. */
   name?:         string
+  /** Registry base for a yarn-berry `npm:` locator's synthesised tarball URL
+   *  (the locator carries none). Adapters pass a config- or lock-inferred base
+   *  for custom registries; defaults to {@link DEFAULT_NPM_REGISTRY}. */
+  registry?:     string
 }
 
 const HEX40_RE  = /^[0-9a-f]{40}$/i
 const SHA_FRAG_RE = /^[0-9a-f]{7,64}$/i
+
+// The public npm registry — the default base for synthesising a yarn-berry
+// `npm:` locator's tarball URL. The locator carries no URL: yarn resolves it
+// against `.yarnrc.yml`'s `npmRegistryServer` at fetch time, which is NOT in the
+// lockfile. A caller with a config- or lock-inferred base overrides it via
+// `ParseOptions.registry`; this is only the fallback (no trailing slash).
+export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org'
 
 // Recognised registry / tarball hosts (suffix-match). The hostingProvider hint
 // is attribution-only — identity drops it for the (name, version) tuple.
@@ -119,9 +130,9 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
         if (archiveUrl !== undefined) {
           return { type: 'tarball', url: archiveUrl, bind: bindSuffix }
         }
-        return { type: 'tarball', url: deriveRegistryUrl(options.name, version), bind: bindSuffix }
+        return { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry ?? DEFAULT_NPM_REGISTRY), bind: bindSuffix }
       }
-      return { type: 'tarball', url: deriveRegistryUrl(options.name, version) }
+      return { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry ?? DEFAULT_NPM_REGISTRY) }
     }
     case 'portal':
       return { type: 'directory', path: normaliseDirectoryPath(spec) }
@@ -146,19 +157,20 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
   }
 }
 
-// Derive the npmjs-default registry URL for a yarn-berry `npm:` locator.
-// Aliased form (`<n>@npm:<n2>@<ver>`) projects onto `<n2>` as the underlying
-// name; non-aliased (`<n>@npm:<ver>`) uses `name` directly.
-function deriveRegistryUrl(name: string | undefined, spec: string): string {
+// Derive the registry tarball URL for a yarn-berry `npm:` locator against the
+// given `registry` base (see DEFAULT_NPM_REGISTRY). Aliased form
+// (`<n>@npm:<n2>@<ver>`) projects onto `<n2>` as the underlying name;
+// non-aliased (`<n>@npm:<ver>`) uses `name` directly.
+function deriveRegistryUrl(name: string | undefined, spec: string, registry: string): string {
   const aliasAt = spec.lastIndexOf('@')
   if (aliasAt > 0) {
     const aliasName    = spec.slice(0, aliasAt)
     const aliasVersion = spec.slice(aliasAt + 1)
     if (looksLikeNpmName(aliasName) && /^[\dvV]/.test(aliasVersion)) {
-      return registryUrlOf(aliasName, aliasVersion)
+      return registryUrlOf(aliasName, aliasVersion, registry)
     }
   }
-  return registryUrlOf(name ?? '', spec)
+  return registryUrlOf(name ?? '', spec, registry)
 }
 
 function looksLikeNpmName(s: string): boolean {
@@ -185,11 +197,11 @@ function archiveUrlOfBind(bindSuffix: string): string | undefined {
   return undefined
 }
 
-function registryUrlOf(name: string, version: string): string {
-  // npmjs URL convention: for `@scope/pkg`, the basename in the tail is `pkg`
-  // (not `@scope/pkg`); the scope appears only in the path segment.
+function registryUrlOf(name: string, version: string, registry: string): string {
+  // Registry tarball convention: for `@scope/pkg`, the basename in the tail is
+  // `pkg` (not `@scope/pkg`); the scope appears only in the path segment.
   const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
-  return `https://registry.npmjs.org/${name}/-/${tail}-${version}.tgz`
+  return `${registry}/${name}/-/${tail}-${version}.tgz`
 }
 
 function parseUrlOrFallback(raw: string): ResolutionCanonical {

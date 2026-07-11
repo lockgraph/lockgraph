@@ -130,9 +130,9 @@ describe('optimize/mark-and-sweep', () => {
   // Gate 5 — Sentinel-keyed unreachable collected normally
   // ────────────────────────────────────────────────────────────────
   //
-  // ADR-0011 sentinel patches carry pure-deletion carve-out
-  // (graph.ts:248-265). optimize MAY remove unreachable sentinel-keyed
-  // nodes — no sentinel-specific warning, just OPTIMIZE_NODE_REMOVED.
+  // ADR-0011 sentinel patches carry a pure-deletion carve-out: optimize MAY
+  // remove unreachable sentinel-keyed nodes — no sentinel-specific warning,
+  // just OPTIMIZE_NODE_REMOVED.
   it('§9.2 — sentinel-keyed orphan removed without special pleading', () => {
     const sentinel = 'unresolved-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
     const graph = graphOf(builder => {
@@ -202,7 +202,7 @@ describe('optimize/mark-and-sweep', () => {
   // Gate 8 — Peer-edge reachability
   // ────────────────────────────────────────────────────────────────
   it('§9.2 — node referenced only via peer edge stays live', () => {
-    // peer-edge ↔ peerContext coherence (graph.ts:418-425) requires that
+    // peer-edge ↔ peerContext coherence requires that
     // peerContext on a node list the same NodeIds as its out('peer')
     // targets. So if `consumer` has a peer edge to `peerDep`, peerDep
     // must be in consumer.peerContext.

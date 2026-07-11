@@ -10,7 +10,17 @@
 import { describe, expect, it } from 'vitest'
 import { type Graph } from '../../main/ts/graph.ts'
 import { LockfileError } from '../../main/ts/errors.ts'
-import { check, enrich, optimize, parse, stringify } from '../../main/ts/formats/pnpm-v5.ts'
+import {
+  check,
+  enrich,
+  optimize,
+  parse,
+  stringify,
+  peelPeerTail,
+  parsePackagesKey,
+  resolveDependencyTarget,
+  resolveAliasedDependencyTarget,
+} from '../../main/ts/formats/pnpm-v5.ts'
 import { parse as parseV6 } from '../../main/ts/formats/pnpm-v6.ts'
 import { parse as parseV9 } from '../../main/ts/formats/pnpm-v9.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
@@ -45,6 +55,8 @@ registerPnpmCoreSuite(SPEC)
 
 const parseFixtureGraph = (name: typeof FIXTURES[number]): Graph =>
   parse(fixture(`${name}/pnpm-v5.lock`))
+
+const V5 = (body: string): string => `lockfileVersion: 5.4\n\n` + body
 
 // === v5-only — cross-version rejection (decimal vs quoted handshake) ========
 
@@ -463,5 +475,279 @@ describe('pnpm-v5 — canonical NodeId multi-peer encoding (v5-specific undersco
     expect(emitted).toContain('/host/1.0.0_react@18.0.0_redux@4.2.0:')
     const reparsed = parse(emitted)
     expect(reparsed.getNode('host@1.0.0(react@18.0.0)(redux@4.2.0)')).toBeDefined()
+  })
+})
+
+describe('parse', () => {
+  it('rejects an in-shape but out-of-range literal `5.9` with FORMAT_MISMATCH', () => {
+    // Passes the `5.\d` byte regex but fails the accepted-literal set {5.0..5.4}.
+    expect(() => parse('lockfileVersion: 5.9\n\npackages: {}\n')).toThrow(LockfileError)
+    try {
+      parse('lockfileVersion: 5.9\n\npackages: {}\n')
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('FORMAT_MISMATCH')
+      expect((error as LockfileError).message).toContain('5.9')
+    }
+  })
+
+  it('warns PNPM_BAD_ENTRY on a packages key missing the leading slash', () => {
+    const graph = parse(
+      V5('specifiers: {}\n\npackages:\n\n  bad-key-no-slash:\n    resolution: {integrity: sha512-x}\n    dev: false\n'),
+    )
+    expect(graph.diagnostics().map(d => d.code)).toContain('PNPM_BAD_ENTRY')
+  })
+
+  it('warns PNPM_UNRESOLVED_DEP when an importer `link:` points at an unknown workspace', () => {
+    const graph = parse(
+      V5('specifiers:\n  x: link:../nowhere\n\ndependencies:\n  x: link:../nowhere\n\npackages: {}\n'),
+    )
+    const diags = graph.diagnostics().filter(d => d.code === 'PNPM_UNRESOLVED_DEP')
+    expect(diags.length).toBeGreaterThan(0)
+    expect(diags[0]!.message).toContain('nowhere')
+  })
+
+  it('synthesises an empty `.` importer when neither top-level deps nor importers exist', () => {
+    const graph = parse(V5('packages: {}\n'))
+    expect(graph.getNode('.@0.0.0')).toBeDefined()
+    expect(Array.from(graph.nodes()).map(n => n.id)).toEqual(['.@0.0.0'])
+  })
+
+  it('rethrows a GraphError seal failure as a PARSE_FAILED LockfileError', () => {
+    // A packages key whose peer-context references a node that does not exist →
+    // the seal rejects (peer edges disagree with peerContext), caught and rewrapped.
+    const lock = V5(
+      'specifiers: {}\n\n' +
+        'packages:\n\n  /host/1.0.0_react@18.2.0:\n    resolution: {integrity: sha512-h}\n' +
+        "    peerDependencies:\n      react: '*'\n    dev: false\n",
+    )
+    expect(() => parse(lock)).toThrow(LockfileError)
+    try {
+      parse(lock)
+    } catch (error) {
+      expect((error as LockfileError).code).toBe('PARSE_FAILED')
+      expect((error as LockfileError).message).toContain('seal failed')
+    }
+  })
+
+  it('warns PNPM_UNRESOLVED_DEP for a packages inline dep with no matching entry', () => {
+    const graph = parse(
+      V5(
+        'specifiers:\n  host: 1.0.0\n\ndependencies:\n  host: 1.0.0\n\n' +
+          'packages:\n\n  /host/1.0.0:\n    resolution: {integrity: sha512-h}\n    dependencies:\n      ghostdep: 9.9.9\n    dev: false\n',
+      ),
+    )
+    const diags = graph.diagnostics().filter(d => d.code === 'PNPM_UNRESOLVED_DEP')
+    expect(diags.some(d => d.message.includes('ghostdep'))).toBe(true)
+  })
+
+  it('resolves an importer `link:` to a workspace member and records workspaceRange', () => {
+    const graph = parse(
+      V5(
+        'importers:\n' +
+          '  .:\n    specifiers:\n      b: workspace:*\n    dependencies:\n      b: link:packages/b\n' +
+          '  packages/b:\n    specifiers: {}\n\n' +
+          'packages: {}\n',
+      ),
+    )
+    const edge = graph.out('.@0.0.0', 'dep').find(e => e.dst === 'packages/b@0.0.0')
+    expect(edge).toBeDefined()
+    expect(edge!.attrs?.workspace).toBe(true)
+    expect(edge!.attrs?.workspaceRange).toEqual({ specifier: 'workspace:*', resolvedVersion: '0.0.0' })
+  })
+
+  it('resolves a link dep that has no declared specifier (range falls back to the link value)', () => {
+    // The `specifier` is undefined (no specifiers map) → range uses the link
+    // value, and workspaceRange carries an empty specifier.
+    const graph = parse(
+      V5(
+        'importers:\n' +
+          '  .:\n    dependencies:\n      b: link:packages/b\n' +
+          '  packages/b:\n    specifiers: {}\n\n' +
+          'packages: {}\n',
+      ),
+    )
+    const edge = graph.out('.@0.0.0', 'dep').find(e => e.dst === 'packages/b@0.0.0')
+    expect(edge).toBeDefined()
+    expect(edge!.attrs?.range).toBe('link:packages/b')
+    expect(edge!.attrs?.workspaceRange).toEqual({ specifier: '', resolvedVersion: '0.0.0' })
+  })
+})
+
+describe('enrich', () => {
+  it('rewrites an existing workspace edge when the manifest range differs (range drift)', () => {
+    // Parse binds `b` at `workspace:^1.0.0`; the manifest declares `workspace:*`
+    // → range drift → markWorkspaceEdges remove+add mutate.
+    const graph = parse(
+      V5(
+        'importers:\n' +
+          '  .:\n    specifiers:\n      b: workspace:^1.0.0\n    dependencies:\n      b: link:packages/b\n' +
+          '  packages/b:\n    specifiers: {}\n\n' +
+          'packages: {}\n',
+      ),
+    )
+    expect(graph.out('.@0.0.0', 'dep').find(e => e.dst === 'packages/b@0.0.0')!.attrs?.range).toBe(
+      'workspace:^1.0.0',
+    )
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root', dependencies: { b: 'workspace:*' } },
+        'packages/b': { name: 'b', version: '0.0.0' },
+      },
+    })
+    expect(result.graph.out('.@0.0.0', 'dep').find(e => e.dst === 'packages/b@0.0.0')!.attrs?.range).toBe(
+      'workspace:*',
+    )
+  })
+
+  it('adds a root edge from the root manifest when the lock importer omitted it', () => {
+    const graph = parse(
+      V5(
+        'importers:\n' +
+          '  .:\n    specifiers: {}\n' +
+          '  packages/a:\n    specifiers: {}\n\n' +
+          'packages:\n\n  /lodash/4.17.21:\n    resolution: {integrity: sha512-x}\n    dev: false\n',
+      ),
+    )
+    expect(graph.out('.@0.0.0', 'dep').map(e => e.dst)).not.toContain('lodash@4.17.21')
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root', dependencies: { lodash: '^4.0.0' } },
+        'packages/a': { name: 'a', version: '0.0.0' },
+      },
+    })
+    expect(result.graph.out('.@0.0.0', 'dep').map(e => e.dst)).toContain('lodash@4.17.21')
+  })
+
+  it('emits PNPM_V5_NO_MANIFESTS when a workspace graph is enriched without manifests', () => {
+    const graph = parse(
+      V5('importers:\n  .:\n    specifiers: {}\n  packages/a:\n    specifiers: {}\n\npackages: {}\n'),
+    )
+    const result = enrich(graph)
+    expect(result.diagnostics.some(d => d.code === 'PNPM_V5_NO_MANIFESTS')).toBe(true)
+  })
+
+  it('resolves a root manifest workspace dep BY NAME to the member node (workspaceRange sidecar)', () => {
+    // resolveManifestTarget member-by-name path + workspaceRange. The manifest
+    // names the member's PACKAGE name.
+    const graph = parse(
+      V5('importers:\n  .:\n    specifiers: {}\n  packages/b:\n    specifiers: {}\n\npackages: {}\n'),
+    )
+    const result = enrich(graph, {
+      manifests: {
+        '': { name: 'root', dependencies: { 'b-pkg': 'workspace:*' } },
+        'packages/b': { name: 'b-pkg', version: '0.0.0' },
+      },
+    })
+    const edge = result.graph.out('.@0.0.0', 'dep').find(e => e.dst === 'packages/b@0.0.0')
+    expect(edge).toBeDefined()
+    expect(edge!.attrs?.workspace).toBe(true)
+    expect(edge!.attrs?.workspaceRange).toEqual({ specifier: 'workspace:*', resolvedVersion: '0.0.0' })
+  })
+
+  it('resolves a root manifest registry dep via a single by-name candidate', () => {
+    // resolveManifestTarget non-workspace path: exactly one candidate node.
+    const graph = parse(
+      V5('specifiers: {}\n\npackages:\n\n  /lodash/4.17.21:\n    resolution: {integrity: sha512-a}\n    dev: false\n'),
+    )
+    const result = enrich(graph, { manifests: { '': { name: 'root', dependencies: { lodash: '^4.0.0' } } } })
+    const edge = result.graph.out('.@0.0.0', 'dep').find(e => e.dst === 'lodash@4.17.21')
+    expect(edge).toBeDefined()
+    expect(edge!.attrs?.range).toBe('^4.0.0')
+    expect(edge!.attrs?.workspace).toBeUndefined()
+  })
+})
+
+describe('stringify', () => {
+  it('preserves declared specifiers for a workspace member that wires no edges', () => {
+    // A member with a `specifiers` block but no resolvable dep keeps its
+    // specifiers on emit.
+    const graph = parse(
+      V5(
+        'importers:\n' +
+          '  .:\n    specifiers: {}\n' +
+          '  packages/a:\n    specifiers:\n      ghost: ^1.0.0\n\n' +
+          'packages: {}\n',
+      ),
+    )
+    const out = stringify(graph)
+    expect(out).toContain('packages/a:')
+    expect(out).toContain('ghost: ^1.0.0')
+  })
+})
+
+describe('optimize', () => {
+  it('drops a cyclic pair unreachable from the root importer', () => {
+    // A pure cycle (cyc-a <-> cyc-b) has no path from any real root, so both are
+    // unreachable and pruned.
+    const graph = parse(
+      V5(
+        'specifiers:\n  lodash: 4.17.21\n\ndependencies:\n  lodash: 4.17.21\n\n' +
+          'packages:\n\n' +
+          '  /lodash/4.17.21:\n    resolution: {integrity: sha512-a}\n    dev: false\n' +
+          '  /cyc-a/1.0.0:\n    resolution: {integrity: sha512-b}\n    dependencies:\n      cyc-b: 1.0.0\n    dev: false\n' +
+          '  /cyc-b/1.0.0:\n    resolution: {integrity: sha512-c}\n    dependencies:\n      cyc-a: 1.0.0\n    dev: false\n',
+      ),
+    )
+    expect(graph.getNode('cyc-a@1.0.0')).toBeDefined()
+    const result = optimize(graph)
+    expect(result.graph.getNode('cyc-a@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('cyc-b@1.0.0')).toBeUndefined()
+    expect(result.graph.getNode('lodash@4.17.21')).toBeDefined()
+  })
+})
+
+describe('peelPeerTail', () => {
+  it('returns undefined for an empty input and for a fully-consumed remainder', () => {
+    expect(peelPeerTail('')).toBeUndefined()
+    // A value that is ALL peer tail (`_react@18.0.0`) has no base version left.
+    expect(peelPeerTail('_react@18.0.0')).toBeUndefined()
+  })
+
+  it('peels multiple underscore peer segments right-to-left, keeping canonical order', () => {
+    const peeled = peelPeerTail('1.0.0_react@18.0.0_redux@4.2.0')
+    expect(peeled).toEqual({
+      version: '1.0.0',
+      peers: [
+        { name: 'react', version: '18.0.0' },
+        { name: 'redux', version: '4.2.0' },
+      ],
+    })
+  })
+})
+
+describe('parsePackagesKey', () => {
+  it('splits scoped names on the last slash', () => {
+    expect(parsePackagesKey('/@types/node/20.11.30')).toEqual({
+      name: '@types/node',
+      version: '20.11.30',
+      peers: [],
+    })
+    // No leading slash → undefined.
+    expect(parsePackagesKey('lodash/4.17.21')).toBeUndefined()
+    // Only one segment (no `/` after strip) → undefined.
+    expect(parsePackagesKey('/lodash')).toBeUndefined()
+  })
+})
+
+describe('resolveDependencyTarget', () => {
+  it('resolves a peer-suffixed value to the peer-virt node, else the bare node', () => {
+    const seen = new Set(['react-dom@18.2.0(react@18.2.0)', 'lodash@4.17.21'])
+    // Peer-context form resolves to the peer-virt id.
+    expect(resolveDependencyTarget(seen, 'react-dom', '18.2.0_react@18.2.0')).toBe(
+      'react-dom@18.2.0(react@18.2.0)',
+    )
+    // Bare form resolves to the bare id.
+    expect(resolveDependencyTarget(seen, 'lodash', '4.17.21')).toBe('lodash@4.17.21')
+    // Unknown → undefined.
+    expect(resolveDependencyTarget(seen, 'missing', '9.9.9')).toBeUndefined()
+  })
+})
+
+describe('resolveAliasedDependencyTarget', () => {
+  it('peels `<target>@<version>` for the npm-alias form', () => {
+    const seen = new Set(['react-is@17.0.2'])
+    expect(resolveAliasedDependencyTarget(seen, 'react-is@17.0.2')).toBe('react-is@17.0.2')
+    // A bare version (no interior `@`) is not an alias shape.
+    expect(resolveAliasedDependencyTarget(seen, '17.0.2')).toBeUndefined()
   })
 })

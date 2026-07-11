@@ -797,7 +797,7 @@ function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
   return parsed as NpmLockfile
 }
 
-function nameFromInstallPath(config: NpmFamilyConfig, path: string, entry: NpmEntry): string {
+export function nameFromInstallPath(config: NpmFamilyConfig, path: string, entry: NpmEntry): string {
   if (entry.name !== undefined && entry.link !== true) {
     return entry.name
   }
@@ -1132,7 +1132,7 @@ function compareEdgesForBfs(a: Edge, b: Edge): number {
   return cmpStr(a.dst, b.dst)
 }
 
-function fallbackInstallPathForNode(node: Node, pathToId: ReadonlyMap<string, string>): string {
+export function fallbackInstallPathForNode(node: Node, pathToId: ReadonlyMap<string, string>): string {
   const primary = `node_modules/${node.name}`
   const occupant = pathToId.get(primary)
   if (occupant === undefined || occupant === node.id) return primary
@@ -1169,7 +1169,7 @@ function buildRootEntry(
   return body
 }
 
-function buildSyntheticRootEntry(rootMeta: NpmRootMeta): Record<string, unknown> {
+export function buildSyntheticRootEntry(rootMeta: NpmRootMeta): Record<string, unknown> {
   const body: Record<string, unknown> = {}
   if (rootMeta.name !== undefined) body.name = rootMeta.name
   if (rootMeta.version !== undefined) body.version = rootMeta.version
@@ -1276,7 +1276,7 @@ function installPathTail(path: string): string {
   return chain[chain.length - 1] ?? path
 }
 
-function collectManifestBlocks(
+export function collectManifestBlocks(
   graph: Graph,
   srcId: string,
   sidecar: NpmSidecar | undefined,

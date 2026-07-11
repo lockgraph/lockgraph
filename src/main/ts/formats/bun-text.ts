@@ -552,7 +552,7 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
   return options.lineEnding === 'crlf' ? json.replace(/\n/g, '\r\n') : json
 }
 
-function resolveOverridesBlock(
+export function resolveOverridesBlock(
   callerOverrides: OverrideConstraint[] | undefined,
   sidecar: BunTextSidecar | undefined,
   emitDiagnostic: (d: Diagnostic) => void,
@@ -795,7 +795,7 @@ function renderJsonc(value: unknown): string {
 
 const INDENT = '  '
 
-function renderValue(value: unknown, depth: number, isTopLevel: boolean): string {
+export function renderValue(value: unknown, depth: number, isTopLevel: boolean): string {
   if (Array.isArray(value)) return renderArray(value)
   if (value !== null && typeof value === 'object') return renderObject(value as Record<string, unknown>, depth, isTopLevel)
   return renderInlineValue(value)
@@ -807,7 +807,7 @@ function renderArray(arr: unknown[]): string {
   return `[${arr.map(renderInlineValue).join(', ')}]`
 }
 
-function renderInlineValue(value: unknown): string {
+export function renderInlineValue(value: unknown): string {
   if (value === null) return 'null'
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null'
@@ -940,7 +940,7 @@ interface BunTextDepBlocks {
 // workspace-protocol ranges resolve via `workspaceByPath`; otherwise we
 // rely on the pre-scoped `byName` map. Peer ranges are stashed declaratively
 // — bun encodes peers as data, not graph edges (ADR-0006 / §C enrich).
-function addBlockEdges(
+export function addBlockEdges(
   builder: ReturnType<typeof newBuilder>,
   diagnostics: Diagnostic[],
   srcId: string,
@@ -1030,7 +1030,7 @@ function locateRootNode(graph: Graph, sidecar: BunTextSidecar | undefined): Node
   return undefined
 }
 
-function buildWorkspaceManifest(
+export function buildWorkspaceManifest(
   graph: Graph,
   workspaceNode: Node | undefined,
   sidecarManifest: BunTextWorkspaceManifest | undefined,
@@ -1099,7 +1099,7 @@ function buildWorkspaceManifest(
   return out
 }
 
-function buildInnerBlock(graph: Graph, node: Node, sidecar: BunTextSidecar | undefined): BunTextInner {
+export function buildInnerBlock(graph: Graph, node: Node, sidecar: BunTextSidecar | undefined): BunTextInner {
   const dependencies: Record<string, string> = {}
   const optionalDependencies: Record<string, string> = {}
   const peerDependencies: Record<string, string> = {}

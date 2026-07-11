@@ -79,6 +79,7 @@ import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
 import {
+  DEFAULT_NPM_REGISTRY,
   stringifyForPnpm,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
@@ -799,8 +800,8 @@ export function optimize(
 
 // === Parse helpers ==========================================================
 
-interface PeerEntry { name: string; version: string }
-interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] }
+export interface PeerEntry { name: string; version: string }
+export interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] }
 
 /**
  * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5 r2. Given
@@ -815,7 +816,7 @@ interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] 
  * the working corpus. PEER_TAIL_RE handles the common scoped-peer shape
  * `@scope/name@version` correctly.
  */
-function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | undefined {
+export function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | undefined {
   if (input.length === 0) return undefined
   let rest = input
   const peers: PeerEntry[] = []
@@ -835,7 +836,7 @@ function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | 
  * (the version segment contains no `/`, so the rule applies uniformly
  * to scoped and unscoped names), then peel the peer tail right-to-left.
  */
-function parsePackagesKey(key: string): ParsedPackagesKey | undefined {
+export function parsePackagesKey(key: string): ParsedPackagesKey | undefined {
   if (!key.startsWith('/')) return undefined
   const body = key.slice(1)
   const lastSlash = body.lastIndexOf('/')
@@ -848,7 +849,7 @@ function parsePackagesKey(key: string): ParsedPackagesKey | undefined {
   return { name, version: peeled.version, peers: peeled.peers }
 }
 
-function resolveDependencyTarget(
+export function resolveDependencyTarget(
   seenIds: Set<string>,
   depName: string,
   rawValue: string,
@@ -864,7 +865,7 @@ function resolveDependencyTarget(
 }
 
 /** pnpm v5 npm-alias variant: rawValue carries `<target>@<version>` rather than a bare version. */
-function resolveAliasedDependencyTarget(
+export function resolveAliasedDependencyTarget(
   seenIds: Set<string>,
   rawValue: string,
 ): string | undefined {
@@ -1135,7 +1136,7 @@ function buildPackageEntry(
       || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
   const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
-    && tarball.resolution.url === `https://registry.npmjs.org/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
+    && tarball.resolution.url === `${DEFAULT_NPM_REGISTRY}/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
     if (tarball.integrity !== undefined) {
