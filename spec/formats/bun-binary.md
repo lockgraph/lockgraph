@@ -11,7 +11,7 @@
 > `deferred` today, so the bare `deferred` value is used and its
 > permanence is stated in prose here.
 
-`@antongolub/lockfile` does **not** parse `bun.lockb` and never will.
+`lockgraph` does **not** parse `bun.lockb` and never will.
 The format is undocumented, version-fragile, and obsoleted by bun's
 own move to text format in 1.2. The library's path for any bun
 input is [bun-text](./bun-text.md); the `bun-binary` adapter exists

@@ -57,7 +57,7 @@ const CORPUS: ReadonlyArray<{ source: string; format: FormatId; fixture: string 
 // Split a lockgraph document into the volatile META (the four lines before the
 // first region header) and the canonical BODY (the `R <n>` region header onward,
 // i.e. R/N/E and the optional trailing L line). META carries the `generatedAt`
-// and `generator @antongolub/lockfile@<version>` lines and is the only
+// and `generator lockgraph@<version>` lines and is the only
 // generatedAt/version-dependent part, so excluding it makes the guards immune to
 // a clock or a version bump.
 function bodyOf(text: string): string {

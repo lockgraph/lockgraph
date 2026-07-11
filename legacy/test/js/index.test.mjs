@@ -2,7 +2,7 @@ import { suite } from 'uvu'
 import assert from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
-import { parse, format } from '@antongolub/lockfile'
+import { parse, format } from 'lockgraph'
 
 const test = suite('index (mjs)')
 

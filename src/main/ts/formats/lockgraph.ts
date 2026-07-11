@@ -110,7 +110,7 @@ const SCHEMA_MAJOR = 1
 const SCHEMA_MINOR = 0
 
 const MAGIC = '@lockgraph'
-const GENERATOR = `@antongolub/lockfile@${version}`
+const GENERATOR = `lockgraph@${version}`
 
 // The `-` sentinel for an ABSENT (undefined) value in a column. A bare dash is
 // the only one-char value a column never legitimately holds, so it discriminates

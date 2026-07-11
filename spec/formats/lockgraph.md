@@ -238,7 +238,7 @@ graph identity**:
 @lockgraph 1
 schema 1.0
 generatedAt <RFC-3339 UTC, second precision, 'Z'>
-generator @antongolub/lockfile@<version>
+generator lockgraph@<version>
 ```
 
 - **`@lockgraph 1`** — the magic discriminant; MUST be the first token of the
@@ -251,7 +251,7 @@ generator @antongolub/lockfile@<version>
   `stringify` defaults it to "now"; pass `{ generatedAt }` to pin it (makes the
   whole document byte-stable, useful for golden tests).
 - **`generator`** — the producing library id
-  (`@antongolub/lockfile@<version>`). Provenance only.
+  (`lockgraph@<version>`). Provenance only.
 
 META is **pure provenance** — magic, `schema`, `generatedAt`, `generator`, and
 nothing else. Unknown or absent META lines are **ignored on parse** (they are

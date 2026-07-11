@@ -196,7 +196,7 @@ describe('lockgraph §D — META / regions', () => {
     expect(text).toMatch(/^@lockgraph 1\n/)
     expect(text).toMatch(/\nschema 1\.0\n/)
     expect(text).toContain(`generatedAt ${PINNED}`)
-    expect(text).toMatch(/\ngenerator @antongolub\/lockfile@/)
+    expect(text).toMatch(/\ngenerator lockgraph@/)
     // the three region headers, space-separated framing, in order
     expect(text).toMatch(/\nR \d+\n/)
     expect(text).toMatch(/\nN \d+\n/)

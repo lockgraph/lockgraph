@@ -611,7 +611,7 @@ Deno is **multi-registry by construction**, and each maps to an existing
 - `--level=high` gates by severity; advisories can be **filtered by CVE id**
   (suppress accepted risk in CI). `deno ci` / config-level integration exists.
 
-Implication for `@antongolub/lockfile`: for Deno the **native** remediation path is
+Implication for `lockgraph`: for Deno the **native** remediation path is
 real and constraint-aware (unlike Bun's blunt `bun update`). The project's value-add
 for Deno is narrower — cross-PM / lockfile-format breadth and the GitHub-advisory
 bulk path documented in [`_common.md` §8](../registry/_common.md#8-advisories--audit-api),

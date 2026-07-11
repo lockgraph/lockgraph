@@ -128,7 +128,7 @@ integrity hash and a resolution, so `parse → stringify` is fully offline; the 
 exception is the berry-zip ↔ tarball-SRI crossing, which *omits* the hash rather
 than fetching (the PM refills it on install).
 
-The registry is an **opt-in** adapter (`liveRegistry`, `@antongolub/lockfile/registry`)
+The registry is an **opt-in** adapter (`liveRegistry`, `lockgraph/registry`)
 used by three refinement paths:
 
 | Path | What it fetches | Why |

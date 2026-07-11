@@ -57,7 +57,7 @@ export type {
 // ADR-0023 §8.2 — `modify()` orchestrator + its `Primitive` discriminated
 // union and unified `ModifyResult` shape. The orchestrator is the single
 // dispatch entry point for the modifier vocabulary; per-primitive functions
-// remain individually importable via `@antongolub/lockfile/modify`.
+// remain individually importable via `lockgraph/modify`.
 export { modify } from './modify/modify.ts'
 export type {
   ModifyResult,
@@ -72,7 +72,7 @@ export type {
 // ADR-0024 — `optimize()` post-completion, pre-stringify orphan GC.
 // Monotone-reductive: removes unreachable nodes from the
 // roots/workspaces/preserve mark-set, never adds. Per-primitive importable
-// via `@antongolub/lockfile/optimize`.
+// via `lockgraph/optimize`.
 export { optimize } from './optimize/optimize.ts'
 export type { OptimizeOptions, OptimizeResult } from './optimize/optimize.ts'
 

@@ -38,8 +38,8 @@ export interface YamlMap { [k: string]: unknown }
 
 // --- Typed wrappers (B1' resolution) --------------------------------------
 
-const FLOW_MAP_TAG = Symbol.for('@antongolub/lockfile/_pnpm-yaml/flow-map')
-const QUOTED_TAG = Symbol.for('@antongolub/lockfile/_pnpm-yaml/quoted')
+const FLOW_MAP_TAG = Symbol.for('lockgraph/_pnpm-yaml/flow-map')
+const QUOTED_TAG = Symbol.for('lockgraph/_pnpm-yaml/quoted')
 
 export interface YamlFlowMap {
   readonly [FLOW_MAP_TAG]: true

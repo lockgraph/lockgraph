@@ -2,7 +2,7 @@ const assert = require('node:assert')
 const fs = require('node:fs')
 const path = require('node:path')
 const {suite} = require('uvu')
-const { parse, format} = require('@antongolub/lockfile')
+const { parse, format} = require('lockgraph')
 
 const test = suite('index (cjs)')
 

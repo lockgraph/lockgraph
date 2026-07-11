@@ -1,7 +1,7 @@
 @lockgraph 1
 schema 1.0
 generatedAt 2026-01-01T00:00:00Z
-generator @antongolub/lockfile@0.0.0
+generator lockgraph@0.0.0
 R 4
 npm	https://registry.npmjs.org
 unknown	fsevents@patch:fsevents@npm%3A2.3.3#optional!builtin<compat/fsevents>::version=2.3.3&hash=df0bf1

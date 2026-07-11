@@ -1,7 +1,7 @@
 @lockgraph 1
 schema 1.0
 generatedAt 2026-01-01T00:00:00Z
-generator @antongolub/lockfile@0.0.0
+generator lockgraph@0.0.0
 R 2
 npm	-
 workspace	-

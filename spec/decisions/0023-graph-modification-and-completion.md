@@ -23,7 +23,7 @@ project's headline mission shifts from *conversion* to
 that motivated [`yarn-audit-fix`](https://github.com/antongolub/yarn-audit-fix)
 in 2019, now generalised across npm / yarn / pnpm / bun.
 
-The README already promises this surface (`@antongolub/lockfile/modify`):
+The README already promises this surface (`lockgraph/modify`):
 
 > *"Conversion is one use case; modification (audit-fix, override
 > pinning, license filtering) is the headline."*
@@ -119,7 +119,7 @@ The headline use case `audit-fix` decomposes into operational parts:
    in-edges came from the removed nodes.
 
 Step 1 is advisory-feed integration (out of scope for this ADR;
-likely a separate `@antongolub/lockfile/advise` subpath later).
+likely a separate `lockgraph/advise` subpath later).
 Steps 2 / 3 / 4 are this ADR's territory: modifier primitives that
 take an existing Graph + RegistryAdapter (+ optional CacheAdapter,
 manifests) and return a new Graph + Diagnostic[] that downstream
@@ -166,7 +166,7 @@ new Graph + diagnostics; the runtime (ADR-0008's iterative loop)
 composes primitives, runs completion after each, and re-enters the
 loop until fixpoint.
 
-Public surface: `import { ... } from '@antongolub/lockfile/modify'`
+Public surface: `import { ... } from 'lockgraph/modify'`
 per README §"Sub-imports".
 
 The modifier-completion layer is **offline-first**: every primitive
@@ -917,7 +917,7 @@ modify/complete, not amended.
 Per README §"Sub-imports":
 
 ```ts
-// @antongolub/lockfile/modify
+// lockgraph/modify
 export {
   replaceVersion,
   pinOverride,
@@ -1162,7 +1162,7 @@ registry cannot answer, NOT to fail.
   more `patch-package` / `pnpm patch-commit` territory).
 - **Advisory feed integration** (npm audit / OSV / GHSA → modifier
   intents) — separate concern; likely a separate
-  `@antongolub/lockfile/advise` subpath. ADR-0023's modifier
+  `lockgraph/advise` subpath. ADR-0023's modifier
   primitives consume already-formed intents.
 - **Modifier-time peer-virt synthesis** — when a modifier
   introduces a node with peer-deps that bind to different
@@ -1194,7 +1194,7 @@ registry cannot answer, NOT to fail.
 ## §11 Links
 
 - [README.md](../../README.md) — aspirational
-  `@antongolub/lockfile/modify` surface this ADR pins.
+  `lockgraph/modify` surface this ADR pins.
 - [ADR-0001](./0001-three-layer-model.md) — three-layer model
   (Manifest / Graph / Layout); modification operates at the
   Graph layer.

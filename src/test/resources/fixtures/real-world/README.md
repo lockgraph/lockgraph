@@ -38,7 +38,7 @@ transitional shape onto the shared `_yarn-berry-core` family pipeline
 ### Sister-session canary import — Yarn 4 large monorepos
 
 Discovered via the `yarn-audit-fix` sister-session's real-world canary
-(first run against `@antongolub/lockfile@0.0.0-snapshot.45`, 2026-05-28).
+(first run against `lockgraph@0.0.0-snapshot.45`, 2026-05-28).
 Re-pinned 2026-05-29 to exact commits: each fixture's directory handle is
 `<space>-<repo>-<branch>-<sha7>` and its `yarn.lock` is byte-identical to
 that commit's `yarn.lock` (re-fetched from `raw.githubusercontent.com` at

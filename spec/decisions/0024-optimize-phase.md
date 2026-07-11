@@ -146,7 +146,7 @@ Normative pins:
 ## §3 Public API surface
 
 ```ts
-// @antongolub/lockfile/optimize
+// lockgraph/optimize
 export function optimize(
   graph:    Graph,
   options?: OptimizeOptions,
@@ -208,9 +208,9 @@ src/main/ts/
     └── diagnostics.ts       # OPTIMIZE_* code constants + helpers
 ```
 
-Public subpath: `@antongolub/lockfile/optimize`, in line with
-existing `@antongolub/lockfile/modify` and
-`@antongolub/lockfile/complete`.
+Public subpath: `lockgraph/optimize`, in line with
+existing `lockgraph/modify` and
+`lockgraph/complete`.
 
 The `optimize/` directory MUST NOT import from `modify/` or
 `complete/` — the phase is intentionally agnostic of which

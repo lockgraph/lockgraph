@@ -9,7 +9,7 @@ them, and handled scopes, integrity hashes and git sources. It has served the np
 and yarn communities for years and is the reference point every later converter,
 including this one, is measured against. lockgraph builds on that groundwork.
 
-lockgraph (`@antongolub/lockfile`) is a universal lockfile **model** and
+lockgraph (`lockgraph`) is a universal lockfile **model** and
 converter. It spans npm (`package-lock.json` v1/v2/v3), yarn classic, yarn berry
 (v4–v10), pnpm (v5/v6/v9) and bun (`bun.lock`), and converts any of them to any
 other through a single canonical graph. It runs as a pure library: no package

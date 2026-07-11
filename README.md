@@ -1,8 +1,8 @@
-# @antongolub/lockfile
+# lockgraph
 
 > Universal lockfile model and converter for **npm**, **yarn**, **pnpm**, **bun**.
 
-<p><img alt="@antongolub/lockfile — universal lockfile model and converter for npm, yarn, pnpm, bun" src="./pics/lockfile.svg" align="right" width="300">
+<p><img alt="lockgraph — universal lockfile model and converter for npm, yarn, pnpm, bun" src="./pics/lockfile.svg" align="right" width="300">
 
 Each package manager brings its own philosophy of how to describe, store and
 control project dependencies. Inside a single repo it's invisible to the
@@ -27,8 +27,8 @@ that emit it.
 > **ℹ️ Active R&D — snapshot channel.** While the project is under active research &
 > development, every release ships to the **snapshot channel** (`0.0.0-snapshot.N`,
 > published under the `snapshot` npm dist-tag) rather than `latest`. Install the newest
-> snapshot with `npm i @antongolub/lockfile@snapshot`, or pin an exact build
-> (e.g. `npm i @antongolub/lockfile@0.0.0-snapshot.61`). The first stable `latest`
+> snapshot with `npm i lockgraph@snapshot`, or pin an exact build
+> (e.g. `npm i lockgraph@0.0.0-snapshot.61`). The first stable `latest`
 > release is pending.
 
 | Format | `detect` | `parse` | `stringify` |
@@ -67,7 +67,7 @@ signatures) are the exception — they are never silently lost.
 ## API
 
 ```ts
-import { parse, stringify, convert } from '@antongolub/lockfile'
+import { parse, stringify, convert } from 'lockgraph'
 
 // explicit format (it's always the first argument):
 const graph = parse('pnpm-v9', raw)
@@ -102,7 +102,7 @@ format-agnostically:
   `addDependency`, `removeDependency`, `applyPatch`, `filterLicense` — the
   building blocks of audit-fix, override-pinning and license filtering.
 - **`optimize`** runs orphan GC / dedup over the graph (a production-reachability
-  sweep). **`pruneOrphans`** (via `@antongolub/lockfile/optimize`) is the
+  sweep). **`pruneOrphans`** (via `lockgraph/optimize`) is the
   reference-count sibling: it retires only nodes that lost their *last* incoming
   edge of any kind — post-bump cleanup that, unlike reachability, never
   over-collects a still-referenced dev/optional/peer dep.
@@ -124,7 +124,7 @@ type StringifyOptions = {
   onDiagnostic?: (d: Diagnostic) => void
 }
 
-// @antongolub/lockfile/registry — liveRegistry({ … }); the transport seams:
+// lockgraph/registry — liveRegistry({ … }); the transport seams:
 type LiveRegistryOptions = {
   url?:        string                         // registry URL (default registry.npmjs.org)
   auth?:       string                         // Bearer token (authHeader? for a verbatim 'Bearer …' / 'Basic …')
@@ -133,7 +133,7 @@ type LiveRegistryOptions = {
 }
 type Limiter = <T>(task: () => Promise<T>) => Promise<T>
 
-// @antongolub/lockfile/complete — completeTransitives(graph, registry, { … }):
+// lockgraph/complete — completeTransitives(graph, registry, { … }):
 type CompletionOptions = {
   constraints?:   Condition[]                 // node-local acceptance gates (engines / license / custom); ADR-0037
   budget?:        { maxCombinations: number } // opt-in bounded-backtracking discovery (suggests the override to pin)
@@ -155,8 +155,8 @@ Registry-backed work — re-resolution, checksum refill, advisory audit — need
 registry URL and its auth, resolved from the package-manager config, never guessed.
 
 ```ts
-import { resolveRegistry, liveRegistry } from '@antongolub/lockfile/registry'
-import { registryPackages } from '@antongolub/lockfile/optimize'
+import { resolveRegistry, liveRegistry } from 'lockgraph/registry'
+import { registryPackages } from 'lockgraph/optimize'
 
 // Resolve routing + host-bound auth for ONE ecosystem. `ecosystem` is REQUIRED:
 // it fixes exactly which config files + env namespace are read, so a planted
@@ -201,14 +201,14 @@ const reg = liveRegistry({ fetch: fetchWithRetry, limit: task => pool(task) })
 ### Constraint-aware completion
 
 `completeTransitives(graph, registry, { constraints })` (from
-`@antongolub/lockfile/complete`) selects each newly-introduced transitive as the
+`lockgraph/complete`) selects each newly-introduced transitive as the
 **highest range-satisfying version that also passes every constraint** — so a
 post-bump closure stays compatible with the target environment, not merely
 semver-valid. Constraints are pluggable acceptance gates; `engines` and `license`
 ship built-in:
 
 ```ts
-import { completeTransitives, engines, license } from '@antongolub/lockfile/complete'
+import { completeTransitives, engines, license } from 'lockgraph/complete'
 
 const { graph: completed, unresolved } = await completeTransitives(graph, registry, {
   constraints: [
@@ -273,13 +273,13 @@ packument already in hand (`engines`), `10` needs one full-manifest fetch (`lice
 
 | Surface | Importable as | Contains |
 |---------|---------------|----------|
-| Root | `@antongolub/lockfile` | `detect`, `check`, `parse`, `stringify`, `convert`, `modify`, `optimize`, `overridesOf`, plus types `Graph`, `FormatId`, `ParseOptions`, `StringifyOptions`, `ConvertOptions`, `Manifest` |
-| Modifiers | `@antongolub/lockfile/modify` | the individual `Primitive` functions behind `modify` (audit-fix, override-pin, license-filter) |
-| Complete | `@antongolub/lockfile/complete` | `completeTransitives` — registry-backed tree completion that wires the transitive deps a modify introduced, with optional node-local `constraints` (`engines`, `license`) for engine/license-aware version selection |
-| Optimize | `@antongolub/lockfile/optimize` | `optimize` (reachability orphan GC), `pruneOrphans` (reference-count orphan GC), `registryPackages` (the graph's registry deps as a `{name: versions[]}` audit input) |
-| Enrich | `@antongolub/lockfile/enrich` | `refurbish` — monotone field-fill (e.g. recomputes a yarn-berry zip `checksum` from a tarball source so a patched lock installs without `yarn install`) |
-| Registry | `@antongolub/lockfile/registry` | `frozenRegistry`, `liveRegistry` (+ `.fromConfig`, `.audit`), `resolveRegistry`, `npmCache`, `pnpmCache`, `yarnBerryCache` |
-| Per-format | `@antongolub/lockfile/formats/<id>` | a single adapter directly (test surface; not a primary user API) |
+| Root | `lockgraph` | `detect`, `check`, `parse`, `stringify`, `convert`, `modify`, `optimize`, `overridesOf`, plus types `Graph`, `FormatId`, `ParseOptions`, `StringifyOptions`, `ConvertOptions`, `Manifest` |
+| Modifiers | `lockgraph/modify` | the individual `Primitive` functions behind `modify` (audit-fix, override-pin, license-filter) |
+| Complete | `lockgraph/complete` | `completeTransitives` — registry-backed tree completion that wires the transitive deps a modify introduced, with optional node-local `constraints` (`engines`, `license`) for engine/license-aware version selection |
+| Optimize | `lockgraph/optimize` | `optimize` (reachability orphan GC), `pruneOrphans` (reference-count orphan GC), `registryPackages` (the graph's registry deps as a `{name: versions[]}` audit input) |
+| Enrich | `lockgraph/enrich` | `refurbish` — monotone field-fill (e.g. recomputes a yarn-berry zip `checksum` from a tarball source so a patched lock installs without `yarn install`) |
+| Registry | `lockgraph/registry` | `frozenRegistry`, `liveRegistry` (+ `.fromConfig`, `.audit`), `resolveRegistry`, `npmCache`, `pnpmCache`, `yarnBerryCache` |
+| Per-format | `lockgraph/formats/<id>` | a single adapter directly (test surface; not a primary user API) |
 
 ### Errors
 

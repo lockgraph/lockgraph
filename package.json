@@ -1,5 +1,5 @@
 {
-  "name": "@antongolub/lockfile",
+  "name": "lockgraph",
   "version": "0.0.0-snapshot.93",
   "private": false,
   "description": "Universal lockfile model and converter for npm, yarn, pnpm, bun",
@@ -178,7 +178,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/antongolub/lockfile.git"
+    "url": "git+https://github.com/lockgraph/lockgraph.git"
   },
   "keywords": [
     "lockfile",
@@ -192,8 +192,8 @@
   "author": "Anton Golub <antongolub@antongolub.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/antongolub/lockfile/issues"
+    "url": "https://github.com/lockgraph/lockgraph/issues"
   },
-  "homepage": "https://github.com/antongolub/lockfile#readme",
+  "homepage": "https://github.com/lockgraph/lockgraph#readme",
   "packageManager": "npm@10.9.2"
 }
