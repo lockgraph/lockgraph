@@ -47,7 +47,7 @@ source. `~` = representable only with `manifests`, or in a degraded form.
 | `dev` / `peer` edge distinction | ~ (flags) | ✓ | ~ (needs manifests) | ✓ | ✓ | ~ (from reachability) | ✓ |
 | `optional` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `peerDependenciesMeta` | ✗ | ✓ | ✗ | ✓ | ✓ | ✓ | ~ (declarative) |
-| Overrides / resolutions block | ✗ | ✓ (`packages[""].overrides`) | ✗ (rewrites entry key) | ✗ (manifest-only) | ✓ (`overrides:`) | ✓ | ✓ (npm-shaped) |
+| Overrides / resolutions block | ✗ | ✗ (manifest-only) | ✗ (rewrites entry key) | ✗ (manifest-only) | ✓ (`overrides:`) | ✓ | ✓ (npm-shaped) |
 | `patch:` protocol | ✗ | ✗ | ✗ | ✓ (per-node) | ✓ | ✓ | ~ (top-level map only) |
 | `conditions` (os/cpu/libc gate) | ✗ | ✗ | ✗ | ✓ (v5+) | ✗ | ✗ | ✗ |
 | `catalog:` protocol | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ (9.5+) | ✗ |
@@ -71,7 +71,7 @@ Organised by feature axis. "Direction" is the family boundary that loses it;
 | **`patch:` protocol** | berry / pnpm → npm / yarn-classic / bun | `RECIPE_FEATURE_DROPPED` (`feature='patch'`) | No — no patch protocol in the target; the patched copy becomes the base package. |
 | **`conditions` (os/cpu/libc)** | berry v5+ → any non-berry (and berry → v4) | **— none (silent loss)** | Re-derivable on a completion mint from `os`/`cpu`/`libc` (needs the **full** manifest — corgi omits `libc`). |
 | **`workspace:` protocol** | berry / pnpm / bun → npm / yarn-classic | `RECIPE_WORKSPACE_COLLAPSED` (also `_RESOLVED` / `_UNRESOLVED`) | npm keeps members via `packages/<path>` + `link`; yarn-classic keeps them only via manifests (see below). |
-| **Overrides / resolutions block** | pnpm / npm / bun → yarn-classic / yarn-berry | `INTEROP_OVERRIDE_NOT_PROJECTED` | The resolved *graph* still reflects the pin; only the re-emittable overrides *block* is lost (yarn applies resolutions at resolve time, not from the lock). |
+| **Overrides / resolutions block** | pnpm / bun (lock carriers) → npm / yarn-classic / yarn-berry (manifest-only) | `INTEROP_OVERRIDE_NOT_PROJECTED` | The resolved *graph* still reflects the pin; the re-emittable overrides *block* is lost. npm & yarn read the policy from the root manifest, never the lock (npm `package.json.overrides`, yarn `resolutions`) — so the declaration is owed to a companion manifest patch (project-level API), never synthesized into a lock the manager ignores. |
 | **`catalog:` protocol** | pnpm-v9 → anything | **— none (silent)**; missing target → `RECIPE_RESOLUTION_UNKNOWN` | No equivalent elsewhere; a `catalog:` ref binds to the resolved entry the lock already carries. |
 | **`dev` / `peer` classification** | any → yarn-classic **without manifests** | `YARN_CLASSIC_NO_MANIFESTS`; peer edges also `YARN_CLASSIC_PEER_DROPPED` | `dev` is recoverable with `manifests[<path>]`; **`peer` is not** — a `yarn.lock` cannot record it and yarn-classic manifest synthesis reads only `dependencies`. |
 | **Bundled deps** | npm → yarn / pnpm / bun | **— none (silent)** | Carried as a `bundled` edge kind in the graph but not re-emitted by non-npm targets. |
@@ -147,7 +147,17 @@ scope-inferred registry so a `--frozen-lockfile` install does not rewrite it.
 
 Freeze-mode acceptance (`npm ci`, `yarn install --immutable`, `pnpm install
 --frozen-lockfile`) is the gate — the generated lock must install without a
-rewrite. Beyond that, some targets are byte-identical to the PM's own output:
+rewrite.
+
+For **npm and yarn**, the frozen unit is the lock **plus the root manifest**, not
+the lock alone: the override policy lives in `package.json` (`overrides` /
+`resolutions`), never the lock, so a project that uses overrides needs a matching
+companion manifest for the target to freeze-clean — the lock carries the resolved
+graph, not the policy. (pnpm/bun persist an in-lock `overrides` carrier and
+additionally deep-compare it against config in frozen mode — pnpm 6–10 reject on
+mismatch.)
+
+Beyond acceptance, some targets are byte-identical to the PM's own output:
 
 - **npm** emits `json-stringify-nice` key order (matching arborist) and preserves
   `peerDependenciesMeta` / `hasInstallScript`, so a generated `package-lock.json`
@@ -166,7 +176,7 @@ diagnostic codes). "clean" = frozen-clean with no feature loss beyond layout.
 
 | From ↓ \ To → | npm | yarn-classic | yarn-berry | pnpm | bun |
 | --- | --- | --- | --- | --- | --- |
-| **npm** | clean (v3↔v2; v→v1 drops workspaces/peerMeta) | needs manifests for dev/peer + workspaces | drops overrides block; integrity recompute for install | clean | clean |
+| **npm** | clean (v3↔v2; v→v1 drops workspaces/peerMeta) | needs manifests for dev/peer + workspaces | overrides are manifest-only (neither lock carries them); integrity omitted (berry recompute on install) | clean | clean |
 | **yarn-classic** | needs manifests (root + members + dev/peer) | — | preamble/workspace synthesized | needs manifests for dev/peer | resolved-URL forms may drop |
 | **yarn-berry** | drops peer-virt, patch, conditions; integrity omitted | drops peer-virt, patch, conditions, workspace; needs manifests | clean (v-to-v; v→v4 drops conditions) | drops peer-virt→pnpm keeps it; **integrity omitted** | drops peer-virt, patch, conditions |
 | **pnpm** | drops peer-virt, patch, catalog | drops peer-virt, patch, workspace; needs manifests | drops catalog; preamble synthesized | clean (v-to-v; v9↔v5/6 settings drop) | drops peer-virt, patch, catalog |

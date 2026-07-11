@@ -383,14 +383,19 @@ export function overrideParentRefDropped(pkg: string, to: string): Diagnostic {
   }
 }
 
-// `INTEROP_OVERRIDE_NOT_PROJECTED` (warning) — caller-supplied overrides were
-// passed to a stringify target whose lockfile carries no overrides block
-// (yarn-berry: forced resolutions live only in the manifest, never the lock).
-export function interopOverrideNotProjected(pm: 'yarn', count: number): Diagnostic {
+// `INTEROP_OVERRIDE_NOT_PROJECTED` (warning) — caller-supplied (or captured)
+// overrides were passed to a stringify target whose lockfile carries no
+// AUTHORITATIVE overrides declaration. npm and yarn read the policy from the
+// root manifest, never the lock (yarn-berry forced resolutions and npm
+// `overrides` live only in package.json). The declaration must ride a companion
+// manifest patch (the project-level conversion API), not the lock — so we
+// surface the drop rather than synthesize a field the manager ignores.
+export function interopOverrideNotProjected(pm: 'yarn' | 'npm', count: number): Diagnostic {
+  const manifestKey = pm === 'npm' ? 'overrides' : 'resolutions'
   return {
     code:     'INTEROP_OVERRIDE_NOT_PROJECTED',
     severity: 'warning',
-    message:  `${count} override${count === 1 ? '' : 's'} not projected: ${pm} lockfiles carry no overrides block (declare in package.json resolutions)`,
+    message:  `${count} override${count === 1 ? '' : 's'} not projected: ${pm} lockfiles carry no overrides block (declare in package.json ${manifestKey})`,
   }
 }
 

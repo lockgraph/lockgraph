@@ -187,15 +187,17 @@ describe('parse', () => {
 })
 
 describe('stringify', () => {
-  it('projects caller overrides into packages[""].overrides on a v3 lock', () => {
-    // options.overrides (non-empty) → projectOverrides → nested npm form landed
-    // in the root entry's `overrides` slot (lockfileVersion >= 2 path).
+  it('does NOT synthesize packages[""].overrides for caller overrides — diagnoses instead', () => {
+    // npm reads overrides from package.json, not the lock; the field is non-native,
+    // so caller overrides surface INTEROP_OVERRIDE_NOT_PROJECTED (owed to a
+    // companion manifest patch) rather than a forged lock block.
     const graph = parseV3(v3Lock({ '': { name: 'root', version: '1.0.0' } }))
-    const text = stringifyV3(graph, { overrides: [{ package: 'lodash', to: '4.17.21' }] })
-    const out = JSON.parse(text) as {
-      packages: Record<string, { overrides?: Record<string, unknown> }>
-    }
-    expect(out.packages['']!.overrides).toEqual({ lodash: '4.17.21' })
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(
+      stringifyV3(graph, { overrides: [{ package: 'lodash', to: '4.17.21' }], onDiagnostic: d => diags.push(d) }),
+    ) as { packages: Record<string, { overrides?: unknown }> }
+    expect(out.packages['']!.overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
   it('emits NOTHING for an explicit empty overrides array (suppresses captured fallback)', () => {
@@ -212,15 +214,19 @@ describe('stringify', () => {
     expect(out.packages['']!.overrides).toBeUndefined()
   })
 
-  it('re-emits the VERBATIM captured overrides block when the caller supplies none', () => {
+  it('does NOT re-emit a captured non-native overrides block — drops it + diagnoses', () => {
+    // A non-native lock that carries `packages[""].overrides` is captured into the
+    // graph but never re-emitted: npm ignores a lock overrides field.
     const lock = v3Lock({
       '': { name: 'root', version: '1.0.0', overrides: { lodash: '4.17.20', ms: '2.1.3' } },
     })
     const graph = parseV3(lock)
-    const out = JSON.parse(stringifyV3(graph)) as {
-      packages: Record<string, { overrides?: Record<string, unknown> }>
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringifyV3(graph, { onDiagnostic: d => diags.push(d) })) as {
+      packages: Record<string, { overrides?: unknown }>
     }
-    expect(out.packages['']!.overrides).toEqual({ lodash: '4.17.20', ms: '2.1.3' })
+    expect(out.packages['']!.overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 })
 

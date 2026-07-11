@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { overridesOf, parse, stringify } from '../../main/ts/index.ts'
 import { mergeOverrides } from '../../main/ts/recipe/override-carrier.ts'
-import type { Manifest, OverrideConstraint } from '../../main/ts/graph.ts'
+import type { Diagnostic, Manifest, OverrideConstraint } from '../../main/ts/graph.ts'
 import { fixture } from '../helpers/lockfile-test-utils.ts'
 
 // A2 (ADR-0025 §6) — `overridesOf(graph)` folds lock-borne + parse-time-manifest
@@ -106,14 +106,19 @@ describe('overridesOf — precedence (manifest-F6 wins over lock-borne)', () => 
   })
 })
 
-describe('overridesOf — cross-PM carry (parse yarn+resolutions → stringify npm)', () => {
-  it('yarn resolutions reach npm packages[""].overrides via overridesOf thread', () => {
+describe('overridesOf — cross-PM carry (parse yarn+resolutions → npm)', () => {
+  it('threads the yarn resolution into overridesOf, but npm has no lock carrier — diagnoses, no block', () => {
     const manifests: Record<string, Manifest> = {
       '.': { native: { yarnResolutions: { lodash: '4.17.21' } } },
     }
     const g = parse('yarn-berry-v9', fixture('simple/yarn-berry-v9.lock'), { manifests })
-    const out = JSON.parse(stringify('npm-3', g, { overrides: overridesOf(g) }))
-    expect(out.packages[''].overrides).toEqual({ lodash: '4.17.21' })
+    // the policy is captured + queryable...
+    expect(overridesOf(g)).toContainEqual({ package: 'lodash', to: '4.17.21' })
+    // ...but npm reads overrides from package.json, not the lock: dropped + diagnosed.
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringify('npm-3', g, { overrides: overridesOf(g), onDiagnostic: d => diags.push(d) }))
+    expect(out.packages[''].overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 })
 

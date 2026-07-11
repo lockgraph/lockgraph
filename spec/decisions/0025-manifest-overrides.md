@@ -157,11 +157,25 @@ Per-adapter projection of `options.overrides`:
 | PM | Lock target | Behaviour |
 |----|-------------|-----------|
 | **pnpm** | top-level `overrides:` block | Project canonical → `parent>child` keys; **overlay** onto the captured `sidecar.overrides` (caller wins per key, except synthesised `patch:` entries which win on collision — see §Risks). Hook exists (`synthesiseOverridePatches`); only the option seed is added. |
-| **npm** | `packages[""].overrides` | Forward-synthesis only (lock carries none natively): add `overrides` to the root entry. |
+| **npm** | — (no lock carrier) | **No lock projection** (CORRECTED — see note). npm reads overrides from the root manifest, never the lock. Emit `INTEROP_OVERRIDE_NOT_PROJECTED`; policy owed to a companion package.json patch. Same standing as yarn. |
 | **yarn-berry** | — | No lock projection (resolutions don't reach the lock). Emit `INTEROP_OVERRIDE_NOT_PROJECTED` (warning) rather than silently dropping. |
 
 Cross-PM projection of a constraint whose form has no native equivalent
 emits a typed loss diagnostic (§6).
+
+> **CORRECTION (frozen-clean audit, `tmp/codex2claude/001–004`).** The original
+> npm row prescribed forward-synthesis into `packages[""].overrides`. That was
+> **reversed**: the field is not npm-native — npm reads its override policy from
+> the root `package.json`, never `package-lock.json` (canary:
+> `src/test/interop/real-world/overrides-canary.test.ts`), and — unlike pnpm 6–10,
+> which DO deep-compare a lock `overrides:` block in frozen mode
+> (`getOutdatedLockfileSetting`) — npm consumes no such field. Emitting it could
+> only forge false `npm ci` confidence and weaken byte-stability. npm stringify
+> now surfaces `INTEROP_OVERRIDE_NOT_PROJECTED`; the declaration is owed to a
+> companion package.json patch delivered by the project-level conversion API
+> (forthcoming contract-split ADR amending this one). Defensive parse-capture of a
+> non-native lock's `overrides` is retained for query/round-trip; only the npm
+> *emit* is removed.
 
 ### 5. Reconciliation with `pinOverride` (ADR-0023)
 

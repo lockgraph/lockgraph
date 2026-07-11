@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { parse, stringify } from '../../main/ts/index.ts'
+import { overridesOf, parse, stringify } from '../../main/ts/index.ts'
 import type { Diagnostic, OverrideConstraint } from '../../main/ts/graph.ts'
 import { fixture } from '../helpers/lockfile-test-utils.ts'
 
-// Phase-1c — StringifyOptions.overrides projection end-to-end (ADR-0025 §4).
-// Caller-declared canonical OverrideConstraint[] are lowered into each target
-// PM's native lockfile carrier on stringify:
-//   - npm-2/3 → packages[""].overrides (npm nested shape)
-//   - pnpm-v6/v9 → top-level `overrides:` (flat `>`-selectors)
-//   - yarn (classic + berry) → no lock carrier; INTEROP_OVERRIDE_NOT_PROJECTED
-// bun-text / npm-1 / pnpm-v5 do not yet thread overrides (tracked follow-up).
+// StringifyOptions.overrides projection (ADR-0025 §4, corrected). Caller-declared
+// canonical OverrideConstraint[] lower into each target PM's AUTHORITATIVE
+// override carrier on stringify:
+//   - pnpm-v6/v9 → top-level `overrides:` (the lock IS the carrier pnpm frozen-
+//     compares — cf. pnpm 6–10 getOutdatedLockfileSetting deep-equality; flat
+//     `>`-selectors)
+//   - npm (2/3), yarn (classic + berry) → NO lock carrier. The policy lives in
+//     the ROOT MANIFEST, never the lock: npm reads `package.json.overrides` and
+//     real npm locks carry no `packages[""].overrides` (canary). We emit
+//     INTEROP_OVERRIDE_NOT_PROJECTED; the declaration is owed to a companion
+//     package.json patch (project-level conversion API, ADR TBD).
+// bun-text / npm-1 / pnpm-v5 override carriers are tracked follow-ups.
 
 const OVERRIDES: OverrideConstraint[] = [
   { package: 'lodash', to: '4.17.21' }, // global
@@ -17,20 +22,21 @@ const OVERRIDES: OverrideConstraint[] = [
 ]
 
 describe('StringifyOptions.overrides projection (ADR-0025 §4)', () => {
-  it('npm-3 projects into packages[""].overrides (nested shape)', () => {
+  it('npm-3 does NOT synthesize packages[""].overrides — surfaces INTEROP_OVERRIDE_NOT_PROJECTED', () => {
     const g = parse('npm-3', fixture('simple/npm-3.lock'))
-    const out = JSON.parse(stringify('npm-3', g, { overrides: OVERRIDES }))
-    expect(out.packages[''].overrides).toEqual({
-      lodash: '4.17.21',
-      bar: { foo: '1.0.0' },
-    })
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringify('npm-3', g, { overrides: OVERRIDES, onDiagnostic: d => diags.push(d) }))
+    // npm reads overrides from package.json, never the lock — the field is not npm-native.
+    expect(out.packages[''].overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
-  it('npm-3 omits the overrides block when none are supplied', () => {
+  it('npm-3 emits no overrides block and no diagnostic when none are supplied', () => {
     const g = parse('npm-3', fixture('simple/npm-3.lock'))
-    const out = JSON.parse(stringify('npm-3', g))
-    expect(out.packages['']).toBeDefined()
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringify('npm-3', g, { onDiagnostic: d => diags.push(d) }))
     expect(out.packages[''].overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).not.toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
   it('pnpm-v9 projects into top-level overrides: (flat >-selectors)', () => {
@@ -69,11 +75,12 @@ describe('StringifyOptions.overrides projection (ADR-0025 §4)', () => {
   })
 })
 
-// A1 — npm lock-borne overrides round-trip (ADR-0025 §3). npm writes the root
-// manifest's overrides into packages[""].overrides; parse captures that block
-// into the canonical carrier (rootMeta.overrides), and stringify re-emits it
-// when the caller supplies no StringifyOptions.overrides. This is the symmetric
-// inverse of the Phase-1c projection above — it closes the npm→npm round-trip.
+// npm `packages[""].overrides` is NOT npm-native (real npm locks carry none —
+// canary). A synthetic/non-native lock that DOES carry it is captured DEFENSIVELY
+// into the graph (so the policy stays queryable + can later feed a companion
+// package.json patch), but is NEVER re-emitted into npm output — npm ignores a
+// lock overrides field, so re-emitting it would only forge false `npm ci`
+// confidence and weaken byte-stability.
 
 const NPM3_WITH_OVERRIDES = JSON.stringify(
   {
@@ -99,14 +106,14 @@ const NPM3_WITH_OVERRIDES = JSON.stringify(
   2,
 )
 
-describe('npm lock-borne overrides round-trip (ADR-0025 §3, A1)', () => {
-  it('re-emits packages[""].overrides unchanged when no options supplied', () => {
+describe('npm lock-borne overrides are non-native — captured, never re-emitted', () => {
+  it('captures the policy into the graph (overridesOf) but drops it from npm output + diagnoses', () => {
     const g = parse('npm-3', NPM3_WITH_OVERRIDES)
-    const out = JSON.parse(stringify('npm-3', g))
-    expect(out.packages[''].overrides).toEqual({
-      lodash: '4.17.21',
-      bar: { foo: '1.0.0' },
-    })
+    expect(overridesOf(g).length).toBeGreaterThan(0) // policy preserved in the graph...
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringify('npm-3', g, { onDiagnostic: d => diags.push(d) }))
+    expect(out.packages[''].overrides).toBeUndefined() // ...but never written back into npm output
+    expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
   it('parse surfaces RECIPE_OVERRIDE_NORMALISED for the captured block', () => {
@@ -114,61 +121,29 @@ describe('npm lock-borne overrides round-trip (ADR-0025 §3, A1)', () => {
     expect(g.diagnostics().map(d => d.code)).toContain('RECIPE_OVERRIDE_NORMALISED')
   })
 
-  it('options.overrides wins over the captured lock-borne block', () => {
+  it('caller options.overrides also drops for npm (no lock carrier) — diagnostic, no block', () => {
     const g = parse('npm-3', NPM3_WITH_OVERRIDES)
+    const diags: Diagnostic[] = []
     const out = JSON.parse(
-      stringify('npm-3', g, { overrides: [{ package: 'left-pad', to: '1.3.0' }] }),
+      stringify('npm-3', g, { overrides: [{ package: 'left-pad', to: '1.3.0' }], onDiagnostic: d => diags.push(d) }),
     )
-    expect(out.packages[''].overrides).toEqual({ 'left-pad': '1.3.0' })
+    expect(out.packages[''].overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
-  it('explicit overrides: [] suppresses the captured fallback (no block)', () => {
+  it('explicit overrides: [] means "none" — no block, no diagnostic', () => {
     const g = parse('npm-3', NPM3_WITH_OVERRIDES)
-    const out = JSON.parse(stringify('npm-3', g, { overrides: [] }))
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringify('npm-3', g, { overrides: [], onDiagnostic: d => diags.push(d) }))
     expect(out.packages[''].overrides).toBeUndefined()
+    expect(diags.map(d => d.code)).not.toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
-  it('a lock with no overrides block captures nothing and emits no block', () => {
+  it('a real npm lock (no overrides block) captures nothing and emits nothing', () => {
     const g = parse('npm-3', fixture('simple/npm-3.lock'))
-    const out = JSON.parse(stringify('npm-3', g))
+    const diags: Diagnostic[] = []
+    const out = JSON.parse(stringify('npm-3', g, { onDiagnostic: d => diags.push(d) }))
     expect(out.packages[''].overrides).toBeUndefined()
-  })
-
-  // The two shapes whose canonical name-chain is lossy (ADR-0025 §2): the
-  // VERBATIM carrier must re-emit them byte-identically. Without it these would
-  // round-trip through canonical → projectNpm and (c) drop the child override
-  // destructively, (e) drop the `@2` qualifier.
-  const npm3LockWithOverrides = (overrides: unknown): string =>
-    JSON.stringify(
-      {
-        name: 'x',
-        version: '0.0.0',
-        lockfileVersion: 3,
-        requires: true,
-        packages: {
-          '': { name: 'x', version: '0.0.0', dependencies: { ms: '2.1.3' }, overrides },
-          'node_modules/ms': {
-            version: '2.1.3',
-            resolved: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
-            integrity: 'sha512-abc',
-          },
-        },
-      },
-      null,
-      2,
-    )
-
-  it('losslessly round-trips a self-key-LAST nested block (verbatim carrier)', () => {
-    const block = { bar: { foo: '1.0.0', '.': '2.0.0' } }
-    const g = parse('npm-3', npm3LockWithOverrides(block))
-    const out = JSON.parse(stringify('npm-3', g))
-    expect(out.packages[''].overrides).toEqual(block) // not the destructive {bar:'2.0.0'}
-  })
-
-  it('losslessly round-trips a version-qualified leaf key (verbatim carrier)', () => {
-    const block = { 'foo@2': '3.0.0' }
-    const g = parse('npm-3', npm3LockWithOverrides(block))
-    const out = JSON.parse(stringify('npm-3', g))
-    expect(out.packages[''].overrides).toEqual(block) // @2 preserved, not {foo:'3.0.0'}
+    expect(diags.map(d => d.code)).not.toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 })
