@@ -241,7 +241,7 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions)
     case 'npm-1':         return npm1.stringify(graph,        { lineEnding, onDiagnostic })
     case 'npm-2':         return npm2.stringify(graph,        { lineEnding, onDiagnostic, overrides })
     case 'npm-3':         return npm3.stringify(graph,        { lineEnding, onDiagnostic, overrides })
-    case 'pnpm-v5':       return pnpmV5.stringify(graph,      { lineEnding, onDiagnostic })
+    case 'pnpm-v5':       return pnpmV5.stringify(graph,      { lineEnding, onDiagnostic, overrides })
     case 'pnpm-v6':       return pnpmV6.stringify(graph,      { lineEnding, onDiagnostic, overrides })
     case 'pnpm-v9':       return pnpmV9.stringify(graph,      { lineEnding, onDiagnostic, overrides })
     case 'yarn-berry-v4': return yarnBerryV4.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
@@ -370,6 +370,7 @@ export function overridesOf(graph: Graph): OverrideConstraint[] {
   const lockBorne =
     getFlatSidecar(graph)?.rootMeta?.overrides ??
     getPnpmOverridesCanonical(graph) ??
+    pnpmV5.getPnpmV5OverridesCanonical(graph) ??
     bunText.getBunOverridesCanonical(graph) ??
     []
   return mergeOverrides(mergeOverrides(lockBorne, manifest), pinnedOverrides(graph))

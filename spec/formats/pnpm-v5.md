@@ -43,6 +43,9 @@
 ```yaml
 lockfileVersion: 5.4
 
+overrides:
+  foo: 1.0.3
+
 importers:
   .:
     specifiers:
@@ -78,7 +81,7 @@ packages:
 | Integrity hashes                          | ✓ | `resolution.integrity` |
 | `dev` / `optional` / `peer` separation    | ✓ | per-importer keyed buckets + `dev: true` flag |
 | Bundled deps                              | ~ | rare; respected if present |
-| Overrides / resolutions                   | ✓ | `pnpm.overrides` baked in |
+| Overrides / resolutions                   | ✓ | top-level `overrides:` block (after `lockfileVersion`), captured verbatim + re-emitted; pnpm 6–7 frozen-compare it against config |
 
 ## Integrity
 
@@ -114,6 +117,11 @@ this is only how pnpm *carries* it.
 - `specifiers` block in each importer mirrors the manifest's range section —
   used for upgrade detection.
 - `lockfileVersion` is a **string**, not a number (`'5.4'`).
+- Top-level `overrides:` block (pnpm 6–7): pnpm's frozen install
+  (`--frozen-lockfile`) DEEP-COMPARES it against current config
+  (`getOutdatedLockfileSetting`) and rejects with `LockfileConfigMismatchError`
+  on mismatch — so an override-using project whose lock omits the block is NOT
+  frozen-clean. lockgraph captures + re-emits it verbatim (after `lockfileVersion`).
 - Top-level `time` block (optional) records first-seen timestamps.
 
 ## Degradation rules

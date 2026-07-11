@@ -147,3 +147,40 @@ describe('npm lock-borne overrides are non-native — captured, never re-emitted
     expect(diags.map(d => d.code)).not.toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 })
+
+// pnpm-v5 (lockfileVersion 5.4, pnpm 6–7) DOES carry a top-level `overrides:`
+// block and frozen-compares it against config (`getOutdatedLockfileSetting`
+// deep-equality → `LockfileConfigMismatchError`). A v5 lock that omits the block
+// for an override-using project fails `--frozen-lockfile`, so the carrier is a
+// correctness fix, not polish. (Unlike npm/yarn above, pnpm's lock IS a carrier.)
+
+const V5_MIN =
+  `lockfileVersion: 5.4\n\n` +
+  `specifiers:\n  ms: 2.1.3\n\n` +
+  `dependencies:\n  ms: 2.1.3\n\n` +
+  `packages:\n\n` +
+  `  /ms/2.1.3:\n` +
+  `    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}\n` +
+  `    dev: false\n`
+
+describe('pnpm-v5 overrides carrier (ADR-0025 §4; pnpm 6–7 frozen-compare)', () => {
+  it('projects caller overrides into the top-level overrides: block', () => {
+    const g = parse('pnpm-v5', V5_MIN)
+    const out = stringify('pnpm-v5', g, { overrides: OVERRIDES })
+    expect(out).toMatch(/^overrides:/m)
+    expect(out).toContain('lodash')
+    expect(out).toContain('bar>foo') // scoped constraint as a `>`-selector key
+  })
+
+  it('round-trips a lock-borne overrides block byte-identically + reads it via overridesOf', () => {
+    const withOvr = V5_MIN.replace('specifiers:', 'overrides:\n  ms: 2.1.3\n\nspecifiers:')
+    const g = parse('pnpm-v5', withOvr)
+    expect(stringify('pnpm-v5', g)).toBe(withOvr) // byte-identical, overrides after lockfileVersion
+    expect(overridesOf(g)).toContainEqual({ package: 'ms', to: '2.1.3' })
+  })
+
+  it('omits overrides: when the graph carries none and none supplied', () => {
+    const g = parse('pnpm-v5', V5_MIN)
+    expect(stringify('pnpm-v5', g)).not.toMatch(/^overrides:/m)
+  })
+})

@@ -25,6 +25,11 @@
 //   - NO `settings` block (v5 predates the pnpm settings table).
 //     Graphs carrying settings via cross-version composition trigger
 //     a `PNPM_V5_SETTINGS_DROPPED` warning on emit.
+//   - top-level `overrides:` block (pnpm 6–7) — captured verbatim + re-emitted
+//     after `lockfileVersion`. pnpm frozen-compares it against config
+//     (`getOutdatedLockfileSetting` deep-equality), so an override-using project
+//     needs the block to stay `--frozen-lockfile`-clean. `patch:` entries
+//     round-trip verbatim but are not compiled (v5 has no patch slot per §B).
 //   - top-level layout — `specifiers` + `dependencies` blocks
 //     (single-importer collapsed-root) OR `importers` block
 //     (multi-importer workspaces). Mutually exclusive on emit;
@@ -72,9 +77,11 @@ import {
   type EdgeKind,
   type Graph,
   type Node,
+  type OverrideConstraint,
   type TarballKeyInputs,
 } from '../graph.ts'
 import { emitSriForRegistry } from '../recipe/integrity.ts'
+import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
@@ -125,6 +132,10 @@ export interface PnpmV5ParseOptions {}
 export interface PnpmV5StringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
+  /** Caller-declared overrides (ADR-0025 §4) overlaid onto the captured
+   *  lock-borne `overrides:` block (caller wins per key). pnpm 6–7 read this
+   *  top-level block and frozen-compare it against config. */
+  overrides?: OverrideConstraint[]
 }
 
 export interface PnpmV5Manifest {
@@ -180,12 +191,30 @@ interface PnpmV5Sidecar {
   importerEdges: Map<string, PnpmV5EdgeSidecar>
   /** Cross-version settings stash (for PNPM_V5_SETTINGS_DROPPED). */
   inboundSettings?: PnpmV5SettingsCrossVersion
+  /** Top-level `overrides:` block, verbatim (pnpm 6–7 carry + frozen-compare it). */
+  overrides?: Record<string, string>
 }
 
 const sidecarByGraph = new WeakMap<Graph, PnpmV5Sidecar>()
 
 function rememberSidecar(graph: Graph, sidecar: PnpmV5Sidecar): void {
   sidecarByGraph.set(graph, sidecar)
+}
+
+/**
+ * Lock-borne pnpm-v5 overrides as canonical `OverrideConstraint[]`, for
+ * `overridesOf`. Reads the verbatim `sidecar.overrides` block; `patch:` entries
+ * are skipped (v5 has no patch slot). Returns undefined when the graph carries
+ * no pnpm-v5 overrides block.
+ */
+export function getPnpmV5OverridesCanonical(graph: Graph): OverrideConstraint[] | undefined {
+  const sidecar = sidecarByGraph.get(graph)
+  if (sidecar?.overrides === undefined) return undefined
+  const versionOnly: Record<string, string> = {}
+  for (const [key, value] of Object.entries(sidecar.overrides)) {
+    if (!value.startsWith('patch:')) versionOnly[key] = value
+  }
+  return captureOverrides(versionOnly, 'pnpm').canonical
 }
 
 // === Constants ==============================================================
@@ -198,6 +227,7 @@ const V5_LOCKFILE_VERSION_ACCEPTED = new Set(['5.0', '5.1', '5.2', '5.3', '5.4']
 
 const TOP_LEVEL_ORDER: readonly string[] = [
   'lockfileVersion',
+  'overrides',
   'specifiers',
   'dependencies',
   'devDependencies',
@@ -257,6 +287,12 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
     importerSpecifiers: new Map<string, Record<string, string>>(),
     nodes: new Map<string, PnpmV5NodeSidecar>(),
     importerEdges: new Map<string, PnpmV5EdgeSidecar>(),
+  }
+
+  // Top-level `overrides:` block — pnpm 6–7 write it into v5.4 and frozen-compare
+  // it against config. Captured verbatim so a bump stays --frozen-lockfile-clean.
+  if (yaml.overrides !== undefined && typeof yaml.overrides === 'object') {
+    sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
   }
 
   const packagesMap = isPlainObject(yaml.packages) ? yaml.packages : {}
@@ -531,6 +567,21 @@ export function stringify(graph: Graph, options: PnpmV5StringifyOptions = {}): s
   const out: YamlMap = {}
   // Decimal scalar — NO quoted wrapper (numeric scalar emit path).
   out.lockfileVersion = V5_LOCKFILE_VERSION_CANONICAL
+
+  // Top-level `overrides:` — caller `options.overrides` (canonical → pnpm flat
+  // `>`-selectors) overlaid onto the captured lock-borne block (caller wins per
+  // key). pnpm 6–7 frozen-compare this against config, so a missing/mismatched
+  // block fails `--frozen-lockfile`. Ordered after lockfileVersion (TOP_LEVEL_ORDER).
+  let effectiveOverrides: Record<string, string> | undefined = sidecar?.overrides
+  if (options.overrides !== undefined) {
+    const projected = options.overrides.length > 0
+      ? (projectOverrides(options.overrides, 'pnpm', emitDiagnostic) as Record<string, string>)
+      : {}
+    effectiveOverrides = { ...(sidecar?.overrides ?? {}), ...projected }
+  }
+  if (effectiveOverrides !== undefined && Object.keys(effectiveOverrides).length > 0) {
+    out.overrides = sortRecord(effectiveOverrides) as YamlMap
+  }
 
   // Layout discriminant: single-importer collapsed-root vs multi-importer.
   const hasMulti = workspaceNodes.length > 0
