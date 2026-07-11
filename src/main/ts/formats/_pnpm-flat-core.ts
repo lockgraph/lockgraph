@@ -59,11 +59,12 @@ import {
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
-import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
+import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   DEFAULT_NPM_REGISTRY,
   parse as parseResolutionRecipe,
   stringifyForPnpm,
+  stripRegistrySha1Fragment,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import {
@@ -2004,11 +2005,9 @@ function buildPackageEntry(
     && isNpmRegistryDefault(tarball.resolution.url, representative.name, representative.version)
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
-    if (tarball.integrity !== undefined) {
-      const sri = emitSri(tarball.integrity)
-      if (sri !== undefined) resolution.integrity = sri
-    }
-    if (nativeIsPnpmUrl) resolution.tarball = nativeResolution!
+    const sri = emitSriForRegistry(tarball.integrity, nativeResolution)
+    if (sri !== undefined) resolution.integrity = sri
+    if (nativeIsPnpmUrl) resolution.tarball = stripRegistrySha1Fragment(nativeResolution!)
     else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)

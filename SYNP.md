@@ -13,7 +13,7 @@ lockgraph (`lockgraph`) is a universal lockfile **model** and
 converter. It spans npm (`package-lock.json` v1/v2/v3), yarn classic, yarn berry
 (v4–v10), pnpm (v5/v6/v9) and bun (`bun.lock`), and converts any of them to any
 other through a single canonical graph. It runs as a pure library: no package
-manager is installed, no `node_modules` is read, no install is performed.
+manager is required, no `node_modules` is read, no install is performed.
 
 ## Why the approach changed
 

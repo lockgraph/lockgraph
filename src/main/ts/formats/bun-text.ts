@@ -35,7 +35,7 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
+import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   emitDropped as patchEmitDropped,
   emitDropped as recipeEmitDropped,
@@ -517,8 +517,8 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
     emittedNameVersion.add(nameVersion)
 
     const inner = buildInnerBlock(graph, node, sidecar)
-    const integritySrc = graph.tarballOf(node.id)?.integrity
-    const integrity = (integritySrc && emitSri(integritySrc)) ?? ''
+    const tarballSrc = graph.tarballOf(node.id)
+    const integrity = emitSriForRegistry(tarballSrc?.integrity, tarballSrc?.nativeResolution) ?? ''
     const key = chooseNodeEmitKey(node, sidecar, packagesBlock)
     packagesBlock[key] = [`${node.name}@${node.version}`, '', inner, integrity]
   }

@@ -48,7 +48,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
+import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   emitDropped as patchEmitDropped,
   emitWorkspaceResolved,
@@ -61,6 +61,7 @@ import {
   parse as parseResolutionRecipe,
   sourceDiscriminatorOf,
   stringifyForNpm,
+  stripRegistrySha1Fragment,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import {
@@ -1226,11 +1227,12 @@ function buildNodeModulesEntry(
   if (resolved !== undefined && isYarnBerryLocator(resolved)) {
     resolved = undefined
   }
-  if (resolved !== undefined) body.resolved = resolved
-  if (tarball?.integrity !== undefined) {
-    const sri = emitSri(tarball.integrity)
-    if (sri !== undefined) body.integrity = sri
-  }
+  // A yarn-classic registry `resolved` may glue on a `#<sha1>` fragment — yarn
+  // syntax; npm carries that sha1 in `integrity` instead, so emit a clean `.tgz`
+  // and promote the fragment sha1 to integrity when it's the entry's only checksum.
+  if (resolved !== undefined) body.resolved = stripRegistrySha1Fragment(resolved)
+  const sri = emitSriForRegistry(tarball?.integrity, native)
+  if (sri !== undefined) body.integrity = sri
   if (nodeSide?.dev === true) body.dev = true
   if (nodeSide?.optional === true) body.optional = true
   if (nodeSide?.peer === true) body.peer = true

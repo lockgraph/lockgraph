@@ -74,13 +74,14 @@ import {
   type Node,
   type TarballKeyInputs,
 } from '../graph.ts'
-import { emitSri } from '../recipe/integrity.ts'
+import { emitSriForRegistry } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
 import {
   DEFAULT_NPM_REGISTRY,
   stringifyForPnpm,
+  stripRegistrySha1Fragment,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import { readYaml, emitYaml, flowMap, type YamlMap } from './_pnpm-yaml.ts'
@@ -1139,11 +1140,9 @@ function buildPackageEntry(
     && tarball.resolution.url === `${DEFAULT_NPM_REGISTRY}/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
-    if (tarball.integrity !== undefined) {
-      const integ = emitSri(tarball.integrity)
-      if (integ !== undefined) resolution.integrity = integ
-    }
-    if (nativeIsPnpmUrl) resolution.tarball = nativeResolution!
+    const integ = emitSriForRegistry(tarball.integrity, nativeResolution)
+    if (integ !== undefined) resolution.integrity = integ
+    if (nativeIsPnpmUrl) resolution.tarball = stripRegistrySha1Fragment(nativeResolution!)
     else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)

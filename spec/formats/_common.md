@@ -689,6 +689,15 @@ sha512 — rather than collapsed to one member.) The yarn-classic
 sidecar** rather than in the integrity multiset (the `url-fragment` origin is
 reserved/unwired — [§3.2](#32-origin-tags--the-load-bearing-addition)).
 
+When that fragment sha1 is the entry's ONLY checksum (yarn 1.0–1.5, no
+`integrity:` line), a cross-family emit to npm / pnpm / bun **promotes** it to
+`integrity: sha1-<base64>` and writes a clean `.tgz` `resolved` — the checksum is
+carried, never dropped, so the target survives `npm ci` byte-identical. The
+promotion reads the sha1 from the resolved URL and is **emit-only**: the graph
+model is unchanged, and yarn-classic itself keeps the sha1 in the resolved-URL
+fragment (never an `integrity:` line), so its own round-trip stays byte-identical.
+Git `…#<40hex-commit>` locators are untouched (only a fragment fused to `.tgz`).
+
 ### 3.2 Origin tags — the load-bearing addition
 
 `origin` distinguishes a **tarball** digest (`origin ∈ {sri, registry,

@@ -59,6 +59,16 @@ const SHA_FRAG_RE = /^[0-9a-f]{7,64}$/i
 // `ParseOptions.registry`; this is only the fallback (no trailing slash).
 export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org'
 
+// A yarn-classic registry-tarball `resolved` may glue the tarball sha1 on as a
+// `#<40-hex>` fragment (yarn 1.0–1.5's inline checksum form). That fragment is
+// yarn syntax: npm / pnpm / bun emit a clean `.tgz` and carry the sha1 in
+// `integrity` instead. Strip ONLY a fragment fused to a `.tgz` so a git
+// `…#<40-hex-commit>` resolution — whose sha IS its identity — is never touched.
+const REGISTRY_TGZ_SHA1_FRAGMENT = /(\.tgz)#[0-9a-f]{40}$/i
+export function stripRegistrySha1Fragment(url: string): string {
+  return url.replace(REGISTRY_TGZ_SHA1_FRAGMENT, '$1')
+}
+
 // Recognised registry / tarball hosts (suffix-match). The hostingProvider hint
 // is attribution-only — identity drops it for the (name, version) tuple.
 const GITHUB_HOST   = 'github.com'

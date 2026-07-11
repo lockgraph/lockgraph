@@ -138,6 +138,27 @@ export function emitSri(i: Integrity): string | undefined {
   return members.length > 0 ? members.join(' ') : undefined
 }
 
+// The yarn-classic registry `resolved#<sha1>` fragment — the tarball sha1 that
+// yarn 1.0–1.5 glue onto the URL. `.tgz#` gating excludes git `…#<sha>` locators.
+const REGISTRY_TGZ_SHA1_FRAGMENT = /\.tgz#([0-9a-f]{40})$/i
+
+/**
+ * SRI for a registry-tarball target (npm / pnpm / bun). Prefers an SRI-emittable
+ * multiset hash (sha512 etc.); when none exists it PROMOTES the tarball sha1
+ * from the resolved URL's `#<sha1>` fragment to `sha1-<base64>`. A fragment-only
+ * yarn.lock (yarn 1.0–1.5) carries its checksum SOLELY there — that sha1 is the
+ * only integrity fact, so it must be emitted, never dropped. The sha1 lives on
+ * the resolution (per ADR-0031 / _common.md §3 it rides the resolved URL, not
+ * the integrity multiset); this promotion is emit-only, so yarn-classic's own
+ * fragment round-trip stays byte-identical.
+ */
+export function emitSriForRegistry(i: Integrity | undefined, resolvedUrl: string | undefined): string | undefined {
+  const sri = i !== undefined ? emitSri(i) : undefined
+  if (sri !== undefined) return sri
+  const hex = resolvedUrl !== undefined ? REGISTRY_TGZ_SHA1_FRAGMENT.exec(resolvedUrl)?.[1]?.toLowerCase() : undefined
+  return hex !== undefined ? `sha1-${hexToBase64(hex)}` : undefined
+}
+
 /**
  * Parse a Yarn Berry `checksum` value — `<cacheKey>/<128-hex>` (v8+) or a bare
  * `<128-hex>` (v4–v6) — into `{ integrity, cacheKey }`. The digest is tagged

@@ -51,7 +51,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../errors.ts'
-import { parseSri, emitSri, isEmptyIntegrity } from '../recipe/integrity.ts'
+import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -68,6 +68,7 @@ import {
   parse as parseResolutionRecipe,
   sourceDiscriminatorOf,
   stringifyForNpm,
+  stripRegistrySha1Fragment,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 
@@ -879,11 +880,11 @@ function buildEntry(
     } else if (isHttpUrl(resolutionStr) && isHttpUrl(node.version)) {
       entry.version = node.version
     } else {
-      entry.resolved = resolutionStr
+      entry.resolved = stripRegistrySha1Fragment(resolutionStr)
     }
   }
-  if (tarball?.integrity !== undefined && !/^(git[+:]|github:)/.test(entry.version ?? '')) {
-    const sri = emitSri(tarball.integrity)
+  if (!/^(git[+:]|github:)/.test(entry.version ?? '')) {
+    const sri = emitSriForRegistry(tarball?.integrity, native)
     if (sri !== undefined) entry.integrity = sri
   }
   if (nodeSide?.dev === true) entry.dev = true

@@ -31,11 +31,12 @@
 // block, so the two are consistent by construction.
 
 import { type Graph, type Node, type Diagnostic } from '../graph.ts'
-import { emitSri } from '../recipe/integrity.ts'
+import { emitSriForRegistry } from '../recipe/integrity.ts'
 import { LockfileError } from '../errors.ts'
 import {
   isYarnBerryLocator,
   stringifyForNpm,
+  stripRegistrySha1Fragment,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 
@@ -326,7 +327,7 @@ function buildLegacyNodeEntry(
       const fromSpec = synthesizeFromSpec(ctx, node)
       if (fromSpec !== undefined) entry.from = fromSpec
     } else {
-      entry.resolved = native
+      entry.resolved = stripRegistrySha1Fragment(native)
     }
   } else if (sourceResolved !== undefined && !isYarnBerryLocator(sourceResolved)) {
     // Same git-vs-tarball discrimination on the recovered URL.
@@ -336,12 +337,12 @@ function buildLegacyNodeEntry(
       const fromSpec = synthesizeFromSpec(ctx, node)
       if (fromSpec !== undefined) entry.from = fromSpec
     } else {
-      entry.resolved = sourceResolved
+      entry.resolved = stripRegistrySha1Fragment(sourceResolved)
     }
   }
 
-  if (tarball?.integrity !== undefined && entry.from === undefined) {
-    const sri = emitSri(tarball.integrity)
+  if (entry.from === undefined) {
+    const sri = emitSriForRegistry(tarball?.integrity, native)
     if (sri !== undefined) entry.integrity = sri
   }
 
