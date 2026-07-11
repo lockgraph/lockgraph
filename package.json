@@ -31,70 +31,11 @@
       "types": "./dist/enrich/index.d.ts",
       "default": "./dist/enrich/index.js"
     },
-    "./formats/bun-text": {
-      "types": "./dist/formats/bun-text.d.ts",
-      "default": "./dist/formats/bun-text.js"
+    "./formats/*": {
+      "types": "./dist/formats/*.d.ts",
+      "default": "./dist/formats/*.js"
     },
-    "./formats/npm-1": {
-      "types": "./dist/formats/npm-1.d.ts",
-      "default": "./dist/formats/npm-1.js"
-    },
-    "./formats/npm-2": {
-      "types": "./dist/formats/npm-2.d.ts",
-      "default": "./dist/formats/npm-2.js"
-    },
-    "./formats/npm-3": {
-      "types": "./dist/formats/npm-3.d.ts",
-      "default": "./dist/formats/npm-3.js"
-    },
-    "./formats/pnpm-v5": {
-      "types": "./dist/formats/pnpm-v5.d.ts",
-      "default": "./dist/formats/pnpm-v5.js"
-    },
-    "./formats/pnpm-v6": {
-      "types": "./dist/formats/pnpm-v6.d.ts",
-      "default": "./dist/formats/pnpm-v6.js"
-    },
-    "./formats/pnpm-v9": {
-      "types": "./dist/formats/pnpm-v9.d.ts",
-      "default": "./dist/formats/pnpm-v9.js"
-    },
-    "./formats/yarn-berry-v4": {
-      "types": "./dist/formats/yarn-berry-v4.d.ts",
-      "default": "./dist/formats/yarn-berry-v4.js"
-    },
-    "./formats/yarn-berry-v5": {
-      "types": "./dist/formats/yarn-berry-v5.d.ts",
-      "default": "./dist/formats/yarn-berry-v5.js"
-    },
-    "./formats/yarn-berry-v6": {
-      "types": "./dist/formats/yarn-berry-v6.d.ts",
-      "default": "./dist/formats/yarn-berry-v6.js"
-    },
-    "./formats/yarn-berry-v7": {
-      "types": "./dist/formats/yarn-berry-v7.d.ts",
-      "default": "./dist/formats/yarn-berry-v7.js"
-    },
-    "./formats/yarn-berry-v8": {
-      "types": "./dist/formats/yarn-berry-v8.d.ts",
-      "default": "./dist/formats/yarn-berry-v8.js"
-    },
-    "./formats/yarn-berry-v9": {
-      "types": "./dist/formats/yarn-berry-v9.d.ts",
-      "default": "./dist/formats/yarn-berry-v9.js"
-    },
-    "./formats/yarn-berry-v10": {
-      "types": "./dist/formats/yarn-berry-v10.d.ts",
-      "default": "./dist/formats/yarn-berry-v10.js"
-    },
-    "./formats/yarn-classic": {
-      "types": "./dist/formats/yarn-classic.d.ts",
-      "default": "./dist/formats/yarn-classic.js"
-    },
-    "./formats/lockgraph": {
-      "types": "./dist/formats/lockgraph.d.ts",
-      "default": "./dist/formats/lockgraph.js"
-    }
+    "./formats/_*": null
   },
   "typesVersions": {
     "*": {
@@ -131,9 +72,12 @@
     "build:dist": "node scripts/clean.mjs && rollup -c && tsc -p tsconfig.dts.json && node scripts/fix-dts.mjs",
     "build:fixtures": "node src/test/resources/fixtures/_gen.mjs",
     "test:types": "tsc --noEmit",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run src/test/unit",
+    "test:integration": "vitest run src/test/interop src/test/infra",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:smoke": "node scripts/smoke.mjs",
+    "test:size": "size-limit",
     "prepublishOnly": "npm run build:dist"
   },
   "dependencies": {
@@ -147,6 +91,7 @@
     "@types/node": "^22.10.0",
     "@types/pako": "^2.0.4",
     "@types/semver": "^7.7.1",
+    "@vitest/coverage-v8": "^2.1.9",
     "@yarnpkg/libzip": "^3.2.2",
     "bun": "1.2.0",
     "pm-npm-10": "npm:npm@10.9.2",

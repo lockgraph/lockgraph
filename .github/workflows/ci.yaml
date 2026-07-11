@@ -15,6 +15,7 @@ jobs:
   build:
     name: Build & test (Node 26)
     runs-on: ubuntu-latest
+    timeout-minutes: 18   # backstop — a hung job can't burn more than this
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,7 +32,21 @@ jobs:
 
       - run: npm run build:dist
 
-      - run: npm run test:unit
+      - run: npm run test:size
+
+      # One instrumented run = the test gate + coverage (unit + integration +
+      # infra). The split `test:unit` / `test:integration` scripts stay for fast
+      # local iteration; CI runs them together under coverage. timeout caps a hang.
+      - name: Tests + coverage
+        timeout-minutes: 12
+        run: npm run test:coverage
+
+      - name: Publish coverage to Qlty
+        if: always()   # push lcov even if a test/threshold failed, so Qlty always has data
+        uses: qltysh/qlty-action/coverage@v1
+        with:
+          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
+          files: target/coverage/lcov.info
 
       - uses: actions/upload-artifact@v5
         with:
@@ -41,6 +56,14 @@ jobs:
             package.json
           retention-days: 1
 
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: coverage-html
+          path: target/coverage
+          retention-days: 7
+
   smoke:
     name: Smoke (Node ${{ matrix.node }})
     needs: build
@@ -48,6 +71,7 @@ jobs:
     # current (26), against a prod-deps-only install — no typecheck / unit / lint
     # here, only that `lockgraph` loads and converts. Reuses the build artifact.
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
@@ -82,6 +106,7 @@ jobs:
     #   if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     if: false
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       checks:    read
       statuses:  write

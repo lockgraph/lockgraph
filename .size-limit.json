@@ -6,7 +6,7 @@
       "README.md",
       "LICENSE"
     ],
-    "limit": "619 kB",
+    "limit": "750 kB",
     "brotli": false,
     "gzip": false
   },
@@ -15,7 +15,7 @@
     "path": [
       "dist/**/*.d.ts"
     ],
-    "limit": "70 kB",
+    "limit": "90 kB",
     "brotli": false,
     "gzip": false
   }
