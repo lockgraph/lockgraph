@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   build:
-    name: Build
+    name: Build & test (Node 26)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -22,14 +22,16 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 26
           cache: 'npm'
 
       - run: npm ci
 
-      - run: npm run typecheck
+      - run: npm run test:types
 
-      - run: npm run build
+      - run: npm run build:dist
+
+      - run: npm run test:unit
 
       - uses: actions/upload-artifact@v5
         with:
@@ -39,14 +41,17 @@ jobs:
             package.json
           retention-days: 1
 
-  test:
-    name: Test (Node ${{ matrix.node-version }})
+  smoke:
+    name: Smoke (Node ${{ matrix.node }})
     needs: build
+    # Basic workability of the BUILT package on the support floor (14.18) and
+    # current (26), against a prod-deps-only install — no typecheck / unit / lint
+    # here, only that `lockgraph` loads and converts. Reuses the build artifact.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['20', '22', '24']
+        node: ['14', '26']
     steps:
       - uses: actions/checkout@v5
         with:
@@ -54,22 +59,26 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          node-version: ${{ matrix.node }}
+
+      # Node 14 ships npm 6, which cannot read lockfileVersion 3. Bump to a
+      # v3-capable npm that still runs on Node 14.18.
+      - if: matrix.node == '14'
+        run: npm i -g npm@8
 
       - uses: actions/download-artifact@v5
         with:
           name: build
 
-      - run: npm ci
+      - run: npm ci --omit=dev
 
-      - run: npm test
+      - run: npm run test:smoke
 
   release:
     name: Release ${{ github.ref }}
-    needs: test
-    # zx-semrel pre-wired (OIDC scheme + permissions) but kept inactive
-    # until publish gate opens. Flip к the live condition when 0.1.0 ships:
+    needs: smoke
+    # zx-semrel pre-wired (OIDC scheme + permissions) but kept inactive until the
+    # publish gate opens. Flip to the live condition when 0.1.0 ships:
     #   if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     if: false
     runs-on: ubuntu-latest
@@ -78,7 +87,7 @@ jobs:
       statuses:  write
       contents:  write
       packages:  write
-      id-token:  write   # OIDC к npm registry — passwordless publish + provenance
+      id-token:  write   # OIDC to the npm registry — passwordless publish + provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -89,7 +98,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 26
           cache: 'npm'
 
       - uses: actions/download-artifact@v5

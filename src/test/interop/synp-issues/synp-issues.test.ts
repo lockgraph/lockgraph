@@ -168,7 +168,7 @@ lodash@^3.0.0:
 
   it('keeps all three lodash versions as distinct nodes', () => {
     const g = parse('yarn-classic', yarnLock)
-    expect(g.byName('lodash').sort()).toEqual(['lodash@3.10.1', 'lodash@4.0.0', 'lodash@4.17.0'])
+    expect([...g.byName('lodash')].sort()).toEqual(['lodash@3.10.1', 'lodash@4.0.0', 'lodash@4.17.0'])
   })
 
   it('carries all three versions through a yarn->npm conversion', () => {

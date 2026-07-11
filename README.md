@@ -16,6 +16,18 @@ license filtering) is the headline.
 
 </p>
 
+## Install
+```shell
+npm i lockgraph
+yarn add lockgraph
+```
+
+## Compatibility
+
+- **Node ≥ 14.18** No browser build planned
+- **ESM only** Consumers on CommonJS use dynamic `await import(…)`
+
+
 ## Status
 
 **Snapshot preview.** Every format below parses and stringifies; conversion is
@@ -327,11 +339,6 @@ Earlier work in this space:
 - [`pnpm/spec/lockfile/`](https://github.com/pnpm/spec/tree/master/lockfile)
   — pnpm
 - [bun lockfile](https://bun.com/docs/pm/lockfile) — bun
-
-## Compatibility
-
-- **Node ≥ 20.** No browser build planned.
-- **ESM only.** Consumers on CommonJS use dynamic `await import(…)`.
 
 ## License
 

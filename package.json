@@ -128,12 +128,13 @@
     "node": ">=14.18"
   },
   "scripts": {
-    "build": "node scripts/clean.mjs && rollup -c && tsc -p tsconfig.dts.json && node scripts/fix-dts.mjs",
-    "test": "vitest run",
+    "build:dist": "node scripts/clean.mjs && rollup -c && tsc -p tsconfig.dts.json && node scripts/fix-dts.mjs",
+    "build:fixtures": "node src/test/resources/fixtures/_gen.mjs",
+    "test:types": "tsc --noEmit",
+    "test:unit": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "gen:fixtures": "node src/test/resources/fixtures/_gen.mjs",
-    "prepublishOnly": "npm run build"
+    "test:smoke": "node scripts/smoke.mjs",
+    "prepublishOnly": "npm run build:dist"
   },
   "dependencies": {
     "node-fetch-native": "^1.6.7",

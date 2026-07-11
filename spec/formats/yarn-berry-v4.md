@@ -51,7 +51,6 @@ reference published [ADR-0023](../decisions/0023-graph-modification-and-completi
   — yarn's yaml-flavoured parser used for `yarn.lock`.
 - [`collab/research/lockfile-schema-history-yarn.md`](../../collab/research/lockfile-schema-history-yarn.md)
   — empirical walk across release tags.
-- Existing parser: `legacy/main/ts/formats/yarn-berry.ts`.
 
 ## Schema sketch
 
@@ -363,8 +362,7 @@ emit deltas layered on top of that contract:
 
 ## Fixtures
 
-- `legacy/test/fixtures/yarn-5-mr/` (note: existing `yarn-5/6/7` directories
-  are berry-vN samples, despite the directory naming)
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

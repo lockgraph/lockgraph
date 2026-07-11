@@ -1,7 +1,0 @@
-{
-  "name": "deploop-test",
-  "version": "0.0.0",
-  "dependencies": {
-    "es-abstract": "^1.22.1"
-  }
-}

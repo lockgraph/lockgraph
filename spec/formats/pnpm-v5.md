@@ -125,7 +125,7 @@ this is only how pnpm *carries* it.
 
 ## Fixtures
 
-> **TBD:** no pnpm fixtures in `legacy/`. To be generated via test bench.
+> **TBD:** no pnpm fixtures carried over yet; generated via the test bench.
 
 ## Open questions
 

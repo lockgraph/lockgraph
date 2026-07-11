@@ -281,8 +281,7 @@ Inherits v6.
 
 ## Fixtures
 
-- `legacy/test/fixtures/yarn-7-mr/` (the existing `yarn-7-mr` fixture is
-  actually a v8 lockfile — yarn 4 era — confirm and rename if needed)
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

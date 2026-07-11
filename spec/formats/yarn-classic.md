@@ -34,7 +34,6 @@
 1. <https://classic.yarnpkg.com/en/docs/yarn-lock>
 2. <https://github.com/yarnpkg/yarn/tree/master/packages/lockfile>
 3. <https://github.com/yarnpkg/yarn/blob/master/src/lockfile/parse.js> — parser
-4. Existing parser: `legacy/main/ts/formats/yarn-classic.ts`
 5. Prior art: `synp`, `snyk-nodejs-lockfile-parser`
 
 ## Schema sketch
@@ -519,8 +518,7 @@ parses unchanged.
 
 ## Fixtures
 
-- `legacy/test/fixtures/yarn-1/`
-- `legacy/test/fixtures/yarn-1-mr/` (workspaces)
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

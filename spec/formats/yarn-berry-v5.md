@@ -108,7 +108,7 @@ Inherits v4.
 
 ## Fixtures
 
-- `legacy/test/fixtures/yarn-5-mr/`
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

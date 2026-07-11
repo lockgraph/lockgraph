@@ -44,7 +44,6 @@
   the npm 9+ default.
 - [GitHub Changelog — Dependabot supports npm v9](https://github.blog/changelog/2023-03-10-dependency-graph-and-dependabot-support-npm-v9/)
   — confirms v3 drops the legacy `dependencies` block.
-- Existing legacy parser: `legacy/main/ts/formats/npm-3.ts`.
 
 ## Schema sketch
 
@@ -115,9 +114,7 @@ version is unknown.
 
 ## Fixtures
 
-- `legacy/test/fixtures/npm-3/`
-- `legacy/test/fixtures/npm-3-mr/`
-- `legacy/test/fixtures/npm-3-aliases/`
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

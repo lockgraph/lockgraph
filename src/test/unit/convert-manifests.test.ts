@@ -122,7 +122,7 @@ ansi-styles@^3.2.1:
       packages: Record<string, { name?: string; dependencies?: Record<string, string> }>
     }
     expect(npm3.name).toBe('app')                                  // root is the declared project, not `chalk`
-    expect(npm3.packages[''].dependencies).toEqual({ chalk: '^2.4.2' })
+    expect(npm3.packages['']?.dependencies).toEqual({ chalk: '^2.4.2' })
     expect('node_modules/chalk' in npm3.packages).toBe(true)      // the promoted dep no longer vanishes
   })
 
@@ -281,7 +281,7 @@ csstype@3.0.9:
     const npm = JSON.parse(convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
       packages: Record<string, { dependencies?: Record<string, string> }>
     }
-    expect(npm.packages[''].dependencies).toEqual({ csstype: '^3.1.3' })
+    expect(npm.packages['']?.dependencies).toEqual({ csstype: '^3.1.3' })
     expect('node_modules/csstype' in npm.packages).toBe(true)
   })
 })

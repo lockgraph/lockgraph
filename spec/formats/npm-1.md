@@ -40,8 +40,6 @@
   (pre-Arborist).
 - [`shrinkwrap.js` at npm v9.9.4](https://github.com/npm/cli/blob/v9.9.4/workspaces/arborist/lib/shrinkwrap.js#L478-L481)
   — Arborist's read-path branches: `lockfileVersion === 1 ? defaultLockfileVersion : …` (npm 7+ migrates v1 on read).
-- Existing legacy parser: `legacy/main/ts/formats/npm-1.ts`.
-3. Existing parser: `legacy/main/ts/formats/npm-1.ts`
 
 ## Schema sketch
 
@@ -132,8 +130,7 @@ Mostly self-contained: the lockfile encodes the full hoisted tree.
 
 ## Fixtures
 
-- `legacy/test/fixtures/npm-1/`
-- `legacy/test/fixtures/npm-1-recursive/`
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

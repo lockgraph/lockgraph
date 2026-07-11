@@ -36,7 +36,6 @@
   — narrative for the v2 introduction (`packages` block, workspaces).
 - [`shrinkwrap.js` at npm v8.19.4](https://github.com/npm/cli/blob/v8.19.4/workspaces/arborist/lib/shrinkwrap.js)
   — Arborist's writer for v2 (carries the legacy v1 mirror unless `lockfileVersion=3`).
-- Existing legacy parser: `legacy/main/ts/formats/npm-2.ts`.
 
 ## Schema sketch
 
@@ -126,8 +125,7 @@ this is only how npm-2 *carries* it.
 
 ## Fixtures
 
-- `legacy/test/fixtures/npm-2/`
-- `legacy/test/fixtures/npm-2-mr/`
+See the test-bench fixtures under [`src/test/resources/fixtures/`](../../src/test/resources/fixtures) — `lockfiles/<case>/<format>.lock` for canonical per-case locks (`npm run build:fixtures`), `real-world/` for whole-project samples.
 
 ## Open questions
 

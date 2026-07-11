@@ -107,7 +107,6 @@ Default policy:
 
 Canonical inputs against which the parser/formatter is verified.
 
-- **Existing in repo:** `legacy/test/fixtures/<name>/…`
 - **To generate:** small projects that exercise specific shapes (workspaces,
   peer deps, aliases, patches, …) via the [test bench](../08-test-bench.md).
 

@@ -1,1 +1,0 @@
-Copy-pasted from https://github.com/imsnif/synp/tree/master/test
