@@ -3,12 +3,18 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import semver from 'semver'
 
 interface PmEntry {
   alias: string
   binName: string
   expectedPrefix: string
   runtime: 'node' | 'native'
+  // Node engine range the PM binary itself needs to run. When the running Node
+  // does not satisfy it, the binary errors, so the check is skipped. npm 12
+  // dropped Node ≤ 21 and needs recent 22.x/24.x — unrunnable on the Node-20 CI
+  // job (and on a 24.x below 24.15).
+  nodeRange?: string
 }
 
 const MATRIX: PmEntry[] = [
@@ -18,6 +24,7 @@ const MATRIX: PmEntry[] = [
   { alias: 'pm-npm-9',   binName: 'npm',  expectedPrefix: '9.',   runtime: 'node' },
   { alias: 'pm-npm-10',  binName: 'npm',  expectedPrefix: '10.',  runtime: 'node' },
   { alias: 'pm-npm-11',  binName: 'npm',  expectedPrefix: '11.',  runtime: 'node' },
+  { alias: 'pm-npm-12',  binName: 'npm',  expectedPrefix: '12.',  runtime: 'node', nodeRange: '^22.22.2 || ^24.15.0 || >=26.0.0' },
   { alias: 'pm-yarn-1',  binName: 'yarn', expectedPrefix: '1.',   runtime: 'node' },
   { alias: 'pm-yarn-2',  binName: 'yarn', expectedPrefix: '2.',   runtime: 'node' },
   { alias: 'pm-pnpm-6',  binName: 'pnpm', expectedPrefix: '6.',   runtime: 'node' },
@@ -55,7 +62,11 @@ function getVersion(entry: PmEntry): string {
 
 describe('infra: every PM binary in the matrix is reachable and prints its pinned version', () => {
   for (const entry of MATRIX) {
-    it(`${entry.alias} → ${entry.binName} --version starts with "${entry.expectedPrefix}"`, () => {
+    // Skip a PM whose own Node floor the current runtime doesn't meet (npm 12).
+    const run = entry.nodeRange !== undefined && !semver.satisfies(process.versions.node, entry.nodeRange)
+      ? it.skip
+      : it
+    run(`${entry.alias} → ${entry.binName} --version starts with "${entry.expectedPrefix}"`, () => {
       const version = getVersion(entry)
       expect(version, `${entry.alias} returned ${JSON.stringify(version)}`)
         .toMatch(new RegExp(`^${entry.expectedPrefix.replace(/\./g, '\\.')}`))

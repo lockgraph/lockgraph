@@ -1,9 +1,9 @@
 # `npm` — the npm CLI (`npm/cli`, Arborist)
 
 > Status: **preview** (docs+source-grounded) — docs-anchored, Arborist
-> source-derived core; `npm@12` trust change tracked but unreleased at time of
-> writing.
-> Updated: 2026-06-17.
+> source-derived core; `npm@12` released (2026-07) — its trust-model changes are
+> recorded in Axis 5.
+> Updated: 2026-07-10.
 > Provenance: **Official** — npm is the reference PM; behaviour is documented at
 > [docs.npmjs.com](https://docs.npmjs.com/cli/v10/) and the running CLI +
 > [`npm/cli`](https://github.com/npm/cli) source (Arborist) are the ground truth.
@@ -468,21 +468,32 @@ the major 2025 supply-chain campaigns (Shai-Hulud, Nx s1ngularity), which used
 `postinstall` hooks to exfiltrate credentials
 ([Snyk](https://snyk.io/articles/npm-security-best-practices-shai-hulud-attack/)).
 
-> **Version-specific — `npm@12` (planned ~July 2026): scripts blocked by
-> default.** npm v12 is announced to ship `allowScripts: off` as the **default**,
-> so `npm install` will **no longer** auto-run dependency `preinstall`/`install`/
-> `postinstall`. Scripts run only for packages on an **explicit allowlist**, built
-> with `npm approve-scripts` and trimmed with `npm deny-scripts`, committed to the
-> repo — moving npm from *implicit* to *explicit* trust, matching pnpm v10
-> (Jan 2025) and yarn-berry/bun
-> ([Aikido](https://www.aikido.dev/blog/npm-v12-block-postinstall),
-> [Snyk](https://snyk.io/articles/npm-security-best-practices-shai-hulud-attack/)).
-> **Uncertainty flag:** at the time this doc was written (mid-2026) npm v12 had
-> **not shipped**; exact command names (`approve-scripts`/`deny-scripts`),
-> config key (`allowScripts`), and the migration deadline are from
-> pre-release announcements and may shift. The **current** stable default is
-> still implicit script execution. Pre-12 mitigation: set `ignore-scripts=true`
-> globally and grant per-install with `--ignore-scripts=false` for trusted
+> **Version-specific — `npm@12` (released 2026-07, `12.0.1`): implicit trust
+> ends.** npm 12 ships three security-model breaking changes
+> ([GitHub changelog, 2026-06-09](https://github.blog/changelog/2026-06-09-upcoming-breaking-changes-for-npm-v12/)):
+> 1. **`allowScripts` off by default** — `npm install` no longer auto-runs a
+>    dependency's `preinstall`/`install`/`postinstall`. Scripts run only for
+>    packages on an explicit allowlist built with `npm approve-scripts`
+>    (`npm approve-scripts --allow-scripts-pending` surfaces the pending ones),
+>    written to the project's `package.json` and committed.
+> 2. **`--allow-git` defaults to `none`** — git dependencies (direct or
+>    transitive) no longer resolve unless allowed via `--allow-git` (flag added in
+>    npm 11.10.0).
+> 3. **`--allow-remote` defaults to `none`** — remote-URL / HTTPS-tarball
+>    dependencies no longer resolve unless allowed via `--allow-remote` (flag added
+>    in npm 11.15.0).
+>
+> This moves npm from *implicit* to *explicit* trust, matching pnpm v10 (Jan 2025)
+> and yarn-berry/bun. npm 12 also raises its Node floor to
+> `^22.22.2 || ^24.15.0 || >=26.0.0` (Node ≤ 21 dropped). **None of the three
+> touch `package-lock.json` content** — the allowlist lives in `package.json`, the
+> allow-flags are runtime — so a lock this project emits is byte-unaffected and
+> still installs frozen-clean under npm 12
+> ([`formats/npm-3.md` §Compatibility](../formats/npm-3.md#compatibility)). The one
+> install-time consequence for a *consumer*: a lock encoding **git** or
+> **remote-URL** dependencies will not resolve under npm 12 defaults without the
+> opt-in flag. Pre-12 mitigation for implicit execution: `ignore-scripts=true`
+> globally, granting per-install with `--ignore-scripts=false` for trusted
 > packages.
 
 ---
@@ -504,6 +515,12 @@ re-documented here**. The npm-CLI↔version interaction only:
 | **1** | npm **5–6** | nested `dependencies` tree only | npm 5+ |
 | **2** | npm **7–8** | **dual**: `packages` (flat, install-path-keyed, authoritative) **+** `dependencies` (legacy mirror for npm 6 readers) | npm 7+ |
 | **3** | npm **9+** (default) | `packages` only — **drops** the legacy mirror | npm **7+** (npm 5/6 **cannot** read v3) |
+
+> Verified current through **npm 12** (`12.0.1`, 2026-07): npm 10 / 11 / 12 follow
+> the `npm 9+` row (`lockfileVersion: 3`; npm 11 emits byte-identical to npm 12).
+> The one field change within the v3 era is **`license`, added per-entry at npm 10**
+> (npm 9 omits it). npm 12's breaking changes are install-time (Axis 5), not
+> lock-format.
 
 ([docs — package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/);
 `defaultLockfileVersion = 3` in
@@ -659,7 +676,8 @@ Authoritative, cited inline above; consolidated:
 - Cross-PM mechanics referenced only for the Axis-3 contrast (not a comparison
   table) — [Yarn — Plug'n'Play](https://yarnpkg.com/features/pnp).
 - RFCs — [RFC-0021 reduced lifecycle env](https://github.com/npm/rfcs/blob/main/implemented/0021-reduce-lifecycle-script-environment.md).
-- `npm@12` script-trust change (unreleased) —
+- `npm@12` breaking changes (released 2026-07) —
+  [GitHub changelog 2026-06-09](https://github.blog/changelog/2026-06-09-upcoming-breaking-changes-for-npm-v12/),
   [Aikido](https://www.aikido.dev/blog/npm-v12-block-postinstall),
   [Snyk](https://snyk.io/articles/npm-security-best-practices-shai-hulud-attack/)
   *(pre-release; flagged in Axis 5)*.
@@ -679,8 +697,11 @@ Authoritative, cited inline above; consolidated:
   (`#1-module-resolution--commonjs`,
   `#44-bin-shims--path--how-a-packages-executable-runs`,
   `#7-axis-template--what-every-per-pm-doc-covers`) resolve into it.
-- **`npm@12` specifics.** Confirm final command/config names and the default
-  flip once v12 GAs (Axis 5 uncertainty flag).
+- **`npm@12` specifics — resolved (2026-07).** v12 shipped (`12.0.1`); the three
+  security breaking changes (`allowScripts` off, `--allow-git`/`--allow-remote`
+  default `none`) and the raised Node floor are recorded in Axis 5. The lock
+  format is unchanged — still `lockfileVersion: 3`, byte-identical, verified
+  against `12.0.1`.
 - **`peerDependenciesMeta` round-trip.** npm records optional-peer metadata that
   the current npm-family contract does not fully model
   ([ADR-0021](../decisions/0021-npm-family-completeness-contract.md) scope note) —

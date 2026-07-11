@@ -210,6 +210,41 @@ lodash@4.17.21:
   })
 })
 
+// A workspace member whose package NAME collides with an external published package
+// already in the lock must still be synthesized. Real yarn 1 links the root
+// `node_modules/<name>` to the LOCAL member and nests the external copy under its
+// consumer. Guarding member synthesis on `graph.byName(name).length > 0` (any
+// same-name node) wrongly skipped the member — it vanished and `npm ci` reported
+// "Missing … from lock file". Verified against `npm ci`: byte-clean, with
+// `node_modules/is-number` resolving to the local 99.0.0.
+describe('yarn-classic workspace member colliding with an external package name is not dropped', () => {
+  const YARN = `# yarn lockfile v1
+is-number@^7.0.0:
+  version "7.0.0"
+  resolved "https://registry.yarnpkg.com/is-number/-/is-number-7.0.0.tgz#7535345b896734d5f80c4d06c50955527a14f12b"
+  integrity sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==
+`
+  const MAN: Record<string, Manifest> = {
+    '': { name: 'root', version: '1.0.0' },
+    'packages/localnum': { name: 'is-number', version: '99.0.0' },
+    'packages/consumer': { name: '@c/consumer', version: '1.0.0', dependencies: { 'is-number': '^7.0.0' } },
+  }
+
+  it('synthesizes the local member + links the root node_modules to it, nesting the external copy', () => {
+    const codes: string[] = []
+    const out = JSON.parse(convert(YARN, {
+      from: 'yarn-classic', to: 'npm-3', manifests: MAN, onDiagnostic: d => codes.push(d.code),
+    })) as { packages: Record<string, { link?: boolean; resolved?: string; name?: string; version?: string }> }
+
+    // The local member (is-number@99) appears and wins the root symlink.
+    expect(out.packages['packages/localnum']).toEqual({ name: 'is-number', version: '99.0.0' })
+    expect(out.packages['node_modules/is-number']).toEqual({ resolved: 'packages/localnum', link: true })
+    // The external is-number@7 nests under its consumer, not at the root.
+    expect(out.packages['packages/consumer/node_modules/is-number']?.version).toBe('7.0.0')
+    expect(codes).not.toContain('YARN_CLASSIC_WORKSPACE_MEMBER_DEPS_UNSYNTHESISED')
+  })
+})
+
 // A yarn `resolutions` pin can force a version the declared range does NOT satisfy
 // (e.g. root declares csstype `^3.1.3` but resolutions pin `3.0.9`). yarn-classic
 // root-edge synthesis in `enrich` must honour that pin, not just semver: with ≥2

@@ -1448,9 +1448,25 @@ function planClassicEnrich(
   // built from the member manifest. Without this the member is dropped and its
   // deps have no consumer to nest under — the npm emit then falls back to a
   // synthetic `node_modules/.lockfile-…` store key that no client can install.
+  //
+  // Skip only members the lock ALREADY carries — i.e. the ones the loop above
+  // marked as `directory`-resolution members. Testing `graph.byName(name)` for
+  // ANY node would wrongly skip a member whose name collides with an external
+  // published package already in the lock (a workspace member literally named
+  // `is-number` alongside the npm `is-number` a sibling depends on): the external
+  // node is not that member, so the member still needs synthesizing — otherwise
+  // it vanishes and `npm ci` reports "Missing … from lock file".
+  const membersAlreadyInLock = new Set(memberNodeReplacements.map(n => n.name))
+  // The marking loop above skips a node that a PRIOR enrich already gave a
+  // `workspacePath` — such a member is still in the lock, so fold its name in
+  // too. Otherwise a second enrich (the idempotency path) re-synthesizes a
+  // duplicate member node at the manifest version alongside the sentinel one.
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined) membersAlreadyInLock.add(node.name)
+  }
   for (const [name, { path, manifest }] of memberManifests) {
     if (manifest.version === undefined) continue
-    if (graph.byName(name).length > 0) continue // already present in the lock — handled above
+    if (membersAlreadyInLock.has(name)) continue
     const memberId = `${name}@${manifest.version}`
     addMemberNodes.push({ id: memberId, name, version: manifest.version, peerContext: [], workspacePath: path })
     for (const edge of desiredManifestEdges(graph, memberId, manifest, memberManifests, specIndex, overrides)) {

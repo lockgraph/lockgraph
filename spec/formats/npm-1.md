@@ -20,6 +20,11 @@
 |----|--------------|-------|
 | npm | `>=5` | all npm; `>=7` auto-migrates lockfile to v2 / v3 on next install |
 
+> Verified through **npm 12**: the v1 *writer* stays dropped (npm 9+); npm 7–12
+> read v1 but auto-migrate it to v2 / v3 on the next `npm install`, so a v1 lock
+> does **not** round-trip frozen-clean under modern npm — emit v3 for npm 9+
+> readers.
+
 ## File
 
 - **Filename:** `package-lock.json` (or `npm-shrinkwrap.json` for shipped libs)

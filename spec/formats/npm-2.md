@@ -19,6 +19,9 @@
 |----|--------------|-------|
 | npm | `>=7` | npm 5 / 6 cannot read `lockfileVersion: 2` |
 
+> Verified through **npm 12**: npm 7–12 read v2; npm 9–12 still emit it under
+> `--lockfile-version=2` (their default output is v3).
+
 ## File
 
 - **Filename:** `package-lock.json`
