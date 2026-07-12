@@ -1,6 +1,6 @@
 // pnpm-v5 adapter — pnpm `pnpm-lock.yaml` lockfileVersion 5.4.
 //
-// Standalone-fit per ADR-0022 §5 r2 amendment: v5 (decimal `5.4`
+// Standalone-fit per ADR-0022 §5: v5 (decimal `5.4`
 // handshake, `specifiers` + bare-version `dependencies`,
 // `/<name>/<version>` slash-separator packages keys, underscore peer-
 // context syntax) is fundamentally different from the flat-core v6/v9
@@ -238,7 +238,7 @@ const TOP_LEVEL_ORDER: readonly string[] = [
 
 const TOP_LEVEL_SECTION_KEYS: readonly string[] = ['importers', 'packages']
 
-// Per ADR-0022 §A.pnpm-v5 r2 amendment: right-to-left peel grammar.
+// Per ADR-0022 §A.pnpm-v5: right-to-left peel grammar.
 // Anchored at end-of-string; peer-name captures optional leading `@`
 // for scoped peers, optional `/sub` segment for scoped names, then
 // `@<version>` up to the next `_` boundary.
@@ -861,7 +861,7 @@ export interface PeerEntry { name: string; version: string }
 export interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] }
 
 /**
- * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5 r2. Given
+ * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5. Given
  * `<version>[_<peer>@<v>…]`, peel `_<peerName>@<peerVersion>` segments
  * from the tail while PEER_TAIL_RE matches; returns the bare version
  * (unconsumed remainder) and peers in canonical order. Returns undefined

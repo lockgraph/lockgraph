@@ -269,6 +269,15 @@ export interface PnpmSidecar {
   importerByPath: Map<string, string>
   nodes: Map<string, PnpmNodeSidecar>
   importerEdges: Map<string, PnpmEdgeSidecar>
+  /** Workspace-peer attribution keyed `${ownerNodeId}\0${workspaceNodeId}` →
+   *  { published name, original `+`-encoded locator }, used to reconstruct the native
+   *  locator at emit. Keyed by owner because `resolveWorkspacePeerId` collapses a
+   *  sub-dir publish and its ancestor onto one node, so one target may carry different
+   *  locators across consumers. */
+  workspacePeerNames: Map<string, { name: string; locator: string }>
+  /** Attribution keys with a within-owner collision (two published packages on one
+   *  ancestor node); the locator is not reproducible, so they surface as gaps. */
+  workspacePeerCollisions: Set<string>
   overrides?: Record<string, string>
   /** Verbatim top-level `catalogs:` block (pnpm v9+ catalog protocol). Captured
    *  at parse, replayed on emit. The importer `specifier: 'catalog:'` refs
@@ -368,6 +377,8 @@ export function parseFamily(
     importerByPath: new Map<string, string>(),
     nodes: new Map<string, PnpmNodeSidecar>(),
     importerEdges: new Map<string, PnpmEdgeSidecar>(),
+    workspacePeerNames: new Map<string, { name: string; locator: string }>(),
+    workspacePeerCollisions: new Set<string>(),
   }
 
   // Capture the full `settings:` block verbatim for same-PM frozen-clean emit;
@@ -723,6 +734,28 @@ export function parseFamily(
   }
 }
 
+// A peer edge into a workspace node whose native-locator attribution is absent
+// (`missing` — e.g. a mutation dropped the sidecar) or ambiguous (`collision`). Emit
+// cannot reproduce the pnpm locator, so it surfaces a diagnostic.
+type WorkspacePeerGap = { owner: string; workspace: string; reason: 'missing' | 'collision' }
+
+function workspacePeerProjectionGaps(graph: Graph, sidecar: PnpmSidecar | undefined): WorkspacePeerGap[] {
+  const gaps: WorkspacePeerGap[] = []
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (edge.kind !== 'peer') continue
+      if (graph.getNode(edge.dst)?.workspacePath === undefined) continue
+      const key = `${node.id}\0${edge.dst}`
+      if (sidecar?.workspacePeerNames.get(key) === undefined) {
+        gaps.push({ owner: node.id, workspace: edge.dst, reason: 'missing' })
+      } else if (sidecar.workspacePeerCollisions.has(key)) {
+        gaps.push({ owner: node.id, workspace: edge.dst, reason: 'collision' })
+      }
+    }
+  }
+  return gaps
+}
+
 export function stringifyFamily(
   graph: Graph,
   profile: PnpmLayoutProfile,
@@ -732,6 +765,18 @@ export function stringifyFamily(
   const sidecar = sidecarByGraph.get(graph)
   const emitDiagnostic = (diagnostic: Diagnostic): void => {
     options.onDiagnostic?.(diagnostic)
+  }
+
+  // Surface any workspace-peer attribution gap as a typed diagnostic; the missing
+  // native locator is never fabricated.
+  for (const gap of workspacePeerProjectionGaps(graph, sidecar)) {
+    if (gap.reason !== 'missing') continue // collisions are already surfaced at parse
+    emitDiagnostic({
+      code: 'PNPM_WORKSPACE_PEER_ATTR_MISSING',
+      severity: 'warning',
+      subject: gap.owner,
+      message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: workspace-peer ${gap.owner} →peer ${gap.workspace} has no native-locator attribution; the relation is retained but the pnpm locator is not reproduced.`,
+    })
   }
 
   // ADR-0014 §4.F2 — pnpm v6/v9 SUPPORT patch slots via the `overrides:`
@@ -872,7 +917,7 @@ export function stringifyFamily(
   // packages — keyed by bare or slash-leading `<id>` per shape.packagesKeyShape.
   const packagesUsed = new Set<string>()
   for (const node of resolvedNodes) {
-    packagesUsed.add(packagesKeyForNode(node, shape))
+    packagesUsed.add(packagesKeyForNode(node, shape, sidecar))
   }
 
   const packages: YamlMap = {}
@@ -893,9 +938,9 @@ export function stringifyFamily(
     }
   } else {
     // v6: one packages entry per peer-virt instance, key includes peer-context.
-    const sortedNodes = resolvedNodes.slice().sort((a, b) => cmpStr(packagesKeyForNode(a, shape), packagesKeyForNode(b, shape)))
+    const sortedNodes = resolvedNodes.slice().sort((a, b) => cmpStr(packagesKeyForNode(a, shape, sidecar), packagesKeyForNode(b, shape, sidecar)))
     for (const node of sortedNodes) {
-      const key = packagesKeyForNode(node, shape)
+      const key = packagesKeyForNode(node, shape, sidecar)
       packages[key] = buildPackageEntry(graph, sidecar, node, shape)
     }
   }
@@ -905,7 +950,7 @@ export function stringifyFamily(
   if (shape.hasSnapshots) {
     const snapshots: YamlMap = {}
     for (const node of resolvedNodes) {
-      const snapshotKey = nodeIdToSnapshotKey(node)
+      const snapshotKey = nodeIdToSnapshotKey(node, sidecar)
       snapshots[snapshotKey] = buildSnapshotEntry(graph, sidecar, node)
     }
     out.snapshots = sortRecord(snapshots) as YamlMap
@@ -916,7 +961,7 @@ export function stringifyFamily(
   // adjacency back to its target, via the SAME oracle parse uses. A miss is a
   // generator defect surfaced as a soft `LAYOUT_RESOLVE_VIOLATION` (error) — no
   // throw, so stringify still produces output (lean-safety, npm INV-FINDUP §).
-  assertResolveValid(graph, shape, out, rootNode, resolvedNodes, emitDiagnostic)
+  assertResolveValid(graph, shape, out, rootNode, resolvedNodes, emitDiagnostic, sidecar)
 
   const text = emitYaml(out, {
     topLevelOrder: shape.topLevelOrder,
@@ -954,6 +999,7 @@ function assertResolveValid(
   rootNode: Node | undefined,
   resolvedNodes: readonly Node[],
   onDiagnostic: (d: Diagnostic) => void,
+  sidecar: PnpmSidecar | undefined,
 ): void {
   // The set of NodeIds that actually got a packages/snapshots entry — exactly
   // the `seenIds` the parse oracle checks membership against.
@@ -991,10 +1037,10 @@ function assertResolveValid(
   const packagesMap = isPlainObject(out.packages) ? (out.packages as Record<string, unknown>) : undefined
   const packageBlockOf = (pkg: Node): Record<string, unknown> | undefined => {
     if (shape.hasSnapshots) {
-      const entry = snapshotsMap?.[nodeIdToSnapshotKey(pkg)]
+      const entry = snapshotsMap?.[nodeIdToSnapshotKey(pkg, sidecar)]
       return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
     }
-    const entry = packagesMap?.[packagesKeyForNode(pkg, shape)]
+    const entry = packagesMap?.[packagesKeyForNode(pkg, shape, sidecar)]
     return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
   }
 
@@ -1149,7 +1195,13 @@ export function optimizeFamily(
   _options: PnpmFamilyOptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph)
-  const reachable = new Set(graph.walk(Array.from(graph.roots())))
+  // Seed every workspace node, not just in-degree-0 `roots()`: an incoming `peer` edge
+  // raises a workspace's in-degree, so `roots()` alone no longer anchors it.
+  const seeds = new Set(graph.roots())
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined) seeds.add(node.id)
+  }
+  const reachable = new Set(graph.walk(Array.from(seeds)))
   const unreachableNodes = Array.from(graph.nodes(), node => node.id)
     .filter(nodeId => !reachable.has(nodeId))
     .sort(cmpStr)
@@ -1409,14 +1461,14 @@ function applyPackagesKeyPrefix(stripped: string, packagesKeyShape: PnpmLayoutSh
   return stripped
 }
 
-function packagesKeyForNode(node: Node, shape: PnpmLayoutShape): string {
+function packagesKeyForNode(node: Node, shape: PnpmLayoutShape, sidecar: PnpmSidecar | undefined): string {
   // v9 collapses peer-virt onto bare key. v6 carries peer-context on the key.
   const bare = `${node.name}@${node.version}`
   if (shape.peerContextLocation === 'snapshots-keys') return bare
-  // v6 — append peer-context if present.
+  // v6 — append peer-context if present (workspace tokens map to their native locator).
   const suffix = node.peerContext.length === 0
     ? ''
-    : node.peerContext.map(p => `(${p})`).join('')
+    : node.peerContext.map(p => `(${denormalizeWorkspaceToken(p, node.id, sidecar)})`).join('')
   return applyPackagesKeyPrefix(bare + suffix, shape.packagesKeyShape)
 }
 
@@ -1550,11 +1602,42 @@ function addResolvedTreeEdges(
     // `+`-encoded importer dir).
     const fullPeerVersion = peer.version + normalizeNestedSuffix(peer.nested, sidecar.importerByPath)
     const peerId = peer.name + '@' + fullPeerVersion
-    // #8b-A — a workspace peer (`vue@packages+vue`) is satisfied by a
-    // workspace importer node; the seal forbids a registry node owning an
-    // edge into a workspace node, so it is dropped symmetrically with its
-    // peerContext entry (see buildPeerContext / resolveWorkspacePeerId).
-    if (resolveWorkspacePeerId(peer.version, sidecar.importerByPath) !== undefined) continue
+    // A workspace peer is satisfied by a workspace importer node: its canonical node id
+    // rides the peerContext and a real `peer` edge backs it; the native locator is
+    // recorded for emit only.
+    const wsPeerId = resolveWorkspacePeerId(peer.version, sidecar.importerByPath)
+    if (wsPeerId !== undefined) {
+      // Key attribution by (owner node id, workspace target), not by target alone.
+      // `resolveWorkspacePeerId` walks to an ancestor importer, so `packages+lib` and
+      // a sub-dir `packages+lib+build` collapse onto the same target node; keying by
+      // owner keeps each consumer's original locator distinct. A within-owner
+      // collision (two distinct published packages sharing the ancestor) is diagnosed
+      // (first wins), never silently last-write.
+      const attrKey = `${srcId}\0${wsPeerId}`
+      const prior = sidecar.workspacePeerNames.get(attrKey)
+      if (prior === undefined) {
+        sidecar.workspacePeerNames.set(attrKey, { name: peer.name, locator: peer.version })
+      } else if (prior.name !== peer.name || prior.locator !== peer.version) {
+        sidecar.workspacePeerCollisions.add(attrKey)
+        diagnostics.push({
+          code: 'PNPM_WORKSPACE_PEER_ATTR_COLLISION',
+          severity: 'warning',
+          subject: srcId,
+          message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: workspace-peer attribution collision on ${srcId} → ${wsPeerId}: ${prior.name}@${prior.locator} vs ${peer.name}@${peer.version} (emit keeps the first — distinct sub-dir publishes projected onto one ancestor node)`,
+        })
+      }
+      if (tryWire('peer', wsPeerId, undefined)) {
+        try {
+          const sc = sidecar.nodes.get(srcId)
+          const peerAttrs: EdgeAttrs = { range: sc?.peerDependencies?.[peer.name] ?? peer.version }
+          if (sc?.peerDependenciesMeta?.[peer.name]?.optional === true) peerAttrs.optional = true
+          builder.addEdge(srcId, wsPeerId, 'peer', peerAttrs)
+        } catch (error) {
+          if (!(error instanceof GraphError && error.code === 'INVARIANT_VIOLATION')) throw error
+        }
+      }
+      continue
+    }
     const peerNodeId = resolvePeerTargetById(seenIds, peer.name, fullPeerVersion)
     if (peerNodeId === undefined) {
       diagnostics.push({
@@ -1782,7 +1865,7 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
  * `isHashedPeerSetToken`. They ride through `serializeNodeId` verbatim, so emit
  * reproduces the original bare-hex key.
  *
- * NB the workspace filter checks the BASE `version` only: `resolveWorkspacePeerId`
+ * NB the workspace mapping checks the base `version` only: `resolveWorkspacePeerId`
  * decodes a `+`-encoded importer dir, and a nested `(...)` suffix would break
  * that detection.
  */
@@ -1791,10 +1874,14 @@ function buildPeerContext(
   importerByPath: Map<string, string>,
   opaquePeers: readonly string[] = [],
 ): string[] {
-  const edgePeers = peers
-    .filter(p => resolveWorkspacePeerId(p.version, importerByPath) === undefined)
-    .map(p => `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`)
-  return [...edgePeers, ...opaquePeers].sort()
+  // A workspace peer becomes the canonical workspace node id, backed by a real `peer`
+  // edge (every token stays edge-bearing); a registry peer keeps `name@version` plus its
+  // normalised nested suffix. The native locator is reconstructed at emit, not here.
+  const contextPeers = peers.map(p => {
+    const wsId = resolveWorkspacePeerId(p.version, importerByPath)
+    return wsId ?? `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`
+  })
+  return [...contextPeers, ...opaquePeers].sort()
 }
 
 function importerSpec(value: unknown): { specifier?: string; version: string } | undefined {
@@ -1950,9 +2037,43 @@ export function locatePnpmRootNode(
   return undefined
 }
 
-function nodeIdToSnapshotKey(node: Node): string {
+// Emit-time inverse of the workspace mapping: a peerContext token that is a canonical
+// workspace node id is rewritten to its recorded native locator. Attribution is keyed by
+// (owner, workspace target); a nested token's owner is the enclosing instance `token`
+// (its canonical id per #70). A matched workspace token is a leaf.
+function denormalizeWorkspaceToken(token: string, ownerId: string, sidecar: PnpmSidecar | undefined): string {
+  const base = stripPeerContextFromNodeId(token)
+  const attr = sidecar?.workspacePeerNames.get(`${ownerId}\0${base}`)
+  if (attr !== undefined) return `${attr.name}@${attr.locator}`
+  // No attribution (e.g. a mutation dropped the sidecar): the locator is not fabricated
+  // (the published peer name is unevidenced), the relation is retained, and the gap is
+  // surfaced via `workspacePeerProjectionGaps`. A registry peer's nested suffix recurses.
+  const suffix = token.slice(base.length)
+  if (suffix.length === 0) return token
+  return base + splitTopLevelPeerGroups(suffix).map(g => `(${denormalizeWorkspaceToken(g, token, sidecar)})`).join('')
+}
+
+// Split a `(g1)(g2)…` peer suffix into its DEPTH-0 groups (nested parens intact).
+function splitTopLevelPeerGroups(suffix: string): string[] {
+  const groups: string[] = []
+  let depth = 0
+  let start = -1
+  for (let i = 0; i < suffix.length; i++) {
+    const c = suffix[i]
+    if (c === '(') {
+      if (depth === 0) start = i + 1
+      depth++
+    } else if (c === ')') {
+      depth--
+      if (depth === 0 && start >= 0) groups.push(suffix.slice(start, i))
+    }
+  }
+  return groups
+}
+
+function nodeIdToSnapshotKey(node: Node, sidecar: PnpmSidecar | undefined): string {
   if (node.peerContext.length === 0) return `${node.name}@${node.version}`
-  return `${node.name}@${node.version}` + node.peerContext.map(p => `(${p})`).join('')
+  return `${node.name}@${node.version}` + node.peerContext.map(p => `(${denormalizeWorkspaceToken(p, node.id, sidecar)})`).join('')
 }
 
 // ADR-0028 INV-RESOLVE — the (slot-key, slot-value) pair for one resolved-tree
@@ -1963,8 +2084,8 @@ function nodeIdToSnapshotKey(node: Node): string {
 // `<dst.name>@<version>(<peers>)`, the form parse's resolveAliasedSnapshotTarget
 // reconstructs (`_pnpm-flat-core.ts:1183-1190`). Mirrors the importer-side
 // `{ specifier, version }` alias shape (`react-is-cjs: react-is@17.0.2`).
-function aliasedSnapshotSlotValue(edge: Edge, dst: Node): { key: string; value: string } {
-  const bareValue = nodeIdToImporterVersion(dst)
+function aliasedSnapshotSlotValue(edge: Edge, dst: Node, sidecar: PnpmSidecar | undefined): { key: string; value: string } {
+  const bareValue = nodeIdToImporterVersion(dst, sidecar)
   const alias = edge.attrs?.alias
   if (alias === undefined) return { key: dst.name, value: bareValue }
   return { key: alias, value: `${dst.name}@${bareValue}` }
@@ -2003,7 +2124,7 @@ function buildImporterEntry(
     // resolveAliasedSnapshotTarget resolves). `alias` is set by parse only on
     // the npm-alias path; a bare dep has no alias and falls back to `dst.name`
     // + bare version — byte-unchanged for the non-alias case.
-    const slot = aliasedSnapshotSlotValue(edge, dst)
+    const slot = aliasedSnapshotSlotValue(edge, dst, sidecar)
     const isAliased = edge.attrs?.alias !== undefined
     const range = edge.attrs?.range
     // The `importerEdges` sidecar is keyed by the (src,kind,dst) triple, which
@@ -2045,9 +2166,9 @@ function buildImporterEntry(
   return entry
 }
 
-function nodeIdToImporterVersion(node: Node): string {
+function nodeIdToImporterVersion(node: Node, sidecar: PnpmSidecar | undefined): string {
   if (node.peerContext.length === 0) return node.version
-  return node.version + node.peerContext.map(p => `(${p})`).join('')
+  return node.version + node.peerContext.map(p => `(${denormalizeWorkspaceToken(p, node.id, sidecar)})`).join('')
 }
 
 export function relativeImporterPath(importerPath: string, targetPath: string): string {
@@ -2164,7 +2285,7 @@ function buildPackageEntry(
       const block = blocks[edge.kind]!
       // ADR-0028 INV-RESOLVE — alias slot keying + canonical value (see
       // buildSnapshotEntry / aliasedSnapshotSlotValue).
-      const seg = aliasedSnapshotSlotValue(edge, dst)
+      const seg = aliasedSnapshotSlotValue(edge, dst, sidecar)
       block[seg.key] = seg.value
     }
     for (const [kind, blockName] of [['dep', 'dependencies'], ['optional', 'optionalDependencies']] as const) {
@@ -2208,7 +2329,7 @@ function buildSnapshotEntry(
     // `<name>@<version>` value (`react-is@17.0.2`), the only form parse's
     // resolveAliasedSnapshotTarget oracle resolves; a bare dep keeps its bare
     // version under `dst.name` (byte-unchanged).
-    const seg = aliasedSnapshotSlotValue(edge, dst)
+    const seg = aliasedSnapshotSlotValue(edge, dst, sidecar)
     block[seg.key] = seg.value
   }
 

@@ -653,6 +653,9 @@ function validate(s: State): void {
       // info diagnostic each), reject everything else with the verbatim message.
       for (const edge of inc) {
         if (s.nodes.get(edge.src)?.workspacePath !== undefined) continue // ws→ws: permitted
+        // A workspace can satisfy a peer dependency, so a `peer` edge into a workspace
+        // node is permitted (ADR-0022); other kinds still reject below.
+        if (edge.kind === 'peer') continue
         // ADR-0017 amendment — a LOCAL node (canonical resolution type
         // 'directory': yarn `portal:` / `link:`, npm/pnpm `file:` directory
         // link) is part of the project graph, not a published package, so it

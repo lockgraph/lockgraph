@@ -156,12 +156,10 @@ describe('pnpm-v9 — multi-peer rendering', () => {
   })
 })
 
-describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedup + patch-hash)', () => {
-  it('#8b-A: a workspace peer (`lib@packages+lib`) is dropped from peerContext AND edges, not sealed as a registry peer', () => {
-    // `consumer` peers on the workspace package `packages/lib`, encoded by pnpm
-    // as `lib@packages+lib` (importer dir `packages/lib` with `/` → `+`). The
-    // workspace target is a workspace node; the seal forbids a registry node
-    // owning an incoming edge into it, so the peer is dropped symmetrically.
+describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)', () => {
+  it('#8b-A: a workspace peer is a real peer edge; its canonical token round-trips to the native locator', () => {
+    // `consumer` peers on the workspace `packages/lib`, encoded by pnpm as
+    // `lib@packages+lib` (importer dir `packages/lib`, `/` → `+`).
     const lock =
       `lockfileVersion: '9.0'\n\n` +
       `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
@@ -177,24 +175,23 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
       `snapshots:\n\n` +
       `  consumer@1.0.0(lib@packages+lib):\n    dependencies:\n      lib: link:packages/lib\n` +
       `  left-pad@1.3.0: {}\n`
-    const graph = parse(lock) // throws on seal failure — the regression guard
+    const graph = parse(lock)
 
-    // The workspace peer was filtered out: NodeId has NO peer suffix.
-    const consumer = graph.getNode('consumer@1.0.0')
+    const consumer = graph.getNode('consumer@1.0.0(packages/lib@0.0.0)')
     expect(consumer).toBeDefined()
-    expect(consumer!.peerContext).toEqual([])
-    expect(graph.getNode('consumer@1.0.0(lib@packages+lib)')).toBeUndefined()
-    // No peer edge into the workspace member node.
-    const member = graph.getNode('packages/lib@0.0.0')
-    expect(member).toBeDefined()
-    expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
+    expect(consumer!.peerContext).toEqual(['packages/lib@0.0.0'])
+    expect(graph.getNode('consumer@1.0.0')).toBeUndefined()
+    expect(graph.in('packages/lib@0.0.0', 'peer').length).toBe(1)
+
+    const out = stringify(graph)
+    expect(out).toContain('consumer@1.0.0(lib@packages+lib)')
+    expect(out).not.toContain('packages/lib@0.0.0')
   })
 
-  it('#8d: a workspace peer published from a SUB-DIR (`lib@packages+lib+build`) resolves to the ancestor importer + drops from peerContext', () => {
-    // A workspace can encode a peer as `packages+<name>+build`
-    // (`packages/<name>/build`) while the importer is `packages/<name>`.
-    // resolveWorkspacePeerId must walk up to the ancestor importer; otherwise the
-    // peer stays in peerContext and the seal "disagrees".
+  it('#8d: a sub-dir workspace peer resolves to the ancestor importer and replays its original locator', () => {
+    // A workspace can encode a peer as `packages+<name>+build` (`packages/<name>/build`)
+    // while the importer is `packages/<name>`. resolveWorkspacePeerId walks up to the
+    // ancestor importer; the original sub-dir locator is preserved for emit.
     const lock =
       `lockfileVersion: '9.0'\n\n` +
       `settings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\n` +
@@ -210,12 +207,12 @@ describe('pnpm-v9 — peer-resolution residue (#8b-A workspace-peer / #8b-C dedu
       `snapshots:\n\n` +
       `  consumer@1.0.0(lib@packages+lib+build):\n    dependencies:\n      lib: link:packages/lib\n` +
       `  left-pad@1.3.0: {}\n`
-    const graph = parse(lock) // throws on seal failure — the regression guard
-    const consumer = graph.getNode('consumer@1.0.0')
+    const graph = parse(lock)
+    const consumer = graph.getNode('consumer@1.0.0(packages/lib@0.0.0)')
     expect(consumer).toBeDefined()
-    expect(consumer!.peerContext).toEqual([])
-    expect(graph.getNode('consumer@1.0.0(lib@packages+lib+build)')).toBeUndefined()
-    expect(graph.in('packages/lib@0.0.0', 'peer')).toEqual([])
+    expect(consumer!.peerContext).toEqual(['packages/lib@0.0.0'])
+    expect(graph.in('packages/lib@0.0.0', 'peer').length).toBe(1)
+    expect(stringify(graph)).toContain('consumer@1.0.0(lib@packages+lib+build)')
   })
 
   it('#70: two snapshot keys differing only in a nested peer-of-peer stay DISTINCT NodeIds', () => {

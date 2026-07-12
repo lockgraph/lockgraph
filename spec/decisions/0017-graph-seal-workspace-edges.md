@@ -862,3 +862,30 @@ Published-self-link amendment (2026-05-29):
   nodes always live; no GC hazard from the new edge)
 - Bug #3 `EdgeAttrs.alias` work — sibling edge metadata; `range` and
   `alias` are independent slots, both may apply to one edge
+
+## Amendment — workspace-peer relation
+
+**Context.** A pnpm workspace package may satisfy a peer requirement of a
+non-workspace consumer (`@angular/core@…(@angular/compiler@packages+common)` — the
+peer `@angular/compiler` is the workspace `packages/compiler`). Previously the
+workspace peer was dropped from BOTH the consumer's `peerContext` and its peer-edge
+set (kept in bijection by symmetric omission), which COLLAPSED two consumer snapshots
+that differ only by a workspace-peer suffix onto one NodeId — a fidelity loss that
+breaks `--frozen-lockfile` (ADR-0022 no-dedup).
+
+**Amended seal rule.** In addition to ws→ws, directory-source, and published-self-link
+(above), a workspace node MAY own an incoming edge iff **`edge.kind === 'peer'`**. The
+rule is format-agnostic — keyed on `edge.kind`, never on any PM's locator spelling.
+Non-peer (`dep`/`dev`/`optional`/`bundled`) incoming edges from a non-workspace node
+still reject unless a prior carve-out applies.
+
+**Identity.** The consumer's `peerContext` carries the workspace peer's CANONICAL node
+id (the workspace importer node id, e.g. `packages/compiler@0.0.0`), and a REAL `peer`
+edge backs it — so the existing `peerContext ⟺ peer-edge` base-key bijection holds with
+NO exemption (contrast the ADR-0030 hashed-token exemption). The pnpm-native
+`name@packages+dir` locator is attribution only, reconstructed at emit from a pnpm
+sidecar (`workspacePeerNames`); it never enters identity or leaks cross-format.
+
+**Injectivity.** Workspace importer nodes are keyed by importer path (unique), so two
+distinct workspace instances get distinct canonical tokens even when they publish the
+same `name@version` (covered in `pnpm-workspace-peer.test.ts`).

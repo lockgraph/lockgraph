@@ -1,24 +1,23 @@
 // _pnpm-yaml.ts — minimal YAML reader/emitter scoped to the pnpm-emitted
 // subset of YAML 1.2.
 //
-// Split from `_pnpm-flat-core.ts` per ADR-0022 §5 r1 BLOCKER B1 — the
-// codec is single-responsibility (YAML in/out) and lives independently
-// from any pnpm semantics (lockfileVersion handshake, section ordering,
-// override key shape). The codec accepts structural options only:
+// Split from `_pnpm-flat-core.ts` per ADR-0022 §5 — the codec is
+// single-responsibility (YAML in/out) and lives independently from any pnpm
+// semantics (lockfileVersion handshake, section ordering, override key shape).
+// The codec accepts structural options only:
 //
 //   - `topLevelOrder` pins root-key emit order (caller-supplied table).
 //   - `topLevelSectionKeys` declares which top-level keys behave as
 //     "sections" (immediate children prefixed with a blank line, pnpm's
 //     `packages:` / `snapshots:` style).
 //
-// Codec-supplied typed surface for format-affecting variants — these
-// are PUBLIC discriminated wrappers, NOT magic properties on YamlMap:
+// Codec-supplied typed surface for format-affecting variants — these are public
+// discriminated wrappers, not magic properties on YamlMap:
 //
 //   - `flowMap(entries)` — emit as `{k: v, …}` inline flow map.
 //   - `quoted(value)`    — force single-quoted scalar (e.g. `'9.0'`).
 //
-// The codec dispatches on the tagged kind, no string keys are
-// reserved. Per r2 BLOCKER B1' resolution.
+// The codec dispatches on the tagged kind; no string keys are reserved.
 //
 // Scope of the supported YAML subset:
 //
@@ -29,14 +28,14 @@
 //     contain `@`, `(`, `)`, `/` characters (packages keys)
 //   - 2-space indent, LF newlines
 //
-// This module is NOT a general-purpose YAML 1.2 implementation. Upstream
-// pnpm-emitted fixtures drive the acceptance corpus.
+// This module is not a general-purpose YAML 1.2 implementation. Upstream
+// pnpm-emitted fixtures drive the corpus.
 
 // === Public surface ========================================================
 
 export interface YamlMap { [k: string]: unknown }
 
-// --- Typed wrappers (B1' resolution) --------------------------------------
+// --- Typed wrappers -------------------------------------------------------
 
 const FLOW_MAP_TAG = Symbol.for('lockgraph/_pnpm-yaml/flow-map')
 const QUOTED_TAG = Symbol.for('lockgraph/_pnpm-yaml/quoted')
