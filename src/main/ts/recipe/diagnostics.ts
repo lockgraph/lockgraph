@@ -383,6 +383,17 @@ export function overrideParentRefDropped(pkg: string, to: string): Diagnostic {
   }
 }
 
+// `BUN_OVERRIDE_NESTED_UNSUPPORTED` (warning) — Bun's `overrides` / `resolutions`
+// grammar is FLAT (top-level only). An ancestry-scoped / nested constraint has no
+// Bun representation, so it is dropped when projecting to a bun target.
+export function bunOverrideNestedUnsupported(pkg: string, parentPath: readonly string[]): Diagnostic {
+  return {
+    code:     'BUN_OVERRIDE_NESTED_UNSUPPORTED',
+    severity: 'warning',
+    message:  `override ${[...parentPath, pkg].join('>')}: bun overrides are flat (no ancestry scope); the scoped constraint is dropped`,
+  }
+}
+
 // `INTEROP_OVERRIDE_NOT_PROJECTED` (warning) — caller-supplied (or captured)
 // overrides were passed to a stringify target whose lockfile carries no
 // AUTHORITATIVE overrides declaration. npm and yarn read the policy from the

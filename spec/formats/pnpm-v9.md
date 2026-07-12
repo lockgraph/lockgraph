@@ -155,6 +155,28 @@ suffix are load-bearing for faithful round-trip:
   and yields a structurally-invalid lockfile. A handful of importer-EDGE
   `catalog:` refs (dev-tooling) are a known partial round-trip gap (tracked).
 
+### `packageExtensionsChecksum` (frozen-compare digest)
+
+- A top-level `packageExtensionsChecksum:` scalar — pnpm's digest of the effective
+  `packageExtensions` config (from `pnpm-workspace.yaml` / `package.json#pnpm`). pnpm
+  recomputes it on every install and **frozen-compares** it; a same-PM round-trip
+  that dropped it would leave pnpm seeing "no checksum" ≠ "recomputed checksum",
+  forcing a recompute and **breaking `--frozen-lockfile`**. Preserved **verbatim**
+  and emitted right after `overrides:`, before `importers:`. It is a digest of the
+  *manifest config*, not of the lock graph, so it is carried on the pnpm sidecar
+  only and drops naturally on cross-PM conversion (the target has no such config).
+
+### `patchedDependencies` (patch-file declarations)
+
+- A top-level `patchedDependencies:` block — each patched dep `name@version →
+  { hash, path }`, where `path` is the repo-relative patch file. pnpm frozen-compares
+  it (same `getOutdatedLockfileSetting` path as `overrides:`), so a same-PM round-trip
+  that dropped it would break `--frozen-lockfile`. The `path` is **not** recoverable
+  from the modeled `patch_hash=<sha256>` snapshot-key markers (which carry only the
+  hash), so the block is preserved **verbatim**, emitted after
+  `packageExtensionsChecksum:` and before `importers:`. Sidecar-carried → drops
+  naturally cross-PM (patch files are pnpm-specific config, not graph state).
+
 ### Round-tripped package / snapshot fields
 
 Captured + re-emitted verbatim (each was previously dropped): `libc` and

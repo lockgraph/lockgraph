@@ -27,6 +27,7 @@
 
 import type { Diagnostic, Manifest, OverrideConstraint, OverridePM } from '../graph.ts'
 import {
+  bunOverrideNestedUnsupported,
   interopOverrideNotProjected,
   overrideParentRefDropped,
   recipeOverrideNormalised,
@@ -317,10 +318,14 @@ function asStringRecord(block: object): Record<string, string> {
  */
 export function projectOverrides(
   canonical: readonly OverrideConstraint[],
-  pm: 'npm' | 'pnpm',
+  pm: 'npm' | 'pnpm' | 'bun',
   onDiagnostic?: (d: Diagnostic) => void,
 ): Record<string, unknown> {
-  return pm === 'npm' ? projectNpm(canonical) : projectPnpm(canonical, onDiagnostic)
+  switch (pm) {
+    case 'npm':  return projectNpm(canonical)
+    case 'pnpm': return projectPnpm(canonical, onDiagnostic)
+    case 'bun':  return projectBun(canonical, onDiagnostic)
+  }
 }
 
 /** yarn-berry carries no lockfile overrides block; signal the non-projection. */
@@ -379,6 +384,28 @@ function projectPnpm(
       onDiagnostic(overrideParentRefDropped(c.package, c.to))
     }
     out[key] = c.to
+  }
+  return out
+}
+
+// Bun's `overrides` / `resolutions` grammar is FLAT top-level only — a global
+// `{ name: to }` (or `name@range`). An ancestry-scoped (parentPath) constraint has
+// no Bun representation, so it is DROPPED with BUN_OVERRIDE_NESTED_UNSUPPORTED
+// rather than emitted as a nested block bun cannot read. (Bun normalises manifest
+// `resolutions` into this same `overrides` block; capture already folds both into
+// the canonical form, so this projection is the single flat emitter.)
+function projectBun(
+  canonical: readonly OverrideConstraint[],
+  onDiagnostic?: (d: Diagnostic) => void,
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const c of canonical) {
+    if (c.parentPath && c.parentPath.length > 0) {
+      onDiagnostic?.(bunOverrideNestedUnsupported(c.package, c.parentPath))
+      continue
+    }
+    const leaf = c.versionCondition ? `${c.package}@${c.versionCondition}` : c.package
+    out[leaf] = c.to
   }
   return out
 }

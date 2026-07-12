@@ -77,6 +77,14 @@ Compared to v5:
   instead of a plain version string.
 - New top-level `settings` block reflecting `pnpm` config that affects resolution.
 - `time` block deprecated.
+- A top-level `packageExtensionsChecksum:` scalar (pnpm's frozen-compared digest of
+  the effective `packageExtensions` config) is preserved verbatim via the shared
+  `_pnpm-flat-core.ts` — see the [pnpm-v9 note](./pnpm-v9.md#packageextensionschecksum-frozen-compare-digest)
+  for why dropping it breaks `--frozen-lockfile`. Emitted after `overrides:`.
+- A top-level `patchedDependencies:` block (`name@version → {hash, path}`) is likewise
+  preserved verbatim via the shared core — see the
+  [pnpm-v9 note](./pnpm-v9.md#patcheddependencies-patch-file-declarations). Emitted
+  after `packageExtensionsChecksum:`.
 
 ## Degradation rules
 

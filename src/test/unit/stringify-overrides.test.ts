@@ -184,3 +184,20 @@ describe('pnpm-v5 overrides carrier (ADR-0025 §4; pnpm 6–7 frozen-compare)', 
     expect(stringify('pnpm-v5', g)).not.toMatch(/^overrides:/m)
   })
 })
+
+// Bun's overrides/resolutions grammar is FLAT top-level only (no ancestry scope).
+// A global constraint projects flat; an ancestry-scoped one has no representation
+// and is dropped with BUN_OVERRIDE_NESTED_UNSUPPORTED — not emitted as a nested
+// block bun cannot read (contrast the previous npm-nested projection).
+
+describe('bun-text overrides — flat grammar (ancestry-scoped dropped)', () => {
+  it('projects a global override flat + drops an ancestry-scoped one with a diagnostic', () => {
+    const g = parse('bun-text', fixture('simple/bun-text.lock'))
+    const diags: Diagnostic[] = []
+    const out = stringify('bun-text', g, { overrides: OVERRIDES, onDiagnostic: d => diags.push(d) })
+    expect(diags.map(d => d.code)).toContain('BUN_OVERRIDE_NESTED_UNSUPPORTED')
+    const back = overridesOf(parse('bun-text', out))
+    expect(back).toContainEqual({ package: 'lodash', to: '4.17.21' })          // global kept, flat
+    expect(back).not.toContainEqual({ package: 'foo', parentPath: ['bar'], to: '1.0.0' }) // scoped dropped
+  })
+})

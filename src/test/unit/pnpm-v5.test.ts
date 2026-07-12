@@ -751,3 +751,25 @@ describe('resolveAliasedDependencyTarget', () => {
     expect(resolveAliasedDependencyTarget(seen, '17.0.2')).toBeUndefined()
   })
 })
+
+describe('importer dep alias collision (plain + npm-alias to same target)', () => {
+  // A plain `react: ^x` dep and an aliased `react-alias: react@x` dep resolve to
+  // the SAME node. The importerEdges sidecar was keyed src\0kind\0dst WITHOUT the
+  // alias, so the two collided and the plain dep read back the alias's descriptor
+  // (emitting `react: npm:react@^x` / `react: react@x`). Regression for the v5
+  // standalone pipeline (v6/v9 fixed separately).
+  it('keeps each importer dep its own specifier/version', () => {
+    const lock =
+      `lockfileVersion: 5.4\n\n` +
+      `specifiers:\n  react: ^19.2.6\n  react-alias: npm:react@^19.2.6\n\n` +
+      `dependencies:\n  react: 19.2.6\n  react-alias: react@19.2.6\n\n` +
+      `packages:\n\n  /react/19.2.6:\n` +
+      `    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}\n` +
+      `    dev: false\n`
+    const out = stringify(parse(lock))
+    expect(out).toContain('  react: ^19.2.6\n') // plain specifier NOT corrupted to npm:react@…
+    expect(out).toContain('  react: 19.2.6\n') // plain version NOT corrupted to react@19.2.6
+    expect(out).toContain('  react-alias: npm:react@^19.2.6\n')
+    expect(out).toContain('  react-alias: react@19.2.6\n')
+  })
+})

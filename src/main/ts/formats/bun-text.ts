@@ -60,8 +60,9 @@ export interface BunTextStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   /**
    * Caller-supplied canonical override constraints (ADR-0025). bun's `overrides`
-   * block is npm-shaped, so these project through the npm grammar
-   * (`projectOverrides(_, 'npm')`). An explicit `[]` suppresses the verbatim
+   * block is FLAT top-level only, so these project through the bun-flat grammar
+   * (`projectOverrides(_, 'bun')`); an ancestry-scoped constraint is dropped with
+   * BUN_OVERRIDE_NESTED_UNSUPPORTED. An explicit `[]` suppresses the verbatim
    * carrier captured at parse; `undefined` falls back to it. This is the
    * audit-fix write path — `pinOverride` results land here as a forced
    * resolution into bun's top-level `overrides`.
@@ -559,12 +560,12 @@ export function resolveOverridesBlock(
 ): Record<string, unknown> | undefined {
   if (callerOverrides !== undefined) {
     return callerOverrides.length > 0
-      ? projectOverrides(callerOverrides, 'npm', emitDiagnostic)
+      ? projectOverrides(callerOverrides, 'bun', emitDiagnostic)
       : undefined
   }
   if (sidecar?.nativeOverrides !== undefined) return sidecar.nativeOverrides
   if (sidecar?.canonicalOverrides !== undefined && sidecar.canonicalOverrides.length > 0) {
-    return projectOverrides(sidecar.canonicalOverrides, 'npm', emitDiagnostic)
+    return projectOverrides(sidecar.canonicalOverrides, 'bun', emitDiagnostic)
   }
   return undefined
 }

@@ -500,8 +500,15 @@ function keyNeedsQuoting(key: string): boolean {
 function emitScalar(value: string): string {
   if (value === '') return "''"
   if (/^(true|false|null|~)$/i.test(value)) return `'${value}'`
-  if (/^[>!&*|?:\-,\[\]{}%]/.test(value)) return `'${value.replace(/'/g, "''")}'`
-  if (/[#]/.test(value) || / : /.test(value)) return `'${value.replace(/'/g, "''")}'`
+  // `@` and `` ` `` are YAML reserved indicators — a plain scalar may not start
+  // with them, so pnpm quotes e.g. `'@vitejs/x@file:…'`. Match that (leaving them
+  // unquoted risks a strict-parser rejection and always breaks byte-identity).
+  if (/^[>!&*|?:\-,\[\]{}%@`]/.test(value)) return `'${value.replace(/'/g, "''")}'`
+  // `#` only starts a comment at position 0 or after whitespace; pnpm leaves an
+  // in-word `#` (git-ref URLs like `…git#sha`) unquoted, so quote only those two.
+  // `\s` (not a literal space) so a TAB before `#` also quotes — a strict YAML
+  // reader (js-yaml, pnpm's actual parser) treats `\t#` as a comment start.
+  if (/(^#|\s#)/.test(value) || / : /.test(value)) return `'${value.replace(/'/g, "''")}'`
   return value
 }
 

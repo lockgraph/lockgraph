@@ -174,6 +174,9 @@ const TOP_LEVEL_ORDER_V9: readonly string[] = [
   'settings',
   'catalogs',
   'overrides',
+  'packageExtensionsChecksum',
+  'patchedDependencies',
+  'pnpmfileChecksum',
   'importers',
   'packages',
   'snapshots',
@@ -183,6 +186,9 @@ const TOP_LEVEL_ORDER_V6: readonly string[] = [
   'lockfileVersion',
   'settings',
   'overrides',
+  'packageExtensionsChecksum',
+  'patchedDependencies',
+  'pnpmfileChecksum',
   'dependencies',
   'devDependencies',
   'optionalDependencies',
@@ -271,6 +277,33 @@ export interface PnpmSidecar {
    *  catalog refs). Cross-PM `catalog:`→concrete-version resolution is a separate
    *  concern (#56 layer 2); this just stops the same-PM round-trip drop. */
   catalogs?: YamlMap
+  /** Verbatim top-level `packageExtensionsChecksum:` scalar (pnpm v6+). pnpm
+   *  recomputes this digest of the effective `packageExtensions` config on every
+   *  install and frozen-compares it; dropping it on a same-PM round-trip makes
+   *  pnpm see "no checksum" ≠ "recomputed checksum" → recompute → NOT frozen-clean
+   *  (vite/angular real locks carry it). A derived digest of the manifest config,
+   *  not of the lock graph, so it round-trips verbatim same-PM and drops naturally
+   *  cross-PM (no sidecar there). */
+  packageExtensionsChecksum?: string
+  /** Verbatim top-level `patchedDependencies:` block (pnpm v6+): each patched dep
+   *  `name@version → { hash, path }`, where `path` is the repo-relative patch file.
+   *  pnpm frozen-compares it (same `getOutdatedLockfileSetting` path as overrides);
+   *  dropping it on a same-PM round-trip breaks `--frozen-lockfile`. The `path` is
+   *  NOT derivable from the modeled `patch_hash=` snapshot-key markers (which carry
+   *  only the hash), so the block is preserved verbatim, sidecar-only → drops
+   *  naturally cross-PM (patch files are pnpm-specific config, not graph state). */
+  patchedDependencies?: YamlMap
+  /** Verbatim top-level `pnpmfileChecksum:` scalar (pnpm v9+) — pnpm's digest of
+   *  `.pnpmfile.cjs`. Frozen-compared like `packageExtensionsChecksum`; dropping it
+   *  on a same-PM round-trip breaks `--frozen-lockfile` (real angular lock carries
+   *  it). Manifest-config-derived → sidecar-only, drops naturally cross-PM. */
+  pnpmfileChecksum?: string
+  /** Verbatim top-level `settings:` block (pnpm v6+). `extractSettings` keeps only
+   *  the two resolution-affecting booleans for the model, but pnpm frozen-compares
+   *  the FULL block (e.g. `dedupePeers`), so a same-PM round-trip must replay it
+   *  verbatim or dropping keys → frozen mismatch. Reconstructed from defaults
+   *  cross-PM (no verbatim block). */
+  settingsVerbatim?: YamlMap
 }
 
 const sidecarByGraph = new WeakMap<Graph, PnpmSidecar>()
@@ -337,6 +370,12 @@ export function parseFamily(
     importerEdges: new Map<string, PnpmEdgeSidecar>(),
   }
 
+  // Capture the full `settings:` block verbatim for same-PM frozen-clean emit;
+  // extractSettings above keeps only the model's resolution-affecting subset.
+  if (yaml.settings !== undefined && typeof yaml.settings === 'object') {
+    sidecar.settingsVerbatim = yaml.settings as YamlMap
+  }
+
   if (yaml.overrides !== undefined && typeof yaml.overrides === 'object') {
     sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
   }
@@ -346,6 +385,21 @@ export function parseFamily(
   // dropping the `catalogs:` definitions orphans them → invalid lockfile.
   if (yaml.catalogs !== undefined && typeof yaml.catalogs === 'object') {
     sidecar.catalogs = yaml.catalogs as YamlMap
+  }
+  // pnpm frozen-compares this manifest-config digest; capture it so a same-PM
+  // round-trip doesn't drop it into a recompute-mismatch (breaks --frozen-lockfile).
+  if (typeof yaml.packageExtensionsChecksum === 'string') {
+    sidecar.packageExtensionsChecksum = yaml.packageExtensionsChecksum
+  }
+  // Patch-file declarations (`name@version → { hash, path }`); the `path` is not
+  // carried by the modeled `patch_hash=` markers, so preserve the block verbatim
+  // or a same-PM round-trip drops it into a frozen-compare mismatch.
+  if (yaml.patchedDependencies !== undefined && typeof yaml.patchedDependencies === 'object') {
+    sidecar.patchedDependencies = yaml.patchedDependencies as YamlMap
+  }
+  // pnpm's `.pnpmfile.cjs` digest — another frozen-compared config scalar.
+  if (typeof yaml.pnpmfileChecksum === 'string') {
+    sidecar.pnpmfileChecksum = yaml.pnpmfileChecksum
   }
 
   // ADR-0014 §4.F2 — compile patch directives from the overrides block.
@@ -562,7 +616,9 @@ export function parseFamily(
             if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
             throw error
           }
-          const edgeKey = `${srcId}\0${kind}\0${targetId}`
+          // Key includes the alias slot so parallel importer edges to the SAME
+          // target don't collide (workspace deps are never aliased → empty slot).
+          const edgeKey = `${srcId}\0${kind}\0${targetId}\0`
           sidecar.importerEdges.set(edgeKey, { resolvedVersion: version, specifier })
           continue
         }
@@ -598,7 +654,10 @@ export function parseFamily(
           if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
           throw error
         }
-        const edgeKey = `${srcId}\0${kind}\0${targetId}`
+        // Include the alias slot — a plain `react: ^x` dep and an aliased
+        // `foo: npm:react@^x` dep resolve to the SAME target node; keying without
+        // the alias collides them and the plain edge inherits the alias descriptor.
+        const edgeKey = `${srcId}\0${kind}\0${targetId}\0${aliasSlot ?? ''}`
         sidecar.importerEdges.set(edgeKey, { resolvedVersion: version, specifier })
       }
     }
@@ -723,10 +782,18 @@ export function stringifyFamily(
     ...sidecar?.settings,
     ...options.settings,
   }
-  out.settings = {
-    autoInstallPeers: settings.autoInstallPeers ?? true,
-    excludeLinksFromLockfile: settings.excludeLinksFromLockfile ?? false,
-  } as YamlMap
+  // Prefer the verbatim source block same-PM (preserves dedupePeers and any other
+  // key pnpm frozen-compares), overlaid by caller-supplied settings; reconstruct
+  // from the resolution-affecting subset cross-PM (no verbatim block — `settings`
+  // already folds in options.settings).
+  out.settings = (
+    sidecar?.settingsVerbatim !== undefined
+      ? { ...sidecar.settingsVerbatim, ...options.settings }
+      : {
+          autoInstallPeers: settings.autoInstallPeers ?? true,
+          excludeLinksFromLockfile: settings.excludeLinksFromLockfile ?? false,
+        }
+  ) as YamlMap
 
   if (Object.keys(effectiveOverrides).length > 0) {
     out.overrides = sortRecord(effectiveOverrides) as YamlMap
@@ -736,6 +803,25 @@ export function stringifyFamily(
   // order (settings → catalogs → overrides) matches pnpm via TOP_LEVEL_ORDER_V9.
   if (sidecar?.catalogs !== undefined && Object.keys(sidecar.catalogs).length > 0) {
     out.catalogs = sidecar.catalogs
+  }
+
+  // Replay the captured `packageExtensionsChecksum:` verbatim (pnpm v6+). pnpm
+  // frozen-compares this digest; a same-PM round-trip that drops it forces a
+  // recompute-mismatch and breaks --frozen-lockfile. Sidecar-only (derived from
+  // manifest config, not the graph) → naturally absent cross-PM.
+  if (sidecar?.packageExtensionsChecksum !== undefined) {
+    out.packageExtensionsChecksum = sidecar.packageExtensionsChecksum
+  }
+
+  // Replay the `patchedDependencies:` block verbatim (pnpm v6+); same frozen-compare
+  // rationale as packageExtensionsChecksum. Sidecar-only → absent cross-PM.
+  if (sidecar?.patchedDependencies !== undefined && Object.keys(sidecar.patchedDependencies).length > 0) {
+    out.patchedDependencies = sidecar.patchedDependencies
+  }
+
+  // Replay `pnpmfileChecksum:` verbatim (pnpm v9+); same frozen-compare rationale.
+  if (sidecar?.pnpmfileChecksum !== undefined) {
+    out.pnpmfileChecksum = sidecar.pnpmfileChecksum
   }
 
   // importers vs collapsed dependencies — v9 always emits importers; v6
@@ -1906,7 +1992,7 @@ function buildImporterEntry(
     const dst = graph.getNode(edge.dst)
     if (dst === undefined) continue
     const isWorkspaceTarget = dst.workspacePath !== undefined && dst.workspacePath !== ''
-    const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}`
+    const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}\0${edge.attrs?.alias ?? ''}`
     const edgeSc = sidecar?.importerEdges.get(edgeKey)
 
     // ADR-0028 INV-RESOLVE — key the dep block by the DESCRIPTOR segment

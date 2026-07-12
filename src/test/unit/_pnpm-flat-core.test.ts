@@ -388,3 +388,132 @@ describe('relativeImporterPath', () => {
     expect(relativeImporterPath('packages/a', 'packages/a')).toBe('.')
   })
 })
+
+describe('packageExtensionsChecksum round-trip', () => {
+  // pnpm recomputes this digest of the effective packageExtensions config and
+  // frozen-compares it; dropping it on a same-PM round-trip forces a recompute-
+  // mismatch and breaks --frozen-lockfile (real vite/angular v9 locks carry it).
+  const CHK = 'sha256-Tldxs3DhJEw/FFBonUidqhCBqApA0zxQnop3Y+BTO3U='
+
+  it('replays the checksum verbatim, after overrides and before importers (v9)', () => {
+    const lock = V9(
+      `overrides:\n  foo: 1.0.0\n\n` +
+        `packageExtensionsChecksum: ${CHK}\n\n` +
+        `importers:\n\n  .:\n    dependencies:\n      ms:\n        specifier: 2.1.3\n        version: 2.1.3\n\n` +
+        `packages:\n\n  ms@2.1.3:\n    resolution: {integrity: sha512-x}\n\n` +
+        `snapshots:\n\n  ms@2.1.3: {}\n`,
+    )
+    const out = stringifyV9(parseV9(lock))
+    expect(out).toContain(`packageExtensionsChecksum: ${CHK}`)
+    expect(out.indexOf('packageExtensionsChecksum')).toBeGreaterThan(out.indexOf('overrides:'))
+    expect(out.indexOf('packageExtensionsChecksum')).toBeLessThan(out.indexOf('importers:'))
+  })
+
+  it('omits the key when the source lock carries none (v9)', () => {
+    const lock = V9(
+      `importers:\n\n  .:\n    dependencies:\n      ms:\n        specifier: 2.1.3\n        version: 2.1.3\n\n` +
+        `packages:\n\n  ms@2.1.3:\n    resolution: {integrity: sha512-x}\n\n` +
+        `snapshots:\n\n  ms@2.1.3: {}\n`,
+    )
+    expect(stringifyV9(parseV9(lock))).not.toContain('packageExtensionsChecksum')
+  })
+
+  it('replays the checksum for v6 too (defensive slot)', () => {
+    const lock = V6(
+      `overrides:\n  foo: 1.0.0\n\n` +
+        `packageExtensionsChecksum: ${CHK}\n\n` +
+        `dependencies:\n  ms: 2.1.3\n\n` +
+        `packages:\n\n  /ms@2.1.3:\n    resolution: {integrity: sha512-x}\n    dev: false\n`,
+    )
+    expect(stringifyV6(parseV6(lock))).toContain(`packageExtensionsChecksum: ${CHK}`)
+  })
+})
+
+describe('patchedDependencies round-trip', () => {
+  // Top-level patch-file declarations (name@version → {hash, path}) pnpm frozen-
+  // compares; the `path` isn't carried by the modeled patch_hash= markers, so the
+  // block must round-trip verbatim or --frozen-lockfile breaks.
+  const BLOCK = `patchedDependencies:\n  ms@2.1.3:\n    hash: 8a4f9e2b\n    path: patches/ms@2.1.3.patch\n\n`
+
+  it('replays the block verbatim, after packageExtensionsChecksum and before importers (v9)', () => {
+    const lock = V9(
+      `overrides:\n  foo: 1.0.0\n\n` +
+        `packageExtensionsChecksum: sha256-abc=\n\n` +
+        BLOCK +
+        `importers:\n\n  .:\n    dependencies:\n      ms:\n        specifier: 2.1.3\n        version: 2.1.3\n\n` +
+        `packages:\n\n  ms@2.1.3:\n    resolution: {integrity: sha512-x}\n\n` +
+        `snapshots:\n\n  ms@2.1.3: {}\n`,
+    )
+    const out = stringifyV9(parseV9(lock))
+    expect(out).toContain('path: patches/ms@2.1.3.patch')
+    expect(out.indexOf('patchedDependencies:')).toBeGreaterThan(out.indexOf('packageExtensionsChecksum'))
+    expect(out.indexOf('patchedDependencies:')).toBeLessThan(out.indexOf('importers:'))
+  })
+
+  it('omits the block when the source lock carries none (v9)', () => {
+    const lock = V9(
+      `importers:\n\n  .:\n    dependencies:\n      ms:\n        specifier: 2.1.3\n        version: 2.1.3\n\n` +
+        `packages:\n\n  ms@2.1.3:\n    resolution: {integrity: sha512-x}\n\n` +
+        `snapshots:\n\n  ms@2.1.3: {}\n`,
+    )
+    expect(stringifyV9(parseV9(lock))).not.toContain('patchedDependencies:')
+  })
+})
+
+describe('importer dep alias collision (plain + npm-alias to same target)', () => {
+  // A plain `react: ^x` dep and an aliased `react-alias: npm:react@^x` dep resolve
+  // to the SAME target node. Importer-edge sidecars were keyed src\0kind\0dst
+  // WITHOUT the alias, so the two collided and the plain dep read back the alias's
+  // descriptor (emitting `specifier: npm:react@^x, version: react@x`). Regression.
+  it('keeps each dep its own specifier/version (no descriptor bleed)', () => {
+    const lock = V9(
+      `importers:\n\n  .:\n    dependencies:\n` +
+        `      react:\n        specifier: ^19.2.6\n        version: 19.2.6\n` +
+        `      react-alias:\n        specifier: npm:react@^19.2.6\n        version: react@19.2.6\n\n` +
+        `packages:\n\n  react@19.2.6:\n    resolution: {integrity: sha512-x}\n\n` +
+        `snapshots:\n\n  react@19.2.6: {}\n`,
+    )
+    const out = stringifyV9(parseV9(lock))
+    expect(out).toContain('      react:\n        specifier: ^19.2.6\n        version: 19.2.6\n')
+    expect(out).toContain('      react-alias:\n        specifier: npm:react@^19.2.6\n        version: react@19.2.6\n')
+  })
+})
+
+describe('pnpmfileChecksum round-trip', () => {
+  // pnpm's `.pnpmfile.cjs` digest — frozen-compared like packageExtensionsChecksum.
+  it('replays the checksum, after packageExtensionsChecksum and before importers (v9)', () => {
+    const lock = V9(
+      `packageExtensionsChecksum: sha256-a=\n\n` +
+        `pnpmfileChecksum: sha256-b=\n\n` +
+        `importers:\n\n  .:\n    dependencies:\n      ms:\n        specifier: 2.1.3\n        version: 2.1.3\n\n` +
+        `packages:\n\n  ms@2.1.3:\n    resolution: {integrity: sha512-x}\n\n` +
+        `snapshots:\n\n  ms@2.1.3: {}\n`,
+    )
+    const out = stringifyV9(parseV9(lock))
+    expect(out).toContain('pnpmfileChecksum: sha256-b=')
+    expect(out.indexOf('pnpmfileChecksum')).toBeGreaterThan(out.indexOf('packageExtensionsChecksum'))
+    expect(out.indexOf('pnpmfileChecksum')).toBeLessThan(out.indexOf('importers:'))
+  })
+})
+
+describe('settings block round-trip', () => {
+  // extractSettings keeps only the two resolution-affecting booleans for the model,
+  // but pnpm frozen-compares the FULL block — dropping e.g. `dedupePeers` breaks it.
+  it('preserves non-extracted settings keys verbatim (dedupePeers)', () => {
+    const lock =
+      `lockfileVersion: '9.0'\n\n` +
+      `settings:\n  autoInstallPeers: false\n  dedupePeers: true\n  excludeLinksFromLockfile: false\n\n` +
+      `importers:\n\n  .: {}\n\npackages: {}\n\nsnapshots: {}\n`
+    const out = stringifyV9(parseV9(lock))
+    expect(out).toContain('dedupePeers: true')
+    expect(out).toContain('autoInstallPeers: false')
+  })
+
+  it('reconstructs the two-key block cross-PM (no verbatim sidecar)', () => {
+    // A graph with no pnpm sidecar (npm→pnpm-shaped) still emits a valid settings block.
+    const lock = V9(`importers:\n\n  .: {}\n\npackages: {}\n\nsnapshots: {}\n`)
+    const out = stringifyV9(parseV9(lock))
+    expect(out).toMatch(/^settings:/m)
+    expect(out).toContain('autoInstallPeers:')
+  })
+})

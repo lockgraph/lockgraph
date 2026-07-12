@@ -453,7 +453,9 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
             if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
             throw error
           }
-          const edgeKey = `${srcId}\0${kind}\0${targetId}`
+          // Alias slot in the key so a plain dep and an npm-alias to the SAME
+          // target don't collide (workspace deps are never aliased → empty slot).
+          const edgeKey = `${srcId}\0${kind}\0${targetId}\0`
           sidecar.importerEdges.set(edgeKey, { resolvedVersion: depValue, specifier })
           continue
         }
@@ -485,7 +487,10 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
           if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
           throw error
         }
-        const edgeKey = `${srcId}\0${kind}\0${targetId}`
+        // Alias slot in the key — a plain `react:^x` dep and an aliased
+        // `foo: react@x` dep resolve to the SAME node; without the alias the plain
+        // edge reads back the alias descriptor (specifier/version corruption).
+        const edgeKey = `${srcId}\0${kind}\0${targetId}\0${aliasSlot ?? ''}`
         sidecar.importerEdges.set(edgeKey, { resolvedVersion: depValue, specifier })
       }
     }
@@ -1117,7 +1122,7 @@ function buildImporterEntry(
     const dst = graph.getNode(edge.dst)
     if (dst === undefined) continue
     const isWorkspaceTarget = dst.workspacePath !== undefined && dst.workspacePath !== ''
-    const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}`
+    const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}\0${edge.attrs?.alias ?? ''}`
     const edgeSc = sidecar?.importerEdges.get(edgeKey)
 
     // ADR-0028 INV-RESOLVE — key both `specifiers` and the dep block by the
@@ -1125,11 +1130,11 @@ function buildImporterEntry(
     // CANONICAL `<name>@<version>` dep value for an alias. pnpm-v5 keys both
     // maps by the descriptor (`react-is-cjs:` in both), so an npm-aliased dep
     // must emit under the alias slot, not `dst.name`. The `importerEdges`
-    // sidecar is keyed by the (src,kind,dst) triple, which an aliased and a
-    // direct edge to the SAME node share, so an aliased edge prefers its own
-    // per-edge descriptor + computed canonical value unless the capture is
-    // already alias-consistent (`<dst.name>@…`); non-aliased edges keep the
-    // round-trip-faithful capture verbatim.
+    // sidecar key now carries the alias slot, so an aliased and a direct edge to
+    // the SAME node no longer collide — each reads back its OWN descriptor (a
+    // plain `react` no longer inherits an `react-alias: npm:react@…` descriptor).
+    // The per-edge preference below still computes the aliased canonical
+    // `<name>@<version>` value; non-aliased edges keep the capture verbatim.
     const slot = aliasedDependencySlot(edge, dst)
     const isAliased = edge.attrs?.alias !== undefined
     const range = edge.attrs?.range
