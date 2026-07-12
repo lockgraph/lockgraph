@@ -67,6 +67,7 @@ typings/
 *.tgz
 # …except vendored test-fixture tarballs (ADR-0035 berry-checksum conformance)
 !src/test/resources/fixtures/tarballs/*.tgz
+src/test/resources/fixtures/_report.json
 
 # Yarn Integrity file
 .yarn-integrity
