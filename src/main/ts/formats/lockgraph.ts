@@ -1439,6 +1439,15 @@ export function parseSlots(fields: string[], tarballKey: TarballKey): TarballPay
         throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed hasInstallScript slot (${tarballKey})` })
       }
       out.hasInstallScript = s.value === 'true'
+    } else if (root === 'peerDependencies') {
+      const rec: Record<string, string> = {}
+      for (const s of slots) {
+        if (s.path.length !== 2) {
+          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed peerDependencies slot (${tarballKey})` })
+        }
+        rec[s.path[1]!] = s.value
+      }
+      out.peerDependencies = rec
     } else if (root === 'peerDependenciesMeta') {
       const rec: Record<string, { optional?: boolean }> = {}
       for (const s of slots) {
@@ -1595,6 +1604,12 @@ export function flattenToSlots(payload: TarballPayload, name: string, version: s
     out.push(emitSlot(['hasInstallScript'], String(payload.hasInstallScript)))
   }
 
+  if (payload.peerDependencies !== undefined) {
+    for (const peer of Object.keys(payload.peerDependencies).sort(cmpStr)) {
+      out.push(emitSlot(['peerDependencies', peer], payload.peerDependencies[peer]!))
+    }
+  }
+
   // peerDependenciesMeta: Record<peer, {optional?}> → `peerDependenciesMeta.<peer>.optional=<bool>`,
   // peers cmpStr-sorted. npm's only sub-key is `optional`; a peer without it emits nothing.
   if (payload.peerDependenciesMeta !== undefined) {
@@ -1697,4 +1712,3 @@ function collectEdges(graph: Graph, nodes: Node[], nodeIndex: Map<NodeId, number
   )
   return out
 }
-

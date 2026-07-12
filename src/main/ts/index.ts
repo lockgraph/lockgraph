@@ -10,7 +10,13 @@ import { newBuilder, type Diagnostic, type Graph, type Manifest, type OverrideCo
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
 import { getManifestOverrides, mergeOverrides, rememberManifestOverrides } from './recipe/override-carrier.ts'
 import { getFlatSidecar } from './formats/_npm-core.ts'
-import { getPnpmOverridesCanonical } from './formats/_pnpm-flat-core.ts'
+import {
+  getPnpmOverridesCanonical,
+  resolvePnpmWorkspacePeerProjection,
+  stringifyFamily as stringifyPnpmFamily,
+  type PnpmWorkspacePeerProjection,
+  type PnpmWorkspacePeerProjectionEvidence,
+} from './formats/_pnpm-flat-core.ts'
 import {
   attachParsedEvidence,
   evidenceOf,
@@ -24,6 +30,7 @@ import { authoritativePolicyOverridesOf } from './completeness/profile.ts'
 import type {
   AssessedOutput,
   ConvertAssessedOptions,
+  RequirementAssessment,
   StringifyAssessedOptions,
 } from './completeness/types.ts'
 
@@ -186,6 +193,10 @@ export type StringifyOptions = {
   onDiagnostic?: (d: Diagnostic) => void
 }
 
+type StringifyDispatchOptions = StringifyOptions & {
+  pnpmWorkspacePeerProjection?: PnpmWorkspacePeerProjection
+}
+
 export type ConvertOptions = {
   to:             FormatId
   from?:          FormatId
@@ -296,7 +307,7 @@ function observedPolicyCarrier(
     : undefined
 }
 
-function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions): string {
+function stringifyOne(format: FormatId, graph: Graph, options: StringifyDispatchOptions): string {
   const lineEnding   = options.lineEnding
   const onDiagnostic = options.onDiagnostic
   const cacheKey     = options.cacheKey
@@ -314,8 +325,22 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions)
     case 'npm-2':         return npm2.stringify(graph,        { lineEnding, onDiagnostic, overrides })
     case 'npm-3':         return npm3.stringify(graph,        { lineEnding, onDiagnostic, overrides })
     case 'pnpm-v5':       return pnpmV5.stringify(graph,      { lineEnding, onDiagnostic, overrides })
-    case 'pnpm-v6':       return pnpmV6.stringify(graph,      { lineEnding, onDiagnostic, overrides })
-    case 'pnpm-v9':       return pnpmV9.stringify(graph,      { lineEnding, onDiagnostic, overrides })
+    case 'pnpm-v6':       return options.pnpmWorkspacePeerProjection === undefined
+      ? pnpmV6.stringify(graph, { lineEnding, onDiagnostic, overrides })
+      : stringifyPnpmFamily(
+          graph,
+          { profile: 'v6-collapsed-root' },
+          { lineEnding, onDiagnostic, overrides },
+          { workspacePeerProjection: options.pnpmWorkspacePeerProjection },
+        )
+    case 'pnpm-v9':       return options.pnpmWorkspacePeerProjection === undefined
+      ? pnpmV9.stringify(graph, { lineEnding, onDiagnostic, overrides })
+      : stringifyPnpmFamily(
+          graph,
+          { profile: 'v9-importers-snapshots' },
+          { lineEnding, onDiagnostic, overrides },
+          { workspacePeerProjection: options.pnpmWorkspacePeerProjection },
+        )
     case 'yarn-berry-v4': return yarnBerryV4.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v5': return yarnBerryV5.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v6': return yarnBerryV6.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
@@ -708,12 +733,81 @@ function outputProbe(
   }
 }
 
+function pnpmWorkspacePeerEvidenceOf(
+  graph: Graph,
+  evidence: StringifyAssessedOptions['evidence'],
+): PnpmWorkspacePeerProjectionEvidence {
+  const state = internalEvidenceOf(evidence ?? evidenceOf(graph))
+  return {
+    ...(state.repositoryManifests === undefined
+      ? {}
+      : { repositoryManifests: state.repositoryManifests }),
+    packageManifests: state.packageManifests,
+    conflictedSubjects: new Set(state.conflicts
+      .flatMap(conflict => conflict.subject === undefined ? [] : [conflict.subject])),
+  }
+}
+
+function pnpmWorkspacePeerRequirement(
+  projection: PnpmWorkspacePeerProjection,
+): RequirementAssessment {
+  const diagnostics: Diagnostic[] = [
+    ...projection.gaps.map(gap => ({
+      code: 'PNPM_WORKSPACE_PEER_ATTR_MISSING',
+      severity: 'warning' as const,
+      subject: gap.owner,
+      message: `workspace-peer ${gap.owner} → ${gap.workspace} lacks proven native attribution`,
+      data: { reason: gap.reason },
+    })),
+    ...projection.conflicts.map(conflict => ({
+      code: 'PNPM_WORKSPACE_PEER_ATTR_COLLISION',
+      severity: 'warning' as const,
+      subject: conflict.owner,
+      message: `workspace-peer ${conflict.owner} → ${conflict.workspace} has conflicting native attribution`,
+      data: { reason: conflict.reason },
+    })),
+  ]
+  return Object.freeze({
+    key: 'target:pnpm-workspace-peer-projection',
+    dimension: 'peerModel',
+    status: projection.conflicts.length > 0
+      ? 'unsatisfied'
+      : projection.gaps.length > 0
+        ? 'unassessed'
+        : 'satisfied',
+    diagnostics: Object.freeze(diagnostics),
+  })
+}
+
+function pnpmWorkspacePeerRuntime(
+  graph: Graph,
+  options: StringifyAssessedOptions,
+): {
+  projection?: PnpmWorkspacePeerProjection
+  targetRequirements: readonly RequirementAssessment[]
+} {
+  if (options.target.format !== 'pnpm-v6' && options.target.format !== 'pnpm-v9') {
+    return { targetRequirements: Object.freeze([]) }
+  }
+  const projection = resolvePnpmWorkspacePeerProjection(
+    graph,
+    pnpmWorkspacePeerEvidenceOf(graph, options.evidence),
+  )
+  return {
+    projection,
+    targetRequirements: Object.freeze([pnpmWorkspacePeerRequirement(projection)]),
+  }
+}
+
 function stringifyAssessedInternal(
   graph: Graph,
   options: StringifyAssessedOptions,
   onDiagnostic?: (diagnostic: Diagnostic) => void,
 ): AssessedOutput {
-  const preflight = assessConversion(graph, options)
+  const workspacePeer = pnpmWorkspacePeerRuntime(graph, options)
+  const preflight = assessConversion(graph, options, {
+    targetRequirements: workspacePeer.targetRequirements,
+  })
   if (!probeEligible(preflight)) return { assessment: preflight }
 
   const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
@@ -727,6 +821,7 @@ function stringifyAssessedInternal(
       lineEnding: options.lineEnding,
       cacheKey: options.cacheKey,
       overrides: authority === undefined ? undefined : [...authority],
+      pnpmWorkspacePeerProjection: workspacePeer.projection,
       onDiagnostic: diagnostic => {
         diagnostics.push(diagnostic)
         onDiagnostic?.(diagnostic)
@@ -740,6 +835,7 @@ function stringifyAssessedInternal(
     ))
     const assessment = assessConversion(graph, options, {
       outputProbe: { accepted: false, diagnostics },
+      targetRequirements: workspacePeer.targetRequirements,
     })
     return { assessment }
   }
@@ -762,7 +858,10 @@ function stringifyAssessedInternal(
     ))
     probe = { accepted: false, diagnostics }
   }
-  const assessment = assessConversion(graph, options, { outputProbe: probe })
+  const assessment = assessConversion(graph, options, {
+    outputProbe: probe,
+    targetRequirements: workspacePeer.targetRequirements,
+  })
   return assessment.status === 'satisfied' ? { output, assessment } : { assessment }
 }
 

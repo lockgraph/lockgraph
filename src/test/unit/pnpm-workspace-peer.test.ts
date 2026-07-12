@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parse as parseV9, stringify as stringifyV9, optimize as optimizeV9 } from '../../main/ts/formats/pnpm-v9.ts'
 import { parse as parseV6, stringify as stringifyV6 } from '../../main/ts/formats/pnpm-v6.ts'
 import { stringify as stringifyNpm3 } from '../../main/ts/formats/npm-3.ts'
-import { GraphError, newBuilder, type Diagnostic } from '../../main/ts/graph.ts'
+import { GraphError, newBuilder, toTarballKey, type Diagnostic } from '../../main/ts/graph.ts'
+import {
+  resolvePnpmWorkspacePeerProjection,
+  stringifyFamily,
+} from '../../main/ts/formats/_pnpm-flat-core.ts'
+import { internalEvidenceOf } from '../../main/ts/completeness/evidence.ts'
+import {
+  evidenceOf,
+  parse,
+  stringifyAssessed,
+  withEvidence,
+} from '../../main/ts/index.ts'
 
 // A workspace package satisfying a peer requirement is a `peer` edge into the workspace
 // node; the peerContext carries the workspace node id and emit reconstructs the native
@@ -18,6 +32,20 @@ const WS_PEER =
   `  dep@1.0.0:\n    resolution: {integrity: sha512-x}\n    peerDependencies:\n      '@scope/host': '*'\n\n` +
   `snapshots:\n\n` +
   `  dep@1.0.0(@scope/host@packages+host):\n    dependencies:\n      '@scope/host': link:packages/host\n`
+
+const STATE3 =
+  `lockfileVersion: '9.0'\n\n` +
+  `importers:\n\n` +
+  `  .:\n    dependencies:\n` +
+  `      consumer:\n        specifier: 1.0.0\n        version: 1.0.0(mid@1.0.0(@scope/host@packages+host))\n` +
+  `      consumer-alias:\n        specifier: npm:consumer@1.0.0\n        version: consumer@1.0.0(mid@1.0.0(@scope/host@packages+host))\n` +
+  `  packages/host:\n    dependencies: {}\n\n` +
+  `packages:\n\n` +
+  `  consumer@1.0.0:\n    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}\n    peerDependencies:\n      mid: '*'\n` +
+  `  mid@1.0.0:\n    resolution: {integrity: sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==}\n    peerDependencies:\n      '@scope/host': '*'\n\n` +
+  `snapshots:\n\n` +
+  `  mid@1.0.0(@scope/host@packages+host):\n    dependencies:\n      '@scope/host': link:packages/host\n` +
+  `  consumer@1.0.0(mid@1.0.0(@scope/host@packages+host)):\n    dependencies:\n      mid: 1.0.0(@scope/host@packages+host)\n`
 
 describe('workspace-peer round-trip', () => {
   it('reconstructs the native locator at emit; the canonical id never leaks', () => {
@@ -213,6 +241,249 @@ describe('missing attribution', () => {
     const out = stringifyV9(g2, { onDiagnostic: d => diags.push(d) })
     expect(diags.map(d => d.code)).toContain('PNPM_WORKSPACE_PEER_ATTR_MISSING')
     expect(out).not.toContain('packages+other')
+    expect(() => parseV9(out)).not.toThrow()
+  })
+})
+
+describe('state-3 evidence restoration', () => {
+  const detached = () => {
+    const source = parse('pnpm-v9', STATE3)
+    const builder = newBuilder()
+    const tarballs = new Set<string>()
+    for (const node of source.nodes()) {
+      builder.addNode({ ...node, peerContext: [...node.peerContext] })
+      for (const edge of source.out(node.id)) {
+        builder.addEdge(edge.src, edge.dst, edge.kind,
+          edge.attrs === undefined ? undefined : { ...edge.attrs })
+      }
+      const inputs = {
+        name: node.name,
+        version: node.version,
+        ...(node.patch === undefined ? {} : { patch: node.patch }),
+        ...(node.source === undefined ? {} : { source: node.source }),
+      }
+      const key = toTarballKey(inputs)
+      const payload = source.tarball(inputs)
+      if (payload !== undefined && !tarballs.has(key)) {
+        builder.setTarball(inputs, payload)
+        tarballs.add(key)
+      }
+    }
+    const layout = source.layoutHints()
+    if (layout !== undefined) builder.layoutHints(layout)
+    return {
+      source,
+      graph: builder.seal(),
+    }
+  }
+
+  it('fails closed without exact workspace manifest evidence', () => {
+    const { source, graph } = detached()
+    const result = stringifyAssessed(graph, {
+      contract: 'snapshot',
+      target: { format: 'pnpm-v9', managerVersion: '9.15.0' },
+      evidence: evidenceOf(source),
+    })
+
+    expect(result.output).toBeUndefined()
+    expect(result.assessment.requirements).toContainEqual(expect.objectContaining({
+      key: 'target:pnpm-workspace-peer-projection',
+      status: 'unassessed',
+    }))
+  })
+
+  it('feeds one restored plan through v9 and v6 emit paths', () => {
+    const { source, graph } = detached()
+    const evidence = withEvidence(evidenceOf(source), {
+      kind: 'repository-manifests',
+      coverage: 'complete',
+      manifests: {
+        '': { name: 'root' },
+        'packages/host': { name: '@scope/host' },
+      },
+    })
+    const v9 = stringifyAssessed(graph, {
+      contract: 'snapshot',
+      target: { format: 'pnpm-v9', managerVersion: '9.15.0' },
+      evidence,
+    })
+    const v6 = stringifyAssessed(graph, {
+      contract: 'snapshot',
+      target: { format: 'pnpm-v6', managerVersion: '8.15.9' },
+      evidence,
+    })
+    const nested = 'mid@1.0.0(@scope/host@packages+host)'
+
+    const state = internalEvidenceOf(evidence)
+    const projection = resolvePnpmWorkspacePeerProjection(graph, {
+      repositoryManifests: state.repositoryManifests,
+      packageManifests: state.packageManifests,
+    })
+    const direct = stringifyFamily(
+      graph,
+      { profile: 'v9-importers-snapshots' },
+      {},
+      { workspacePeerProjection: projection },
+    )
+    const reparsed = parse('pnpm-v9', direct)
+    expect(graph.diff(reparsed)).toEqual({
+      addedNodes: [], removedNodes: [], changedNodes: [], addedEdges: [], removedEdges: [],
+    })
+    expect([...reparsed.nodes()].flatMap(node => reparsed.out(node.id)))
+      .toEqual([...graph.nodes()].flatMap(node => graph.out(node.id)))
+    expect([...reparsed.tarballs()]).toEqual([...graph.tarballs()])
+
+    expect(v9.assessment.status, JSON.stringify(v9.assessment.requirements)).toBe('satisfied')
+    expect(v6.assessment.status, JSON.stringify(v6.assessment.requirements)).toBe('satisfied')
+    expect(v9.output).toContain(`consumer@1.0.0(${nested})`)
+    expect(v9.output).toContain(`version: consumer@1.0.0(${nested})`)
+    expect(v9.output).toContain(`mid: 1.0.0(@scope/host@packages+host)`)
+    expect(v6.output).toContain(`/consumer@1.0.0(${nested}):`)
+    expect(v6.output).toContain(`/mid@1.0.0(@scope/host@packages+host):`)
+    expect(v6.output).toContain(`version: consumer@1.0.0(${nested})`)
+    expect(v6.output).toContain(`mid: 1.0.0(@scope/host@packages+host)`)
+    expect(v9.output).not.toContain('packages/host@0.0.0')
+    expect(v6.output).not.toContain('packages/host@0.0.0')
+  })
+
+  it('keeps native sidecar reads inside the projection resolver', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const source = readFileSync(resolve(here, '../../main/ts/formats/_pnpm-flat-core.ts'), 'utf8')
+    expect(source.match(/workspacePeerNames\.get/g)).toHaveLength(1)
+    expect(source.match(/workspacePeerCollisions\.has/g)).toHaveLength(1)
+  })
+
+  it('fails closed when descendant publish evidence is ambiguous', () => {
+    const { source, graph } = detached()
+    const evidence = withEvidence(evidenceOf(source), {
+      kind: 'repository-manifests',
+      coverage: 'complete',
+      manifests: {
+        '': { name: 'root' },
+        'packages/host': { name: '@scope/host' },
+        'packages/host/build': { name: '@scope/host' },
+      },
+    })
+    const result = stringifyAssessed(graph, {
+      contract: 'snapshot',
+      target: { format: 'pnpm-v9', managerVersion: '9.15.0' },
+      evidence,
+    })
+
+    expect(result.output).toBeUndefined()
+    expect(result.assessment.requirements).toContainEqual(expect.objectContaining({
+      key: 'target:pnpm-workspace-peer-projection',
+      status: 'unsatisfied',
+    }))
+  })
+
+  it('fails closed on conflicting authoritative workspace manifests', () => {
+    const { source, graph } = detached()
+    const first = withEvidence(evidenceOf(source), {
+      kind: 'repository-manifests',
+      coverage: 'complete',
+      manifests: {
+        '': { name: 'root' },
+        'packages/host': { name: '@scope/host' },
+      },
+    })
+    const evidence = withEvidence(first, {
+      kind: 'repository-manifests',
+      coverage: 'complete',
+      manifests: {
+        '': { name: 'root' },
+        'packages/host': { name: '@scope/other' },
+      },
+    })
+    const result = stringifyAssessed(graph, {
+      contract: 'snapshot',
+      target: { format: 'pnpm-v9', managerVersion: '9.15.0' },
+      evidence,
+    })
+
+    expect(result.output).toBeUndefined()
+    expect(result.assessment.requirements).toContainEqual(expect.objectContaining({
+      key: 'target:pnpm-workspace-peer-projection',
+      status: 'unsatisfied',
+    }))
+  })
+
+  it.each([
+    ['single-segment scoped publish', 'host', 'host', '@scope/host'],
+    ['unique descendant publish', 'packages/lib', 'packages/lib/build', '@scope/lib'],
+  ])('restores %s without using the directory leaf as the package name', (
+    _label,
+    workspacePath,
+    manifestPath,
+    peerName,
+  ) => {
+    const builder = newBuilder()
+    const workspaceId = `${workspacePath}@0.0.0`
+    const ownerId = `owner@2.0.0(${workspaceId})`
+    builder.addNode({
+      id: workspaceId,
+      name: workspacePath,
+      version: '0.0.0',
+      peerContext: [],
+      workspacePath,
+    })
+    builder.addNode({ id: ownerId, name: 'owner', version: '2.0.0', peerContext: [workspaceId] })
+    builder.addEdge(ownerId, workspaceId, 'peer', { range: '*' })
+    builder.setTarball({ name: 'owner', version: '2.0.0' }, {
+      peerDependencies: { [peerName]: '*' },
+    })
+    const projection = resolvePnpmWorkspacePeerProjection(builder.seal(), {
+      repositoryManifests: {
+        coverage: 'complete',
+        manifests: { [manifestPath]: { name: peerName } },
+      },
+    })
+
+    expect(projection.gaps).toEqual([])
+    expect(projection.conflicts).toEqual([])
+    expect(projection.attribution.get(`${ownerId}\0${workspaceId}`)).toEqual({
+      name: peerName,
+      locator: manifestPath.replace(/\//g, '+'),
+    })
+  })
+
+  it('ignores an orphaned old payload after an owner version re-key', () => {
+    const builder = newBuilder()
+    const workspaceId = 'packages/host@0.0.0'
+    const ownerId = `owner@2.0.0(${workspaceId})`
+    builder.addNode({
+      id: workspaceId,
+      name: 'packages/host',
+      version: '0.0.0',
+      peerContext: [],
+      workspacePath: 'packages/host',
+    })
+    builder.addNode({ id: 'owner@1.0.0', name: 'owner', version: '1.0.0', peerContext: [] })
+    builder.setTarball({ name: 'owner', version: '1.0.0' }, {
+      peerDependencies: { stale: '*' },
+    })
+    builder.addNode({ id: ownerId, name: 'owner', version: '2.0.0', peerContext: [workspaceId] })
+    builder.addEdge(ownerId, workspaceId, 'peer', { range: '*' })
+    const graph = builder.seal()
+    const repositoryManifests = {
+      coverage: 'complete' as const,
+      manifests: { 'packages/host': { name: '@scope/host' } },
+    }
+
+    expect(resolvePnpmWorkspacePeerProjection(graph, { repositoryManifests }).gaps)
+      .toContainEqual(expect.objectContaining({ reason: 'owner-declaration-missing' }))
+    const restored = resolvePnpmWorkspacePeerProjection(graph, {
+      repositoryManifests,
+      packageManifests: new Map([[
+        'owner@2.0.0',
+        { manifest: { peerDependencies: { '@scope/host': '*' } } },
+      ]]),
+    })
+    expect(restored.gaps).toEqual([])
+    expect(restored.attribution.get(`${ownerId}\0${workspaceId}`)).toEqual({
+      name: '@scope/host',
+      locator: 'packages+host',
+    })
   })
 })
 

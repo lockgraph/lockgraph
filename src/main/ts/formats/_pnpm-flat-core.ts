@@ -51,9 +51,11 @@ import {
   type EdgeAttrs,
   type EdgeKind,
   type Graph,
+  type Manifest,
   type Node,
   type NodeId,
   type OverrideConstraint,
+  type TarballKey,
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
@@ -103,6 +105,44 @@ export interface PnpmFamilyStringifyOptions {
    *  `overrides:` block. Caller wins per key; pre-existing `patch:` directives
    *  (F2) survive on collision. */
   overrides?: OverrideConstraint[]
+}
+
+export interface PnpmWorkspacePeerProjectionEvidence {
+  readonly repositoryManifests?: Readonly<{
+    coverage: 'partial' | 'complete'
+    manifests: Readonly<Record<string, Manifest>>
+  }>
+  readonly packageManifests?: ReadonlyMap<TarballKey, Readonly<{ manifest: Manifest }>>
+  readonly conflictedSubjects?: ReadonlySet<string>
+}
+
+export interface PnpmWorkspacePeerAttribution {
+  readonly name: string
+  readonly locator: string
+}
+
+export interface PnpmWorkspacePeerGap {
+  readonly owner: string
+  readonly workspace: string
+  readonly reason: 'owner-declaration-missing' | 'workspace-manifest-missing'
+}
+
+export interface PnpmWorkspacePeerConflict {
+  readonly owner: string
+  readonly workspace: string
+  readonly reason: 'native-collision' | 'manifest-ambiguous' | 'evidence-conflict'
+}
+
+export interface PnpmWorkspacePeerProjection {
+  readonly attribution: ReadonlyMap<string, Readonly<PnpmWorkspacePeerAttribution>>
+  readonly ownerPeerDependencies: ReadonlyMap<string, Readonly<Record<string, string>>>
+  readonly gaps: readonly Readonly<PnpmWorkspacePeerGap>[]
+  readonly conflicts: readonly Readonly<PnpmWorkspacePeerConflict>[]
+}
+
+export interface PnpmFamilyStringifyInternalOptions {
+  readonly workspacePeerProjection?: PnpmWorkspacePeerProjection
+  readonly workspacePeerEvidence?: PnpmWorkspacePeerProjectionEvidence
 }
 
 export interface PnpmManifest {
@@ -768,48 +808,222 @@ export function parseFamily(
   }
 }
 
-// A peer edge into a workspace node whose native-locator attribution is absent
-// (`missing` — e.g. a mutation dropped the sidecar) or ambiguous (`collision`). Emit
-// cannot reproduce the pnpm locator, so it surfaces a diagnostic.
-type WorkspacePeerGap = { owner: string; workspace: string; reason: 'missing' | 'collision' }
+function readonlyAttributionMap(
+  source: ReadonlyMap<string, Readonly<PnpmWorkspacePeerAttribution>>,
+): ReadonlyMap<string, Readonly<PnpmWorkspacePeerAttribution>> {
+  const map = new Map(source)
+  let view: ReadonlyMap<string, Readonly<PnpmWorkspacePeerAttribution>>
+  view = Object.freeze({
+    get size() { return map.size },
+    get: (key: string) => map.get(key),
+    has: (key: string) => map.has(key),
+    entries: () => map.entries(),
+    keys: () => map.keys(),
+    values: () => map.values(),
+    forEach: (callback: (
+      value: Readonly<PnpmWorkspacePeerAttribution>,
+      key: string,
+      source: ReadonlyMap<string, Readonly<PnpmWorkspacePeerAttribution>>,
+    ) => void, thisArg?: unknown) => {
+      map.forEach((value, key) => callback.call(thisArg, value, key, view))
+    },
+    [Symbol.iterator]: () => map[Symbol.iterator](),
+  })
+  return view
+}
 
-function workspacePeerProjectionGaps(graph: Graph, sidecar: PnpmSidecar | undefined): WorkspacePeerGap[] {
-  const gaps: WorkspacePeerGap[] = []
+function readonlyPeerDependenciesMap(
+  source: ReadonlyMap<string, Readonly<Record<string, string>>>,
+): ReadonlyMap<string, Readonly<Record<string, string>>> {
+  const map = new Map(source)
+  let view: ReadonlyMap<string, Readonly<Record<string, string>>>
+  view = Object.freeze({
+    get size() { return map.size },
+    get: (key: string) => map.get(key),
+    has: (key: string) => map.has(key),
+    entries: () => map.entries(),
+    keys: () => map.keys(),
+    values: () => map.values(),
+    forEach: (callback: (
+      value: Readonly<Record<string, string>>,
+      key: string,
+      source: ReadonlyMap<string, Readonly<Record<string, string>>>,
+    ) => void, thisArg?: unknown) => {
+      map.forEach((value, key) => callback.call(thisArg, value, key, view))
+    },
+    [Symbol.iterator]: () => map[Symbol.iterator](),
+  })
+  return view
+}
+
+function peerDeclarationsForOwner(
+  graph: Graph,
+  owner: Node,
+  evidence: PnpmWorkspacePeerProjectionEvidence | undefined,
+): Readonly<Record<string, string>> | undefined {
+  const payload = graph.tarballOf(owner.id)
+  if (payload?.peerDependencies !== undefined) return payload.peerDependencies
+  const repository = evidence?.repositoryManifests
+  if (repository?.coverage === 'complete' && owner.workspacePath !== undefined) {
+    const manifest = repository.manifests[owner.workspacePath]
+    if (manifest?.peerDependencies !== undefined) return manifest.peerDependencies
+  }
+  const key = toTarballKey({
+    name: owner.name,
+    version: owner.version,
+    ...(owner.patch === undefined ? {} : { patch: owner.patch }),
+    ...(owner.source === undefined ? {} : { source: owner.source }),
+  })
+  return evidence?.packageManifests?.get(key)?.manifest.peerDependencies
+}
+
+function restoredWorkspacePeerAttribution(
+  graph: Graph,
+  owner: Node,
+  workspace: Node,
+  evidence: PnpmWorkspacePeerProjectionEvidence | undefined,
+): { attribution?: PnpmWorkspacePeerAttribution; gap?: PnpmWorkspacePeerGap; conflict?: PnpmWorkspacePeerConflict } {
+  const currentKey = toTarballKey({
+    name: owner.name,
+    version: owner.version,
+    ...(owner.patch === undefined ? {} : { patch: owner.patch }),
+    ...(owner.source === undefined ? {} : { source: owner.source }),
+  })
+  const declarationSubject = owner.workspacePath ?? currentKey
+  if (graph.tarballOf(owner.id)?.peerDependencies === undefined
+    && evidence?.conflictedSubjects?.has(declarationSubject) === true) {
+    return { conflict: Object.freeze({
+      owner: owner.id,
+      workspace: workspace.id,
+      reason: 'evidence-conflict',
+    }) }
+  }
+  const declarations = peerDeclarationsForOwner(graph, owner, evidence)
+  if (declarations === undefined || Object.keys(declarations).length === 0) {
+    return { gap: Object.freeze({
+      owner: owner.id,
+      workspace: workspace.id,
+      reason: 'owner-declaration-missing',
+    }) }
+  }
+  const repository = evidence?.repositoryManifests
+  if (repository?.coverage !== 'complete' || workspace.workspacePath === undefined) {
+    return { gap: Object.freeze({
+      owner: owner.id,
+      workspace: workspace.id,
+      reason: 'workspace-manifest-missing',
+    }) }
+  }
+  const candidates: Array<{ name: string; path: string }> = []
+  for (const [path, manifest] of Object.entries(repository.manifests)) {
+    if (manifest.name === undefined || declarations[manifest.name] === undefined) continue
+    if (path !== workspace.workspacePath && !path.startsWith(`${workspace.workspacePath}/`)) continue
+    candidates.push({ name: manifest.name, path })
+  }
+  if (candidates.some(candidate => evidence?.conflictedSubjects?.has(candidate.path) === true)) {
+    return { conflict: Object.freeze({
+      owner: owner.id,
+      workspace: workspace.id,
+      reason: 'evidence-conflict',
+    }) }
+  }
+  if (candidates.length === 0) {
+    return { gap: Object.freeze({
+      owner: owner.id,
+      workspace: workspace.id,
+      reason: 'workspace-manifest-missing',
+    }) }
+  }
+  if (candidates.length > 1) {
+    return { conflict: Object.freeze({
+      owner: owner.id,
+      workspace: workspace.id,
+      reason: 'manifest-ambiguous',
+    }) }
+  }
+  const candidate = candidates[0]!
+  return { attribution: Object.freeze({
+    name: candidate.name,
+    locator: candidate.path.replace(/\//g, '+'),
+  }) }
+}
+
+export function resolvePnpmWorkspacePeerProjection(
+  graph: Graph,
+  evidence?: PnpmWorkspacePeerProjectionEvidence,
+): PnpmWorkspacePeerProjection {
+  const sidecar = sidecarByGraph.get(graph)
+  const attribution = new Map<string, Readonly<PnpmWorkspacePeerAttribution>>()
+  const ownerPeerDependencies = new Map<string, Readonly<Record<string, string>>>()
+  const gaps: Readonly<PnpmWorkspacePeerGap>[] = []
+  const conflicts: Readonly<PnpmWorkspacePeerConflict>[] = []
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
       if (edge.kind !== 'peer') continue
-      if (graph.getNode(edge.dst)?.workspacePath === undefined) continue
-      const key = `${node.id}\0${edge.dst}`
-      if (sidecar?.workspacePeerNames.get(key) === undefined) {
-        gaps.push({ owner: node.id, workspace: edge.dst, reason: 'missing' })
-      } else if (sidecar.workspacePeerCollisions.has(key)) {
-        gaps.push({ owner: node.id, workspace: edge.dst, reason: 'collision' })
+      const workspace = graph.getNode(edge.dst)
+      if (workspace?.workspacePath === undefined) continue
+      const declarations = peerDeclarationsForOwner(graph, node, evidence)
+      if (declarations !== undefined) {
+        ownerPeerDependencies.set(node.id, Object.freeze({ ...declarations }))
       }
+      const key = `${node.id}\0${edge.dst}`
+      if (sidecar?.workspacePeerCollisions.has(key) === true) {
+        conflicts.push(Object.freeze({
+          owner: node.id,
+          workspace: edge.dst,
+          reason: 'native-collision',
+        }))
+        continue
+      }
+      const native = sidecar?.workspacePeerNames.get(key)
+      if (native !== undefined) {
+        attribution.set(key, Object.freeze({ ...native }))
+        continue
+      }
+      const restored = restoredWorkspacePeerAttribution(graph, node, workspace, evidence)
+      if (restored.attribution !== undefined) attribution.set(key, restored.attribution)
+      if (restored.gap !== undefined) gaps.push(restored.gap)
+      if (restored.conflict !== undefined) conflicts.push(restored.conflict)
     }
   }
-  return gaps
+  return Object.freeze({
+    attribution: readonlyAttributionMap(attribution),
+    ownerPeerDependencies: readonlyPeerDependenciesMap(ownerPeerDependencies),
+    gaps: Object.freeze(gaps),
+    conflicts: Object.freeze(conflicts),
+  })
 }
 
 export function stringifyFamily(
   graph: Graph,
   profile: PnpmLayoutProfile,
   options: PnpmFamilyStringifyOptions = {},
+  internal: PnpmFamilyStringifyInternalOptions = {},
 ): string {
   const shape = resolveProfile(profile)
   const sidecar = sidecarByGraph.get(graph)
+  const workspacePeerProjection = internal.workspacePeerProjection
+    ?? resolvePnpmWorkspacePeerProjection(graph, internal.workspacePeerEvidence)
   const emitDiagnostic = (diagnostic: Diagnostic): void => {
     options.onDiagnostic?.(diagnostic)
   }
 
   // Surface any workspace-peer attribution gap as a typed diagnostic; the missing
   // native locator is never fabricated.
-  for (const gap of workspacePeerProjectionGaps(graph, sidecar)) {
-    if (gap.reason !== 'missing') continue // collisions are already surfaced at parse
+  for (const gap of workspacePeerProjection.gaps) {
     emitDiagnostic({
       code: 'PNPM_WORKSPACE_PEER_ATTR_MISSING',
       severity: 'warning',
       subject: gap.owner,
       message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: workspace-peer ${gap.owner} →peer ${gap.workspace} has no native-locator attribution; the relation is retained but the pnpm locator is not reproduced.`,
+    })
+  }
+  for (const conflict of workspacePeerProjection.conflicts) {
+    emitDiagnostic({
+      code: 'PNPM_WORKSPACE_PEER_ATTR_COLLISION',
+      severity: 'warning',
+      subject: conflict.owner,
+      message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: workspace-peer ${conflict.owner} →peer ${conflict.workspace} has conflicting native-locator attribution.`,
     })
   }
 
@@ -906,7 +1120,7 @@ export function stringifyFamily(
   // importers vs collapsed dependencies — v9 always emits importers; v6
   // collapses single-importer to top-level `dependencies` (plus any
   // workspace-member importers separately).
-  const rootImporterEntry = buildImporterEntry(graph, sidecar, rootNode, '.')
+  const rootImporterEntry = buildImporterEntry(graph, sidecar, workspacePeerProjection, rootNode, '.')
 
   if (shape.topLevelShape === 'dependencies-collapsed') {
     const hasMultiImporters = workspaceNodes.length > 0
@@ -922,7 +1136,7 @@ export function stringifyFamily(
       }
       for (const wsNode of workspaceNodes) {
         const wsPath = wsNode.workspacePath ?? wsNode.name
-        importers[wsPath] = buildImporterEntry(graph, sidecar, wsNode, wsPath)
+        importers[wsPath] = buildImporterEntry(graph, sidecar, workspacePeerProjection, wsNode, wsPath)
       }
       out.importers = sortRecord(importers) as YamlMap
     } else {
@@ -943,7 +1157,7 @@ export function stringifyFamily(
     }
     for (const wsNode of workspaceNodes) {
       const wsPath = wsNode.workspacePath ?? wsNode.name
-      importers[wsPath] = buildImporterEntry(graph, sidecar, wsNode, wsPath)
+      importers[wsPath] = buildImporterEntry(graph, sidecar, workspacePeerProjection, wsNode, wsPath)
     }
     out.importers = sortRecord(importers) as YamlMap
   }
@@ -951,7 +1165,7 @@ export function stringifyFamily(
   // packages — keyed by bare or slash-leading `<id>` per shape.packagesKeyShape.
   const packagesUsed = new Set<string>()
   for (const node of resolvedNodes) {
-    packagesUsed.add(packagesKeyForNode(node, shape, sidecar))
+    packagesUsed.add(packagesKeyForNode(node, shape, workspacePeerProjection))
   }
 
   const packages: YamlMap = {}
@@ -968,14 +1182,14 @@ export function stringifyFamily(
       const siblings = bareToNodes.get(bareKey)!
       if (!packagesUsed.has(bareKey)) continue
       const first = siblings[0]!
-      packages[bareKey] = buildPackageEntry(graph, sidecar, first, shape)
+      packages[bareKey] = buildPackageEntry(graph, sidecar, workspacePeerProjection, first, shape)
     }
   } else {
     // v6: one packages entry per peer-virt instance, key includes peer-context.
-    const sortedNodes = resolvedNodes.slice().sort((a, b) => cmpStr(packagesKeyForNode(a, shape, sidecar), packagesKeyForNode(b, shape, sidecar)))
+    const sortedNodes = resolvedNodes.slice().sort((a, b) => cmpStr(packagesKeyForNode(a, shape, workspacePeerProjection), packagesKeyForNode(b, shape, workspacePeerProjection)))
     for (const node of sortedNodes) {
-      const key = packagesKeyForNode(node, shape, sidecar)
-      packages[key] = buildPackageEntry(graph, sidecar, node, shape)
+      const key = packagesKeyForNode(node, shape, workspacePeerProjection)
+      packages[key] = buildPackageEntry(graph, sidecar, workspacePeerProjection, node, shape)
     }
   }
   out.packages = packages
@@ -984,8 +1198,8 @@ export function stringifyFamily(
   if (shape.hasSnapshots) {
     const snapshots: YamlMap = {}
     for (const node of resolvedNodes) {
-      const snapshotKey = nodeIdToSnapshotKey(node, sidecar)
-      snapshots[snapshotKey] = buildSnapshotEntry(graph, sidecar, node)
+      const snapshotKey = nodeIdToSnapshotKey(node, workspacePeerProjection)
+      snapshots[snapshotKey] = buildSnapshotEntry(graph, sidecar, workspacePeerProjection, node)
     }
     out.snapshots = sortRecord(snapshots) as YamlMap
   }
@@ -995,7 +1209,15 @@ export function stringifyFamily(
   // adjacency back to its target, via the SAME oracle parse uses. A miss is a
   // generator defect surfaced as a soft `LAYOUT_RESOLVE_VIOLATION` (error) — no
   // throw, so stringify still produces output (lean-safety, npm INV-FINDUP §).
-  assertResolveValid(graph, shape, out, rootNode, resolvedNodes, emitDiagnostic, sidecar)
+  assertResolveValid(
+    graph,
+    shape,
+    out,
+    rootNode,
+    resolvedNodes,
+    emitDiagnostic,
+    workspacePeerProjection,
+  )
 
   const text = emitYaml(out, {
     topLevelOrder: shape.topLevelOrder,
@@ -1033,7 +1255,7 @@ function assertResolveValid(
   rootNode: Node | undefined,
   resolvedNodes: readonly Node[],
   onDiagnostic: (d: Diagnostic) => void,
-  sidecar: PnpmSidecar | undefined,
+  workspacePeerProjection: PnpmWorkspacePeerProjection,
 ): void {
   // The set of NodeIds that actually got a packages/snapshots entry — exactly
   // the `seenIds` the parse oracle checks membership against.
@@ -1071,10 +1293,10 @@ function assertResolveValid(
   const packagesMap = isPlainObject(out.packages) ? (out.packages as Record<string, unknown>) : undefined
   const packageBlockOf = (pkg: Node): Record<string, unknown> | undefined => {
     if (shape.hasSnapshots) {
-      const entry = snapshotsMap?.[nodeIdToSnapshotKey(pkg, sidecar)]
+      const entry = snapshotsMap?.[nodeIdToSnapshotKey(pkg, workspacePeerProjection)]
       return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
     }
-    const entry = packagesMap?.[packagesKeyForNode(pkg, shape, sidecar)]
+    const entry = packagesMap?.[packagesKeyForNode(pkg, shape, workspacePeerProjection)]
     return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
   }
 
@@ -1495,14 +1717,18 @@ function applyPackagesKeyPrefix(stripped: string, packagesKeyShape: PnpmLayoutSh
   return stripped
 }
 
-function packagesKeyForNode(node: Node, shape: PnpmLayoutShape, sidecar: PnpmSidecar | undefined): string {
+function packagesKeyForNode(
+  node: Node,
+  shape: PnpmLayoutShape,
+  projection: PnpmWorkspacePeerProjection,
+): string {
   // v9 collapses peer-virt onto bare key. v6 carries peer-context on the key.
   const bare = `${node.name}@${node.version}`
   if (shape.peerContextLocation === 'snapshots-keys') return bare
   // v6 — append peer-context if present (workspace tokens map to their native locator).
   const suffix = node.peerContext.length === 0
     ? ''
-    : node.peerContext.map(p => `(${denormalizeWorkspaceToken(p, node.id, sidecar)})`).join('')
+    : nativePeerSuffix(node.peerContext, node.id, projection)
   return applyPackagesKeyPrefix(bare + suffix, shape.packagesKeyShape)
 }
 
@@ -1525,11 +1751,6 @@ function addPackageNode(
   }
   if (patch !== undefined) node.patch = patch
   builder.addNode(node)
-
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics)
-  if (payload !== undefined) {
-    builder.setTarball({ name, version, patch }, payload)
-  }
 
   const nodeSc: PnpmNodeSidecar = {}
   if (isPlainObject(pkgEntry)) {
@@ -1555,6 +1776,18 @@ function addPackageNode(
     if (Array.isArray(pkgEntry.libc)) nodeSc.libc = (pkgEntry.libc as string[]).slice()
   }
   sidecar.nodes.set(nodeId, nodeSc)
+
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  if (nodeSc.peerDependencies !== undefined) {
+    payload.peerDependencies = { ...nodeSc.peerDependencies }
+  }
+  if (nodeSc.peerDependenciesMeta !== undefined) {
+    payload.peerDependenciesMeta = Object.fromEntries(Object.entries(nodeSc.peerDependenciesMeta)
+      .map(([peerName, meta]) => [peerName, { ...meta }]))
+  }
+  if (Object.keys(payload).length > 0) {
+    builder.setTarball({ name, version, patch }, payload)
+  }
 }
 
 function addResolvedTreeEdges(
@@ -1648,7 +1881,8 @@ function addResolvedTreeEdges(
       // collision (two distinct published packages sharing the ancestor) is diagnosed
       // (first wins), never silently last-write.
       const attrKey = `${srcId}\0${wsPeerId}`
-      const prior = sidecar.workspacePeerNames.get(attrKey)
+      const prior = [...sidecar.workspacePeerNames]
+        .find(([key]) => key === attrKey)?.[1]
       if (prior === undefined) {
         sidecar.workspacePeerNames.set(attrKey, { name: peer.name, locator: peer.version })
       } else if (prior.name !== peer.name || prior.locator !== peer.version) {
@@ -1828,15 +2062,8 @@ export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, pe
  * `vue: link:packages/vue`). Such a peer's true target is the synthesised
  * importer member node (`packages/vue@0.0.0`).
  *
- * That target is a WORKSPACE node, and the graph seal (graph.ts §validate)
- * forbids a non-workspace node from owning an incoming edge into a workspace
- * node (the published-self-link carve-out covers registry ranges only, not a
- * `link:`-class workspace peer). The format already DROPS the matching
- * `link:` snapshot dependency for the same reason. So a workspace peer is
- * dropped symmetrically from BOTH the peerContext and the peer edge set —
- * keeping the two in bijection under the seal's base-key projection. Returns
- * the importer member NodeId when `peerVersion` decodes to a known importer
- * path (i.e. this IS a workspace peer), else `undefined` (a registry peer).
+ * Returns the canonical importer member NodeId when `peerVersion` decodes to a
+ * known workspace path, otherwise `undefined`.
  */
 export function resolveWorkspacePeerId(
   peerVersion: string,
@@ -1861,15 +2088,8 @@ export function resolveWorkspacePeerId(
 
 /**
  * Recursively normalise a peer's `(...)` nested suffix into the form the
- * peer's OWN node id carries (#70). pnpm spells a consumer's reference to a
- * peer with the peer's FULL transitive suffix — INCLUDING workspace peers
- * (`@angular/common@packages+common`). But the peer's own node drops those
- * workspace peers (#8b-A — `buildPeerContext`'s filter), so the consumer's raw
- * nested suffix is NOT a valid node id. Re-running the SAME drop+sort at every
- * depth reproduces exactly the target node's id, keeping the peerContext token
- * and the peer-edge target byte-identical to a real node (the seal's
- * bijection, and `resolvePeerTargetById`'s exact match, both depend on this).
- * Returns '' for a leaf peer or one whose nested peers are all droppable.
+ * peer's own node id carries. Workspace locators are replaced recursively with
+ * canonical workspace node ids so each token matches the referenced identity.
  */
 function normalizeNestedSuffix(nested: string, importerByPath: Map<string, string>): string {
   if (nested.length === 0) return ''
@@ -1881,10 +2101,8 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
 
 /**
  * Build the ADR-0006 peerContext for a node from its parsed suffix peers.
- * Workspace peers (#8b-A) are filtered out so the recorded context stays in
- * bijection with the wired peer edges (a workspace peer is droppable — see
- * `resolveWorkspacePeerId`). A surviving registry peer keeps its `name@version`
- * PLUS its recursively-normalised nested peer-of-a-peer suffix (#70) so two
+ * Workspace peers become canonical workspace node ids. A registry peer keeps
+ * `name@version` plus its recursively-normalised nested suffix so two
  * consumer instances that differ only in a transitive peer's resolution stay
  * distinct NodeIds. The seal (graph.ts) reconciles this token against the peer
  * edge target by BASE-KEY projection (ADR-0017), which strips the nested
@@ -2075,16 +2293,42 @@ export function locatePnpmRootNode(
 // workspace node id is rewritten to its recorded native locator. Attribution is keyed by
 // (owner, workspace target); a nested token's owner is the enclosing instance `token`
 // (its canonical id per #70). A matched workspace token is a leaf.
-function denormalizeWorkspaceToken(token: string, ownerId: string, sidecar: PnpmSidecar | undefined): string {
+function unresolvedWorkspacePeer(
+  owner: string,
+  workspace: string,
+  projection: PnpmWorkspacePeerProjection,
+): boolean {
+  return projection.gaps.some(gap => gap.owner === owner && gap.workspace === workspace)
+    || projection.conflicts.some(conflict =>
+      conflict.owner === owner && conflict.workspace === workspace)
+}
+
+function denormalizeWorkspaceToken(
+  token: string,
+  ownerId: string,
+  projection: PnpmWorkspacePeerProjection,
+): string | undefined {
   const base = stripPeerContextFromNodeId(token)
-  const attr = sidecar?.workspacePeerNames.get(`${ownerId}\0${base}`)
+  const attr = projection.attribution.get(`${ownerId}\0${base}`)
   if (attr !== undefined) return `${attr.name}@${attr.locator}`
-  // No attribution (e.g. a mutation dropped the sidecar): the locator is not fabricated
-  // (the published peer name is unevidenced), the relation is retained, and the gap is
-  // surfaced via `workspacePeerProjectionGaps`. A registry peer's nested suffix recurses.
+  if (unresolvedWorkspacePeer(ownerId, base, projection)) return undefined
   const suffix = token.slice(base.length)
   if (suffix.length === 0) return token
-  return base + splitTopLevelPeerGroups(suffix).map(g => `(${denormalizeWorkspaceToken(g, token, sidecar)})`).join('')
+  return base + splitTopLevelPeerGroups(suffix).flatMap(group => {
+    const restored = denormalizeWorkspaceToken(group, token, projection)
+    return restored === undefined ? [] : [`(${restored})`]
+  }).join('')
+}
+
+function nativePeerSuffix(
+  peers: readonly string[],
+  ownerId: string,
+  projection: PnpmWorkspacePeerProjection,
+): string {
+  return peers.flatMap(peer => {
+    const restored = denormalizeWorkspaceToken(peer, ownerId, projection)
+    return restored === undefined ? [] : [`(${restored})`]
+  }).join('')
 }
 
 // Split a `(g1)(g2)…` peer suffix into its DEPTH-0 groups (nested parens intact).
@@ -2105,9 +2349,9 @@ function splitTopLevelPeerGroups(suffix: string): string[] {
   return groups
 }
 
-function nodeIdToSnapshotKey(node: Node, sidecar: PnpmSidecar | undefined): string {
+function nodeIdToSnapshotKey(node: Node, projection: PnpmWorkspacePeerProjection): string {
   if (node.peerContext.length === 0) return `${node.name}@${node.version}`
-  return `${node.name}@${node.version}` + node.peerContext.map(p => `(${denormalizeWorkspaceToken(p, node.id, sidecar)})`).join('')
+  return `${node.name}@${node.version}${nativePeerSuffix(node.peerContext, node.id, projection)}`
 }
 
 // ADR-0028 INV-RESOLVE — the (slot-key, slot-value) pair for one resolved-tree
@@ -2118,8 +2362,12 @@ function nodeIdToSnapshotKey(node: Node, sidecar: PnpmSidecar | undefined): stri
 // `<dst.name>@<version>(<peers>)`, the form parse's resolveAliasedSnapshotTarget
 // reconstructs (`_pnpm-flat-core.ts:1183-1190`). Mirrors the importer-side
 // `{ specifier, version }` alias shape (`react-is-cjs: react-is@17.0.2`).
-function aliasedSnapshotSlotValue(edge: Edge, dst: Node, sidecar: PnpmSidecar | undefined): { key: string; value: string } {
-  const bareValue = nodeIdToImporterVersion(dst, sidecar)
+function aliasedSnapshotSlotValue(
+  edge: Edge,
+  dst: Node,
+  projection: PnpmWorkspacePeerProjection,
+): { key: string; value: string } {
+  const bareValue = nodeIdToImporterVersion(dst, projection)
   const alias = edge.attrs?.alias
   if (alias === undefined) return { key: dst.name, value: bareValue }
   return { key: alias, value: `${dst.name}@${bareValue}` }
@@ -2128,6 +2376,7 @@ function aliasedSnapshotSlotValue(edge: Edge, dst: Node, sidecar: PnpmSidecar | 
 function buildImporterEntry(
   graph: Graph,
   sidecar: PnpmSidecar | undefined,
+  projection: PnpmWorkspacePeerProjection,
   node: Node | undefined,
   importerPath: string,
 ): YamlMap {
@@ -2158,7 +2407,7 @@ function buildImporterEntry(
     // resolveAliasedSnapshotTarget resolves). `alias` is set by parse only on
     // the npm-alias path; a bare dep has no alias and falls back to `dst.name`
     // + bare version — byte-unchanged for the non-alias case.
-    const slot = aliasedSnapshotSlotValue(edge, dst, sidecar)
+    const slot = aliasedSnapshotSlotValue(edge, dst, projection)
     const isAliased = edge.attrs?.alias !== undefined
     const range = edge.attrs?.range
     // The `importerEdges` sidecar is keyed by the (src,kind,dst) triple, which
@@ -2200,9 +2449,9 @@ function buildImporterEntry(
   return entry
 }
 
-function nodeIdToImporterVersion(node: Node, sidecar: PnpmSidecar | undefined): string {
+function nodeIdToImporterVersion(node: Node, projection: PnpmWorkspacePeerProjection): string {
   if (node.peerContext.length === 0) return node.version
-  return node.version + node.peerContext.map(p => `(${denormalizeWorkspaceToken(p, node.id, sidecar)})`).join('')
+  return node.version + nativePeerSuffix(node.peerContext, node.id, projection)
 }
 
 export function relativeImporterPath(importerPath: string, targetPath: string): string {
@@ -2222,6 +2471,7 @@ export function relativeImporterPath(importerPath: string, targetPath: string): 
 function buildPackageEntry(
   graph: Graph,
   sidecar: PnpmSidecar | undefined,
+  projection: PnpmWorkspacePeerProjection,
   representative: Node,
   shape: PnpmLayoutShape,
 ): YamlMap {
@@ -2276,8 +2526,11 @@ function buildPackageEntry(
   if (nodeSc?.os !== undefined && nodeSc.os.length > 0) entry.os = nodeSc.os.slice()
   if (nodeSc?.cpu !== undefined && nodeSc.cpu.length > 0) entry.cpu = nodeSc.cpu.slice()
   if (nodeSc?.libc !== undefined && nodeSc.libc.length > 0) entry.libc = nodeSc.libc.slice()
-  if (nodeSc?.peerDependencies !== undefined && Object.keys(nodeSc.peerDependencies).length > 0) {
-    entry.peerDependencies = sortRecord(nodeSc.peerDependencies) as YamlMap
+  const peerDependencies = nodeSc?.peerDependencies
+    ?? projection.ownerPeerDependencies.get(representative.id)
+    ?? tarball?.peerDependencies
+  if (peerDependencies !== undefined && Object.keys(peerDependencies).length > 0) {
+    entry.peerDependencies = sortRecord(peerDependencies) as YamlMap
   }
 
   // peerDependenciesMeta — the per-peer `{ optional: true }` markers. Re-derive
@@ -2296,6 +2549,11 @@ function buildPackageEntry(
   if (nodeSc?.peerDependenciesMeta !== undefined) {
     for (const [peerName, m] of Object.entries(nodeSc.peerDependenciesMeta)) {
       if (m.optional === true) optionalPeers.add(peerName)
+    }
+  }
+  if (tarball?.peerDependenciesMeta !== undefined) {
+    for (const [peerName, meta] of Object.entries(tarball.peerDependenciesMeta)) {
+      if (meta.optional === true) optionalPeers.add(peerName)
     }
   }
   if (optionalPeers.size > 0) {
@@ -2319,7 +2577,7 @@ function buildPackageEntry(
       const block = blocks[edge.kind]!
       // ADR-0028 INV-RESOLVE — alias slot keying + canonical value (see
       // buildSnapshotEntry / aliasedSnapshotSlotValue).
-      const seg = aliasedSnapshotSlotValue(edge, dst, sidecar)
+      const seg = aliasedSnapshotSlotValue(edge, dst, projection)
       block[seg.key] = seg.value
     }
     for (const [kind, blockName] of [['dep', 'dependencies'], ['optional', 'optionalDependencies']] as const) {
@@ -2342,6 +2600,7 @@ function buildPackageEntry(
 function buildSnapshotEntry(
   graph: Graph,
   sidecar: PnpmSidecar | undefined,
+  projection: PnpmWorkspacePeerProjection,
   node: Node,
 ): YamlMap {
   const entry: YamlMap = {}
@@ -2363,7 +2622,7 @@ function buildSnapshotEntry(
     // `<name>@<version>` value (`react-is@17.0.2`), the only form parse's
     // resolveAliasedSnapshotTarget oracle resolves; a bare dep keeps its bare
     // version under `dst.name` (byte-unchanged).
-    const seg = aliasedSnapshotSlotValue(edge, dst, sidecar)
+    const seg = aliasedSnapshotSlotValue(edge, dst, projection)
     block[seg.key] = seg.value
   }
 

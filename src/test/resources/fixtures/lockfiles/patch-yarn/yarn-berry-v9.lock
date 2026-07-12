@@ -15,7 +15,14 @@ __metadata:
 
 "lodash@npm:4.17.21":
   version: 4.17.21
-  resolution: "lodash@patch:lodash@npm%3A4.17.21#./.yarn/patches/lodash-npm-4.17.21-6382451519.patch::version=4.17.21&hash=858da5&locator=case-patch-yarn%40workspace%3A."
+  resolution: "lodash@npm:4.17.21"
   checksum: 10c0/d8cbea072bb08655bb4c989da418994b073a608dffa608b09ac04b43a791b12aeae7cd7ad919aa4c925f33b48490b5cfe6c1f71d827956071dae2e7bb3a6b74c
+  languageName: node
+  linkType: hard
+
+"lodash@patch:lodash@npm%3A4.17.21#./.yarn/patches/lodash-npm-4.17.21-6382451519.patch::locator=case-patch-yarn%40workspace%3A.":
+  version: 4.17.21
+  resolution: "lodash@patch:lodash@npm%3A4.17.21#./.yarn/patches/lodash-npm-4.17.21-6382451519.patch::version=4.17.21&hash=858da5&locator=case-patch-yarn%40workspace%3A."
+  checksum: 10c0/3e09854d347328b7e01cbdf47455491a9eebf8a7c69e79b6cbf526d953bed9aaeaa91f247c3100a50d4ddf59c95eae6c4db4f265f4ee9c8d0fb0be5c7e1a909d
   languageName: node
   linkType: hard
