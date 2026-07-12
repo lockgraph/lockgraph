@@ -1170,6 +1170,28 @@ export function rawConditionsScalarOfNode(graph: Graph, nodeId: string): string 
   return sidecarByGraph.get(graph)?.conditions?.get(nodeId)
 }
 
+export interface YarnBerryConditionsFeatureQuery {
+  readonly available: boolean
+  readonly present: boolean
+  readonly fingerprint?: string
+}
+
+/** Read-only conditions feature query for completeness assessment. */
+export function yarnBerryConditionsFeatureOf(graph: Graph): YarnBerryConditionsFeatureQuery {
+  const sidecar = sidecarByGraph.get(graph)
+  const conditions = sidecar?.conditions
+  const entries = conditions === undefined
+    ? undefined
+    : [...conditions.entries()].sort(([left], [right]) => left.localeCompare(right))
+  return {
+    available: sidecar !== undefined,
+    present: entries !== undefined && entries.length > 0,
+    ...(entries === undefined || entries.length === 0
+      ? {}
+      : { fingerprint: createHash('sha256').update(JSON.stringify(entries)).digest('hex') }),
+  }
+}
+
 export function rawDependenciesMetaBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
   const block = sidecarByGraph.get(graph)?.dependenciesMeta?.get(nodeId)
   return block === undefined ? undefined : coerceSymlMap(block)

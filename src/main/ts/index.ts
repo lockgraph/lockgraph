@@ -6,11 +6,26 @@
 // this skeleton dispatches to existing adapter parse / stringify
 // hooks without plumbing recipe primitives yet.
 
-import type { Diagnostic, Graph, Manifest, OverrideConstraint } from './graph.ts'
+import { newBuilder, type Diagnostic, type Graph, type Manifest, type OverrideConstraint } from './graph.ts'
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
 import { getManifestOverrides, mergeOverrides, rememberManifestOverrides } from './recipe/override-carrier.ts'
 import { getFlatSidecar } from './formats/_npm-core.ts'
 import { getPnpmOverridesCanonical } from './formats/_pnpm-flat-core.ts'
+import {
+  attachParsedEvidence,
+  evidenceOf,
+  internalEvidenceOf,
+  withEvidence,
+  withSourceVersion,
+} from './completeness/evidence.ts'
+import { assessConversion, type OutputProbeResult } from './completeness/assessment.ts'
+import { detectGraphFeatures } from './completeness/features.ts'
+import { authoritativePolicyOverridesOf } from './completeness/profile.ts'
+import type {
+  AssessedOutput,
+  ConvertAssessedOptions,
+  StringifyAssessedOptions,
+} from './completeness/types.ts'
 
 import * as bunText      from './formats/bun-text.ts'
 import * as npm1         from './formats/npm-1.ts'
@@ -33,6 +48,47 @@ export const version = '0.0.0'
 
 export { LockfileError, type LockfileErrorCode } from './errors.ts'
 export type { Diagnostic, Graph } from './graph.ts'
+
+export { sourceCapabilitiesOf } from './completeness/capabilities.ts'
+export { evidenceOf, withEvidence }
+export { completenessOf } from './completeness/profile.ts'
+export type {
+  ArtifactKnowledge,
+  AssessedOutput,
+  AssessmentOptions,
+  CompletenessContext,
+  CompletenessDimension,
+  CompletenessProfile,
+  CompletenessResult,
+  ConversionAssessment,
+  ConversionContract,
+  ConvertAssessedOptions,
+  EvidenceContext,
+  EvidenceInput,
+  EvidenceKind,
+  EvidenceLedger,
+  EvidenceRef,
+  Knowledge,
+  LayoutKnowledge,
+  ManifestCoverage,
+  PackageManifestEvidence,
+  PeerKnowledge,
+  PinnedTargetRequest,
+  PmConfigEvidence,
+  PolicyKnowledge,
+  RepositoryManifestEvidence,
+  RequirementAssessment,
+  RequirementStatus,
+  ResolvedTargetCapabilities,
+  SourceCapabilityResult,
+  StructuralCoverage,
+  TargetManager,
+  TargetOracleEvidence,
+  TargetProfile,
+  TargetRequest,
+  StringifyAssessedOptions,
+  Verification,
+} from './completeness/types.ts'
 
 // Registry adapter contract (Phase C) — re-exported for caller-side
 // frozen-registry construction and live-adapter authoring. Phase D-A
@@ -224,6 +280,22 @@ function parseOne(
   }
 }
 
+function observedPolicyCarrier(
+  format: FormatId,
+  graph: Graph,
+): readonly OverrideConstraint[] | null | undefined {
+  const carrier = format === 'pnpm-v5'
+    ? pnpmV5.getPnpmV5OverridesCanonical(graph)
+    : format === 'pnpm-v6' || format === 'pnpm-v9'
+      ? getPnpmOverridesCanonical(graph)
+      : format === 'bun-text'
+        ? bunText.getBunOverridesCanonical(graph)
+        : undefined
+  return format.startsWith('pnpm-') || format === 'bun-text'
+    ? carrier ?? null
+    : undefined
+}
+
 function stringifyOne(format: FormatId, graph: Graph, options: StringifyOptions): string {
   const lineEnding   = options.lineEnding
   const onDiagnostic = options.onDiagnostic
@@ -304,6 +376,7 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
   if (options.onDiagnostic !== undefined) {
     for (const d of graph.diagnostics()) options.onDiagnostic(d)
   }
+  attachParsedEvidence(graph, format, options.manifests, observedPolicyCarrier(format, graph))
   return graph
 }
 
@@ -414,4 +487,366 @@ export function convert(input: string, options: ConvertOptions): string {
     cacheKey:     options.cacheKey,
     onDiagnostic: options.onDiagnostic,
   })
+}
+
+const assessedBlockingDiagnostic = (diagnostic: Diagnostic): boolean =>
+  diagnostic.severity !== 'info'
+
+function assessedDiagnostic(
+  code: string,
+  message: string,
+  data?: Record<string, unknown>,
+): Diagnostic {
+  return {
+    code,
+    severity: 'error',
+    message,
+    ...(data === undefined ? {} : { data }),
+  }
+}
+
+function stableValue(value: unknown, stack: WeakSet<object> = new WeakSet()): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (stack.has(value)) throw new TypeError('cyclic value in canonical graph projection')
+  stack.add(value)
+  try {
+    if (Array.isArray(value)) return value.map(item => stableValue(item, stack))
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableValue(item, stack)]))
+  } finally {
+    stack.delete(value)
+  }
+}
+
+function canonicalGraphSnapshot(
+  graph: Graph,
+  contract: StringifyAssessedOptions['contract'],
+): string {
+  const nodes = [...graph.nodes()].map(node => stableValue({
+    id: node.id,
+    name: node.name,
+    version: node.version,
+    peerContext: node.peerContext,
+    ...(node.patch === undefined ? {} : { patch: node.patch }),
+    ...(node.source === undefined ? {} : { source: node.source }),
+    ...(node.workspacePath === undefined ? {} : { workspacePath: node.workspacePath }),
+  }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+  const edges = [...graph.nodes()].flatMap(node => [...graph.out(node.id)])
+    .map(edge => stableValue({
+      src: edge.src,
+      dst: edge.dst,
+      kind: edge.kind,
+      ...(edge.attrs === undefined ? {} : { attrs: {
+        ...(edge.attrs.range === undefined ? {} : { range: edge.attrs.range }),
+        ...(contract === 'snapshot' || edge.attrs.overrideRange === undefined
+          ? {}
+          : { overrideRange: edge.attrs.overrideRange }),
+        ...(edge.attrs.optional === undefined ? {} : { optional: edge.attrs.optional }),
+        ...(edge.attrs.workspace === undefined ? {} : { workspace: edge.attrs.workspace }),
+        ...(edge.attrs.alias === undefined ? {} : { alias: edge.attrs.alias }),
+        ...(edge.attrs.workspaceRange === undefined ? {} : {
+          workspaceRange: edge.attrs.workspaceRange,
+        }),
+      } }),
+    }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+  const tarballs = [...graph.tarballs()].map(([key, payload]) => [key, stableValue({
+    ...(payload.integrity === undefined ? {} : { integrity: payload.integrity }),
+    ...(payload.berryChecksumCacheKey === undefined ? {} : {
+      berryChecksumCacheKey: payload.berryChecksumCacheKey,
+    }),
+    ...(payload.cpu === undefined ? {} : { cpu: payload.cpu }),
+    ...(payload.os === undefined ? {} : { os: payload.os }),
+    ...(payload.libc === undefined ? {} : { libc: payload.libc }),
+    ...(payload.hasInstallScript === undefined ? {} : {
+      hasInstallScript: payload.hasInstallScript,
+    }),
+    ...(payload.bundledDependencies === undefined ? {} : {
+      bundledDependencies: payload.bundledDependencies,
+    }),
+    ...(payload.resolution === undefined ? {} : { resolution: payload.resolution }),
+    ...(payload.peerDependencies === undefined ? {} : {
+      peerDependencies: payload.peerDependencies,
+    }),
+    ...(payload.peerDependenciesMeta === undefined ? {} : {
+      peerDependenciesMeta: payload.peerDependenciesMeta,
+    }),
+  })] as const)
+    .sort(([left], [right]) => left.localeCompare(right))
+  return JSON.stringify({
+    nodes,
+    edges,
+    roots: [...graph.roots()].sort(),
+    tarballs,
+  })
+}
+
+function overrideSetKey(overrides: readonly OverrideConstraint[], target: FormatId): string {
+  const manager = target === 'bun-text' ? 'bun' : target.startsWith('pnpm-') ? 'pnpm' : 'npm'
+  const origin = manager === 'bun' ? 'npm' : manager
+  const entries = overrides.map((override, index) => ({
+    key: JSON.stringify([
+      override.package,
+      override.parentPath ?? [],
+      override.versionCondition ?? '',
+      override.to,
+      override.selfRef ?? false,
+      override.origin ?? origin,
+    ]),
+    order: override.captureIndex ?? index,
+  }))
+  return manager === 'bun'
+    ? entries.sort((left, right) => left.order - right.order).map(entry => entry.key).join('\n')
+    : entries.map(entry => entry.key).sort().join('\n')
+}
+
+function probeEligible(assessment: AssessedOutput['assessment']): boolean {
+  return assessment.requirements.every(item =>
+    item.key === 'target-output-probe' || item.status === 'satisfied')
+}
+
+function outputProbe(
+  graph: Graph,
+  output: string,
+  target: FormatId,
+  contract: StringifyAssessedOptions['contract'],
+  sourceEvidence: StringifyAssessedOptions['evidence'],
+  diagnostics: Diagnostic[],
+): OutputProbeResult {
+  if (!checkOne(target, output)) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_FORMAT_REJECTED',
+      'target adapter rejected emitted output',
+      { target },
+    ))
+    return { accepted: false, diagnostics }
+  }
+
+  let reparsed: Graph
+  try {
+    reparsed = parse(target, output, { onDiagnostic: diagnostic => diagnostics.push(diagnostic) })
+  } catch (error) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_PARSE_FAILED',
+      error instanceof Error ? error.message : 'target output parse failed',
+      { target },
+    ))
+    return { accepted: false, diagnostics }
+  }
+
+  if (canonicalGraphSnapshot(graph, contract) !== canonicalGraphSnapshot(reparsed, contract)) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_GRAPH_MISMATCH',
+      'target output does not preserve the canonical graph',
+      { target },
+    ))
+  }
+
+  const sourceState = internalEvidenceOf(sourceEvidence ?? evidenceOf(graph))
+  const sourceFeatureGraph = sourceState.anchor ?? graph
+  const sourceFeatures = detectGraphFeatures(sourceFeatureGraph)
+  const targetFeatures = detectGraphFeatures(reparsed)
+  const sidecarFacts = [
+    ['conditions', sourceFeatures.attribution.berryConditions, targetFeatures.attribution.berryConditions],
+    ['catalogs', sourceFeatures.attribution.pnpmCatalogs, targetFeatures.attribution.pnpmCatalogs],
+  ] as const
+  for (const [feature, sourceFact, targetFact] of sidecarFacts) {
+    if (sourceFact.present !== targetFact.present
+      || (sourceFact.present && targetFact.fingerprint !== sourceFact.fingerprint)) {
+      diagnostics.push(assessedDiagnostic(
+        'COMPLETENESS_OUTPUT_FEATURE_MISMATCH',
+        'target output changes or drops a sidecar-owned graph feature',
+        { target, feature },
+      ))
+    }
+  }
+  if (sourceFeatures.unmodeled.length > 0 || targetFeatures.unmodeled.length > 0) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_FEATURE_UNMODELED',
+      'output comparison encountered an unmodeled graph fact',
+      { target },
+    ))
+  }
+
+  if (contract !== 'snapshot') {
+    const authority = authoritativePolicyOverridesOf(sourceState)
+    if (authority === undefined) {
+      diagnostics.push(assessedDiagnostic(
+        'COMPLETENESS_POLICY_AUTHORITY_MISSING',
+        'authored override authority is unavailable for output comparison',
+      ))
+    } else {
+      const targetState = internalEvidenceOf(evidenceOf(reparsed))
+      const targetCarrier = targetState.observedPolicyCarrier
+      const expectsCarrierAttribution = target.startsWith('pnpm-') || target === 'bun-text'
+      if (expectsCarrierAttribution && targetCarrier === undefined) {
+        diagnostics.push(assessedDiagnostic(
+          'COMPLETENESS_OUTPUT_POLICY_ATTRIBUTION_MISSING',
+          'target policy carrier attribution is unavailable',
+          { target },
+        ))
+      } else if (targetCarrier !== undefined) {
+        const carrierMatches = targetCarrier.present
+          ? overrideSetKey(targetCarrier.overrides, target) === overrideSetKey(authority, target)
+          : authority.length === 0
+        if (!carrierMatches) {
+          diagnostics.push(assessedDiagnostic(
+            'COMPLETENESS_OUTPUT_POLICY_MISMATCH',
+            'target lock policy carrier differs from authored authority',
+            { target },
+          ))
+        }
+      }
+    }
+  }
+
+  return {
+    accepted: !diagnostics.some(assessedBlockingDiagnostic),
+    diagnostics,
+  }
+}
+
+function stringifyAssessedInternal(
+  graph: Graph,
+  options: StringifyAssessedOptions,
+  onDiagnostic?: (diagnostic: Diagnostic) => void,
+): AssessedOutput {
+  const preflight = assessConversion(graph, options)
+  if (!probeEligible(preflight)) return { assessment: preflight }
+
+  const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
+  const authority = options.contract === 'snapshot'
+    ? undefined
+    : authoritativePolicyOverridesOf(state)
+  const diagnostics: Diagnostic[] = []
+  let output: string
+  try {
+    output = stringifyOne(options.target.format, graph, {
+      lineEnding: options.lineEnding,
+      cacheKey: options.cacheKey,
+      overrides: authority === undefined ? undefined : [...authority],
+      onDiagnostic: diagnostic => {
+        diagnostics.push(diagnostic)
+        onDiagnostic?.(diagnostic)
+      },
+    })
+  } catch (error) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_EMIT_FAILED',
+      error instanceof Error ? error.message : 'target output emit failed',
+      { target: options.target.format },
+    ))
+    const assessment = assessConversion(graph, options, {
+      outputProbe: { accepted: false, diagnostics },
+    })
+    return { assessment }
+  }
+
+  let probe: OutputProbeResult
+  try {
+    probe = outputProbe(
+      graph,
+      output,
+      options.target.format,
+      options.contract,
+      options.evidence,
+      diagnostics,
+    )
+  } catch (error) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_PROBE_FAILED',
+      error instanceof Error ? error.message : 'target output comparison failed',
+      { target: options.target.format },
+    ))
+    probe = { accepted: false, diagnostics }
+  }
+  const assessment = assessConversion(graph, options, { outputProbe: probe })
+  return assessment.status === 'satisfied' ? { output, assessment } : { assessment }
+}
+
+/** Emits only when canonical and target conversion requirements are satisfied. */
+export function stringifyAssessed(
+  graph: Graph,
+  options: StringifyAssessedOptions,
+): AssessedOutput {
+  return stringifyAssessedInternal(graph, options)
+}
+
+function failedAssessedConversion(
+  options: ConvertAssessedOptions,
+  diagnostic: Diagnostic,
+): AssessedOutput {
+  options.onDiagnostic?.(diagnostic)
+  const builder = newBuilder()
+  builder.diagnostic({ ...diagnostic, severity: 'warning' })
+  const graph = builder.seal()
+  const assessment = assessConversion(graph, {
+    contract: options.contract,
+    target: { format: options.to, managerVersion: options.targetVersion },
+  }, {
+    outputProbe: { accepted: false, diagnostics: [diagnostic] },
+  })
+  return { assessment }
+}
+
+/** Parses and emits only when the requested conversion contract is satisfied. */
+export function convertAssessed(
+  input: string,
+  options: ConvertAssessedOptions,
+): AssessedOutput {
+  const from = options.from ?? detect(input)
+  if (from === undefined) {
+    return failedAssessedConversion(options, assessedDiagnostic(
+      'COMPLETENESS_SOURCE_FORMAT_UNKNOWN',
+      'source lockfile format was not detected',
+    ))
+  }
+  if (options.manifestCoverage === 'complete' && options.manifests === undefined) {
+    return failedAssessedConversion(options, assessedDiagnostic(
+      'COMPLETENESS_MANIFESTS_MISSING',
+      'complete manifest coverage requires supplied manifests',
+    ))
+  }
+
+  let graph: Graph
+  try {
+    graph = parse(from, input, {
+      workspaceRoot: options.workspaceRoot,
+      manifests: options.manifests === undefined ? undefined : { ...options.manifests },
+      onDiagnostic: options.onDiagnostic,
+    })
+  } catch (error) {
+    return failedAssessedConversion(options, assessedDiagnostic(
+      'COMPLETENESS_SOURCE_PARSE_FAILED',
+      error instanceof Error ? error.message : 'source lockfile parse failed',
+      { source: from },
+    ))
+  }
+
+  let evidence = evidenceOf(graph)
+  try {
+    if (options.sourceVersion !== undefined) evidence = withSourceVersion(evidence, options.sourceVersion)
+    if (options.manifestCoverage === 'complete' && options.manifests !== undefined) {
+      evidence = withEvidence(evidence, {
+        kind: 'repository-manifests',
+        manifests: options.manifests,
+        coverage: 'complete',
+      })
+    }
+  } catch (error) {
+    return failedAssessedConversion(options, assessedDiagnostic(
+      'COMPLETENESS_EVIDENCE_INVALID',
+      error instanceof Error ? error.message : 'conversion evidence is invalid',
+    ))
+  }
+
+  return stringifyAssessedInternal(graph, {
+    contract: options.contract,
+    target: { format: options.to, managerVersion: options.targetVersion },
+    evidence,
+    lineEnding: options.lineEnding,
+    cacheKey: options.cacheKey,
+  }, options.onDiagnostic)
 }

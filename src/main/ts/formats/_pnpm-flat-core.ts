@@ -38,6 +38,7 @@
 // YAML in/out is delegated to `_pnpm-yaml.ts`; this module owns only
 // the higher-level pnpm family semantics.
 
+import { createHash } from 'node:crypto'
 import semver from 'semver'
 import {
   GraphError,
@@ -319,6 +320,39 @@ const sidecarByGraph = new WeakMap<Graph, PnpmSidecar>()
 
 function rememberSidecar(graph: Graph, sidecar: PnpmSidecar): void {
   sidecarByGraph.set(graph, sidecar)
+}
+
+export interface PnpmCatalogFeatureQuery {
+  readonly available: boolean
+  readonly present: boolean
+  readonly fingerprint?: string
+}
+
+/** Read-only catalog feature query for completeness assessment. */
+export function pnpmCatalogFeatureOf(graph: Graph): PnpmCatalogFeatureQuery {
+  const sidecar = sidecarByGraph.get(graph)
+  const catalogs = sidecar?.catalogs
+  const present = catalogs !== undefined && Object.keys(catalogs).length > 0
+  return {
+    available: sidecar !== undefined,
+    present,
+    ...(present ? { fingerprint: pnpmCatalogFingerprint(catalogs) } : {}),
+  }
+}
+
+function pnpmCatalogFingerprint(catalogs: YamlMap): string {
+  const canonical = canonicalFeatureValue(catalogs)
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+}
+
+function canonicalFeatureValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalFeatureValue)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalFeatureValue(item)]))
+  }
+  return value
 }
 
 /**
