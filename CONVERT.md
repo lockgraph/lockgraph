@@ -121,6 +121,37 @@ Every other family (npm, berry, pnpm, bun) encodes its own root and workspace
 members in the lock, so `manifests` is optional for them and only refines
 `dev`/`peer`/`optional` classification of workspace-member edges.
 
+## Project companion projection
+
+`projectCompanionsOf(graph, { target, evidence })` projects an authoritative
+canonical override policy onto the target manager's project configuration. It
+is pure and returns immutable `set` operations; it never reads or writes files.
+Each operation replaces only the owned value at its JSON-pointer-shaped path,
+creating intermediate containers while preserving sibling fields.
+
+| Target | Companion operation |
+| --- | --- |
+| npm with override support | `package.json` → `/overrides` |
+| Yarn Classic / Berry | `package.json` → `/resolutions` |
+| pnpm ≤10 | `package.json` → `/pnpm/overrides` |
+| pnpm ≥11 | `pnpm-workspace.yaml` → `/overrides` |
+| Bun | `package.json` → `/overrides` |
+
+The result is gated independently from full project conversion: a proven
+companion plan may be returned while the broader `project` contract remains
+unassessed for package metadata. No patch is returned for ambiguous authority,
+an unpinned load-bearing target generation, unsupported policy, or a lossy
+grammar projection. Examples that fail closed include nested Bun rules, npm
+`$name` references outside npm, Yarn Classic descriptor predicates and direct
+dependency overrides, and Yarn Berry selectors deeper than its supported
+single-parent form.
+
+For pnpm, the same canonical authority feeds the companion operation, the lock
+`overrides:` carrier, and importer specifiers. This is required because frozen
+install compares importer specifiers after applying the configured override;
+preserving the original direct-dependency range would make an otherwise
+matching companion and lock carrier fail `--frozen-lockfile`.
+
 ## What is pulled from the registry — and why
 
 **Plain conversion never touches the registry.** Every format carries an

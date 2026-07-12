@@ -149,6 +149,19 @@ describe('completenessOf', () => {
       },
     })
     expect(completenessOf(graph, { evidence: missingWorkspace }).profile.projectTopology).toBe('partial')
+
+    const conflictingName = withEvidence(evidenceOf(graph), {
+      kind: 'repository-manifests',
+      coverage: 'complete',
+      manifests: {
+        '': {
+          name: 'other-project',
+          version: '0.0.0',
+          dependencies: { lodash: '4.17.21', ms: '2.1.3' },
+        },
+      },
+    })
+    expect(completenessOf(graph, { evidence: conflictingName }).profile.projectTopology).toBe('partial')
   })
 
   it('upgrades edge kinds only when every package edge is classified', () => {

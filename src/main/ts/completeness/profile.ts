@@ -3,6 +3,7 @@ import {
   type Diagnostic,
   type Graph,
   type Manifest,
+  type Node,
   type OverrideConstraint,
 } from '../graph.ts'
 import { getBunOverridesCanonical } from '../formats/bun-text.ts'
@@ -223,11 +224,18 @@ function repositoryPreservedInGraph(graph: Graph, state: InternalEvidenceState):
   for (const [path, manifest] of manifestByPath) {
     const node = nodesByPath.get(path)
     if (node === undefined) return false
-    if (manifest.name !== undefined && manifest.name !== node.name) return false
+    if (manifest.name !== undefined && manifest.name !== node.name
+      && !workspaceNameIsPlaceholder(node)) return false
     if (manifest.version !== undefined && manifest.version !== node.version) return false
     if (!declaredProjectEdgesPreserved(graph, node.id, manifest)) return false
   }
   return true
+}
+
+function workspaceNameIsPlaceholder(node: Node): boolean {
+  if (node.workspacePath === undefined) return false
+  return node.name === node.workspacePath
+    || (node.workspacePath === '' && node.name === '.')
 }
 
 function packageEdgesClassified(graph: Graph, state: InternalEvidenceState): boolean {
@@ -261,7 +269,7 @@ function repositoryRootComplete(graph: Graph, state: InternalEvidenceState): boo
   if (state.repositoryManifests?.coverage !== 'complete' || manifest === undefined) return false
   const root = [...graph.nodes()].find(node => node.workspacePath === '')
   if (root === undefined) return false
-  return (manifest.name === undefined || manifest.name === root.name)
+  return (manifest.name === undefined || manifest.name === root.name || workspaceNameIsPlaceholder(root))
     && (manifest.version === undefined || manifest.version === root.version)
 }
 

@@ -264,3 +264,22 @@ export interface AssessedOutput {
   readonly output?: string
   readonly assessment: ConversionAssessment
 }
+
+export interface ProjectCompanionOptions {
+  readonly target: TargetRequest
+  readonly evidence?: EvidenceContext
+}
+
+export interface CompanionSetOperation {
+  readonly path: 'package.json' | 'pnpm-workspace.yaml'
+  readonly op: 'set'
+  readonly pointer: string
+  readonly value: Readonly<Record<string, unknown>>
+}
+
+export interface ProjectCompanionResult {
+  readonly patches?: readonly CompanionSetOperation[]
+  readonly requirement: RequirementAssessment
+  readonly target: TargetProfile
+  readonly diagnostics: readonly Diagnostic[]
+}

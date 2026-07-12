@@ -493,7 +493,10 @@ function targetPolicyAbsenceProven(
 function policyProjectionRequirement(
   state: InternalEvidenceState,
   target: TargetProfile,
+  runtimeRequirements: readonly RequirementAssessment[],
 ): RequirementAssessment {
+  const supplied = runtimeRequirements.find(candidate => candidate.key === 'target:resolution-policy')
+  if (supplied !== undefined) return supplied
   if (!policyPresent(state)) {
     return targetPolicyAbsenceProven(state, target)
       ? requirement('target:resolution-policy', 'satisfied', 'resolutionPolicy')
@@ -736,19 +739,29 @@ export function assessConversion(
     ))
   }
 
-  if (options.contract !== 'snapshot') {
-    requirements.push(policyProjectionRequirement(state, resolvedTarget.target))
-  }
-
   const runtimeRequirements = runtime.targetRequirements ?? []
+  const companion = runtimeRequirements.find(item => item.key === 'target:companion-projection')
+  if (companion !== undefined && (options.contract === 'project' || options.contract === 'frozen')) {
+    const index = requirements.findIndex(item => item.key === companion.key)
+    if (index >= 0) requirements[index] = companion
+  }
+  if (options.contract !== 'snapshot') {
+    requirements.push(policyProjectionRequirement(state, resolvedTarget.target, runtimeRequirements))
+  }
   const workspacePeer = workspacePeerProjectionRequirement(
     graph,
     resolvedTarget.target,
     runtimeRequirements,
   )
   if (workspacePeer !== undefined) requirements.push(workspacePeer)
-  const consumedRuntimeKey = workspacePeer?.key
-  requirements.push(...runtimeRequirements.filter(item => item.key !== consumedRuntimeKey))
+  const consumedRuntimeKeys = new Set([
+    workspacePeer?.key,
+    options.contract === 'snapshot' ? undefined : 'target:resolution-policy',
+    options.contract === 'project' || options.contract === 'frozen'
+      ? 'target:companion-projection'
+      : undefined,
+  ])
+  requirements.push(...runtimeRequirements.filter(item => !consumedRuntimeKeys.has(item.key)))
   requirements.push(outputProbeRequirement(runtime.outputProbe))
 
   const frozenRequirements = Object.freeze(requirements.map(item => Object.freeze({

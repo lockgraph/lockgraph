@@ -13,6 +13,21 @@ const PROJECT_ROOT  = path.resolve(HERE, '../../../..')
 const TEMPLATES_DIR = path.join(HERE, 'templates')
 const LOCKFILES_DIR = path.join(HERE, 'lockfiles')
 const YARN_BIN_DIR  = path.resolve(PROJECT_ROOT, '.cache/yarn-bin')
+const REPORT_FILE   = path.join(HERE, '_report.json')
+
+let activeReport
+
+const USAGE = `Usage:
+  npm run build:fixtures -- --cases <name-or-glob...> [--adapters <id...>]
+  npm run build:fixtures -- --adapters <id...> [--cases <name-or-glob...>]
+
+Options:
+  --cases       Exact case names or patterns using * and ?
+  --adapters    Exact adapter ids
+  --plan        Print the selected cells without running package managers
+  --help        Print this help
+
+Positional arguments are treated as case selectors.`
 
 // (adapter-id) → canonical writer config. Mirrors spec/08-test-bench.md.
 const ADAPTERS = [
@@ -91,12 +106,125 @@ function loadCaseConfig (caseName) {
   return JSON.parse(fs.readFileSync(file, 'utf-8'))
 }
 
+function parseList (values) {
+  return values.flatMap(value => value.split(',')).map(value => value.trim()).filter(Boolean)
+}
+
+function parseArgs (argv) {
+  const cases = []
+  const adapters = []
+  let plan = false
+  let help = false
+
+  for (let index = 0; index < argv.length;) {
+    const arg = argv[index]
+    if (arg === '--plan') {
+      plan = true
+      index++
+      continue
+    }
+    if (arg === '--help' || arg === '-h') {
+      help = true
+      index++
+      continue
+    }
+    if (arg === '--cases' || arg === '--adapters') {
+      const target = arg === '--cases' ? cases : adapters
+      const values = []
+      index++
+      while (index < argv.length && !argv[index].startsWith('--')) {
+        values.push(argv[index])
+        index++
+      }
+      if (values.length === 0) throw new Error(`${arg} requires at least one value`)
+      target.push(...parseList(values))
+      continue
+    }
+    if (arg.startsWith('-')) throw new Error(`unknown option: ${arg}`)
+    cases.push(...parseList([arg]))
+    index++
+  }
+
+  return { cases: [...new Set(cases)], adapters: [...new Set(adapters)], plan, help }
+}
+
+function matchesCaseSelector (caseName, selector) {
+  const source = selector
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.')
+  return new RegExp(`^${source}$`).test(caseName)
+}
+
+function selectPlans (selection) {
+  const allCases = listCases()
+  const adapterIds = new Set(ADAPTERS.map(adapter => adapter.id))
+
+  for (const selector of selection.cases) {
+    if (!allCases.some(caseName => matchesCaseSelector(caseName, selector))) {
+      throw new Error(`case selector matched nothing: ${selector}`)
+    }
+  }
+  for (const adapterId of selection.adapters) {
+    if (!adapterIds.has(adapterId)) throw new Error(`unknown adapter id: ${adapterId}`)
+  }
+
+  const selectedCases = selection.cases.length === 0
+    ? allCases
+    : allCases.filter(caseName => selection.cases.some(selector => matchesCaseSelector(caseName, selector)))
+  const selectedAdapters = new Set(selection.adapters)
+  const plans = selectedCases.map(caseName => {
+    const caseConfig = loadCaseConfig(caseName)
+    const configured = Array.isArray(caseConfig.adapters)
+      ? ADAPTERS.filter(adapter => caseConfig.adapters.includes(adapter.id))
+      : ADAPTERS
+    const adapters = selectedAdapters.size === 0
+      ? configured
+      : configured.filter(adapter => selectedAdapters.has(adapter.id))
+    return { caseName, caseConfig, adapters }
+  }).filter(plan => plan.adapters.length > 0)
+
+  if (plans.length === 0) throw new Error('selection produced no fixture cells')
+  return plans
+}
+
 function postProcessLockfile (file, caseConfig) {
   if (caseConfig.post?.lineEndings !== 'crlf') return
   const input = fs.readFileSync(file, 'utf8')
   const output = input.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')
   fs.writeFileSync(file, output)
 }
+
+function writeReport (report) {
+  const ok = report.runs.filter(run => run.ok).length
+  const skipped = report.runs.filter(run => run.skipped).length
+  const failed = report.runs.length - ok - skipped
+  const output = {
+    ...report,
+    summary: {
+      expected: report.expected,
+      completed: report.runs.length,
+      remaining: report.expected - report.runs.length,
+      ok,
+      skipped,
+      failed,
+    },
+  }
+  fs.writeFileSync(REPORT_FILE, `${JSON.stringify(output, null, 2)}\n`)
+}
+
+function interruptReport (signal) {
+  if (activeReport) {
+    activeReport.status = 'interrupted'
+    activeReport.completedAt = new Date().toISOString()
+    activeReport.signal = signal
+    writeReport(activeReport)
+  }
+  process.exit(signal === 'SIGINT' ? 130 : 143)
+}
+
+process.once('SIGINT', () => interruptReport('SIGINT'))
+process.once('SIGTERM', () => interruptReport('SIGTERM'))
 
 async function runOne (caseName, caseConfig, adapter) {
   if (adapter.skip) return { ok: false, skipped: true, reason: adapter.skip }
@@ -138,28 +266,62 @@ async function runOne (caseName, caseConfig, adapter) {
     postProcessLockfile(outFile, caseConfig)
     return { ok: true }
   } catch (err) {
-    return { ok: false, error: err.message?.split('\n')[0] || String(err), stderr: err.stderr?.toString().slice(-500) }
+    return {
+      ok: false,
+      code: err.code,
+      status: err.status,
+      signal: err.signal,
+      error: err.message || String(err),
+      stdout: err.stdout?.toString(),
+      stderr: err.stderr?.toString(),
+    }
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true })
   }
 }
 
 async function main () {
-  const filter = process.argv.slice(2)
-  const cases = listCases().filter(c => filter.length === 0 || filter.includes(c))
-  const report = []
+  const selection = parseArgs(process.argv.slice(2))
+  if (selection.help) {
+    console.log(USAGE)
+    return
+  }
+  if (selection.cases.length === 0 && selection.adapters.length === 0) {
+    throw new Error(`fixture selection is required\n\n${USAGE}`)
+  }
+  const plans = selectPlans(selection)
+  const cases = plans.map(plan => plan.caseName)
+  const cells = plans.flatMap(plan => plan.adapters.map(adapter => ({ case: plan.caseName, adapter: adapter.id })))
+  if (selection.plan) {
+    console.log(JSON.stringify({
+      selection: { cases: selection.cases, adapters: selection.adapters },
+      expected: cells.length,
+      cells,
+    }, null, 2))
+    return
+  }
+  const report = {
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    selection: { cases: selection.cases, adapters: selection.adapters },
+    cases,
+    expected: plans.reduce((total, plan) => total + plan.adapters.length, 0),
+    active: null,
+    runs: [],
+  }
+  activeReport = report
+  writeReport(report)
 
-  for (const caseName of cases) {
-    const caseConfig = loadCaseConfig(caseName)
-    const adapters = Array.isArray(caseConfig.adapters)
-      ? ADAPTERS.filter(adapter => caseConfig.adapters.includes(adapter.id))
-      : ADAPTERS
-
+  for (const { caseName, caseConfig, adapters } of plans) {
     for (const adapter of adapters) {
       const start = Date.now()
+      let attempts = 1
+      report.active = { case: caseName, adapter: adapter.id, startedAt: new Date(start).toISOString() }
+      writeReport(report)
       process.stdout.write(`[${caseName}] ${adapter.id} ... `)
       let result = await runOne(caseName, caseConfig, adapter)
       if (!result.ok && result.error?.includes('ETIMEDOUT')) {
+        attempts++
         process.stdout.write(`retry (${Date.now() - start}ms) ... `)
         result = await runOne(caseName, caseConfig, adapter)
       }
@@ -171,16 +333,29 @@ async function main () {
       } else {
         process.stdout.write(`FAIL (${ms}ms): ${result.error}\n`)
       }
-      report.push({ case: caseName, adapter: adapter.id, ms, ...result })
+      report.runs.push({ case: caseName, adapter: adapter.id, attempts, ms, ...result })
+      report.active = null
+      writeReport(report)
     }
   }
 
-  const ok      = report.filter(r => r.ok).length
-  const skipped = report.filter(r => r.skipped).length
-  const fail    = report.length - ok - skipped
-  console.log(`\n${ok}/${report.length} ok, ${skipped} skipped, ${fail} failed`)
-  fs.writeFileSync(path.join(HERE, '_report.json'), JSON.stringify(report, null, 2))
-  process.exit(fail === 0 ? 0 : 1)
+  const ok      = report.runs.filter(run => run.ok).length
+  const skipped = report.runs.filter(run => run.skipped).length
+  const failed  = report.runs.length - ok - skipped
+  report.status = failed === 0 ? 'passed' : 'failed'
+  report.completedAt = new Date().toISOString()
+  writeReport(report)
+  console.log(`\n${ok}/${report.runs.length} ok, ${skipped} skipped, ${failed} failed`)
+  process.exit(failed === 0 ? 0 : 1)
 }
 
-main().catch(e => { console.error(e); process.exit(1) })
+main().catch(error => {
+  if (activeReport) {
+    activeReport.status = 'errored'
+    activeReport.completedAt = new Date().toISOString()
+    activeReport.fatal = error.stack || String(error)
+    writeReport(activeReport)
+  }
+  console.error(error)
+  process.exit(1)
+})

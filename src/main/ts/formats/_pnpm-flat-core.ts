@@ -62,6 +62,7 @@ import {
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
+import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   DEFAULT_NPM_REGISTRY,
@@ -143,6 +144,7 @@ export interface PnpmWorkspacePeerProjection {
 export interface PnpmFamilyStringifyInternalOptions {
   readonly workspacePeerProjection?: PnpmWorkspacePeerProjection
   readonly workspacePeerEvidence?: PnpmWorkspacePeerProjectionEvidence
+  readonly workspaceNames?: ReadonlyMap<string, string>
 }
 
 export interface PnpmManifest {
@@ -1120,7 +1122,15 @@ export function stringifyFamily(
   // importers vs collapsed dependencies — v9 always emits importers; v6
   // collapses single-importer to top-level `dependencies` (plus any
   // workspace-member importers separately).
-  const rootImporterEntry = buildImporterEntry(graph, sidecar, workspacePeerProjection, rootNode, '.')
+  const rootImporterEntry = buildImporterEntry(
+    graph,
+    sidecar,
+    workspacePeerProjection,
+    rootNode,
+    '.',
+    options.overrides,
+    internal.workspaceNames,
+  )
 
   if (shape.topLevelShape === 'dependencies-collapsed') {
     const hasMultiImporters = workspaceNodes.length > 0
@@ -1136,7 +1146,15 @@ export function stringifyFamily(
       }
       for (const wsNode of workspaceNodes) {
         const wsPath = wsNode.workspacePath ?? wsNode.name
-        importers[wsPath] = buildImporterEntry(graph, sidecar, workspacePeerProjection, wsNode, wsPath)
+        importers[wsPath] = buildImporterEntry(
+          graph,
+          sidecar,
+          workspacePeerProjection,
+          wsNode,
+          wsPath,
+          options.overrides,
+          internal.workspaceNames,
+        )
       }
       out.importers = sortRecord(importers) as YamlMap
     } else {
@@ -1157,7 +1175,15 @@ export function stringifyFamily(
     }
     for (const wsNode of workspaceNodes) {
       const wsPath = wsNode.workspacePath ?? wsNode.name
-      importers[wsPath] = buildImporterEntry(graph, sidecar, workspacePeerProjection, wsNode, wsPath)
+      importers[wsPath] = buildImporterEntry(
+        graph,
+        sidecar,
+        workspacePeerProjection,
+        wsNode,
+        wsPath,
+        options.overrides,
+        internal.workspaceNames,
+      )
     }
     out.importers = sortRecord(importers) as YamlMap
   }
@@ -2379,6 +2405,8 @@ function buildImporterEntry(
   projection: PnpmWorkspacePeerProjection,
   node: Node | undefined,
   importerPath: string,
+  overrides: readonly OverrideConstraint[] | undefined,
+  workspaceNames: ReadonlyMap<string, string> | undefined,
 ): YamlMap {
   const entry: YamlMap = {}
   if (node === undefined) return entry
@@ -2419,9 +2447,18 @@ function buildImporterEntry(
     // capture is already alias-consistent (`<dst.name>@…`). Non-aliased edges
     // keep the round-trip-faithful capture verbatim.
     const captureIsAliasConsistent = edgeSc?.resolvedVersion?.startsWith(`${dst.name}@`) === true
-    const specifier = isAliased
+    const declaredSpecifier = isAliased
       ? (range ?? edgeSc?.specifier ?? dst.version)
       : (edgeSc?.specifier ?? range ?? dst.version)
+    const override = overrides === undefined
+      ? undefined
+      : governingOverrideFor(
+          slot.key,
+          [workspaceNames?.get(node.id) ?? node.name],
+          overrides,
+          declaredSpecifier,
+        )
+    const specifier = override?.to ?? declaredSpecifier
     const version = isWorkspaceTarget
       ? `link:${relativeImporterPath(importerPath, dst.workspacePath ?? dst.name)}`
       : isAliased

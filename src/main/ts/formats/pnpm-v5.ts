@@ -82,6 +82,7 @@ import {
 } from '../graph.ts'
 import { emitSriForRegistry } from '../recipe/integrity.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
+import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
 import { LockfileError } from '../errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
@@ -136,6 +137,10 @@ export interface PnpmV5StringifyOptions {
    *  lock-borne `overrides:` block (caller wins per key). pnpm 6–7 read this
    *  top-level block and frozen-compare it against config. */
   overrides?: OverrideConstraint[]
+}
+
+export interface PnpmV5StringifyInternalOptions {
+  readonly workspaceNames?: ReadonlyMap<string, string>
 }
 
 export interface PnpmV5Manifest {
@@ -526,7 +531,11 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
   }
 }
 
-export function stringify(graph: Graph, options: PnpmV5StringifyOptions = {}): string {
+export function stringify(
+  graph: Graph,
+  options: PnpmV5StringifyOptions = {},
+  internal: PnpmV5StringifyInternalOptions = {},
+): string {
   const sidecar = sidecarByGraph.get(graph)
   const emitDiagnostic = (diagnostic: Diagnostic): void => {
     options.onDiagnostic?.(diagnostic)
@@ -592,15 +601,36 @@ export function stringify(graph: Graph, options: PnpmV5StringifyOptions = {}): s
   const hasMulti = workspaceNodes.length > 0
   if (hasMulti) {
     const importers: YamlMap = {}
-    importers['.'] = buildImporterEntry(graph, sidecar, rootNode, '.')
+    importers['.'] = buildImporterEntry(
+      graph,
+      sidecar,
+      rootNode,
+      '.',
+      options.overrides,
+      internal.workspaceNames,
+    )
     for (const wsNode of workspaceNodes) {
       const wsPath = wsNode.workspacePath ?? wsNode.name
-      importers[wsPath] = buildImporterEntry(graph, sidecar, wsNode, wsPath)
+      importers[wsPath] = buildImporterEntry(
+        graph,
+        sidecar,
+        wsNode,
+        wsPath,
+        options.overrides,
+        internal.workspaceNames,
+      )
     }
     out.importers = sortRecord(importers) as YamlMap
   } else {
     // Single-importer collapsed-root: top-level specifiers + deps blocks.
-    const rootEntry = buildImporterEntry(graph, sidecar, rootNode, '.')
+    const rootEntry = buildImporterEntry(
+      graph,
+      sidecar,
+      rootNode,
+      '.',
+      options.overrides,
+      internal.workspaceNames,
+    )
     if (rootEntry.specifiers !== undefined) out.specifiers = rootEntry.specifiers
     else out.specifiers = {}
     if (rootEntry.dependencies !== undefined) out.dependencies = rootEntry.dependencies
@@ -1102,6 +1132,8 @@ function buildImporterEntry(
   sidecar: PnpmV5Sidecar | undefined,
   node: Node | undefined,
   importerPath: string,
+  overrides: readonly OverrideConstraint[] | undefined,
+  workspaceNames: ReadonlyMap<string, string> | undefined,
 ): YamlMap {
   const entry: YamlMap = {}
   if (node === undefined) return entry
@@ -1140,9 +1172,18 @@ function buildImporterEntry(
     const range = edge.attrs?.range
     const specifierFromSidecar = importerSpecs?.[slot.key]
     const captureIsAliasConsistent = edgeSc?.resolvedVersion?.startsWith(`${dst.name}@`) === true
-    const specifier = isAliased
+    const declaredSpecifier = isAliased
       ? (range ?? specifierFromSidecar ?? edgeSc?.specifier ?? dst.version)
       : (edgeSc?.specifier ?? specifierFromSidecar ?? range ?? dst.version)
+    const override = overrides === undefined
+      ? undefined
+      : governingOverrideFor(
+          slot.key,
+          [workspaceNames?.get(node.id) ?? node.name],
+          overrides,
+          declaredSpecifier,
+        )
+    const specifier = override?.to ?? declaredSpecifier
     const version = isWorkspaceTarget
       ? `link:${relativeImporterPath(importerPath, dst.workspacePath ?? dst.name)}`
       : isAliased

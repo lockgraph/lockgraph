@@ -8,6 +8,7 @@
 
 import { newBuilder, type Diagnostic, type Graph, type Manifest, type OverrideConstraint } from './graph.ts'
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
+import { governingOverrideFor } from './recipe/descriptor-resolve.ts'
 import { getManifestOverrides, mergeOverrides, rememberManifestOverrides } from './recipe/override-carrier.ts'
 import { getFlatSidecar } from './formats/_npm-core.ts'
 import {
@@ -27,6 +28,10 @@ import {
 import { assessConversion, type OutputProbeResult } from './completeness/assessment.ts'
 import { detectGraphFeatures } from './completeness/features.ts'
 import { authoritativePolicyOverridesOf } from './completeness/profile.ts'
+import {
+  companionProjectionRuntime,
+  projectCompanionsOf,
+} from './completeness/companions.ts'
 import type {
   AssessedOutput,
   ConvertAssessedOptions,
@@ -59,10 +64,12 @@ export type { Diagnostic, Graph } from './graph.ts'
 export { sourceCapabilitiesOf } from './completeness/capabilities.ts'
 export { evidenceOf, withEvidence }
 export { completenessOf } from './completeness/profile.ts'
+export { projectCompanionsOf }
 export type {
   ArtifactKnowledge,
   AssessedOutput,
   AssessmentOptions,
+  CompanionSetOperation,
   CompletenessContext,
   CompletenessDimension,
   CompletenessProfile,
@@ -83,6 +90,8 @@ export type {
   PinnedTargetRequest,
   PmConfigEvidence,
   PolicyKnowledge,
+  ProjectCompanionOptions,
+  ProjectCompanionResult,
   RepositoryManifestEvidence,
   RequirementAssessment,
   RequirementStatus,
@@ -195,6 +204,7 @@ export type StringifyOptions = {
 
 type StringifyDispatchOptions = StringifyOptions & {
   pnpmWorkspacePeerProjection?: PnpmWorkspacePeerProjection
+  pnpmWorkspaceNames?: ReadonlyMap<string, string>
 }
 
 export type ConvertOptions = {
@@ -324,14 +334,21 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyDispatch
     case 'npm-1':         return npm1.stringify(graph,        { lineEnding, onDiagnostic })
     case 'npm-2':         return npm2.stringify(graph,        { lineEnding, onDiagnostic, overrides })
     case 'npm-3':         return npm3.stringify(graph,        { lineEnding, onDiagnostic, overrides })
-    case 'pnpm-v5':       return pnpmV5.stringify(graph,      { lineEnding, onDiagnostic, overrides })
+    case 'pnpm-v5':       return pnpmV5.stringify(
+      graph,
+      { lineEnding, onDiagnostic, overrides },
+      { workspaceNames: options.pnpmWorkspaceNames },
+    )
     case 'pnpm-v6':       return options.pnpmWorkspacePeerProjection === undefined
       ? pnpmV6.stringify(graph, { lineEnding, onDiagnostic, overrides })
       : stringifyPnpmFamily(
           graph,
           { profile: 'v6-collapsed-root' },
           { lineEnding, onDiagnostic, overrides },
-          { workspacePeerProjection: options.pnpmWorkspacePeerProjection },
+          {
+            workspacePeerProjection: options.pnpmWorkspacePeerProjection,
+            workspaceNames: options.pnpmWorkspaceNames,
+          },
         )
     case 'pnpm-v9':       return options.pnpmWorkspacePeerProjection === undefined
       ? pnpmV9.stringify(graph, { lineEnding, onDiagnostic, overrides })
@@ -339,7 +356,10 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyDispatch
           graph,
           { profile: 'v9-importers-snapshots' },
           { lineEnding, onDiagnostic, overrides },
-          { workspacePeerProjection: options.pnpmWorkspacePeerProjection },
+          {
+            workspacePeerProjection: options.pnpmWorkspacePeerProjection,
+            workspaceNames: options.pnpmWorkspaceNames,
+          },
         )
     case 'yarn-berry-v4': return yarnBerryV4.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
     case 'yarn-berry-v5': return yarnBerryV5.stringify(graph, { lineEnding, cacheKey, onDiagnostic })
@@ -547,6 +567,8 @@ function stableValue(value: unknown, stack: WeakSet<object> = new WeakSet()): un
 function canonicalGraphSnapshot(
   graph: Graph,
   contract: StringifyAssessedOptions['contract'],
+  overrides?: readonly OverrideConstraint[],
+  workspaceNames?: ReadonlyMap<string, string>,
 ): string {
   const nodes = [...graph.nodes()].map(node => stableValue({
     id: node.id,
@@ -559,23 +581,40 @@ function canonicalGraphSnapshot(
   }))
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
   const edges = [...graph.nodes()].flatMap(node => [...graph.out(node.id)])
-    .map(edge => stableValue({
-      src: edge.src,
-      dst: edge.dst,
-      kind: edge.kind,
-      ...(edge.attrs === undefined ? {} : { attrs: {
-        ...(edge.attrs.range === undefined ? {} : { range: edge.attrs.range }),
-        ...(contract === 'snapshot' || edge.attrs.overrideRange === undefined
-          ? {}
-          : { overrideRange: edge.attrs.overrideRange }),
-        ...(edge.attrs.optional === undefined ? {} : { optional: edge.attrs.optional }),
-        ...(edge.attrs.workspace === undefined ? {} : { workspace: edge.attrs.workspace }),
-        ...(edge.attrs.alias === undefined ? {} : { alias: edge.attrs.alias }),
-        ...(edge.attrs.workspaceRange === undefined ? {} : {
-          workspaceRange: edge.attrs.workspaceRange,
-        }),
-      } }),
-    }))
+    .map(edge => {
+      const source = graph.getNode(edge.src)
+      const target = graph.getNode(edge.dst)
+      const declaredRange = edge.attrs?.range
+      const descriptor = edge.attrs?.alias ?? target?.name
+      const projectedRange = source?.workspacePath !== undefined
+        && descriptor !== undefined
+        && declaredRange !== undefined
+        && overrides !== undefined
+        ? governingOverrideFor(
+            descriptor,
+            [workspaceNames?.get(source.id) ?? source.name],
+            overrides,
+            declaredRange,
+          )?.to
+        : undefined
+      return stableValue({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        ...(edge.attrs === undefined ? {} : { attrs: {
+          ...(declaredRange === undefined ? {} : { range: projectedRange ?? declaredRange }),
+          ...(contract === 'snapshot' || edge.attrs.overrideRange === undefined
+            ? {}
+            : { overrideRange: edge.attrs.overrideRange }),
+          ...(edge.attrs.optional === undefined ? {} : { optional: edge.attrs.optional }),
+          ...(edge.attrs.workspace === undefined ? {} : { workspace: edge.attrs.workspace }),
+          ...(edge.attrs.alias === undefined ? {} : { alias: edge.attrs.alias }),
+          ...(edge.attrs.workspaceRange === undefined ? {} : {
+            workspaceRange: edge.attrs.workspaceRange,
+          }),
+        } }),
+      })
+    })
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
   const tarballs = [...graph.tarballs()].map(([key, payload]) => [key, stableValue({
     ...(payload.integrity === undefined ? {} : { integrity: payload.integrity }),
@@ -639,6 +678,7 @@ function outputProbe(
   contract: StringifyAssessedOptions['contract'],
   sourceEvidence: StringifyAssessedOptions['evidence'],
   diagnostics: Diagnostic[],
+  workspaceNames?: ReadonlyMap<string, string>,
 ): OutputProbeResult {
   if (!checkOne(target, output)) {
     diagnostics.push(assessedDiagnostic(
@@ -661,7 +701,12 @@ function outputProbe(
     return { accepted: false, diagnostics }
   }
 
-  if (canonicalGraphSnapshot(graph, contract) !== canonicalGraphSnapshot(reparsed, contract)) {
+  const sourceState = internalEvidenceOf(sourceEvidence ?? evidenceOf(graph))
+  const authority = contract === 'snapshot' ? undefined : authoritativePolicyOverridesOf(sourceState)
+  const comparisonOverrides = target.startsWith('pnpm-') ? authority : undefined
+  const sourceSnapshot = canonicalGraphSnapshot(graph, contract, comparisonOverrides, workspaceNames)
+  const targetSnapshot = canonicalGraphSnapshot(reparsed, contract, comparisonOverrides, workspaceNames)
+  if (sourceSnapshot !== targetSnapshot) {
     diagnostics.push(assessedDiagnostic(
       'COMPLETENESS_OUTPUT_GRAPH_MISMATCH',
       'target output does not preserve the canonical graph',
@@ -669,7 +714,6 @@ function outputProbe(
     ))
   }
 
-  const sourceState = internalEvidenceOf(sourceEvidence ?? evidenceOf(graph))
   const sourceFeatureGraph = sourceState.anchor ?? graph
   const sourceFeatures = detectGraphFeatures(sourceFeatureGraph)
   const targetFeatures = detectGraphFeatures(reparsed)
@@ -696,7 +740,6 @@ function outputProbe(
   }
 
   if (contract !== 'snapshot') {
-    const authority = authoritativePolicyOverridesOf(sourceState)
     if (authority === undefined) {
       diagnostics.push(assessedDiagnostic(
         'COMPLETENESS_POLICY_AUTHORITY_MISSING',
@@ -805,8 +848,21 @@ function stringifyAssessedInternal(
   onDiagnostic?: (diagnostic: Diagnostic) => void,
 ): AssessedOutput {
   const workspacePeer = pnpmWorkspacePeerRuntime(graph, options)
+  const companions = options.contract === 'snapshot'
+    ? undefined
+    : companionProjectionRuntime(graph, {
+        target: options.target,
+        evidence: options.evidence,
+      })
+  const targetRequirements = [
+    ...workspacePeer.targetRequirements,
+    ...(companions === undefined ? [] : [
+      companions.policyRequirement,
+      companions.result.requirement,
+    ]),
+  ]
   const preflight = assessConversion(graph, options, {
-    targetRequirements: workspacePeer.targetRequirements,
+    targetRequirements,
   })
   if (!probeEligible(preflight)) return { assessment: preflight }
 
@@ -822,6 +878,7 @@ function stringifyAssessedInternal(
       cacheKey: options.cacheKey,
       overrides: authority === undefined ? undefined : [...authority],
       pnpmWorkspacePeerProjection: workspacePeer.projection,
+      pnpmWorkspaceNames: companions?.pnpmWorkspaceNames,
       onDiagnostic: diagnostic => {
         diagnostics.push(diagnostic)
         onDiagnostic?.(diagnostic)
@@ -835,7 +892,7 @@ function stringifyAssessedInternal(
     ))
     const assessment = assessConversion(graph, options, {
       outputProbe: { accepted: false, diagnostics },
-      targetRequirements: workspacePeer.targetRequirements,
+      targetRequirements,
     })
     return { assessment }
   }
@@ -849,6 +906,7 @@ function stringifyAssessedInternal(
       options.contract,
       options.evidence,
       diagnostics,
+      companions?.pnpmWorkspaceNames,
     )
   } catch (error) {
     diagnostics.push(assessedDiagnostic(
@@ -860,7 +918,7 @@ function stringifyAssessedInternal(
   }
   const assessment = assessConversion(graph, options, {
     outputProbe: probe,
-    targetRequirements: workspacePeer.targetRequirements,
+    targetRequirements,
   })
   return assessment.status === 'satisfied' ? { output, assessment } : { assessment }
 }
