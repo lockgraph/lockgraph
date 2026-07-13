@@ -72,12 +72,10 @@ The public family is a 2 × 2 model rather than four unrelated conversion paths:
 | Lock input | `convert(input, { from, to, ...options })` | `convertAssessed(input, options)` / `convertProject(input, options)` |
 
 Certified functions return structured assessments and withhold output unless the
-requested contract is satisfied. Raw functions currently preserve the historical
-best-effort behavior. The approved safe-default migration will make raw emission
-strict by default: raw `stringify` will share the certified **target-projection**
-gate, while raw `convert` will additionally require snapshot/source readiness.
-`strict: false` will retain the existing best-effort byte path explicitly. This
-migration is staged separately from the documentation and enrichment work.
+requested contract is satisfied. Raw emission is strict by default: raw
+`stringify` shares the certified **target-projection** gate, while raw `convert`
+additionally requires snapshot/source readiness. `strict: false` explicitly
+selects the historical best-effort byte path.
 
 A strict failure is enrichable only when a named source can establish the missing
 fact. Inherent target loss requires explicit best-effort opt-in. A field that a
@@ -88,11 +86,10 @@ example.
 ### Implementation status
 
 The contract vocabulary and assessment framework, evidence ledger, companion
-projection, and bundled `convertProject` API are implemented. The frozen-oracle
-evaluator, target-aware unified `enrich` facade, composite project input, and raw
-strict-default gate are being landed as separate stable changes. Until the
-strict-default change lands, use the implemented assessed contracts for a
-fail-closed decision and treat raw `stringify`/`convert` as best-effort.
+projection, bundled `convertProject` API, target-aware unified `enrich` facade,
+composite project input, strict raw projection, and frozen candidate/certification
+lifecycle are implemented. Raw `stringify` and `convert` are strict by default;
+`strict: false` is the explicit best-effort escape hatch.
 
 Formats and the package-manager versions behind them:
 
@@ -245,14 +242,64 @@ consume one companion-projection runtime. No second post-emission projection is
 performed, so the returned operation cannot diverge from the authority used to
 emit and assess the lockfile.
 
+## Frozen candidate and certification lifecycle
+
+`prepareFrozen(input, options)` and `certifyFrozen(candidate, receipt)` form one
+fail-closed lifecycle:
+
+1. `prepareFrozen` requires an exact full `targetVersion`, performs the composite
+   parse/enrich/evidence pipeline once, projects companions once, emits once, and
+   returns an immutable opaque `FrozenCandidate` only when every non-oracle gate
+   is ready. A candidate remains `contract: 'frozen', status: 'unassessed'`; it is
+   a native-verification challenge, never a certified conversion.
+2. A consumer-controlled runner materializes the exact lock and ordered companion
+   operations in a fresh project, verifies the exact package-manager version,
+   runs its native frozen/immutable command with scripts disabled, and compares
+   the complete pre/post input tree byte-for-byte. The target lock, manifests,
+   PM config, workspace config, and patch files are never output-allowlisted.
+3. The runner issues a `FrozenVerificationReceipt` only after exit 0 and an
+   unchanged input tree. `certifyFrozen` accepts only the original runtime-bound
+   candidate and a receipt echoing its exact target and `projectionDigest`; it
+   recomputes that digest from private candidate state before returning the same
+   lockfile and companion objects with a satisfied assessment.
+
+The `projectionDigest` hashes a versioned canonical envelope containing the exact
+target format/version, target lock path and UTF-8 bytes, and ordered companion
+operations. `inputDigest` separately covers the materialized pre-run project tree;
+`configDigest` covers executable/runtime/config identity. No digest is generalized
+to a manager major, another platform, another project tree, or a future run.
+
+The sole pre-oracle projection exception is a classifier-produced
+`berry-checksum` loss for an exact Yarn Berry target. The candidate contains the
+real best-effort emitted lock bytes; the loss stays explicitly unassessed. Only
+that exact candidate's successful native immutable receipt may discharge it.
+Every other projection loss and every source, metadata, policy, output, or
+companion gap blocks candidate creation.
+
+Core never executes a package manager and intentionally accepts external exact-
+version receipts, so the authority boundary must remain explicit:
+
+> A receipt supplies **integrity**, not **authenticity**. It proves that the
+> attestation is bound to this exact candidate and rejects stale/cross-projection
+> reuse. It does not cryptographically prove that an untrusted producer actually
+> ran the native PM. Lockgraph CI earns its frozen claims by executing the genuine
+> pinned binaries; third-party `frozen-verified` assessments are only as reliable
+> as their receipt producer or an external signed-attestation system.
+
+The calibrated CI oracle matrix covers npm 6–12 across `npm-1`/`npm-2`/`npm-3`,
+Yarn 1.22.22 and 2.4.3, and pnpm 6–10 across `pnpm-v5`/`pnpm-v6`/`pnpm-v9`, subject
+to each binary's Node runtime range. Bun and later Berry generations have no
+bundled calibrated runner yet. External runners may attest another
+profile-compatible exact version without widening that receipt's scope.
+
 ## What is pulled from the registry — and why
 
 **Plain conversion never touches the registry.** `parse → stringify` is offline.
 The historical best-effort path may omit an integrity form it cannot derive,
 including a berry-zip ↔ tarball-SRI crossing, rather than fabricate a value. That
 omission is not an immutable-install guarantee: assessed project conversion and
-the forthcoming strict raw gate keep the output withheld until the required hash
-is proven or recomputed from a caller-supplied artifact source.
+the strict raw gate keep the output withheld until the required hash is proven or
+recomputed from a caller-supplied artifact source.
 
 The registry is an **opt-in** adapter (`liveRegistry`, `lockgraph/registry`)
 used by current and staged refinement paths:

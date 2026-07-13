@@ -277,8 +277,9 @@ describe('assessConversion', () => {
       target: { format: 'npm-3', managerVersion: '11.0.0' },
       verification: 'frozen-verified',
       platform: 'linux-x64',
-      configDigest: 'config-digest',
-      inputDigest: 'input-digest',
+      configDigest: `sha256:${'a'.repeat(64)}`,
+      inputDigest: `sha256:${'b'.repeat(64)}`,
+      projectionDigest: `sha256:${'c'.repeat(64)}`,
     })
     expect(assessConversion(graph, {
       contract: 'frozen',

@@ -445,6 +445,7 @@ const formats = new Set<FormatId>([
 ])
 
 const exactVersion = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+const sha256Digest = /^sha256:[0-9a-f]{64}$/
 
 function isGraph(value: unknown): value is Graph {
   if (value === null || typeof value !== 'object') return false
@@ -486,6 +487,7 @@ function assertEvidenceInput(input: EvidenceInput): void {
     case 'target-oracle':
       assertKnownKeys(input, [
         'kind', 'graph', 'target', 'verification', 'platform', 'configDigest', 'inputDigest',
+        'projectionDigest',
       ], 'target oracle evidence')
       assertRecord(input.target, 'target oracle target')
       assertKnownKeys(input.target, ['format', 'managerVersion'], 'target oracle target')
@@ -496,7 +498,10 @@ function assertEvidenceInput(input: EvidenceInput): void {
         || !['target-parse-accepted', 'mutable-stable', 'frozen-verified'].includes(input.verification)
         || typeof input.platform !== 'string' || input.platform.length === 0
         || typeof input.configDigest !== 'string' || input.configDigest.length === 0
-        || typeof input.inputDigest !== 'string' || input.inputDigest.length === 0) {
+        || typeof input.inputDigest !== 'string' || input.inputDigest.length === 0
+        || (input.verification === 'frozen-verified'
+          && (typeof input.projectionDigest !== 'string'
+            || !sha256Digest.test(input.projectionDigest)))) {
         throw new TypeError('invalid target oracle evidence')
       }
       return
@@ -819,6 +824,9 @@ function refsFor(input: EvidenceInput): EvidenceRef[] {
         platform: input.platform,
         configDigest: input.configDigest,
         inputDigest: input.inputDigest,
+        ...(input.projectionDigest === undefined ? {} : {
+          projectionDigest: input.projectionDigest,
+        }),
         verification: input.verification,
         manager: {
           name: targetManagerOf(input.target.format),
@@ -940,7 +948,8 @@ function mergeTargetOracle(
     && existing.verification === input.verification
     && existing.platform === input.platform
     && existing.configDigest === input.configDigest
-    && existing.inputDigest === input.inputDigest)) return current
+    && existing.inputDigest === input.inputDigest
+    && existing.projectionDigest === input.projectionDigest)) return current
   return Object.freeze([...current, Object.freeze({ ...input, target: cloneAndFreeze(input.target) })])
 }
 

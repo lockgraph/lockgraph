@@ -105,6 +105,50 @@ convert(input: string, opts: ConvertOptions): string   // parse(from) → string
 string-literal union (the [Status](#status) table lists every id, and
 [SCHEMAS.md](./SCHEMAS.md) maps each to the package-manager versions behind it).
 
+### Frozen-certified conversion
+
+`prepareFrozen` emits an opaque challenge for one exact package-manager version;
+it is **not** a usable certified result. Materialize its lockfile and companion
+operations in an isolated project, run that exact manager's native frozen command,
+and pass the resulting receipt to `certifyFrozen`:
+
+```ts
+import { prepareFrozen, certifyFrozen } from 'lockgraph'
+
+const prepared = await prepareFrozen(input, {
+  from: 'pnpm-v9',
+  to: 'npm-3',
+  sourceVersion: '10.0.0',
+  targetVersion: '10.9.2',       // exact full version; no ranges or `latest`
+  manifestCoverage: 'complete',
+  manifests,
+  evidenceInputs,
+})
+
+if (prepared.candidate) {
+  const receipt = await yourNativePmOracle(prepared.candidate)
+  const certified = certifyFrozen(prepared.candidate, receipt)
+  if (certified.assessment.status === 'satisfied') {
+    // Only this lockfile + companion bundle is frozen-certified.
+  }
+}
+```
+
+Core never shells out. A receipt is bound to the candidate's exact target,
+lockfile bytes, ordered companion operations, platform, config digest, and input
+tree digest. A stale, copied, hand-built, or cross-target candidate fails closed,
+and unsuccessful certification returns no final artifacts.
+
+> **Trust boundary:** receipt hashes provide **integrity** — they prevent a
+> receipt from being reused for another projection. They do **not** provide
+> **authenticity** — they cannot prove that an untrusted party really ran the
+> package manager. Lockgraph's own frozen claims rely on CI running the genuine
+> pinned binaries. Third-party `frozen-verified` results are only as trustworthy
+> as the authority that produced the receipt (or a future signed attestation).
+
+See [CONVERT.md](./CONVERT.md#frozen-candidate-and-certification-lifecycle) for
+the candidate gates, oracle bounds, and Berry-checksum exception.
+
 ### Operating on the graph
 
 The graph is where the value lives — `modify` and `optimize` transform it,

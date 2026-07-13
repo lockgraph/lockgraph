@@ -245,8 +245,9 @@ describe('convertProject', () => {
       target: { format: 'npm-3', managerVersion: '9.9.4' },
       verification: 'frozen-verified',
       platform: 'linux-x64',
-      configDigest: 'config',
-      inputDigest: 'input',
+      configDigest: `sha256:${'a'.repeat(64)}`,
+      inputDigest: `sha256:${'b'.repeat(64)}`,
+      projectionDigest: `sha256:${'c'.repeat(64)}`,
     }
     // @ts-expect-error target oracles are graph-scoped and cannot be supplied before parsing
     const options: ConvertProjectOptions = { to: 'npm-3', evidenceInputs: [oracle] }

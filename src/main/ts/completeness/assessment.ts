@@ -773,6 +773,17 @@ export function assessConversion(
     const index = requirements.findIndex(item => item.key === companion.key)
     if (index >= 0) requirements[index] = companion
   }
+  const frozenVerification = runtimeRequirements.find(item => item.key === 'target:frozen-verification')
+  if (frozenVerification !== undefined && options.contract === 'frozen') {
+    const index = requirements.findIndex(item => item.key === frozenVerification.key)
+    if (index >= 0) requirements[index] = frozenVerification
+  }
+  const frozenIntegrity = runtimeRequirements.find(item =>
+    item.key === 'target-feature:integrity:tarball')
+  if (frozenIntegrity !== undefined && options.contract === 'frozen') {
+    const index = requirements.findIndex(item => item.key === frozenIntegrity.key)
+    if (index >= 0) requirements[index] = frozenIntegrity
+  }
   if (options.contract !== 'snapshot') {
     requirements.push(policyProjectionRequirement(state, resolvedTarget.target, runtimeRequirements))
   }
@@ -788,6 +799,8 @@ export function assessConversion(
     options.contract === 'project' || options.contract === 'frozen'
       ? 'target:companion-projection'
       : undefined,
+    options.contract === 'frozen' ? 'target:frozen-verification' : undefined,
+    options.contract === 'frozen' ? 'target-feature:integrity:tarball' : undefined,
   ])
   requirements.push(...runtimeRequirements.filter(item => !consumedRuntimeKeys.has(item.key)))
   requirements.push(outputProbeRequirement(runtime.outputProbe))

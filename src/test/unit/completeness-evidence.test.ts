@@ -167,6 +167,7 @@ describe('completeness evidence', () => {
       platform: 'linux-x64',
       configDigest: 'config',
       inputDigest: 'input',
+      projectionDigest: 'invalid',
     })).toThrowError('invalid target oracle evidence')
   })
 

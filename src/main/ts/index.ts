@@ -2,6 +2,8 @@
 // Exposes the conversion orchestrator and the underlying parse, stringify,
 // check, and detection primitives.
 
+import { createHash } from 'node:crypto'
+
 import { newBuilder, type Diagnostic, type Graph, type Manifest, type OverrideConstraint } from './graph.ts'
 import {
   LockfileError,
@@ -47,9 +49,15 @@ import {
 } from './completeness/companions.ts'
 import type {
   AssessedOutput,
+  CompanionSetOperation,
   ConvertAssessedOptions,
   ConvertProjectOptions,
   EvidenceContext,
+  FrozenCandidate,
+  FrozenConversionResult,
+  FrozenPreparationOptions,
+  FrozenPreparationResult,
+  FrozenVerificationReceipt,
   ProjectConversionResult,
   ProjectEvidenceInput,
   RequirementAssessment,
@@ -126,6 +134,13 @@ export type {
   EvidenceKind,
   EvidenceLedger,
   EvidenceRef,
+  FrozenCandidate,
+  FrozenConversionResult,
+  FrozenInput,
+  FrozenPreparationOptions,
+  FrozenPreparationResult,
+  FrozenVerificationReceipt,
+  FrozenVerificationSubject,
   Knowledge,
   LayoutKnowledge,
   ManifestCoverage,
@@ -784,11 +799,18 @@ async function defaultFileSystem(): Promise<NonNullable<ConvertDependencies['fs'
   return (await import('./convert/node-fs.ts')).nodeFileSystem
 }
 
-async function _convert(
+interface PreparedConversionRuntime {
+  readonly graph: Graph
+  readonly prepared: PreparedConvertInput
+  readonly diagnostics: readonly Diagnostic[]
+}
+
+async function prepareConversionRuntime(
   input: ConvertInput,
   options: ConvertOptions,
   dependencies: ConvertDependencies,
-): Promise<string> {
+  contract: StringifyAssessedOptions['contract'],
+): Promise<PreparedConversionRuntime> {
   const diagnostics: Diagnostic[] = []
   const report = (diagnostic: Diagnostic): void => {
     diagnostics.push(diagnostic)
@@ -808,11 +830,25 @@ async function _convert(
       format: options.to,
       ...(options.targetVersion === undefined ? {} : { managerVersion: options.targetVersion }),
     },
-    contract: 'snapshot',
+    contract,
     ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
   })
   graph = enriched.graph
   for (const diagnostic of enriched.diagnostics) report(diagnostic)
+  return { graph, prepared, diagnostics: Object.freeze(diagnostics) }
+}
+
+async function _convert(
+  input: ConvertInput,
+  options: ConvertOptions,
+  dependencies: ConvertDependencies,
+): Promise<string> {
+  const { graph, diagnostics } = await prepareConversionRuntime(
+    input,
+    options,
+    dependencies,
+    'snapshot',
+  )
   const projected = stringifyProjected(options.to, graph, {
     lineEnding: options.lineEnding,
     cacheKey: options.cacheKey,
@@ -865,6 +901,40 @@ function stableValue(value: unknown, stack: WeakSet<object> = new WeakSet()): un
   } finally {
     stack.delete(value)
   }
+}
+
+const FROZEN_PROJECTION_PROTOCOL = 'lockgraph-frozen-projection/v1' as const
+const FROZEN_ORACLE_PROTOCOL = 'lockgraph-native-frozen/v1' as const
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/
+const EXACT_MANAGER_VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+
+function targetLockPath(format: FormatId): string {
+  if (format.startsWith('npm-')) return 'package-lock.json'
+  if (format.startsWith('yarn-')) return 'yarn.lock'
+  if (format.startsWith('pnpm-')) return 'pnpm-lock.yaml'
+  if (format === 'bun-text') return 'bun.lock'
+  return 'lockgraph.lockgraph'
+}
+
+function sha256(value: string): string {
+  return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`
+}
+
+function frozenProjectionDigest(
+  target: Readonly<{ format: FormatId; managerVersion: string }>,
+  lockfile: string,
+  companions: readonly CompanionSetOperation[],
+): string {
+  const envelope = stableValue({
+    protocol: FROZEN_PROJECTION_PROTOCOL,
+    target,
+    lockfile: {
+      path: targetLockPath(target.format),
+      digest: sha256(lockfile),
+    },
+    companions,
+  })
+  return sha256(JSON.stringify(envelope))
 }
 
 function canonicalGraphSnapshot(
@@ -1029,9 +1099,17 @@ function overrideSetKey(overrides: readonly OverrideConstraint[], target: Format
     : entries.map(entry => entry.key).sort().join('\n')
 }
 
-function probeEligible(assessment: AssessedOutput['assessment']): boolean {
+function probeEligible(
+  assessment: AssessedOutput['assessment'],
+  allowFrozenCandidate = false,
+): boolean {
   return assessment.requirements.every(item =>
-    item.key === 'target-output-probe' || item.status === 'satisfied')
+    item.key === 'target-output-probe'
+      || item.key === 'target:frozen-verification'
+      || (allowFrozenCandidate
+        && assessment.target.capabilities.integrity === 'berry-zip'
+        && item.key === 'target-feature:integrity:tarball')
+      || item.status === 'satisfied')
 }
 
 function outputProbe(
@@ -1211,6 +1289,32 @@ interface AssessedRuntimeBundle {
   readonly output?: string
   readonly assessment: AssessedOutput['assessment']
   readonly companions?: CompanionProjectionRuntime
+  readonly outputProbe?: OutputProbeResult
+  readonly projected?: ProjectionResult
+  readonly targetRequirements?: readonly RequirementAssessment[]
+}
+
+interface AssessedRuntimeOptions {
+  readonly allowFrozenCandidate?: boolean
+}
+
+const BERRY_FROZEN_PROBE_CODES = new Set([
+  'RECIPE_INTEGRITY_INCOMPLETE',
+  'COMPLETENESS_OUTPUT_GRAPH_MISMATCH',
+])
+
+function frozenCandidateOutputProbe(
+  target: FormatId,
+  pendingBerry: RequirementAssessment | undefined,
+  probe: OutputProbeResult,
+): OutputProbeResult {
+  if (pendingBerry === undefined || !target.startsWith('yarn-berry-') || probe.accepted) return probe
+  const codes = probe.diagnostics.map(diagnostic => diagnostic.code)
+  if (codes.length === 0
+    || !codes.includes('RECIPE_INTEGRITY_INCOMPLETE')
+    || !codes.includes('COMPLETENESS_OUTPUT_GRAPH_MISMATCH')
+    || codes.some(code => !BERRY_FROZEN_PROBE_CODES.has(code))) return probe
+  return Object.freeze({ accepted: true, diagnostics: Object.freeze([]) })
 }
 
 function projectionLossDischarged(
@@ -1218,17 +1322,21 @@ function projectionLossDischarged(
   graph: Graph,
   options: StringifyAssessedOptions,
   companions: CompanionProjectionRuntime | undefined,
+  projectionDigest: string | undefined,
 ): boolean {
   if (loss.diagnostic.code === 'INTEROP_OVERRIDE_NOT_PROJECTED') {
     return companions?.result.requirement.status === 'satisfied'
   }
-  if (loss.class !== 'berry-checksum' || options.target.managerVersion === undefined) return false
+  if (loss.class !== 'berry-checksum'
+    || options.target.managerVersion === undefined
+    || projectionDigest === undefined) return false
   const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
   return state.targetOracles.some(oracle =>
     oracle.graph === graph
       && oracle.verification === 'frozen-verified'
       && oracle.target.format === options.target.format
-      && oracle.target.managerVersion === options.target.managerVersion)
+      && oracle.target.managerVersion === options.target.managerVersion
+      && oracle.projectionDigest === projectionDigest)
 }
 
 function activeProjectionDiagnostics(
@@ -1236,9 +1344,12 @@ function activeProjectionDiagnostics(
   graph: Graph,
   options: StringifyAssessedOptions,
   companions: CompanionProjectionRuntime | undefined,
+  projectionDigest?: string,
+  allowFrozenCandidate = false,
 ): readonly Diagnostic[] {
   const discharged = projected.losses.filter(loss =>
-    projectionLossDischarged(loss, graph, options, companions))
+    projectionLossDischarged(loss, graph, options, companions, projectionDigest)
+      || (allowFrozenCandidate && loss.class === 'berry-checksum'))
   if (discharged.length === 0) return projected.diagnostics
   const ignored = new Set(discharged.flatMap(loss => [
     diagnosticKey(loss.diagnostic),
@@ -1246,6 +1357,71 @@ function activeProjectionDiagnostics(
   ]))
   return Object.freeze(projected.diagnostics.filter(diagnostic =>
     !ignored.has(diagnosticKey(diagnostic))))
+}
+
+function frozenBerryRequirement(losses: readonly ProjectionLoss[]): RequirementAssessment | undefined {
+  const pending = losses.filter(loss => loss.class === 'berry-checksum')
+  if (pending.length === 0) return undefined
+  return Object.freeze({
+    key: 'target:projection:berry-checksum',
+    dimension: 'artifacts',
+    status: 'unassessed',
+    diagnostics: Object.freeze(pending.map(loss => Object.freeze({
+      code: 'COMPLETENESS_FROZEN_BERRY_CHECKSUM_PENDING',
+      severity: 'warning' as const,
+      subject: loss.subject,
+      message: `${loss.diagnostic.message}; exact pinned Yarn frozen verification is required`,
+      data: {
+        feature: loss.feature,
+        remedy: { kind: 'verify-target', requirement: 'pinned-frozen-oracle' },
+      },
+    }))),
+  })
+}
+
+function frozenVerificationRequirement(
+  graph: Graph,
+  options: StringifyAssessedOptions,
+  projectionDigest: string | undefined,
+): RequirementAssessment | undefined {
+  if (options.contract !== 'frozen'
+    || options.target.managerVersion === undefined
+    || projectionDigest === undefined) return undefined
+  const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
+  const receipt = state.targetOracles.find(oracle =>
+    oracle.graph === graph
+      && oracle.verification === 'frozen-verified'
+      && oracle.target.format === options.target.format
+      && oracle.target.managerVersion === options.target.managerVersion
+      && oracle.projectionDigest === projectionDigest)
+  if (receipt === undefined) return undefined
+  return Object.freeze({
+    key: 'target:frozen-verification',
+    dimension: 'verification',
+    status: 'satisfied',
+    diagnostics: Object.freeze([Object.freeze({
+      code: 'COMPLETENESS_FROZEN_VERIFIED',
+      severity: 'info' as const,
+      message: 'exact pinned target accepted the emitted project in frozen mode',
+      data: {
+        target: receipt.target,
+        platform: receipt.platform,
+        projectionDigest,
+        configDigest: receipt.configDigest,
+        inputDigest: receipt.inputDigest,
+      },
+    })]),
+  })
+}
+
+function frozenCandidateReady(assessment: AssessedOutput['assessment']): boolean {
+  return assessment.contract === 'frozen' && assessment.requirements.every(requirement =>
+    requirement.status === 'satisfied'
+      || (requirement.status === 'unassessed'
+        && (requirement.key === 'target:frozen-verification'
+          || requirement.key === 'target:projection:berry-checksum'
+          || (assessment.target.capabilities.integrity === 'berry-zip'
+            && requirement.key === 'target-feature:integrity:tarball'))))
 }
 
 function assessedOutputOf(runtime: AssessedRuntimeBundle): AssessedOutput {
@@ -1258,6 +1434,7 @@ function stringifyAssessedRuntime(
   graph: Graph,
   options: StringifyAssessedOptions,
   onDiagnostic?: (diagnostic: Diagnostic) => void,
+  runtimeOptions: AssessedRuntimeOptions = {},
 ): AssessedRuntimeBundle {
   const workspacePeer = pnpmWorkspacePeerRuntime(graph, options)
   const companions = options.contract === 'snapshot'
@@ -1266,7 +1443,7 @@ function stringifyAssessedRuntime(
         target: options.target,
         evidence: options.evidence,
       })
-  const targetRequirements = [
+  const targetRequirements: RequirementAssessment[] = [
     ...workspacePeer.targetRequirements,
     ...(companions === undefined ? [] : [
       companions.policyRequirement,
@@ -1276,7 +1453,9 @@ function stringifyAssessedRuntime(
   const preflight = assessConversion(graph, options, {
     targetRequirements,
   })
-  if (!probeEligible(preflight)) return { assessment: preflight, companions }
+  if (!probeEligible(preflight, runtimeOptions.allowFrozenCandidate)) {
+    return { assessment: preflight, companions, targetRequirements }
+  }
 
   const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
   const authority = options.contract === 'snapshot'
@@ -1284,8 +1463,10 @@ function stringifyAssessedRuntime(
     : authoritativePolicyOverridesOf(state)
   const diagnostics: Diagnostic[] = []
   let output: string
+  let projected: ProjectionResult
+  let pendingBerry: RequirementAssessment | undefined
   try {
-    const projected = stringifyProjected(options.target.format, graph, {
+    projected = stringifyProjected(options.target.format, graph, {
       lineEnding: options.lineEnding,
       cacheKey: options.cacheKey,
       targetVersion: options.target.managerVersion,
@@ -1294,7 +1475,40 @@ function stringifyAssessedRuntime(
       pnpmWorkspaceNames: companions?.pnpmWorkspaceNames,
     })
     output = projected.output
-    for (const diagnostic of activeProjectionDiagnostics(projected, graph, options, companions)) {
+    const projectionDigest = options.target.managerVersion === undefined || companions?.result.patches === undefined
+      ? undefined
+      : frozenProjectionDigest({
+          format: options.target.format,
+          managerVersion: options.target.managerVersion,
+        }, output, companions.result.patches)
+    pendingBerry = runtimeOptions.allowFrozenCandidate && options.contract === 'frozen'
+      ? frozenBerryRequirement(projected.losses)
+      : undefined
+    if (pendingBerry !== undefined) {
+      targetRequirements.push(pendingBerry, Object.freeze({
+        ...pendingBerry,
+        key: 'target-feature:integrity:tarball',
+      }))
+    }
+    const frozenVerification = frozenVerificationRequirement(graph, options, projectionDigest)
+    if (frozenVerification !== undefined) {
+      targetRequirements.push(frozenVerification)
+      const pendingIndex = targetRequirements.findIndex(item =>
+        item.key === 'target:projection:berry-checksum')
+      if (pendingIndex >= 0) targetRequirements[pendingIndex] = Object.freeze({
+        ...targetRequirements[pendingIndex]!,
+        status: 'satisfied',
+        diagnostics: frozenVerification.diagnostics,
+      })
+    }
+    for (const diagnostic of activeProjectionDiagnostics(
+      projected,
+      graph,
+      options,
+      companions,
+      projectionDigest,
+      runtimeOptions.allowFrozenCandidate && options.contract === 'frozen',
+    )) {
       diagnostics.push(diagnostic)
       onDiagnostic?.(diagnostic)
     }
@@ -1308,7 +1522,7 @@ function stringifyAssessedRuntime(
       outputProbe: { accepted: false, diagnostics },
       targetRequirements,
     })
-    return { assessment, companions }
+    return { assessment, companions, targetRequirements }
   }
 
   let probe: OutputProbeResult
@@ -1330,13 +1544,24 @@ function stringifyAssessedRuntime(
     ))
     probe = { accepted: false, diagnostics }
   }
+  const effectiveProbe = runtimeOptions.allowFrozenCandidate
+    ? frozenCandidateOutputProbe(options.target.format, pendingBerry, probe)
+    : probe
   const assessment = assessConversion(graph, options, {
-    outputProbe: probe,
+    outputProbe: effectiveProbe,
     targetRequirements,
   })
+  const runtime = {
+    assessment,
+    companions,
+    outputProbe: effectiveProbe,
+    projected,
+    targetRequirements,
+  }
   return assessment.status === 'satisfied'
-    ? { output, assessment, companions }
-    : { assessment, companions }
+    || (runtimeOptions.allowFrozenCandidate && frozenCandidateReady(assessment))
+    ? { ...runtime, output }
+    : runtime
 }
 
 /** Emits only when canonical and target conversion requirements are satisfied. */
@@ -1465,5 +1690,337 @@ export function convertProject(
     lockfile: runtime.output!,
     companions: runtime.companions!.result.patches!,
     assessment: runtime.assessment,
+  })
+}
+
+interface FrozenCandidateState {
+  readonly graph: Graph
+  readonly evidence: EvidenceContext
+  readonly target: Readonly<{ format: FormatId; managerVersion: string }>
+  readonly lockfile: string
+  readonly companions: readonly CompanionSetOperation[]
+  readonly projectionDigest: string
+  readonly outputProbe: OutputProbeResult
+  readonly targetRequirements: readonly RequirementAssessment[]
+}
+
+const frozenCandidateState = new WeakMap<object, FrozenCandidateState>()
+
+function frozenRequirement(
+  status: RequirementAssessment['status'],
+  diagnostic: Diagnostic,
+): RequirementAssessment {
+  return Object.freeze({
+    key: 'target:frozen-verification',
+    dimension: 'verification',
+    status,
+    diagnostics: Object.freeze([Object.freeze(diagnostic)]),
+  })
+}
+
+function replaceTargetRequirement(
+  requirements: readonly RequirementAssessment[],
+  replacement: RequirementAssessment,
+): readonly RequirementAssessment[] {
+  const output = requirements.filter(requirement => requirement.key !== replacement.key)
+  output.push(replacement)
+  return Object.freeze(output)
+}
+
+function frozenFailure(
+  state: FrozenCandidateState,
+  diagnostic: Diagnostic,
+): FrozenConversionResult {
+  const requirement = frozenRequirement('unsatisfied', diagnostic)
+  const assessment = assessConversion(state.graph, {
+    contract: 'frozen',
+    target: state.target,
+    evidence: state.evidence,
+  }, {
+    outputProbe: state.outputProbe,
+    targetRequirements: replaceTargetRequirement(state.targetRequirements, requirement),
+  })
+  return Object.freeze({ assessment })
+}
+
+function invalidFrozenCandidate(diagnostic: Diagnostic): FrozenConversionResult {
+  const graph = newBuilder().seal()
+  const target = { format: 'npm-3' as const, managerVersion: '9.9.4' }
+  const requirement = frozenRequirement('unsatisfied', diagnostic)
+  const assessment = assessConversion(graph, {
+    contract: 'frozen',
+    target,
+  }, {
+    outputProbe: { accepted: false, diagnostics: [diagnostic] },
+    targetRequirements: [requirement],
+  })
+  return Object.freeze({ assessment })
+}
+
+function frozenPreparationFailure(
+  options: FrozenPreparationOptions,
+  diagnostic: Diagnostic,
+): FrozenPreparationResult {
+  options.onDiagnostic?.(diagnostic)
+  const graph = newBuilder().seal()
+  const requirement = frozenRequirement('unsatisfied', diagnostic)
+  const assessment = assessConversion(graph, {
+    contract: 'frozen',
+    target: { format: options.to, managerVersion: options.targetVersion },
+  }, {
+    outputProbe: { accepted: false, diagnostics: [diagnostic] },
+    targetRequirements: [requirement],
+  })
+  return Object.freeze({ assessment })
+}
+
+function preparationEvidence(
+  graph: Graph,
+  prepared: PreparedConvertInput,
+  options: FrozenPreparationOptions,
+): EvidenceContext {
+  let evidence = evidenceOf(graph)
+  if (options.sourceVersion !== undefined) evidence = withSourceVersion(evidence, options.sourceVersion)
+  const manifests = mergeManifestSources(
+    prepared.source,
+    prepared.manifests,
+    options.manifests,
+    options.sources?.manifests,
+  )
+  if (options.manifestCoverage === 'complete') {
+    if (manifests === undefined) throw new TypeError('complete manifest coverage requires supplied manifests')
+    evidence = withEvidence(evidence, {
+      kind: 'repository-manifests',
+      coverage: 'complete',
+      manifests,
+    })
+  }
+  for (const input of options.evidenceInputs ?? []) evidence = withEvidence(evidence, input)
+  return evidence
+}
+
+/**
+ * Emits an opaque native-verification challenge. A candidate is deliberately
+ * not a frozen-certified result and must never be applied as one.
+ */
+export async function prepareFrozen(
+  input: ConvertInput,
+  options: FrozenPreparationOptions,
+): Promise<FrozenPreparationResult> {
+  if (!EXACT_MANAGER_VERSION.test(options.targetVersion)) {
+    return frozenPreparationFailure(options, assessedDiagnostic(
+      'COMPLETENESS_FROZEN_TARGET_UNPINNED',
+      'frozen verification requires an exact full target manager version',
+      { target: options.to, managerVersion: options.targetVersion },
+    ))
+  }
+  if (options.to === 'lockgraph') {
+    return frozenPreparationFailure(options, assessedDiagnostic(
+      'COMPLETENESS_FROZEN_ORACLE_UNAVAILABLE',
+      'lockgraph has no native package-manager frozen oracle',
+      { target: options.to },
+    ))
+  }
+
+  let preparedRuntime: PreparedConversionRuntime
+  try {
+    preparedRuntime = await prepareConversionRuntime(input, options, {
+      ...(options.fs === undefined ? {} : { fs: options.fs }),
+      defaultFileSystem,
+    }, 'frozen')
+  } catch (error) {
+    return frozenPreparationFailure(options, assessedDiagnostic(
+      'COMPLETENESS_FROZEN_PREPARATION_FAILED',
+      error instanceof Error ? error.message : 'frozen candidate preparation failed',
+      { target: options.to },
+    ))
+  }
+
+  let evidence: EvidenceContext
+  try {
+    evidence = preparationEvidence(preparedRuntime.graph, preparedRuntime.prepared, options)
+  } catch (error) {
+    return frozenPreparationFailure(options, assessedDiagnostic(
+      'COMPLETENESS_EVIDENCE_INVALID',
+      error instanceof Error ? error.message : 'frozen conversion evidence is invalid',
+    ))
+  }
+
+  const preparationLosses = projectionDiagnosticLosses(preparedRuntime.diagnostics, options.to)
+  if (preparationLosses.some(loss => loss.class !== 'berry-checksum')) {
+    const first = preparationLosses.find(loss => loss.class !== 'berry-checksum')!
+    return frozenPreparationFailure(options, assessedDiagnostic(
+      'COMPLETENESS_FROZEN_PROJECTION_BLOCKED',
+      first.diagnostic.message,
+      { feature: first.feature, target: first.target },
+    ))
+  }
+
+  const runtime = stringifyAssessedRuntime(preparedRuntime.graph, {
+    contract: 'frozen',
+    target: { format: options.to, managerVersion: options.targetVersion },
+    evidence,
+    lineEnding: options.lineEnding,
+    cacheKey: options.cacheKey,
+  }, options.onDiagnostic, { allowFrozenCandidate: true })
+  const companions = runtime.companions?.result.patches
+  if (runtime.output === undefined
+    || companions === undefined
+    || runtime.outputProbe === undefined
+    || runtime.targetRequirements === undefined
+    || !frozenCandidateReady(runtime.assessment)) {
+    return Object.freeze({ assessment: runtime.assessment })
+  }
+
+  const target = Object.freeze({ format: options.to, managerVersion: options.targetVersion })
+  const projectionDigest = frozenProjectionDigest(target, runtime.output, companions)
+  const candidate: FrozenCandidate = Object.freeze({
+    protocol: FROZEN_PROJECTION_PROTOCOL,
+    target,
+    projectionDigest,
+    lockfile: runtime.output,
+    companions,
+    assessment: runtime.assessment,
+  })
+  frozenCandidateState.set(candidate, Object.freeze({
+    graph: preparedRuntime.graph,
+    evidence,
+    target,
+    lockfile: runtime.output,
+    companions,
+    projectionDigest,
+    outputProbe: runtime.outputProbe,
+    targetRequirements: runtime.targetRequirements,
+  }))
+  return Object.freeze({ candidate, assessment: runtime.assessment })
+}
+
+function receiptDiagnostic(
+  candidate: FrozenCandidate,
+  receipt: FrozenVerificationReceipt,
+): Diagnostic | undefined {
+  const nonEmpty = (value: unknown): value is string =>
+    typeof value === 'string' && value.length > 0
+  if (receipt === null
+    || typeof receipt !== 'object'
+    || receipt.protocol !== FROZEN_PROJECTION_PROTOCOL
+    || receipt.oracle === null
+    || typeof receipt.oracle !== 'object'
+    || receipt.oracle.protocol !== FROZEN_ORACLE_PROTOCOL
+    || receipt.verification !== 'frozen-verified') {
+    return assessedDiagnostic(
+      'COMPLETENESS_FROZEN_RECEIPT_INVALID',
+      'frozen receipt uses an unknown or non-frozen verification protocol',
+    )
+  }
+  if (receipt.target === null
+    || typeof receipt.target !== 'object'
+    || receipt.target.format !== candidate.target.format
+    || receipt.target.managerVersion !== candidate.target.managerVersion
+    || receipt.projectionDigest !== candidate.projectionDigest) {
+    return assessedDiagnostic(
+      'COMPLETENESS_FROZEN_SUBJECT_MISMATCH',
+      'frozen receipt does not match the exact candidate target and projection',
+      { candidate: candidate.projectionDigest, receipt: receipt.projectionDigest },
+    )
+  }
+  if (!nonEmpty(receipt.platform)
+    || typeof receipt.configDigest !== 'string'
+    || !SHA256_DIGEST.test(receipt.configDigest)
+    || typeof receipt.inputDigest !== 'string'
+    || !SHA256_DIGEST.test(receipt.inputDigest)
+    || !nonEmpty(receipt.oracle.runner)
+    || !nonEmpty(receipt.oracle.version)) {
+    return assessedDiagnostic(
+      'COMPLETENESS_FROZEN_RECEIPT_INVALID',
+      'frozen receipt contains malformed input, config, platform, or oracle identity',
+    )
+  }
+  return undefined
+}
+
+/**
+ * Refines an opaque candidate with an external native-PM receipt. This checks
+ * receipt integrity and exact projection binding; receipt authenticity belongs
+ * to the caller/CI authority that ran the PM.
+ */
+export function certifyFrozen(
+  candidate: FrozenCandidate,
+  receipt: FrozenVerificationReceipt,
+): FrozenConversionResult {
+  const state = frozenCandidateState.get(candidate)
+  if (state === undefined) {
+    return invalidFrozenCandidate(assessedDiagnostic(
+      'COMPLETENESS_FROZEN_CANDIDATE_INVALID',
+      'frozen candidate was not created by this runtime or is no longer valid',
+    ))
+  }
+  const recomputed = frozenProjectionDigest(state.target, state.lockfile, state.companions)
+  if (recomputed !== state.projectionDigest || candidate.projectionDigest !== recomputed) {
+    return frozenFailure(state, assessedDiagnostic(
+      'COMPLETENESS_FROZEN_CANDIDATE_INVALID',
+      'frozen candidate projection state changed after preparation',
+    ))
+  }
+  const invalidReceipt = receiptDiagnostic(candidate, receipt)
+  if (invalidReceipt !== undefined) return frozenFailure(state, invalidReceipt)
+
+  let evidence: EvidenceContext
+  try {
+    evidence = withEvidence(state.evidence, {
+      kind: 'target-oracle',
+      graph: state.graph,
+      target: state.target,
+      verification: 'frozen-verified',
+      platform: receipt.platform,
+      configDigest: receipt.configDigest,
+      inputDigest: receipt.inputDigest,
+      projectionDigest: receipt.projectionDigest,
+    })
+  } catch (error) {
+    return frozenFailure(state, assessedDiagnostic(
+      'COMPLETENESS_FROZEN_RECEIPT_INVALID',
+      error instanceof Error ? error.message : 'frozen receipt evidence is invalid',
+    ))
+  }
+
+  const verified = frozenRequirement('satisfied', {
+    code: 'COMPLETENESS_FROZEN_VERIFIED',
+    severity: 'info',
+    message: 'exact pinned target accepted the emitted project in frozen mode',
+    data: {
+      target: state.target,
+      platform: receipt.platform,
+      projectionDigest: receipt.projectionDigest,
+      configDigest: receipt.configDigest,
+      inputDigest: receipt.inputDigest,
+    },
+  })
+  const targetRequirements = replaceTargetRequirement(
+    state.targetRequirements.map(requirement =>
+      requirement.key === 'target:projection:berry-checksum'
+        || requirement.key === 'target-feature:integrity:tarball'
+        ? Object.freeze({ ...requirement, status: 'satisfied' as const, diagnostics: verified.diagnostics })
+        : requirement),
+    verified,
+  )
+  const assessment = assessConversion(state.graph, {
+    contract: 'frozen',
+    target: state.target,
+    evidence,
+  }, {
+    outputProbe: state.outputProbe,
+    targetRequirements,
+  })
+  if (assessment.status !== 'satisfied') return Object.freeze({ assessment })
+  return Object.freeze({
+    lockfile: state.lockfile,
+    companions: state.companions,
+    verification: Object.freeze({
+      ...receipt,
+      target: Object.freeze({ ...receipt.target }),
+      oracle: Object.freeze({ ...receipt.oracle }),
+    }),
+    assessment,
   })
 }

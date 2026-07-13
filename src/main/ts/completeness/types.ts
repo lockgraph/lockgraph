@@ -8,6 +8,7 @@ import type {
   TarballKey,
 } from '../graph.ts'
 import type { FormatId } from '../index.ts'
+import type { ConvertInput, ConvertOptions } from '../convert/types.ts'
 import type { PackumentVersion } from '../registry/types.ts'
 
 export type Knowledge = 'none' | 'partial' | 'complete'
@@ -83,6 +84,7 @@ export interface EvidenceRef {
   readonly platform?: string
   readonly configDigest?: string
   readonly inputDigest?: string
+  readonly projectionDigest?: string
   readonly verification?: OracleVerification
 }
 
@@ -141,15 +143,26 @@ export interface PinnedTargetRequest extends TargetRequest {
 
 export type OracleVerification = Exclude<Verification, 'unverified' | 'graph-validated'>
 
-export interface TargetOracleEvidence {
+interface TargetOracleEvidenceBase {
   readonly kind: 'target-oracle'
   readonly graph: Graph
   readonly target: PinnedTargetRequest
-  readonly verification: OracleVerification
   readonly platform: string
   readonly configDigest: string
   readonly inputDigest: string
 }
+
+export type TargetOracleEvidence = TargetOracleEvidenceBase & (
+  | Readonly<{
+      readonly verification: 'frozen-verified'
+      /** Exact emitted lock + companion projection verified by the frozen oracle. */
+      readonly projectionDigest: string
+    }>
+  | Readonly<{
+      readonly verification: Exclude<OracleVerification, 'frozen-verified'>
+      readonly projectionDigest?: never
+    }>
+)
 
 export type EvidenceInput =
   | RepositoryManifestEvidence
@@ -285,6 +298,56 @@ export interface ProjectConversionResult {
   readonly companions?: readonly CompanionSetOperation[]
   readonly assessment: ConversionAssessment
 }
+
+export interface FrozenVerificationSubject {
+  readonly protocol: 'lockgraph-frozen-projection/v1'
+  readonly target: PinnedTargetRequest
+  readonly projectionDigest: string
+}
+
+/**
+ * An emitted challenge for a native PM. This is not a certified conversion.
+ * Values are created by `prepareFrozen`; callers cannot construct a candidate
+ * that `certifyFrozen` will accept.
+ */
+export interface FrozenCandidate extends FrozenVerificationSubject {
+  readonly lockfile: string
+  readonly companions: readonly CompanionSetOperation[]
+  readonly assessment: ConversionAssessment
+}
+
+export interface FrozenPreparationResult {
+  readonly candidate?: FrozenCandidate
+  readonly assessment: ConversionAssessment
+}
+
+export interface FrozenVerificationReceipt extends FrozenVerificationSubject {
+  readonly verification: 'frozen-verified'
+  readonly platform: string
+  readonly configDigest: string
+  readonly inputDigest: string
+  readonly oracle: Readonly<{
+    readonly protocol: 'lockgraph-native-frozen/v1'
+    readonly runner: string
+    readonly version: string
+  }>
+}
+
+export interface FrozenConversionResult {
+  readonly lockfile?: string
+  readonly companions?: readonly CompanionSetOperation[]
+  readonly verification?: FrozenVerificationReceipt
+  readonly assessment: ConversionAssessment
+}
+
+export interface FrozenPreparationOptions extends Omit<ConvertOptions, 'strict' | 'targetVersion'> {
+  readonly targetVersion: string
+  readonly sourceVersion?: string
+  readonly manifestCoverage?: ManifestCoverage
+  readonly evidenceInputs?: readonly ProjectEvidenceInput[]
+}
+
+export type FrozenInput = ConvertInput
 
 export interface ProjectCompanionOptions {
   readonly target: TargetRequest

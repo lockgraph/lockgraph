@@ -279,8 +279,9 @@ describe('completenessOf', () => {
       target: { format: 'npm-3', managerVersion: '11.4.2' },
       verification: 'frozen-verified',
       platform: 'linux-x64',
-      configDigest: 'config-sha256',
-      inputDigest: 'input-sha256',
+      configDigest: `sha256:${'a'.repeat(64)}`,
+      inputDigest: `sha256:${'b'.repeat(64)}`,
+      projectionDigest: `sha256:${'c'.repeat(64)}`,
     })
 
     expect(completenessOf(source, { evidence }).profile.verification).toBe('graph-validated')
@@ -289,8 +290,9 @@ describe('completenessOf', () => {
       kind: 'target-oracle',
       target: { format: 'npm-3', managerVersion: '11.4.2' },
       platform: 'linux-x64',
-      configDigest: 'config-sha256',
-      inputDigest: 'input-sha256',
+      configDigest: `sha256:${'a'.repeat(64)}`,
+      inputDigest: `sha256:${'b'.repeat(64)}`,
+      projectionDigest: `sha256:${'c'.repeat(64)}`,
     }))
   })
 
