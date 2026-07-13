@@ -150,6 +150,13 @@ describe('pnpm-v5 — schema deltas (decimal version / slash-separator / undersc
     expect(graph.getNode(peerVirtId)).toBeDefined()
   })
 
+  it('projects package peer declarations into canonical tarball metadata', () => {
+    const graph = parseFixtureGraph('peers-basic')
+    expect(graph.tarballOf('react-dom@18.2.0(react@18.2.0)')?.peerDependencies).toEqual({
+      react: '^18.2.0',
+    })
+  })
+
   it('parses scoped packages keys `/@scope/name/<version>` (last-slash split)', () => {
     const text = fixture('deps-with-scopes/pnpm-v5.lock')
     expect(text).toContain('  /@sindresorhus/is/6.3.1:')

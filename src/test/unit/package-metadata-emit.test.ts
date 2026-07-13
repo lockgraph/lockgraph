@@ -51,6 +51,7 @@ describe('package metadata emitters', () => {
       os: ['linux'],
       libc: ['glibc'],
       hasInstallScript: true,
+      peerDependencies: { peer: '^1.0.0' },
       peerDependenciesMeta: { peer: { optional: true } },
     }
     const output = expectStable('npm-3', payload)

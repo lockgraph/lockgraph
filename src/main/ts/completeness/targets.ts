@@ -100,6 +100,7 @@ const npm3 = capabilities({
     'os',
     'libc',
     'hasInstallScript',
+    'peerDependencies',
     'peerDependenciesMeta',
   ),
 })

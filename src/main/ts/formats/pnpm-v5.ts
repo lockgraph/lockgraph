@@ -994,11 +994,6 @@ function addPackageNode(
   }
   builder.addNode(node)
 
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics)
-  if (payload !== undefined) {
-    builder.setTarball({ name, version }, payload)
-  }
-
   const nodeSc: PnpmV5NodeSidecar = {}
   if (isPlainObject(pkgEntry)) {
     if (isPlainObject(pkgEntry.peerDependencies)) {
@@ -1014,6 +1009,14 @@ function addPackageNode(
     if (typeof pkgEntry.optional === 'boolean') nodeSc.optional = pkgEntry.optional
   }
   sidecar.nodes.set(nodeId, nodeSc)
+
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  if (nodeSc.peerDependencies !== undefined) {
+    payload.peerDependencies = { ...nodeSc.peerDependencies }
+  }
+  if (Object.keys(payload).length > 0) {
+    builder.setTarball({ name, version }, payload)
+  }
 }
 
 function addResolvedTreeEdges(

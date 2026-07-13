@@ -12,10 +12,12 @@ import { getPnpmV5OverridesCanonical } from '../formats/pnpm-v5.ts'
 import { captureOverrides } from '../recipe/overrides.ts'
 import { isHashedPeerSetToken } from '../recipe/patch.ts'
 import {
+  packageMetadataEqual,
   packageMetadataOfPayload,
   payloadOfPackumentVersion,
 } from '../registry/payload.ts'
 import { sourceCapabilitiesOf } from './capabilities.ts'
+import { packageMetadataDiagnostic } from './diagnostics.ts'
 import {
   evidenceOf,
   internalEvidenceOf,
@@ -263,32 +265,6 @@ function packageEdgesClassified(graph: Graph, state: InternalEvidenceState): boo
   return true
 }
 
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue)
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, stableValue(item)]))
-  }
-  return value
-}
-
-function metadataDiagnostic(
-  code: 'COMPLETENESS_PACKAGE_METADATA_INCOMPLETE'
-    | 'COMPLETENESS_PACKAGE_METADATA_MISMATCH'
-    | 'COMPLETENESS_PACKAGE_METADATA_SOURCE_UNSUPPORTED',
-  subject: string,
-  message: string,
-): Diagnostic {
-  return Object.freeze({
-    code,
-    severity: 'warning',
-    subject,
-    message,
-    data: Object.freeze({ dimension: 'packageMetadata', subject }),
-  })
-}
-
 function assessPackageMetadata(
   graph: Graph,
   state: InternalEvidenceState,
@@ -311,7 +287,7 @@ function assessPackageMetadata(
     const resolutionType = payload?.resolution?.type
     if (representative.source !== undefined
       || (resolutionType !== undefined && resolutionType !== 'tarball')) {
-      diagnostics.push(metadataDiagnostic(
+      diagnostics.push(packageMetadataDiagnostic(
         'COMPLETENESS_PACKAGE_METADATA_SOURCE_UNSUPPORTED',
         key,
         'non-registry package metadata requires explicit source-specific manifest evidence',
@@ -321,7 +297,7 @@ function assessPackageMetadata(
 
     const evidence = state.packageManifests.get(key)
     if (evidence === undefined) {
-      diagnostics.push(metadataDiagnostic(
+      diagnostics.push(packageMetadataDiagnostic(
         'COMPLETENESS_PACKAGE_METADATA_INCOMPLETE',
         key,
         'authoritative package manifest evidence is missing',
@@ -330,7 +306,7 @@ function assessPackageMetadata(
     }
     if (nodes.some(node => node.name !== evidence.manifest.name
       || node.version !== evidence.manifest.version)) {
-      diagnostics.push(metadataDiagnostic(
+      diagnostics.push(packageMetadataDiagnostic(
         'COMPLETENESS_PACKAGE_METADATA_MISMATCH',
         key,
         'package manifest identity does not match the graph subject',
@@ -340,8 +316,8 @@ function assessPackageMetadata(
 
     const actual = packageMetadataOfPayload(payload)
     const expected = packageMetadataOfPayload(payloadOfPackumentVersion(evidence.manifest))
-    if (JSON.stringify(stableValue(actual)) !== JSON.stringify(stableValue(expected))) {
-      diagnostics.push(metadataDiagnostic(
+    if (!packageMetadataEqual(actual, expected)) {
+      diagnostics.push(packageMetadataDiagnostic(
         'COMPLETENESS_PACKAGE_METADATA_MISMATCH',
         key,
         'canonical package metadata does not match authoritative manifest evidence',

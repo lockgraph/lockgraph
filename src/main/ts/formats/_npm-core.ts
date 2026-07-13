@@ -804,6 +804,7 @@ function hasTarballPayload(entry: NpmEntry): boolean {
     || entry.cpu !== undefined
     || entry.os !== undefined
     || entry.libc !== undefined
+    || entry.peerDependencies !== undefined
     || entry.peerDependenciesMeta !== undefined
     || entry.hasInstallScript !== undefined
     || entry.resolved !== undefined
@@ -839,6 +840,7 @@ function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnos
   if (entry.cpu !== undefined) payload.cpu = entry.cpu.slice()
   if (entry.os !== undefined) payload.os = entry.os.slice()
   if (entry.libc !== undefined) payload.libc = entry.libc.slice()
+  if (entry.peerDependencies !== undefined) payload.peerDependencies = { ...entry.peerDependencies }
   if (entry.peerDependenciesMeta !== undefined) {
     payload.peerDependenciesMeta = Object.fromEntries(
       Object.entries(entry.peerDependenciesMeta).map(([peer, meta]) => [peer, { ...meta }]))
@@ -1229,6 +1231,7 @@ function buildNodeModulesEntry(
 
   if (Object.keys(blocks.peer).length > 0) body.peerDependencies = blocks.peer
   else if (nodeSide?.peerDependencies !== undefined) body.peerDependencies = sortRecord(nodeSide.peerDependencies)
+  else if (tarball?.peerDependencies !== undefined) body.peerDependencies = sortRecord(tarball.peerDependencies)
 
   if (Object.keys(blocks.optional).length > 0) body.optionalDependencies = blocks.optional
   else if (nodeSide?.optionalDependencies !== undefined) body.optionalDependencies = sortRecord(nodeSide.optionalDependencies)

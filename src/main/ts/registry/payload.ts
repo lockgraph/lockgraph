@@ -83,3 +83,20 @@ export function packageMetadataOfPayload(
   }
   return Object.freeze(metadata as PackageMetadataPayload)
 }
+
+function stableMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableMetadataValue)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, item]) => [key, stableMetadataValue(item)]))
+  }
+  return value
+}
+
+export function packageMetadataEqual(
+  left: Readonly<PackageMetadataPayload>,
+  right: Readonly<PackageMetadataPayload>,
+): boolean {
+  return JSON.stringify(stableMetadataValue(left)) === JSON.stringify(stableMetadataValue(right))
+}

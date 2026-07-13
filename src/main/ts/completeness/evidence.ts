@@ -454,6 +454,13 @@ function assertEvidenceInput(input: EvidenceInput): void {
   }
 }
 
+export function normalizePackageManifestEvidence(
+  input: PackageManifestEvidence,
+): PackageManifestEvidence {
+  assertEvidenceInput(input)
+  return cloneAndFreeze(input)
+}
+
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue)
   if (value !== null && typeof value === 'object') {

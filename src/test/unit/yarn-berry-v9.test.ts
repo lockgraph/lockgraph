@@ -47,6 +47,13 @@ function uniqueNodeByNameVersion(graph: Graph, name: string, version: string): N
   return matches[0]!
 }
 
+function uniquePatchedNodeByNameVersion(graph: Graph, name: string, version: string): Node {
+  const matches = Array.from(graph.nodes()).filter(node =>
+    node.name === name && node.version === version && node.patch !== undefined)
+  expect(matches).toHaveLength(1)
+  return matches[0]!
+}
+
 function graphSnapshot(graph: Graph) {
   return {
     nodes: Array.from(graph.nodes(), node => ({ ...node })),
@@ -259,9 +266,15 @@ describe('yarn-berry-v9 — patch extraction', () => {
     const nodeId = patchedNodeId('lodash', '4.17.21', expectedPatch)
 
     expect(g.getNode(nodeId)?.patch).toBe(expectedPatch)
-    expect(pickAlgorithm(g.tarballOf(nodeId)!.integrity!, 'sha512')).toBeDefined()
+    const patchedChecksum = pickAlgorithm(g.tarballOf(nodeId)!.integrity!, 'sha512')
+    const bareChecksum = pickAlgorithm(
+      g.tarball({ name: 'lodash', version: '4.17.21' })!.integrity!,
+      'sha512',
+    )
+    expect(patchedChecksum).toBeDefined()
     expect(pickAlgorithm(g.tarball({ name: 'lodash', version: '4.17.21', patch: expectedPatch })!.integrity!, 'sha512')).toBeDefined()
-    expect(g.tarball({ name: 'lodash', version: '4.17.21' })).toBeUndefined()
+    expect(bareChecksum).toBeDefined()
+    expect(patchedChecksum).not.toEqual(bareChecksum)
     expect([...g.tarballs()].map(([key]) => key)).toContain(`lodash@4.17.21+patch=${expectedPatch}`)
   })
 
@@ -273,7 +286,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
       rmSync(resolve(tempRoot, PATCH_FILE))
 
       const g = parse(lock, { workspaceRoot: tempRoot })
-      const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
+      const node = uniquePatchedNodeByNameVersion(g, 'lodash', '4.17.21')
       const resolution = g.tarballOf(node.id)?.nativeResolution
       expect(resolution).toBeDefined()
       const locator = patchLocatorOfResolution(resolution!)
@@ -340,7 +353,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
   ])('non-directory intermediate patch segments throw INVALID_INPUT for $label', ({ patchFile, setup }) => {
     const tempParent = mkdtempSync(resolve(tmpdir(), 'lockfile-patch-yarn-nondir-'))
     const tempRoot = resolve(tempParent, 'workspace')
-    const nestedLock = patchFile === PATCH_FILE ? lock : lock.replace(PATCH_FILE, patchFile)
+    const nestedLock = patchFile === PATCH_FILE ? lock : lock.replaceAll(PATCH_FILE, patchFile)
     const locator = patchFile === PATCH_FILE ? fixtureLocator : fixtureLocator.replace(PATCH_FILE, patchFile)
     try {
       cpSync(workspaceRoot, tempRoot, { recursive: true })
@@ -389,7 +402,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
       rmSync(tempRoot, { recursive: true, force: true })
 
       const g = parse(lock, { workspaceRoot: tempRoot })
-      const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
+      const node = uniquePatchedNodeByNameVersion(g, 'lodash', '4.17.21')
       const resolution = g.tarballOf(node.id)?.nativeResolution
       expect(resolution).toBeDefined()
       const locator = patchLocatorOfResolution(resolution!)
@@ -426,7 +439,7 @@ describe('yarn-berry-v9 — patch extraction', () => {
 
   it('parse() without workspaceRoot falls through to sentinel for file-backed patches', () => {
     const g = parse(lock)
-    const node = uniqueNodeByNameVersion(g, 'lodash', '4.17.21')
+    const node = uniquePatchedNodeByNameVersion(g, 'lodash', '4.17.21')
     const resolution = g.tarballOf(node.id)?.nativeResolution
     expect(resolution).toBeDefined()
     const locator = patchLocatorOfResolution(resolution!)
@@ -1244,7 +1257,7 @@ describe('yarn-berry-v9 — stringify', () => {
     // path keeps node.resolution intact when it carries `@patch:` and
     // emit returns it verbatim — round-trip stays lossless.
     const graph = parse(fixture('patch-yarn/yarn-berry-v9.lock'))
-    const node = uniqueNodeByNameVersion(graph, 'lodash', '4.17.21')
+    const node = uniquePatchedNodeByNameVersion(graph, 'lodash', '4.17.21')
     expect(node?.patch?.startsWith('unresolved-')).toBe(true)
     const { lockfile, diagnostics } = stringifyWithDiagnostics(graph)
     expect(diagnostics.find(d => d.code === 'RECIPE_FEATURE_DROPPED')).toBeUndefined()
@@ -1564,7 +1577,7 @@ describe('yarn-berry-v9 — modify', () => {
 
   it('refuses replaceNode on sentinel-keyed entries', () => {
     const graph = parse(fixture('patch-yarn/yarn-berry-v9.lock'))
-    const current = uniqueNodeByNameVersion(graph, 'lodash', '4.17.21')
+    const current = uniquePatchedNodeByNameVersion(graph, 'lodash', '4.17.21')
     expect(current?.patch?.startsWith('unresolved-')).toBe(true)
 
     expect(() => graph.mutate(m => {

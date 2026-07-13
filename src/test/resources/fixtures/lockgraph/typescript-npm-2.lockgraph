@@ -910,7 +910,7 @@ E 535
 365	325	dep	^4.2.3
 365	359	dep	^5.0.5
 365	362	dep	^21.1.1
-F 287
+F 288
 1	engines.node=>=18
 2	cpu.0=arm64	os.0=darwin
 3	cpu.0=x64	os.0=darwin
@@ -947,12 +947,12 @@ F 287
 39	cpu.0=arm64	os.0=win32	engines.node=>=18
 40	cpu.0=ia32	os.0=win32	engines.node=>=18
 41	cpu.0=x64	os.0=win32	engines.node=>=18
-45	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	funding.url=https://opencollective.com/eslint
+45	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	peerDependencies.eslint=^6.0.0 || ^7.0.0 || >=8.0.0	funding.url=https://opencollective.com/eslint
 46	engines.node=^12.0.0 || ^14.0.0 || >=16.0.0
 47	engines.node=^20.19.0 || ^22.13.0 || >=24
 48	engines.node=^20.19.0 || ^22.13.0 || >=24
 49	engines.node=^20.19.0 || ^22.13.0 || >=24
-50	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependenciesMeta.eslint.optional=true	funding.url=https://eslint.org/donate
+50	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependencies.eslint=^10.0.0	peerDependenciesMeta.eslint.optional=true	funding.url=https://eslint.org/donate
 51	engines.node=^20.19.0 || ^22.13.0 || >=24
 52	engines.node=^20.19.0 || ^22.13.0 || >=24
 53	engines.node=>=18.18.0
@@ -970,9 +970,9 @@ F 287
 67	engines.node=>= 20
 68	engines.node=>= 20
 69	engines.node=>= 20
-71	engines.node=>= 20
-72	engines.node=>= 20
-73	engines.node=>= 20
+71	engines.node=>= 20	peerDependencies.@octokit/core=>=6
+72	engines.node=>= 20	peerDependencies.@octokit/core=>=6
+73	engines.node=>= 20	peerDependencies.@octokit/core=>=6
 74	engines.node=>= 20
 75	engines.node=>= 20
 76	engines.node=>= 20
@@ -997,17 +997,18 @@ F 287
 96	cpu.0=ia32	os.0=win32
 97	cpu.0=x64	os.0=win32
 98	engines.node=>=14
-111	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-112	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-113	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-114	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+111	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.@typescript-eslint/parser=^8.57.2	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+112	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+113	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+114	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
 115	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-116	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-117	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+116	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+117	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
 118	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-119	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
-120	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+119	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+120	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
 121	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+122	peerDependencies.acorn=^6.0.0 || ^7.0.0 || ^8.0.0
 123	engines.node=>=0.4.0
 124	engines.node=>=0.4.0
 125	engines.node=>=0.4.0	bin.acorn=bin/acorn
@@ -1024,7 +1025,7 @@ F 287
 139	engines.node=>=8	funding.url=https://github.com/sponsors/sindresorhus
 141	engines.node=18 || 20 || >=22
 142	engines.node=>=8
-145	engines.node=>=18	peerDependenciesMeta.monocart-coverage-reports.optional=true	bin.c8=bin/c8.js
+145	engines.node=>=18	peerDependencies.monocart-coverage-reports=^2	peerDependenciesMeta.monocart-coverage-reports.optional=true	bin.c8=bin/c8.js
 146	engines.node=>= 0.4
 147	engines.node=>= 0.4	funding.url=https://github.com/sponsors/ljharb
 148	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
@@ -1051,11 +1052,11 @@ F 287
 179	engines.node=>=18	hasInstallScript=true	bin.esbuild=bin/esbuild
 180	engines.node=>=6
 181	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
-182	engines.node=^20.19.0 || ^22.13.0 || >=24
+182	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependencies.eslint=>=9.38.0
 183	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://opencollective.com/eslint
 184	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	funding.url=https://opencollective.com/eslint
 185	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://opencollective.com/eslint
-186	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependenciesMeta.jiti.optional=true	bin.eslint=bin/eslint.js	funding.url=https://eslint.org/donate
+186	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependencies.jiti=*	peerDependenciesMeta.jiti.optional=true	bin.eslint=bin/eslint.js	funding.url=https://eslint.org/donate
 187	engines.node=^20.19.0 || ^22.13.0 || >=24	funding.url=https://opencollective.com/eslint
 188	engines.node=>=0.10
 189	engines.node=>=4.0
@@ -1066,7 +1067,7 @@ F 287
 197	funding.0.type=github	funding.0.url=https://github.com/sponsors/NaturalIntelligence
 198	bin.fxparser=src/cli/cli.js	funding.0.type=github	funding.0.url=https://github.com/sponsors/NaturalIntelligence
 199	engines.node=>= 4.9.1
-202	engines.node=>=12.0.0	peerDependenciesMeta.picomatch.optional=true
+202	engines.node=>=12.0.0	peerDependencies.picomatch=^3 || ^4	peerDependenciesMeta.picomatch.optional=true
 203	engines.node=>=16.0.0
 204	engines.node=>=8
 205	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
@@ -1109,7 +1110,7 @@ F 287
 247	bin.jiti=lib/jiti-cli.mjs
 249	bin.js-yaml=bin/js-yaml.js
 250	engines.node=>=20.0.0
-257	engines.node=>=18.18.0	bin.knip=bin/knip.js	bin.knip-bun=bin/knip-bun.js	funding.0.type=github	funding.0.url=https://github.com/sponsors/webpro	funding.1.type=opencollective	funding.1.url=https://opencollective.com/knip
+257	engines.node=>=18.18.0	peerDependencies.@types/node=>=18	peerDependencies.typescript=>=5.0.4 <7	bin.knip=bin/knip.js	bin.knip-bun=bin/knip-bun.js	funding.0.type=github	funding.0.url=https://github.com/sponsors/webpro	funding.1.type=opencollective	funding.1.url=https://opencollective.com/knip
 258	engines.node=>= 0.8.0
 259	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
 261	engines.node=>=10	funding.url=https://github.com/sponsors/sindresorhus
@@ -1174,12 +1175,12 @@ F 287
 334	engines.node=>=18
 335	engines.node=>=12.0.0	funding.url=https://github.com/sponsors/SuperchupuDev
 336	engines.node=>=8.0
-337	engines.node=>=18.12
+337	engines.node=>=18.12	peerDependencies.typescript=>=4.8.4
 339	engines.node=>=0.6.11 <=0.7.0 || >=0.7.3
 340	engines.node=>= 0.8.0
 341	engines.node=>=4
 342	engines.node=>= 16.0.0
-343	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
+343	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.0.0	funding.type=opencollective	funding.url=https://opencollective.com/typescript-eslint
 344	engines.node=>=14.17	bin.tsc=bin/tsc	bin.tsserver=bin/tsserver
 345	engines.node=>=14
 350	engines.node=>=10.12.0

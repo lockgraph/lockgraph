@@ -21,9 +21,9 @@
 // INDEPENDENT of `generatedAt` (only META carries the clock), so neither guard
 // needs to match the timestamp — they compare the BODY only.
 //
-// REGENERATION ESCAPE HATCH — an intentional format change is a one-command refresh:
-//   UPDATE_LOCKGRAPH_FIXTURES=1 npx vitest run src/test/unit/lockgraph-fixtures.test.ts
-// which rewrites every fixture (with the pinned generatedAt) instead of asserting.
+// REGENERATION ESCAPE HATCH — an intentional format change is a targeted refresh:
+//   UPDATE_LOCKGRAPH_FIXTURES=typescript-npm-2.lockgraph npx vitest run src/test/unit/lockgraph-fixtures.test.ts
+// A comma-separated fixture list rewrites only those fixtures. `1` rewrites all.
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -67,13 +67,23 @@ function bodyOf(text: string): string {
   return normalised.slice(m.index! + 1) // from the `R <n>` line through the end
 }
 
-// Gate on a TRUTHY value only — `UPDATE_LOCKGRAPH_FIXTURES=0` (or `''`, `false`,
-// `no`) must NOT trigger a rewrite. A bare presence check would treat `=0` as
-// "on", silently clobbering the committed fixtures (N7).
-const UPDATING = (() => {
-  const v = (process.env.UPDATE_LOCKGRAPH_FIXTURES ?? '').trim().toLowerCase()
-  return v !== '' && v !== '0' && v !== 'false' && v !== 'no' && v !== 'off'
+const UPDATE_SELECTION = (() => {
+  const value = (process.env.UPDATE_LOCKGRAPH_FIXTURES ?? '').trim()
+  const normalized = value.toLowerCase()
+  if (normalized === '' || ['0', 'false', 'no', 'off'].includes(normalized)) return undefined
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return '*'
+
+  const fixtures = new Set(value.split(',').map((fixture) => fixture.trim()).filter(Boolean))
+  const knownFixtures = new Set(CORPUS.map(({ fixture }) => fixture))
+  const unknownFixtures = [...fixtures].filter((fixture) => !knownFixtures.has(fixture))
+  if (unknownFixtures.length > 0) {
+    throw new Error(`Unknown lockgraph fixture selection: ${unknownFixtures.join(', ')}`)
+  }
+  return fixtures
 })()
+
+const shouldUpdate = (fixture: string): boolean =>
+  UPDATE_SELECTION === '*' || UPDATE_SELECTION?.has(fixture) === true
 
 // Re-render a fixture's lockgraph doc from its SOURCE lock with the pinned clock.
 function renderFromSource(source: string, expectedFormat: FormatId): string {
@@ -89,7 +99,7 @@ describe('lockgraph — live example fixtures', () => {
       it('drift guard: fixture BODY matches a fresh render of the source lock', () => {
         const fresh = renderFromSource(source, format)
 
-        if (UPDATING) {
+        if (shouldUpdate(fixture)) {
           writeFileSync(lg(fixture), fresh, 'utf8')
           // eslint-disable-next-line no-console
           console.log(`UPDATE_LOCKGRAPH_FIXTURES: rewrote ${fixture}`)
@@ -108,7 +118,7 @@ describe('lockgraph — live example fixtures', () => {
       })
 
       it('round-trip guard: committed fixture parses back graph-identical and byte-stable', () => {
-        if (UPDATING) return // nothing to assert while regenerating
+        if (shouldUpdate(fixture)) return // nothing to assert while regenerating
 
         const committed = readFileSync(lg(fixture), 'utf8')
         const g = parseLockgraph(committed)
