@@ -154,14 +154,14 @@ describe('Bug #99 — backstage resolutions-pin ladder (real-world)', () => {
 
   it('the restored csstype dependency lines round-trip back into the emitted lock', () => {
     const withM = parse('yarn-berry-v8', lock, { manifests })
-    const out = stringify('yarn-berry-v8', withM)
+    const out = stringify('yarn-berry-v8', withM, { strict: false })
     // A consumer re-emits its `csstype: "npm:^3.1.3"` dependency line (the
     // NON-satisfying pin) now that the edge survived to the graph.
     expect(out).toMatch(/csstype: "npm:\^3\.1\.3"/)
   })
 
   it('round-trips the full lock without throwing (with + without manifests)', () => {
-    expect(() => stringify('yarn-berry-v8', parse('yarn-berry-v8', lock))).not.toThrow()
-    expect(() => stringify('yarn-berry-v8', parse('yarn-berry-v8', lock, { manifests }))).not.toThrow()
+    expect(() => stringify('yarn-berry-v8', parse('yarn-berry-v8', lock), { strict: false })).not.toThrow()
+    expect(() => stringify('yarn-berry-v8', parse('yarn-berry-v8', lock, { manifests }), { strict: false })).not.toThrow()
   })
 })

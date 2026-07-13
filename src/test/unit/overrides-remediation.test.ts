@@ -68,7 +68,7 @@ describe('overrides — Confirm A: pinOverride survives mutate via overridesOf (
 
     // The documented idiom re-emits the pnpm `overrides:` block → a later
     // `pnpm install --frozen-lockfile` stays clean (no CONFIG_MISMATCH).
-    const out = stringify('pnpm-v9', pinned, { overrides: overridesOf(pinned) })
+    const out = stringify('pnpm-v9', pinned, { overrides: overridesOf(pinned), strict: false })
     expect(out).toContain('overrides:')
     expect(out).toContain('axios: 1.6.0')
   })

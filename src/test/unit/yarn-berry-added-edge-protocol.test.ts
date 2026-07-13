@@ -49,7 +49,7 @@ describe('yarn-berry: added edges get the npm: protocol on emit', () => {
       m.addEdge('tslib@2.0.0', 'ms@2.1.3', 'dep', { range: '^2.1.3' })
     }).graph
 
-    const out = stringify('yarn-berry-v8', g1)
+    const out = stringify('yarn-berry-v8', g1, { strict: false })
     expect(out).toContain('ms: "npm:^2.1.3"')   // synthesised, not bare
     expect(out).not.toContain('ms: ^2.1.3')      // never the bare semver: form
   })

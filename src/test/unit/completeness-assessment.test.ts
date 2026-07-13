@@ -182,7 +182,7 @@ describe('sidecar feature attribution', () => {
     ['catalogs', 'pnpm-v9' as const, pnpmWithCatalog('4.17.21')],
   ])('blocks assessment when %s sidecar attribution is lost', (feature, format, input) => {
     const source = parse(format, input)
-    const current = parse('lockgraph', stringify('lockgraph', source))
+    const current = parse('lockgraph', stringify('lockgraph', source, { strict: false }))
     const assessment = assessConversion(current, {
       contract: 'snapshot',
       target: { format },

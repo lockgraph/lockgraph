@@ -142,8 +142,8 @@ function yarnBerry(format: FormatId): Readonly<ResolvedTargetCapabilities> {
     comparesOverridesInFrozen: false,
     overridesGrammar: 'yarn-selective',
     metadataFields: format === 'yarn-berry-v4'
-      ? metadata('bin')
-      : metadata('bin', 'cpu', 'os', 'libc'),
+      ? metadata('bin', 'peerDependencies', 'peerDependenciesMeta')
+      : metadata('bin', 'cpu', 'os', 'libc', 'peerDependencies', 'peerDependenciesMeta'),
   })
 }
 

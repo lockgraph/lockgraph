@@ -24,8 +24,11 @@ function graphWith(payload: TarballPayload): Graph {
 }
 
 function expectStable(format: FormatId, payload: TarballPayload): string {
-  const output = stringify(format, graphWith(payload))
-  expect(stringify(format, parse(format, output))).toBe(output)
+  const options = format.startsWith('pnpm-') || format.startsWith('yarn-berry-')
+    ? { strict: false }
+    : {}
+  const output = stringify(format, graphWith(payload), options)
+  expect(stringify(format, parse(format, output), options)).toBe(output)
   return output
 }
 
@@ -69,11 +72,15 @@ describe('package metadata emitters', () => {
       cpu: ['x64'],
       os: ['linux'],
       libc: ['glibc'],
+      peerDependencies: { peer: '^1.0.0' },
+      peerDependenciesMeta: { peer: { optional: true } },
     }
     const output = expectStable('yarn-berry-v9', payload)
 
     expect(output).toContain('  bin:')
     expect(output).toContain('  conditions: os=linux & cpu=x64 & libc=glibc')
+    expect(output).toContain('  peerDependencies:')
+    expect(output).toContain('  peerDependenciesMeta:')
     expectMetadataFields('yarn-berry-v9', Object.keys(payload) as PackageMetadataField[])
   })
 

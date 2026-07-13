@@ -45,7 +45,7 @@ describe('modify mint paths preserve peer blocks (yaf hpm bump → berry frozen-
     expect(bumped.tarballOf('hpm@2.0.9')?.peerDependenciesMeta).toEqual({ '@types/express': { optional: true } })
 
     // …and survive to the yarn-berry emit (scoped peer key is quoted).
-    const out = stringify('yarn-berry-v8', bumped)
+    const out = stringify('yarn-berry-v8', bumped, { strict: false })
     expect(out).toContain('peerDependencies:')
     expect(out).toContain('"@types/express": ^4.17.13')
     expect(out).toMatch(/peerDependenciesMeta:\n\s+"@types\/express":\n\s+optional: true/)

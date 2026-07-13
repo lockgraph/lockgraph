@@ -12,7 +12,7 @@ const unitLockfiles = resolve(here, '../../resources/fixtures/lockfiles')
 function collectResolveViolations(format: FormatId, lock: string): Diagnostic[] {
   const graph = parse(format, lock)
   const diagnostics: Diagnostic[] = []
-  stringify(format, graph, { onDiagnostic: d => diagnostics.push(d) })
+  stringify(format, graph, { strict: false, onDiagnostic: d => diagnostics.push(d) })
   return diagnostics.filter(d => d.code === 'LAYOUT_RESOLVE_VIOLATION')
 }
 
@@ -83,7 +83,7 @@ describe('pnpm INV-RESOLVE — npm-alias on emit (ADR-0028)', () => {
 
   it('round-trips with the alias slot preserved (red before Task B, green after)', () => {
     const g = parse('pnpm-v9', ALIASED_V9)
-    const out = stringify('pnpm-v9', g)
+    const out = stringify('pnpm-v9', g, { strict: false })
 
     // The importer dep block keys by the ALIAS, valued canonical — the fix.
     // (Pre-fix, the slot was keyed `react-is:` with a bare `17.0.2` value.)
@@ -174,7 +174,7 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
     }
     // Round-trip: emit re-parses with BOTH hash-discriminated instances intact
     // (the opaque token rides through serializeNodeId verbatim).
-    const reparsed = parse('pnpm-v9', stringify('pnpm-v9', graph))
+    const reparsed = parse('pnpm-v9', stringify('pnpm-v9', graph, { strict: false }))
     const rebuilds = Array.from(reparsed.nodes()).filter(nn => nn.name === '@angular/build' && nn.version === '22.0.0-rc.2')
     expect(rebuilds.length).toBe(2)
   })
@@ -258,7 +258,7 @@ describe('pnpm INV-RESOLVE — nested-peer-suffix preserved (#70)', () => {
   })
 
   it('round-trips both instances byte-stably (no silent collapse)', () => {
-    const out = stringify('pnpm-v9', parse('pnpm-v9', NESTED_V9))
+    const out = stringify('pnpm-v9', parse('pnpm-v9', NESTED_V9), { strict: false })
     const g2 = parse('pnpm-v9', out)
     const widgets = Array.from(g2.nodes()).filter(n => n.name === 'widget').map(n => n.id).sort()
     expect(widgets).toEqual([

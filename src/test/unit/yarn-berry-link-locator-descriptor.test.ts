@@ -159,7 +159,7 @@ __metadata:
 describe('yarn-berry link:/portal: ::locator= descriptor round-trip (Bug #90)', () => {
   it('keeps the qualified descriptor; emits NO spurious bare duplicate', () => {
     const g = parse('yarn-berry-v8', MINIMAL)
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
 
     const raw = linkTokens(MINIMAL)
     const emitted = linkTokens(out)
@@ -179,9 +179,9 @@ describe('yarn-berry link:/portal: ::locator= descriptor round-trip (Bug #90)', 
 
   it('round-trips parse→stringify→parse with a stable descriptor set', () => {
     const g1 = parse('yarn-berry-v8', MINIMAL)
-    const out1 = stringify('yarn-berry-v8', g1)
+    const out1 = stringify('yarn-berry-v8', g1, { strict: false })
     const g2 = parse('yarn-berry-v8', out1)
-    const out2 = stringify('yarn-berry-v8', g2)
+    const out2 = stringify('yarn-berry-v8', g2, { strict: false })
 
     // Byte-idempotent and structurally stable.
     expect(out2).toBe(out1)
@@ -210,7 +210,7 @@ describe('yarn-berry link:/portal: ::locator= descriptor round-trip (Bug #90)', 
 
   it('qualified-dep-value control: single key, unaffected by the fix', () => {
     const g = parse('yarn-berry-v8', QUALIFIED_DEP)
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
     const emitted = linkTokens(out)
     // The secondary descriptor equals the primary → still exactly one qualified
     // token, never a bare one.
@@ -224,7 +224,7 @@ describe('yarn-berry link:/portal: ::locator= descriptor round-trip (Bug #90)', 
     expect(sharedNodes.length).toBe(2) // one sentinel node per ::locator=
     expect(new Set(sharedNodes.map(n => n.id)).size).toBe(2)
 
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
     const emitted = linkTokens(out)
     expect(emitted.qualified.length).toBe(2)
     expect(emitted.bare.length).toBe(0)
@@ -233,7 +233,7 @@ describe('yarn-berry link:/portal: ::locator= descriptor round-trip (Bug #90)', 
     expect((out.match(/shared: "link:\.\.\/shared"/g) || []).length).toBe(2)
     const g2 = parse('yarn-berry-v8', out)
     expect(Array.from(g2.nodes()).length).toBe(Array.from(g.nodes()).length)
-    expect(stringify('yarn-berry-v8', g2)).toBe(out)
+    expect(stringify('yarn-berry-v8', g2, { strict: false })).toBe(out)
   })
 })
 
@@ -254,7 +254,7 @@ describe('yarn-berry link: ::locator= descriptor round-trip — real fixture (ba
     expect(raw.bare.length).toBe(0)
 
     const g = parse('yarn-berry-v9', babelLock)
-    const out = stringify('yarn-berry-v9', g)
+    const out = stringify('yarn-berry-v9', g, { strict: false })
     const emitted = linkTokens(out)
     // Same 4 qualified link descriptors survive; zero bare ones are introduced.
     expect(emitted.qualified.length).toBe(4)

@@ -116,7 +116,7 @@ describe('real-world yarn-classic robustness (yarn-audit-fix sweep)', () => {
     })
 
     // Faithful round-trip: stringify → reparse yields the same two distinct nodes.
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
     const g2 = parse('yarn-berry-v8', out)
     const reSample = Array.from(g2.nodes())
       .filter(n => n.name === '@k8ts/sample-interfaces' && n.version === '0.6.3')

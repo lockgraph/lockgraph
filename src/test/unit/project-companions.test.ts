@@ -238,6 +238,7 @@ describe('projectCompanionsOf', () => {
     const graph = parse(format, input)
     const output = stringify(format, graph, {
       overrides: [{ package: 'lodash', to: '4.17.20' }],
+      strict: false,
     })
 
     expect(output).toMatch(expected)

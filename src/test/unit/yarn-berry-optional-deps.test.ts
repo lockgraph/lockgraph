@@ -21,7 +21,7 @@ describe('yarn-berry: optional deps fold into dependencies + dependenciesMeta', 
       addEdge(builder, hb, uglify,   'optional', '^3.1.4')
     })
 
-    const out = stringify('yarn-berry-v8', graph)
+    const out = stringify('yarn-berry-v8', graph, { strict: false })
 
     // No separate optionalDependencies map anywhere.
     expect(out).not.toContain('optionalDependencies:')

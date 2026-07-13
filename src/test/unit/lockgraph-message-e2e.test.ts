@@ -153,7 +153,7 @@ describe('lockgraph-message e2e — dependency-changing berry upgrade', () => {
     expect(deps).not.toContain('optimist@0.6.1')
 
     // bug 2 — emit: every fresh edge carries npm:, never the bare semver: form.
-    const out = stringify('yarn-berry-v8', completed.graph)
+    const out = stringify('yarn-berry-v8', completed.graph, { strict: false })
     expect(out).toContain('minimist: "npm:^1.2.5"')
     expect(out).toContain('neo-async: "npm:^2.6.2"')
     expect(out).toContain('wordwrap: "npm:^1.0.0"')
@@ -189,7 +189,7 @@ describe('lockgraph-message e2e — dependency-changing berry upgrade', () => {
 
     // .69 issue 1 (emit) — optional folds into `dependencies` + dependenciesMeta,
     // never a separate optionalDependencies block (yarn rejects one, YN0028).
-    const out = stringify('yarn-berry-v8', pruned.graph)
+    const out = stringify('yarn-berry-v8', pruned.graph, { strict: false })
     expect(out).not.toContain('optionalDependencies:')
     expect(out).toContain('uglify-js: "npm:^3.1.4"')
     expect(out).toMatch(/dependenciesMeta:\n\s+uglify-js:\n\s+optional: true/)

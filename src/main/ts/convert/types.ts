@@ -30,6 +30,7 @@ export interface ConvertFileSystem {
 
 export interface ConvertOptions {
   readonly to: FormatId
+  readonly strict?: boolean
   readonly from?: FormatId
   readonly targetVersion?: string
   readonly sources?: EnrichSources

@@ -123,7 +123,7 @@ describe('Bug #99 — yarn-berry resolution ladder', () => {
 
   it('round-trips the restored dependency line back into the emitted lock', () => {
     const g = parse('yarn-berry-v8', BERRY_LOCK, { manifests: BERRY_MANIFESTS })
-    const out: string = stringify('yarn-berry-v8', g)
+    const out: string = stringify('yarn-berry-v8', g, { strict: false })
     // the root workspace entry re-emits its `csstype` dependency (it was dropped
     // pre-fix → the line vanished on round-trip)
     const rootBlock = out.slice(out.indexOf('"root@workspace:.":'))

@@ -130,13 +130,13 @@ describe('public surface — detect', () => {
 describe('public surface — convert', () => {
   it('parses + stringifies happy path (yarn-berry-v9 → pnpm-v9)', async () => {
     const input = fixture('simple', 'yarn-berry-v9.lock')
-    const out = await convert(input, { to: 'pnpm-v9' })
+    const out = await convert(input, { to: 'pnpm-v9', strict: false })
     expect(check('pnpm-v9', out)).toBe(true)
   })
 
   it('honours explicit `from` when it agrees with detection', async () => {
     const input = fixture('simple', 'yarn-berry-v9.lock')
-    const out = await convert(input, { from: 'yarn-berry-v9', to: 'pnpm-v9' })
+    const out = await convert(input, { from: 'yarn-berry-v9', to: 'pnpm-v9', strict: false })
     expect(check('pnpm-v9', out)).toBe(true)
   })
 
@@ -150,6 +150,7 @@ describe('public surface — convert', () => {
     const captured: Diagnostic[] = []
     await convert(input, {
       to:           'pnpm-v9',
+      strict:       false,
       onDiagnostic: d => { captured.push(d) },
     })
     // Callback must be invocable; mixed parse-side + stringify-side
@@ -161,13 +162,13 @@ describe('public surface — convert', () => {
     // Recipe-layer F1 hex/SRI translation lands in a later round. For now,
     // verify that the option reaches the yarn-berry sidecar/metadata.
     const input = fixture('simple', 'yarn-berry-v9.lock')
-    const out = await convert(input, { to: 'yarn-berry-v9', cacheKey: 'ffff' })
+    const out = await convert(input, { to: 'yarn-berry-v9', cacheKey: 'ffff', strict: false })
     expect(out).toContain('cacheKey: ffff')
   })
 
   it('cross-family conversion: npm-3 → pnpm-v9 emits valid pnpm output', async () => {
     const input = fixture('simple', 'npm-3.lock')
-    const out = await convert(input, { to: 'pnpm-v9' })
+    const out = await convert(input, { to: 'pnpm-v9', strict: false })
     expect(check('pnpm-v9', out)).toBe(true)
     // round-trip sanity: parse the output as the target format
     const reparsed = parse('pnpm-v9', out)
@@ -183,6 +184,7 @@ describe('public surface — convert', () => {
     const captured: Diagnostic[] = []
     await convert(input, {
       to:           'bun-text',
+      strict:       false,
       onDiagnostic: d => { captured.push(d) },
     })
     // patches dropped → at least one diagnostic surfaces from the bun-text emit side
@@ -197,7 +199,8 @@ describe('public surface — convert', () => {
     const codes: string[] = []
     await convert(input, {
       to:           'bun-text',
-      onDiagnostic: d => { codes.push(`${d.code}|${d.subject ?? ''}`) },
+      strict:       false,
+      onDiagnostic: d => { codes.push(JSON.stringify([d.code, d.subject ?? null, d.message])) },
     })
     const dedup = new Set(codes)
     expect(codes.length).toBe(dedup.size)

@@ -124,9 +124,10 @@ describe('convert input normalization', () => {
   })
 
   it('keeps ProjectInput conversion filesystem-independent', async () => {
-    const expected = await convert(NPM, { to: 'pnpm-v9' })
+    const expected = await convert(NPM, { to: 'pnpm-v9', strict: false })
     const actual = await convert({ files: { 'package-lock.json': NPM } }, {
       to: 'pnpm-v9',
+      strict: false,
       fs: inaccessibleFileSystem,
     })
 
@@ -135,9 +136,10 @@ describe('convert input normalization', () => {
 
   it('reads ProjectPathInput only through the supplied filesystem seam', async () => {
     const memory = memoryFileSystem({ '/repo/package-lock.json': NPM })
-    const expected = await convert({ files: { 'package-lock.json': NPM } }, { to: 'pnpm-v9' })
+    const expected = await convert({ files: { 'package-lock.json': NPM } }, { to: 'pnpm-v9', strict: false })
     const actual = await convert({ cwd: '/repo', patterns: ['package-lock.json'] }, {
       to: 'pnpm-v9',
+      strict: false,
       fs: memory.fs,
     })
 
@@ -150,7 +152,7 @@ describe('convert input normalization', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'lockgraph-convert-'))
     try {
       writeFileSync(path.join(root, 'package-lock.json'), NPM)
-      const output = await convert({ cwd: root, patterns: ['package-lock.json'] }, { to: 'pnpm-v9' })
+      const output = await convert({ cwd: root, patterns: ['package-lock.json'] }, { to: 'pnpm-v9', strict: false })
       expect(check('pnpm-v9', output)).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -243,7 +245,7 @@ describe('convert input normalization', () => {
         'package.json': JSON.stringify({ workspaces: [segment] }),
         [`${candidate}/package.json`]: JSON.stringify({ name: 'candidate', version: '1.0.0' }),
       },
-    }, { to: 'lockgraph' })).resolves.toEqual(expect.any(String))
+    }, { to: 'lockgraph', strict: false })).resolves.toEqual(expect.any(String))
   })
 
   it('rejects traversal introduced by brace expansion', async () => {
@@ -279,6 +281,7 @@ describe('convert project facts', () => {
     })
     const output = JSON.parse(await convert({ cwd: '/repo', patterns: ['yarn.lock'] }, {
       to: 'npm-3',
+      strict: false,
       fs: memory.fs,
     })) as { packages: Record<string, { name?: string }> }
 
@@ -301,6 +304,7 @@ describe('convert project facts', () => {
     })
     await convert({ cwd: '/repo', patterns: ['pnpm-lock.yaml'] }, {
       to: 'lockgraph',
+      strict: false,
       fs: memory.fs,
       onDiagnostic: diagnostic => diagnostics.push(diagnostic),
     })
@@ -326,6 +330,7 @@ describe('convert project facts', () => {
       },
     }, {
       to: 'npm-3',
+      strict: false,
       onDiagnostic: diagnostic => diagnostics.push(diagnostic),
     })
 
@@ -351,7 +356,7 @@ describe('convert project facts', () => {
       },
     }
 
-    const output = await convert(project, { to: 'npm-3', manifests: { '': manifest } })
+    const output = await convert(project, { to: 'npm-3', manifests: { '': manifest }, strict: false })
     expect(check('npm-3', output)).toBe(true)
     await expect(convert(project, {
       to: 'npm-3',
@@ -375,6 +380,7 @@ describe('convert project facts', () => {
       },
     }, {
       to: 'npm-3',
+      strict: false,
       manifests: {
         '': {
           ...manifest,
@@ -419,6 +425,7 @@ describe('convert project facts', () => {
     }
     const output = JSON.parse(await convert({ files: { 'yarn.lock': CLASSIC } }, {
       to: 'npm-3',
+      strict: false,
       sources: {
         manifests: {
           '': {
@@ -441,6 +448,7 @@ describe('convert project facts', () => {
     const memory = memoryFileSystem({ '/repo/yarn.lock': BERRY_PATCH })
     const output = await convert({ cwd: '/repo', patterns: ['yarn.lock'] }, {
       to: 'lockgraph',
+      strict: false,
       fs: memory.fs,
       onDiagnostic: diagnostic => diagnostics.push(diagnostic),
     })
@@ -461,6 +469,7 @@ describe('convert project facts', () => {
     const diagnostics: Diagnostic[] = []
     const output = await convert({ files: { 'yarn.lock': BERRY_PATCH } }, {
       to: 'lockgraph',
+      strict: false,
       onDiagnostic: diagnostic => diagnostics.push(diagnostic),
     })
 
@@ -478,6 +487,7 @@ describe('convert project facts', () => {
     const diagnostics: Diagnostic[] = []
     await convert(BERRY_PATCH, {
       to: 'lockgraph',
+      strict: false,
       onDiagnostic: diagnostic => diagnostics.push(diagnostic),
     })
 
@@ -491,6 +501,7 @@ describe('convert project facts', () => {
     const diagnostics: Diagnostic[] = []
     await convert({ files: { 'yarn.lock': BERRY_BUILTIN } }, {
       to: 'lockgraph',
+      strict: false,
       onDiagnostic: diagnostic => diagnostics.push(diagnostic),
     })
 

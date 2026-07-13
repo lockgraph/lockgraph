@@ -316,6 +316,7 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     const npm2Text = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-2',
+      strict: false,
     })
     const g0 = parse('npm-2', npm2Text)
     const g = npm2.enrich(g0).graph as GraphType
@@ -336,6 +337,7 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     const npm3Text = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-3',
+      strict: false,
     })
     const g0 = parse('npm-3', npm3Text)
     const g = npm3.enrich(g0).graph as GraphType
@@ -372,6 +374,7 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     const yarnText = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
+      strict: false,
     })
     const g0 = parse('yarn-classic', yarnText)
     const g = yarnClassic.enrich(g0, undefined, {
@@ -419,6 +422,7 @@ describe('recipe/workspace — yarn-berry-v9 → pnpm-v9 (both protocol-bearing)
     const out = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'pnpm-v9',
+      strict: false,
       onDiagnostic: d => diags.push(d),
     })
     expect(out).toContain('workspace:')
@@ -437,6 +441,7 @@ describe('recipe/workspace — yarn-berry-v9 → yarn-classic fires RECIPE_WORKS
     const out = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
+      strict: false,
       onDiagnostic: d => diags.push(d),
     })
     const resolved = diags.filter(d => d.code === 'RECIPE_WORKSPACE_RESOLVED')
@@ -453,6 +458,7 @@ describe('recipe/workspace — yarn-berry-v9 → npm-3 fires RECIPE_WORKSPACE_RE
     const out = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-3',
+      strict: false,
       onDiagnostic: d => diags.push(d),
     })
     const resolved = diags.filter(d => d.code === 'RECIPE_WORKSPACE_RESOLVED')
@@ -467,6 +473,7 @@ describe('recipe/workspace — yarn-berry-v9 → bun-text fires RECIPE_WORKSPACE
     await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'bun-text',
+      strict: false,
       onDiagnostic: d => diags.push(d),
     })
     const collapsed = diags.filter(d => d.code === 'RECIPE_WORKSPACE_COLLAPSED')
@@ -480,6 +487,7 @@ describe('recipe/workspace — yarn-berry-v9 → npm-1 fires RECIPE_FEATURE_DROP
     await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-1',
+      strict: false,
       onDiagnostic: d => diags.push(d),
     })
     const wsDrops = diags.filter(d =>

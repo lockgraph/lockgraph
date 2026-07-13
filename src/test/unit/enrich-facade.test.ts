@@ -340,7 +340,8 @@ describe('target-aware enrich facade', () => {
     const first = await enrich(input, sources, npmTarget)
     const second = await enrich(input, sources, npmTarget)
 
-    expect(stringify('lockgraph', second.graph)).toBe(stringify('lockgraph', first.graph))
+    expect(stringify('lockgraph', second.graph, { strict: false }))
+      .toBe(stringify('lockgraph', first.graph, { strict: false }))
     expect(second.diagnostics).toEqual(first.diagnostics)
   })
 

@@ -198,6 +198,7 @@ describe('recipe/patch — convert preserves the patch slot across supporting pa
     const output = await convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'pnpm-v9',
+      strict: false,
       workspaceRoot: templateDir('patch-yarn'),
       onDiagnostic: d => diagnostics.push(d),
     })
@@ -227,6 +228,7 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
     await convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'bun-text',
+      strict: false,
       workspaceRoot: templateDir('patch-yarn'),
       onDiagnostic: d => diagnostics.push(d),
     })
@@ -238,6 +240,7 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
     await convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-3',
+      strict: false,
       workspaceRoot: templateDir('patch-yarn'),
       onDiagnostic: d => diagnostics.push(d),
     })
@@ -249,6 +252,7 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
     await convert(fixture('patch-yarn/pnpm-v9.lock'), {
       from: 'pnpm-v9',
       to:   'yarn-classic',
+      strict: false,
       workspaceRoot: templateDir('patch-yarn'),
       onDiagnostic: d => diagnostics.push(d),
     })
@@ -365,7 +369,7 @@ packages:
     const graph = parse('pnpm-v9', PNPM_V9_WITH_OVERRIDE('lodash@^4'), {
       workspaceRoot: templateDir('patch-yarn'),
     })
-    const out = stringify('pnpm-v9', graph)
+    const out = stringify('pnpm-v9', graph, { strict: false })
     // Either the original `^4` override is preserved verbatim or a
     // synthesised `lodash@npm:4.17.21` entry covers the patched node —
     // either way the overrides block carries a patch: entry.

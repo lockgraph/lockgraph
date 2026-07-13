@@ -31,6 +31,6 @@ describe('real-world berry workspace seal (yarn-audit-fix #4)', () => {
   })
 
   it('round-trips without throwing', () => {
-    expect(() => stringify('yarn-berry-v7', parse('yarn-berry-v7', berryLock))).not.toThrow()
+    expect(() => stringify('yarn-berry-v7', parse('yarn-berry-v7', berryLock), { strict: false })).not.toThrow()
   })
 })

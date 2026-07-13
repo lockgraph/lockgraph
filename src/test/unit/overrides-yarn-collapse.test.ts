@@ -36,19 +36,19 @@ const stampedGraph = (overrideStamp: boolean) => {
 
 describe('overrides — bare yarn resolution collapses a completed descriptor (yaf freeze-oracle)', () => {
   it('yarn-berry (reconstruction): the two descriptors collapse to the single pinned key', () => {
-    const out = stringify('yarn-berry-v8', stampedGraph(true))
+    const out = stringify('yarn-berry-v8', stampedGraph(true), { strict: false })
     expect(out).toContain('"minimist@npm:1.2.5":')
     expect(out).not.toContain('minimist@npm:^1.2.5') // stale range descriptor gone
   })
 
   it('yarn-classic (reconstruction): same collapse', () => {
-    const out = stringify('yarn-classic', stampedGraph(true))
+    const out = stringify('yarn-classic', stampedGraph(true), { strict: false })
     expect(out).toMatch(/minimist@1\.2\.5/)
     expect(out).not.toContain('minimist@^1.2.5')
   })
 
   it('WITHOUT the override stamp, both descriptors survive (collapse is override-gated, not blanket)', () => {
-    const out = stringify('yarn-berry-v8', stampedGraph(false))
+    const out = stringify('yarn-berry-v8', stampedGraph(false), { strict: false })
     expect(out).toContain('minimist@npm:^1.2.5')
   })
 
@@ -57,7 +57,7 @@ describe('overrides — bare yarn resolution collapses a completed descriptor (y
   // drops the pin and re-breaks the collapse downstream (adversary finding).
   it('lockgraph round-trip preserves overrideRange (governed edge stays collapsed)', () => {
     const round = parse('lockgraph', stringify('lockgraph', stampedGraph(true)))
-    const out = stringify('yarn-berry-v8', round)
+    const out = stringify('yarn-berry-v8', round, { strict: false })
     expect(out).toContain('"minimist@npm:1.2.5":')
     expect(out).not.toContain('minimist@npm:^1.2.5')
   })
@@ -127,7 +127,7 @@ describe('overrides — bare yarn resolution collapses a completed descriptor (y
     const result = await completeTransitives(graph, sidecarRegistry, {
       overrides: withOverride ? [{ package: 'minimist', to: '1.2.5' }] : [],
     })
-    return { out: stringify('yarn-berry-v8', result.graph), result }
+    return { out: stringify('yarn-berry-v8', result.graph, { strict: false }), result }
   }
 
   it('yarn-berry (sidecar): completion adding a 2nd consumer keeps the parse sidecar collapsed', async () => {

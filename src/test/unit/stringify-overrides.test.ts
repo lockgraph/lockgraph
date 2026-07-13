@@ -25,7 +25,7 @@ describe('StringifyOptions.overrides projection (ADR-0025 §4)', () => {
   it('npm-3 does NOT synthesize packages[""].overrides — surfaces INTEROP_OVERRIDE_NOT_PROJECTED', () => {
     const g = parse('npm-3', fixture('simple/npm-3.lock'))
     const diags: Diagnostic[] = []
-    const out = JSON.parse(stringify('npm-3', g, { overrides: OVERRIDES, onDiagnostic: d => diags.push(d) }))
+    const out = JSON.parse(stringify('npm-3', g, { overrides: OVERRIDES, strict: false, onDiagnostic: d => diags.push(d) }))
     // npm reads overrides from package.json, never the lock — the field is not npm-native.
     expect(out.packages[''].overrides).toBeUndefined()
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
@@ -56,14 +56,14 @@ describe('StringifyOptions.overrides projection (ADR-0025 §4)', () => {
   it('yarn-berry-v9 emits INTEROP_OVERRIDE_NOT_PROJECTED (lock carries no overrides block)', () => {
     const g = parse('yarn-berry-v9', fixture('simple/yarn-berry-v9.lock'))
     const diags: Diagnostic[] = []
-    stringify('yarn-berry-v9', g, { overrides: OVERRIDES, onDiagnostic: d => diags.push(d) })
+    stringify('yarn-berry-v9', g, { overrides: OVERRIDES, strict: false, onDiagnostic: d => diags.push(d) })
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
   it('yarn-classic emits INTEROP_OVERRIDE_NOT_PROJECTED', () => {
     const g = parse('yarn-classic', fixture('simple/yarn-classic.lock'))
     const diags: Diagnostic[] = []
-    stringify('yarn-classic', g, { overrides: OVERRIDES, onDiagnostic: d => diags.push(d) })
+    stringify('yarn-classic', g, { overrides: OVERRIDES, strict: false, onDiagnostic: d => diags.push(d) })
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
@@ -111,7 +111,7 @@ describe('npm lock-borne overrides are non-native — captured, never re-emitted
     const g = parse('npm-3', NPM3_WITH_OVERRIDES)
     expect(overridesOf(g).length).toBeGreaterThan(0) // policy preserved in the graph...
     const diags: Diagnostic[] = []
-    const out = JSON.parse(stringify('npm-3', g, { onDiagnostic: d => diags.push(d) }))
+    const out = JSON.parse(stringify('npm-3', g, { strict: false, onDiagnostic: d => diags.push(d) }))
     expect(out.packages[''].overrides).toBeUndefined() // ...but never written back into npm output
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
@@ -125,7 +125,7 @@ describe('npm lock-borne overrides are non-native — captured, never re-emitted
     const g = parse('npm-3', NPM3_WITH_OVERRIDES)
     const diags: Diagnostic[] = []
     const out = JSON.parse(
-      stringify('npm-3', g, { overrides: [{ package: 'left-pad', to: '1.3.0' }], onDiagnostic: d => diags.push(d) }),
+      stringify('npm-3', g, { overrides: [{ package: 'left-pad', to: '1.3.0' }], strict: false, onDiagnostic: d => diags.push(d) }),
     )
     expect(out.packages[''].overrides).toBeUndefined()
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
@@ -194,7 +194,7 @@ describe('bun-text overrides — flat grammar (ancestry-scoped dropped)', () => 
   it('projects a global override flat + drops an ancestry-scoped one with a diagnostic', () => {
     const g = parse('bun-text', fixture('simple/bun-text.lock'))
     const diags: Diagnostic[] = []
-    const out = stringify('bun-text', g, { overrides: OVERRIDES, onDiagnostic: d => diags.push(d) })
+    const out = stringify('bun-text', g, { overrides: OVERRIDES, strict: false, onDiagnostic: d => diags.push(d) })
     expect(diags.map(d => d.code)).toContain('BUN_OVERRIDE_NESTED_UNSUPPORTED')
     const back = overridesOf(parse('bun-text', out))
     expect(back).toContainEqual({ package: 'lodash', to: '4.17.21' })          // global kept, flat

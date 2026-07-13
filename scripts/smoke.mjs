@@ -19,8 +19,14 @@ const npm3 = JSON.stringify({
 const graph = parse('npm-3', npm3)
 assert.equal(stringify('npm-3', graph), npm3, 'npm-3 round-trip must be byte-identical')
 
-// 2) Cross-family convert (npm-3 -> yarn-classic) — the headline feature.
-const yarnLock = await convert(npm3, { from: 'npm-3', to: 'yarn-classic' })
+// 2) Cross-family convert (npm-3 -> yarn-classic) — strict rejects the
+// accepted graph loss; the explicit legacy mode still performs the conversion.
+await assert.rejects(
+  convert(npm3, { from: 'npm-3', to: 'yarn-classic' }),
+  error => error?.code === 'IRREDUCIBLE_LOSS',
+  'strict convert must reject a lossy cross-family projection',
+)
+const yarnLock = await convert(npm3, { from: 'npm-3', to: 'yarn-classic', strict: false })
 assert.ok(yarnLock.includes('# yarn lockfile v1'), 'convert must emit a yarn.lock header')
 
 // 3) A dependency edge survives the graph model.

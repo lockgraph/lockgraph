@@ -30,7 +30,7 @@ const catalogEntryNames = (s: string): string[] =>
 describe('pnpm catalog: round-trip (#56)', () => {
   it('preserves the top-level catalogs: block and re-parses (BLOCKER)', () => {
     const lock = realWorld('directus-directus-main-4290f6e/pnpm-lock.yaml')
-    const out = stringify('pnpm-v9', parse('pnpm-v9', lock))
+    const out = stringify('pnpm-v9', parse('pnpm-v9', lock), { strict: false })
 
     // The catalogs: block must survive — its loss is the BLOCKER (orphaned refs).
     expect(/^catalogs:/m.test(out)).toBe(true)
@@ -43,8 +43,8 @@ describe('pnpm catalog: round-trip (#56)', () => {
 
   it('round-trip is idempotent on the catalogs block', () => {
     const lock = realWorld('directus-directus-main-4290f6e/pnpm-lock.yaml')
-    const out1 = stringify('pnpm-v9', parse('pnpm-v9', lock))
-    const out2 = stringify('pnpm-v9', parse('pnpm-v9', out1))
+    const out1 = stringify('pnpm-v9', parse('pnpm-v9', lock), { strict: false })
+    const out2 = stringify('pnpm-v9', parse('pnpm-v9', out1), { strict: false })
     expect(catalogBlock(out2)).toEqual(catalogBlock(out1))
   })
 })

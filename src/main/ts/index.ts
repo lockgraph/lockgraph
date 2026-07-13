@@ -3,7 +3,12 @@
 // check, and detection primitives.
 
 import { newBuilder, type Diagnostic, type Graph, type Manifest, type OverrideConstraint } from './graph.ts'
-import { LockfileError } from './errors.ts'
+import {
+  LockfileError,
+  type ProjectionLoss,
+  type ProjectionLossClass,
+  type ProjectionRemedy,
+} from './errors.ts'
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
 import { governingOverrideFor } from './recipe/descriptor-resolve.ts'
 import { isSentinelPatch } from './recipe/patch.ts'
@@ -25,6 +30,16 @@ import {
 } from './completeness/evidence.ts'
 import { assessConversion, type OutputProbeResult } from './completeness/assessment.ts'
 import { detectGraphFeatures } from './completeness/features.ts'
+import {
+  classifiedProjectionLoss,
+  dedupeProjectionLosses,
+  genericProjectionLoss,
+  projectionDiagnosticLosses,
+  projectionError,
+  projectionPreflightLosses,
+  projectionWarning,
+  type ProjectionResult,
+} from './completeness/projection.ts'
 import { authoritativePolicyOverridesOf } from './completeness/profile.ts'
 import {
   companionProjectionRuntime,
@@ -72,7 +87,13 @@ import type {
 
 export const version = '0.0.0'
 
-export { LockfileError, type LockfileErrorCode } from './errors.ts'
+export {
+  LockfileError,
+  type LockfileErrorCode,
+  type ProjectionLoss,
+  type ProjectionLossClass,
+  type ProjectionRemedy,
+} from './errors.ts'
 export type { Diagnostic, Graph } from './graph.ts'
 export type {
   ConvertFileSystem,
@@ -219,6 +240,7 @@ export type ParseOptions = {
 }
 
 export type StringifyOptions = {
+  strict?:       boolean
   lineEnding?:   'lf' | 'crlf'
   cacheKey?:     string
   /**
@@ -231,6 +253,7 @@ export type StringifyOptions = {
 }
 
 type StringifyDispatchOptions = StringifyOptions & {
+  targetVersion?: string
   pnpmWorkspacePeerProjection?: PnpmWorkspacePeerProjection
   pnpmWorkspaceNames?: ReadonlyMap<string, string>
 }
@@ -383,6 +406,63 @@ function stringifyOne(format: FormatId, graph: Graph, options: StringifyDispatch
   }
 }
 
+function diagnosticKey(diagnostic: Diagnostic): string {
+  return JSON.stringify([
+    diagnostic.code,
+    diagnostic.severity,
+    diagnostic.subject ?? null,
+    diagnostic.message,
+  ])
+}
+
+function uniqueDiagnostics(diagnostics: readonly Diagnostic[]): readonly Diagnostic[] {
+  const output = new Map<string, Diagnostic>()
+  for (const diagnostic of diagnostics) {
+    const key = diagnosticKey(diagnostic)
+    if (!output.has(key)) output.set(key, Object.freeze({ ...diagnostic }))
+  }
+  return Object.freeze([...output.values()])
+}
+
+function stringifyProjected(
+  format: FormatId,
+  graph: Graph,
+  options: StringifyDispatchOptions = {},
+): ProjectionResult {
+  const emittedDiagnostics: Diagnostic[] = []
+  const output = stringifyOne(format, graph, {
+    ...options,
+    onDiagnostic: diagnostic => emittedDiagnostics.push(diagnostic),
+  })
+  const preflight = projectionPreflightLosses(graph, {
+    format,
+    ...(options.targetVersion === undefined ? {} : { managerVersion: options.targetVersion }),
+  })
+  const emittedLosses = projectionDiagnosticLosses(emittedDiagnostics, format)
+  let losses = dedupeProjectionLosses([...preflight, ...emittedLosses])
+  const probeDiagnostics = projectionOutputDiagnostics(
+    graph,
+    output,
+    format,
+    options.overrides,
+    options.pnpmWorkspaceNames,
+  )
+  if (losses.length === 0 && probeDiagnostics.length > 0) {
+    const classified = projectionDiagnosticLosses(probeDiagnostics, format)
+    losses = dedupeProjectionLosses(classified.length > 0
+      ? classified
+      : [genericProjectionLoss(format, probeDiagnostics[0]!)])
+  }
+  const diagnostics = uniqueDiagnostics([
+    ...emittedDiagnostics,
+    ...preflight.map(item => item.diagnostic),
+    ...probeDiagnostics,
+    ...losses.map(projectionWarning),
+  ])
+  for (const diagnostic of diagnostics) options.onDiagnostic?.(diagnostic)
+  return Object.freeze({ output, diagnostics, losses })
+}
+
 export function check(format: FormatId, input: string): boolean {
   return checkOne(format, input)
 }
@@ -526,7 +606,11 @@ function pinnedOverrides(graph: Graph): OverrideConstraint[] {
 export { governingOverrideFor } from './recipe/descriptor-resolve.ts'
 
 export function stringify(format: FormatId, graph: Graph, options: StringifyOptions = {}): string {
-  return stringifyOne(format, graph, options)
+  const projected = stringifyProjected(format, graph, options)
+  if ((options.strict ?? true) && projected.losses.length > 0) {
+    throw new LockfileError(projectionError(projected.losses))
+  }
+  return projected.output
 }
 
 function mergeManifestSources(
@@ -636,6 +720,66 @@ function patchByteDiagnostics(
   return diagnostics
 }
 
+function snapshotRequirementRemedy(
+  requirement: RequirementAssessment,
+): ProjectionRemedy {
+  const subject = requirement.diagnostics.find(item => typeof item.subject === 'string')?.subject
+  const subjectValue = typeof subject === 'string' ? subject : undefined
+  if (requirement.dimension === 'artifacts') {
+    return Object.freeze({ kind: 'supply', source: 'artifacts', ...(subjectValue === undefined ? {} : { subject: subjectValue }) })
+  }
+  if (requirement.dimension === 'packageMetadata'
+    || requirement.dimension === 'resolvedGraph'
+    || requirement.dimension === 'peerModel') {
+    return Object.freeze({ kind: 'supply', source: 'registry', ...(subjectValue === undefined ? {} : { subject: subjectValue }) })
+  }
+  if (requirement.dimension === 'projectTopology' || requirement.dimension === 'edgeKinds') {
+    return Object.freeze({ kind: 'supply', source: 'manifests', ...(subjectValue === undefined ? {} : { subject: subjectValue }) })
+  }
+  return Object.freeze({ kind: 'supply', source: 'config', ...(subjectValue === undefined ? {} : { subject: subjectValue }) })
+}
+
+function snapshotProjectionLosses(
+  graph: Graph,
+  target: FormatId,
+  targetVersion?: string,
+): readonly ProjectionLoss[] {
+  const assessment = assessConversion(graph, {
+    contract: 'snapshot',
+    target: {
+      format: target,
+      ...(targetVersion === undefined ? {} : { managerVersion: targetVersion }),
+    },
+  }, {
+    outputProbe: { accepted: true, diagnostics: Object.freeze([]) },
+  })
+  const relevant = assessment.requirements.filter(requirement =>
+    requirement.status !== 'satisfied'
+      && (requirement.key.startsWith('canonical:')
+        || requirement.key.startsWith('source:')
+        || requirement.key.startsWith('source-sidecar:')
+        || requirement.key.startsWith('graph-feature:')))
+  return dedupeProjectionLosses(relevant.map(requirement => {
+    const diagnostic = requirement.diagnostics[0] ?? assessedDiagnostic(
+      'COMPLETENESS_REQUIREMENT_UNASSESSED',
+      `conversion snapshot requirement ${requirement.key} is not satisfied`,
+      { requirement: requirement.key },
+    )
+    const inherent = requirement.status === 'unsatisfied'
+      || requirement.key.startsWith('graph-feature:')
+    const remedy = inherent
+      ? Object.freeze({ kind: 'allow-loss', option: 'strict', value: false } as const)
+      : snapshotRequirementRemedy(requirement)
+    return classifiedProjectionLoss(
+      inherent ? 'inherent-meaningful' : 'enrichable',
+      requirement.key,
+      target,
+      diagnostic,
+      remedy,
+    )
+  }))
+}
+
 async function defaultFileSystem(): Promise<NonNullable<ConvertDependencies['fs']>> {
   return (await import('./convert/node-fs.ts')).nodeFileSystem
 }
@@ -645,15 +789,20 @@ async function _convert(
   options: ConvertOptions,
   dependencies: ConvertDependencies,
 ): Promise<string> {
+  const diagnostics: Diagnostic[] = []
+  const report = (diagnostic: Diagnostic): void => {
+    diagnostics.push(diagnostic)
+    options.onDiagnostic?.(diagnostic)
+  }
   const prepared = await prepareConvertInput(input, options, { detect }, dependencies)
-  for (const diagnostic of prepared.diagnostics) options.onDiagnostic?.(diagnostic)
+  for (const diagnostic of prepared.diagnostics) report(diagnostic)
   const sources = mergedEnrichSources(prepared, options)
   let graph = parse(prepared.source, prepared.lockfile, {
     workspaceRoot: options.workspaceRoot,
     manifests: sources.manifests === undefined ? undefined : { ...sources.manifests },
-    onDiagnostic: options.onDiagnostic,
+    onDiagnostic: report,
   })
-  for (const diagnostic of patchByteDiagnostics(prepared, graph)) options.onDiagnostic?.(diagnostic)
+  for (const diagnostic of patchByteDiagnostics(prepared, graph)) report(diagnostic)
   const enriched = await enrichGraph(graph, sources, {
     target: {
       format: options.to,
@@ -663,12 +812,22 @@ async function _convert(
     ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
   })
   graph = enriched.graph
-  for (const diagnostic of enriched.diagnostics) options.onDiagnostic?.(diagnostic)
-  return stringify(options.to, graph, {
+  for (const diagnostic of enriched.diagnostics) report(diagnostic)
+  const projected = stringifyProjected(options.to, graph, {
     lineEnding: options.lineEnding,
     cacheKey: options.cacheKey,
+    targetVersion: options.targetVersion,
     onDiagnostic: options.onDiagnostic,
   })
+  if (options.strict ?? true) {
+    const losses = dedupeProjectionLosses([
+      ...projectionDiagnosticLosses(diagnostics, options.to),
+      ...snapshotProjectionLosses(graph, options.to, options.targetVersion),
+      ...projected.losses,
+    ])
+    if (losses.length > 0) throw new LockfileError(projectionError(losses))
+  }
+  return projected.output
 }
 
 export function convert(input: ConvertInput, options: ConvertOptions): Promise<string> {
@@ -765,6 +924,11 @@ function canonicalGraphSnapshot(
     ...(payload.berryChecksumCacheKey === undefined ? {} : {
       berryChecksumCacheKey: payload.berryChecksumCacheKey,
     }),
+    ...(payload.engines === undefined ? {} : { engines: payload.engines }),
+    ...(payload.funding === undefined ? {} : { funding: payload.funding }),
+    ...(payload.license === undefined ? {} : { license: payload.license }),
+    ...(payload.bin === undefined ? {} : { bin: payload.bin }),
+    ...(payload.deprecated === undefined ? {} : { deprecated: payload.deprecated }),
     ...(payload.cpu === undefined ? {} : { cpu: payload.cpu }),
     ...(payload.os === undefined ? {} : { os: payload.os }),
     ...(payload.libc === undefined ? {} : { libc: payload.libc }),
@@ -789,6 +953,61 @@ function canonicalGraphSnapshot(
     roots: [...graph.roots()].sort(),
     tarballs,
   })
+}
+
+function projectionOutputDiagnostics(
+  graph: Graph,
+  output: string,
+  target: FormatId,
+  overrides?: readonly OverrideConstraint[],
+  workspaceNames?: ReadonlyMap<string, string>,
+): readonly Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  if (!checkOne(target, output)) {
+    return Object.freeze([assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_FORMAT_REJECTED',
+      'target adapter rejected emitted output',
+      { target },
+    )])
+  }
+
+  let reparsed: Graph
+  try {
+    reparsed = parse(target, output)
+  } catch (error) {
+    return Object.freeze([assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_PARSE_FAILED',
+      error instanceof Error ? error.message : 'target output parse failed',
+      { target },
+    )])
+  }
+
+  const comparisonOverrides = target.startsWith('pnpm-') ? overrides : undefined
+  if (canonicalGraphSnapshot(graph, 'project', comparisonOverrides, workspaceNames)
+    !== canonicalGraphSnapshot(reparsed, 'project', comparisonOverrides, workspaceNames)) {
+    diagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_OUTPUT_GRAPH_MISMATCH',
+      'target output does not preserve the canonical graph',
+      { target },
+    ))
+  }
+  const sourceFeatures = detectGraphFeatures(graph)
+  const targetFeatures = detectGraphFeatures(reparsed)
+  const sidecarFacts = [
+    ['conditions', sourceFeatures.attribution.berryConditions, targetFeatures.attribution.berryConditions],
+    ['catalogs', sourceFeatures.attribution.pnpmCatalogs, targetFeatures.attribution.pnpmCatalogs],
+  ] as const
+  for (const [feature, sourceFact, targetFact] of sidecarFacts) {
+    if (sourceFact.present !== targetFact.present
+      || (sourceFact.present && targetFact.fingerprint !== sourceFact.fingerprint)) {
+      diagnostics.push(assessedDiagnostic(
+        'COMPLETENESS_OUTPUT_FEATURE_MISMATCH',
+        'target output changes or drops a sidecar-owned graph feature',
+        { target, feature },
+      ))
+    }
+  }
+  return Object.freeze(diagnostics)
 }
 
 function overrideSetKey(overrides: readonly OverrideConstraint[], target: FormatId): string {
@@ -994,6 +1213,41 @@ interface AssessedRuntimeBundle {
   readonly companions?: CompanionProjectionRuntime
 }
 
+function projectionLossDischarged(
+  loss: ProjectionLoss,
+  graph: Graph,
+  options: StringifyAssessedOptions,
+  companions: CompanionProjectionRuntime | undefined,
+): boolean {
+  if (loss.diagnostic.code === 'INTEROP_OVERRIDE_NOT_PROJECTED') {
+    return companions?.result.requirement.status === 'satisfied'
+  }
+  if (loss.class !== 'berry-checksum' || options.target.managerVersion === undefined) return false
+  const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
+  return state.targetOracles.some(oracle =>
+    oracle.graph === graph
+      && oracle.verification === 'frozen-verified'
+      && oracle.target.format === options.target.format
+      && oracle.target.managerVersion === options.target.managerVersion)
+}
+
+function activeProjectionDiagnostics(
+  projected: ProjectionResult,
+  graph: Graph,
+  options: StringifyAssessedOptions,
+  companions: CompanionProjectionRuntime | undefined,
+): readonly Diagnostic[] {
+  const discharged = projected.losses.filter(loss =>
+    projectionLossDischarged(loss, graph, options, companions))
+  if (discharged.length === 0) return projected.diagnostics
+  const ignored = new Set(discharged.flatMap(loss => [
+    diagnosticKey(loss.diagnostic),
+    diagnosticKey(projectionWarning(loss)),
+  ]))
+  return Object.freeze(projected.diagnostics.filter(diagnostic =>
+    !ignored.has(diagnosticKey(diagnostic))))
+}
+
 function assessedOutputOf(runtime: AssessedRuntimeBundle): AssessedOutput {
   return runtime.output === undefined
     ? { assessment: runtime.assessment }
@@ -1031,17 +1285,19 @@ function stringifyAssessedRuntime(
   const diagnostics: Diagnostic[] = []
   let output: string
   try {
-    output = stringifyOne(options.target.format, graph, {
+    const projected = stringifyProjected(options.target.format, graph, {
       lineEnding: options.lineEnding,
       cacheKey: options.cacheKey,
+      targetVersion: options.target.managerVersion,
       overrides: authority === undefined ? undefined : [...authority],
       pnpmWorkspacePeerProjection: workspacePeer.projection,
       pnpmWorkspaceNames: companions?.pnpmWorkspaceNames,
-      onDiagnostic: diagnostic => {
-        diagnostics.push(diagnostic)
-        onDiagnostic?.(diagnostic)
-      },
     })
+    output = projected.output
+    for (const diagnostic of activeProjectionDiagnostics(projected, graph, options, companions)) {
+      diagnostics.push(diagnostic)
+      onDiagnostic?.(diagnostic)
+    }
   } catch (error) {
     diagnostics.push(assessedDiagnostic(
       'COMPLETENESS_OUTPUT_EMIT_FAILED',

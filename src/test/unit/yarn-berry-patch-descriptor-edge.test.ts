@@ -187,7 +187,7 @@ describe('yarn-berry patch: descriptor edge resolution (Bug #88)', () => {
 
   it('form b round-trips: stringify → reparse preserves the 3 nodes + the edge', () => {
     const g = parse('yarn-berry-v8', FORM_B)
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
     // The patch node round-trips its verbatim `patch:` resolution (its emitted
     // entry key is a compound key whose primary spec is the full locator); both
     // the plain npm: base and the bare consumer descriptor ride along as
@@ -235,8 +235,8 @@ describe('yarn-berry patch: descriptor edge resolution (Bug #88)', () => {
     expect(g.diagnostics().filter(d => d.code === 'YARN_BERRY_UNRESOLVED_DEP').length).toBe(0)
 
     // Stringify TWICE → byte-identical (source-order independence + idempotence).
-    const once = stringify('yarn-berry-v8', g)
-    const twice = stringify('yarn-berry-v8', parse('yarn-berry-v8', once))
+    const once = stringify('yarn-berry-v8', g, { strict: false })
+    const twice = stringify('yarn-berry-v8', parse('yarn-berry-v8', once), { strict: false })
     expect(twice).toBe(once)
 
     // The reparsed graph keeps the root→patch edge.

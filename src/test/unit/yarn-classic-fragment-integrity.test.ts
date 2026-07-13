@@ -16,7 +16,7 @@ const FRAG_YARN =
   `  resolved "https://registry.npmjs.org/abab/-/abab-1.0.4.tgz#${SHA1_HEX}"\n`
 const MANIFESTS = { '': { name: 'app', version: '1.0.0', dependencies: { abab: '^1.0.1' } } }
 const to = (fmt: string): Promise<string> =>
-  convert(FRAG_YARN, { from: 'yarn-classic', to: fmt as never, manifests: MANIFESTS })
+  convert(FRAG_YARN, { from: 'yarn-classic', to: fmt as never, manifests: MANIFESTS, strict: false })
 
 const REGISTRY_TARGETS = ['npm-1', 'npm-2', 'npm-3', 'pnpm-v5', 'pnpm-v9', 'bun-text']
 
@@ -57,7 +57,7 @@ describe('yarn-classic resolved#<sha1> fragment → integrity', () => {
       `  version "1.0.4"\n` +
       `  resolved "https://registry.npmjs.org/abab/-/abab-1.0.4.tgz"\n` +
       `  integrity sha512-Cha2R6XPr4gX6vfChANU/svAWK8bmp5o2FGrfPFqNVjD0As8fFbANv0jVn9CmSg96q3xVEP9UZQ5CIVojYyfjA==\n`
-    const e = JSON.parse(await convert(withLine, { from: 'yarn-classic', to: 'npm-3', manifests: MANIFESTS })).packages['node_modules/abab']
+    const e = JSON.parse(await convert(withLine, { from: 'yarn-classic', to: 'npm-3', manifests: MANIFESTS, strict: false })).packages['node_modules/abab']
     expect(e.integrity).toBe('sha512-Cha2R6XPr4gX6vfChANU/svAWK8bmp5o2FGrfPFqNVjD0As8fFbANv0jVn9CmSg96q3xVEP9UZQ5CIVojYyfjA==')
   })
 })

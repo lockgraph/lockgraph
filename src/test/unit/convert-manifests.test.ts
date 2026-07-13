@@ -67,14 +67,14 @@ function importerBlock(out: string): string {
 
 describe('#102 — convert() honours a resolutions pin via manifests', () => {
   it('WITHOUT manifests: the non-satisfying pin is dropped → no csstype dependency under the importer', async () => {
-    const out = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9' })
+    const out = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', strict: false })
     // The root→csstype edge was dropped (no override map, no semver satisfier), so
     // the importer carries no csstype dependency.
     expect(importerBlock(out)).not.toMatch(/csstype/)
   })
 
   it('WITH manifests: the override map bridges the pin → csstype dependency appears under the importer', async () => {
-    const out = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS })
+    const out = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS, strict: false })
     // The restored edge re-points root onto the pinned csstype 3.0.9 node, so the
     // importer now carries the csstype dependency resolved to 3.0.9.
     const importer = importerBlock(out)
@@ -85,9 +85,9 @@ describe('#102 — convert() honours a resolutions pin via manifests', () => {
   it('matches the equivalent parse({manifests}) → stringify pipeline', async () => {
     // convert is exactly parse(from, …, { manifests }) → stringify(to, …); no
     // override auto-threading. Prove equality against the manual pipeline.
-    const viaConvert = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS })
+    const viaConvert = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS, strict: false })
     const g = parse('yarn-berry-v8', BERRY_LOCK, { manifests: MANIFESTS })
-    const viaPipeline = stringify('pnpm-v9', g)
+    const viaPipeline = stringify('pnpm-v9', g, { strict: false })
     expect(viaConvert).toBe(viaPipeline)
   })
 })
@@ -117,7 +117,7 @@ ansi-styles@^3.2.1:
   }
 
   it('convert → npm-3 synthesizes the declared root, keeping the dependency as its own node', async () => {
-    const npm3 = JSON.parse(await convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
+    const npm3 = JSON.parse(await convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN, strict: false })) as {
       name: string
       packages: Record<string, { name?: string; dependencies?: Record<string, string> }>
     }
@@ -132,7 +132,7 @@ ansi-styles@^3.2.1:
   })
 
   it('the pnpm importer lists the real root dependency (chalk), not a transitive', async () => {
-    const out = await convert(YARN, { from: 'yarn-classic', to: 'pnpm-v9', manifests: MAN })
+    const out = await convert(YARN, { from: 'yarn-classic', to: 'pnpm-v9', manifests: MAN, strict: false })
     const importer = out.slice(out.indexOf('importers:'), out.indexOf('\npackages:'))
     expect(importer).toMatch(/chalk:/)
     expect(importer).not.toMatch(/ansi-styles:/)
@@ -153,6 +153,7 @@ ansi-styles@^3.2.1:
     const out = JSON.parse(await convert(YARN, {
       from: 'yarn-classic',
       to: 'npm-3',
+      strict: false,
       manifests: {
         ...MAN,
         'packages/a': { name: '@s/a', version: '1.0.0', dependencies: { chalk: '^2.4.2' } },
@@ -196,7 +197,7 @@ lodash@4.17.21:
   it('emits packages/<path> member entries + node_modules/<name> links, and does not warn', async () => {
     const codes: string[] = []
     const out = JSON.parse(await convert(YARN, {
-      from: 'yarn-classic', to: 'npm-3', manifests: MAN, onDiagnostic: d => codes.push(d.code),
+      from: 'yarn-classic', to: 'npm-3', manifests: MAN, strict: false, onDiagnostic: d => codes.push(d.code),
     })) as { packages: Record<string, { link?: boolean; resolved?: string; dependencies?: Record<string, string> }> }
 
     // Member entries carry their own dependencies.
@@ -233,7 +234,7 @@ is-number@^7.0.0:
   it('synthesizes the local member + links the root node_modules to it, nesting the external copy', async () => {
     const codes: string[] = []
     const out = JSON.parse(await convert(YARN, {
-      from: 'yarn-classic', to: 'npm-3', manifests: MAN, onDiagnostic: d => codes.push(d.code),
+      from: 'yarn-classic', to: 'npm-3', manifests: MAN, strict: false, onDiagnostic: d => codes.push(d.code),
     })) as { packages: Record<string, { link?: boolean; resolved?: string; name?: string; version?: string }> }
 
     // The local member (is-number@99) appears and wins the root symlink.
@@ -278,7 +279,7 @@ csstype@3.0.9:
   })
 
   it('convert → npm-3 keeps the csstype dependency and its pinned node', async () => {
-    const npm = JSON.parse(await convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
+    const npm = JSON.parse(await convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN, strict: false })) as {
       packages: Record<string, { dependencies?: Record<string, string> }>
     }
     expect(npm.packages['']?.dependencies).toEqual({ csstype: '^3.1.3' })

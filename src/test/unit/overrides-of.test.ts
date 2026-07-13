@@ -116,7 +116,11 @@ describe('overridesOf — cross-PM carry (parse yarn+resolutions → npm)', () =
     expect(overridesOf(g)).toContainEqual({ package: 'lodash', to: '4.17.21' })
     // ...but npm reads overrides from package.json, not the lock: dropped + diagnosed.
     const diags: Diagnostic[] = []
-    const out = JSON.parse(stringify('npm-3', g, { overrides: overridesOf(g), onDiagnostic: d => diags.push(d) }))
+    const out = JSON.parse(stringify('npm-3', g, {
+      overrides: overridesOf(g),
+      strict: false,
+      onDiagnostic: d => diags.push(d),
+    }))
     expect(out.packages[''].overrides).toBeUndefined()
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })

@@ -63,19 +63,19 @@ const seed = () => graphOf(b => {
 describe('completion → yarn-berry emit derives platform/peer fields from structured data (yaf pijma/napi-rs)', () => {
   it('composes conditions for a completion-added platform-optional package (os+cpu)', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v8', graph)
+    const out = stringify('yarn-berry-v8', graph, { strict: false })
     expect(out).toContain('conditions: os=darwin & cpu=arm64')
   })
 
   it('composes conditions including libc (os+cpu+libc)', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v8', graph)
+    const out = stringify('yarn-berry-v8', graph, { strict: false })
     expect(out).toContain('conditions: os=linux & cpu=x64 & libc=musl')
   })
 
   it('composes a NEGATED os value with the ! BEFORE the axis (yarn toConditionToken)', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v8', graph)
+    const out = stringify('yarn-berry-v8', graph, { strict: false })
     expect(out).toContain('conditions: !os=win32') // NOT `os=!win32` (would be YN0028)
     expect(out).not.toContain('os=!win32')
   })
@@ -84,27 +84,27 @@ describe('completion → yarn-berry emit derives platform/peer fields from struc
   // on v10 (newest) and confirm the per-version `conditionsAllowed` gate on v4.
   it('is version-general: yarn-berry-v10 composes conditions too (shared core, not v8-only)', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v10', graph)
+    const out = stringify('yarn-berry-v10', graph, { strict: false })
     expect(out).toContain('conditions: os=darwin & cpu=arm64')
     expect(out).toContain('conditions: os=linux & cpu=x64 & libc=musl')
   })
 
   it('respects conditionsAllowed=false: yarn-berry-v4 drops conditions (unsupported), no stray field', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v4', graph)
+    const out = stringify('yarn-berry-v4', graph, { strict: false })
     expect(out).not.toContain('conditions:')
   })
 
   it('emits peerDependencies for a completion-added package (byte-exact block)', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v8', graph)
+    const out = stringify('yarn-berry-v8', graph, { strict: false })
     // Bare range, matching yarn's own `ajv: ^8.0.0` form (corpus-verified).
     expect(out).toContain('  peerDependencies:\n    react: ^18.0.0\n')
   })
 
   it('emits peerDependenciesMeta.optional for a completion-added package (byte-exact block)', async () => {
     const { graph } = await completeTransitives(seed(), registry)
-    const out = stringify('yarn-berry-v8', graph)
+    const out = stringify('yarn-berry-v8', graph, { strict: false })
     expect(out).toContain('  peerDependenciesMeta:\n    react:\n      optional: true\n')
   })
 })

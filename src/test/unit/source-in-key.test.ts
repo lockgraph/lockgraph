@@ -199,7 +199,7 @@ describe('ADR-0032 — round-trip: +src= is internal identity, not emitted', () 
     expect(g.byName('is')[0]).toMatch(/\+src=/)
     // ...but it must NEVER appear in the emitted lockfile (emit uses entry-key
     // descriptors, not the NodeId — ADR-0032 zero-lockfile-emit-change).
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
     expect(out).not.toContain('+src=')
     // And the emit round-trips byte-identically to the input.
     expect(out).toBe(lock)
@@ -265,7 +265,7 @@ describe('ADR-0032 — yarn-classic → yarn-berry synthesis emits VALID source-
       '  resolved "https://nexus.corp/repo/lib/-/lib-1.0.0.tgz"\n' +
       '  integrity ' + SRI('B') + '\n'
 
-    const out = stringify('yarn-berry-v8', parse('yarn-classic', classic))
+    const out = stringify('yarn-berry-v8', parse('yarn-classic', classic), { strict: false })
 
     // 2 distinct entry KEYS — the registry sibling is NOT overwritten on emit.
     const enc = encodeURIComponent('https://nexus.corp/repo/lib/-/lib-1.0.0.tgz')

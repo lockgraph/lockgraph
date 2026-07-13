@@ -109,7 +109,7 @@ describe('Bug #104 — yarn-berry patch preference (lock-borne)', () => {
 
   it('round-trips: the patched edge survives parse→stringify→parse', () => {
     const g = parse('yarn-berry-v8', LOCK)
-    const out = stringify('yarn-berry-v8', g)
+    const out = stringify('yarn-berry-v8', g, { strict: false })
     const g2 = parse('yarn-berry-v8', out)
     const dst2 = ansiTarget(g2)
     expect(dst2).toBeDefined()
