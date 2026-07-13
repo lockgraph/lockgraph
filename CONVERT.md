@@ -4,23 +4,95 @@ How every lockfile format converts to every other: what aligns, what a target
 cannot represent (a dedicated **Lost / breaks** column), what must be supplied
 from `package.json`, and what — if anything — is pulled from the registry.
 
-## How conversion works
+## 0. The conversion model
 
-`convert(input, { from, to })` is `parse(from) → Graph → stringify(to)`. The
-**Graph** (L2) is the canonical, package-manager-independent model; every format
-is just a parser and a stringifier over it. There is no pairwise converter — any
-source reaches any target through the one graph.
+Every conversion uses one canonical pipeline. There are no pairwise converters:
 
-Conversion is **lossy by design**: the aim is a *semantically equivalent* target
-lock, not a byte-copy. Two rules bound the loss:
+```text
+parse(source lock) → Graph → enrich(Graph, sources, target)? [staged] → stringify(target)
+```
 
-- **Irreducible facts are never silently lost** — integrity, resolution URLs,
-  signatures. When a fact cannot be carried it is **omitted, never fabricated**
-  (e.g. a berry-zip checksum has no tarball-SRI form — it is dropped, and the PM
-  recomputes it on install, rather than inventing a wrong hash).
-- **What the lockfile bytes cannot carry comes from two opt-in sources** —
-  `manifests` (the project `package.json`s) and the registry. Everything else
-  succeeds offline against the bytes alone.
+The unified `enrich` facade and composite project input are staged; the current
+public status of each pipeline surface is summarized below.
+
+- **Parse** reads the source snapshot into the package-manager-independent L2
+  `Graph`. It may also consume explicitly supplied local context, such as
+  repository manifests or patch files, but never consults a registry implicitly.
+- **Enrich** is an opt-in, target-aware top-up. It fills only facts established by
+  caller-supplied sources and leaves every unresolved or conflicting fact as a
+  diagnosed gap. It never fabricates a checksum, version, manifest field, policy,
+  or workspace relation.
+- **Stringify** projects the graph into the target format and is always offline.
+  It cannot recover information absent from both the graph and its evidence.
+
+The enrichment vocabulary separates authorities that are often conflated:
+
+| Source | Supplies | I/O boundary |
+| --- | --- | --- |
+| Repository manifests | Root/workspace topology, dependency kinds, authored overrides | Offline `package.json` content keyed by workspace path (`''` = root) |
+| Registry adapter | Missing transitive resolutions and exact-version package manifests | Optional caller-controlled registry/cache reads; no tarball bytes |
+| Artifact source | Tarball bytes or a package-manager-owned cached checksum | Optional caller-controlled cache/network reads for target hash recomputation |
+| Package-manager config evidence | A modeled, complete policy surface; initially overrides only | Already parsed evidence; unmodeled `.npmrc`/`.yarnrc.yml` facts do not upgrade completeness |
+
+Registry and artifact reads are distinct: a packument can prove package metadata
+or a tarball SRI, but it cannot reproduce a Yarn Berry cache-zip checksum without
+the artifact bytes (or a checksum produced by Yarn itself). Live registry results
+are time-varying; cross-run determinism requires a frozen/snapshotted adapter.
+
+### Contracts and required sources
+
+The requested contract determines how much of the composite project must be
+known. Cells are conditional minimums: the target capability table may require
+more, while a source that already carries authoritative facts may require less.
+
+| Contract | Source lock | Repository manifests | Registry manifests | Artifact source | PM config | Native oracle |
+| --- | --- | --- | --- | --- | --- | --- |
+| **`snapshot`** | Required; must establish the selected graph | Required for manifest-blind facts (notably Yarn Classic root, members, and dependency kinds) | Only for missing transitives or target-consumed facts absent from the source | Only when the target requires a hash form not derivable from the graph | — | — |
+| **`policy`** | As snapshot | Root/workspace authored override policy where the source lock is not the authority | As snapshot | As snapshot | Required when the applicable manager generation stores override policy outside `package.json` | — |
+| **`project`** | As policy | Complete root and workspace manifest set | Authoritative exact-version manifests for every non-workspace package whose required metadata is not already proven | Required for target-specific artifact hashes that must survive immutable installation | As policy | — |
+| **`frozen`** | As project | As project | As project | As project | As project | Successful frozen/immutable installation by the exact target manager and recorded platform/config/input tuple |
+
+Yarn Classic and npm lockfile v1 are the principal manifest-blind sources. A
+`yarn.lock` has no project root and may omit independent workspace members; it
+also cannot classify root declarations as dev or peer without manifests. These
+are source limitations, not target stringifier defects.
+
+Target refinements remain target-specific. For example, Berry checksum generation
+needs the intended Berry format/cache key plus artifact bytes, while pnpm override
+placement depends on the exact manager generation. Ambiguous target generations
+remain unassessed rather than selecting a convenient default.
+
+### Raw and certified emission
+
+The public family is a 2 × 2 model rather than four unrelated conversion paths:
+
+| Input | Raw projection | Certified projection |
+| --- | --- | --- |
+| `Graph` | `stringify(format, graph, options)` | `stringifyAssessed(graph, { target, contract, evidence })` |
+| Lock input | `convert(input, { from, to, ...options })` | `convertAssessed(input, options)` / `convertProject(input, options)` |
+
+Certified functions return structured assessments and withhold output unless the
+requested contract is satisfied. Raw functions currently preserve the historical
+best-effort behavior. The approved safe-default migration will make raw emission
+strict by default: raw `stringify` will share the certified **target-projection**
+gate, while raw `convert` will additionally require snapshot/source readiness.
+`strict: false` will retain the existing best-effort byte path explicitly. This
+migration is staged separately from the documentation and enrichment work.
+
+A strict failure is enrichable only when a named source can establish the missing
+fact. Inherent target loss requires explicit best-effort opt-in. A field that a
+mutable install can refill is still a strict failure when an immutable/frozen
+install would rewrite or reject the lock; Berry checksums are the canonical
+example.
+
+### Implementation status
+
+The contract vocabulary and assessment framework, evidence ledger, companion
+projection, and bundled `convertProject` API are implemented. The frozen-oracle
+evaluator, target-aware unified `enrich` facade, composite project input, and raw
+strict-default gate are being landed as separate stable changes. Until the
+strict-default change lands, use the implemented assessed contracts for a
+fail-closed decision and treat raw `stringify`/`convert` as best-effort.
 
 Formats and the package-manager versions behind them:
 
@@ -66,7 +138,7 @@ Organised by feature axis. "Direction" is the family boundary that loses it;
 
 | Feature lost | Direction (source → target) | Runtime diagnostic | Recoverable? |
 | --- | --- | --- | --- |
-| **Integrity — berry-zip ↔ tarball SRI** | berry → npm / yarn-classic / pnpm / bun (and back) | `RECIPE_INTEGRITY_INCOMPLETE` | Only by fetching the tarball and **recomputing** the target's hash (opt-in registry). Never fabricated; the PM refills it on install. |
+| **Integrity — berry-zip ↔ tarball SRI** | berry → npm / yarn-classic / pnpm / bun (and back) | `RECIPE_INTEGRITY_INCOMPLETE` | Only from an authoritative target checksum or by obtaining artifact bytes and **recomputing** the target's hash. Never fabricated; mutable install may refill it, but immutable/frozen install can reject the omission. |
 | **Peer virtualization** | berry / pnpm → npm / yarn-classic / bun | `YARN_CLASSIC_PEER_VIRT_FLATTENED` / `NPM_V1_PEER_VIRT_FLATTENED` / `BUN_TEXT_PEER_VIRT_FLATTENED` (per target adapter) | No — flat targets model one instance per (name, version); peer-context forks collapse. |
 | **`patch:` protocol** | berry / pnpm → npm / yarn-classic / bun | `RECIPE_FEATURE_DROPPED` (`feature='patch'`) | No — no patch protocol in the target; the patched copy becomes the base package. |
 | **`conditions` (os/cpu/libc)** | berry v5+ → any non-berry (and berry → v4) | **— none (silent loss)** | Re-derivable on a completion mint from `os`/`cpu`/`libc` (needs the **full** manifest — corgi omits `libc`). |
@@ -175,18 +247,20 @@ emit and assess the lockfile.
 
 ## What is pulled from the registry — and why
 
-**Plain conversion never touches the registry.** Every format carries an
-integrity hash and a resolution, so `parse → stringify` is fully offline; the one
-exception is the berry-zip ↔ tarball-SRI crossing, which *omits* the hash rather
-than fetching (the PM refills it on install).
+**Plain conversion never touches the registry.** `parse → stringify` is offline.
+The historical best-effort path may omit an integrity form it cannot derive,
+including a berry-zip ↔ tarball-SRI crossing, rather than fabricate a value. That
+omission is not an immutable-install guarantee: assessed project conversion and
+the forthcoming strict raw gate keep the output withheld until the required hash
+is proven or recomputed from a caller-supplied artifact source.
 
 The registry is an **opt-in** adapter (`liveRegistry`, `lockgraph/registry`)
-used by three refinement paths:
+used by current and staged refinement paths:
 
 | Path | What it fetches | Why |
 | --- | --- | --- |
-| **`completeTransitives(graph, registry, …)`** | the **packument** (all versions of a name), memoised per name, concurrency-bounded | To wire in transitive dependencies a partial lock is missing — turning a manifest-only or shallow graph into a full, installable one. Reads are order-independent (a packument is the same bytes whenever fetched), so the resulting lock is deterministic. |
-| **Minting a node** (audit-fix version bump, add-dependency) | the packument **version** → tarball URL + `dist.integrity` / `dist.shasum` | To materialise a version not already in the lock. For a berry target the tarball bytes are then used to **recompute** the berry-zip checksum; corgi (npm's abbreviated packument) **omits `libc`**, so the full single-version manifest is fetched to backfill `conditions … & libc=<glibc|musl>` (else yarn rejects with YN0028). |
+| **`completeTransitives(graph, registry, …)`** | the **packument** (all versions of a name), memoised per operation and concurrency-bounded | To wire in transitive dependencies a partial lock is missing. Resolution is deterministic for a stable response set; repeatability across runs requires a frozen/snapshotted registry adapter. |
+| **Minting a node / staged metadata hydration** | the packument version plus, when available, the full exact-version manifest | To materialise a version not already in the lock or fill authoritative metadata absent from an existing payload. Corgi (npm's abbreviated packument) omits fields including `libc` and `license`, so it cannot prove project metadata completeness. Berry checksum recomputation additionally needs a separate artifact source; `RegistryAdapter` does not provide tarball bytes. |
 | **`audit(registryPackages(graph))`** | raw npm bulk advisories | Security audit of the graph's registry packages (severity and fix-selection stay the caller's). |
 
 Registry routing and auth are resolved from the package-manager config, **never
@@ -219,8 +293,10 @@ makes `project` conversion unsatisfied rather than silently lossy.
 ## Byte-identity of the target
 
 Freeze-mode acceptance (`npm ci`, `yarn install --immutable`, `pnpm install
---frozen-lockfile`) is the gate — the generated lock must install without a
-rewrite.
+--frozen-lockfile`) is the final gate: only a successful oracle for the exact
+manager version, platform, config, and materialized inputs proves that guarantee.
+Snapshot or project assessment can prove that all modeled prerequisites are
+present without generalizing an empirical result to another environment.
 
 For **npm and yarn**, the frozen unit is the lock **plus the root manifest**, not
 the lock alone: the override policy lives in `package.json` (`overrides` /
@@ -238,20 +314,22 @@ Beyond acceptance, some targets are byte-identical to the PM's own output:
 - **yarn-berry** re-emits the canonical preamble, field schedule, quoting, and
   `cacheKey`-prefixed checksums byte-for-byte (checksums recomputed byte-exact for
   cacheKey 7/8/9 via pure-JS; cacheKey 10 via optional `@yarnpkg/libzip`).
-- **Cross-family** output is *semantically* equivalent and frozen-clean, but not
+- **Cross-family** output can be semantically equivalent without being
   byte-identical to what the target PM would generate from scratch (layout and
-  hoisting are re-synthesized; `LAYOUT_PLACEMENT_RESYNTHESISED`).
+  hoisting may be re-synthesized; `LAYOUT_PLACEMENT_RESYNTHESISED`). It is called
+  frozen-clean only after the exact native oracle succeeds.
 
 ## Per-family quick reference
 
 Headline for each source family → target family (see the loss table for the
-diagnostic codes). "clean" = frozen-clean with no feature loss beyond layout.
+diagnostic codes). "clean" means no known modeled feature loss after the named
+sources are supplied; it does not replace native frozen verification.
 
 | From ↓ \ To → | npm | yarn-classic | yarn-berry | pnpm | bun |
 | --- | --- | --- | --- | --- | --- |
-| **npm** | clean (v3↔v2; v→v1 drops workspaces/peerMeta) | needs manifests for dev/peer + workspaces | overrides are manifest-only (neither lock carries them); integrity omitted (berry recompute on install) | clean | clean |
+| **npm** | clean (v3↔v2; v→v1 drops workspaces/peerMeta) | needs manifests for dev/peer + workspaces | overrides are manifest-only (neither lock carries them); Berry integrity needs an artifact-backed checksum | clean | clean |
 | **yarn-classic** | needs manifests (root + members + dev/peer) | — | preamble/workspace synthesized | needs manifests for dev/peer | resolved-URL forms may drop |
-| **yarn-berry** | drops peer-virt, patch, conditions; integrity omitted | drops peer-virt, patch, conditions, workspace; needs manifests | clean (v-to-v; v→v4 drops conditions) | drops peer-virt→pnpm keeps it; **integrity omitted** | drops peer-virt, patch, conditions |
+| **yarn-berry** | drops peer-virt, patch, conditions; tarball integrity needs artifact evidence | drops peer-virt, patch, conditions, workspace; needs manifests | clean (v-to-v; v→v4 drops conditions) | peer virtualization is re-encoded; tarball integrity needs artifact evidence | drops peer-virt, patch, conditions |
 | **pnpm** | drops peer-virt, patch, catalog | drops peer-virt, patch, workspace; needs manifests | drops catalog; preamble synthesized | clean (v-to-v; v9↔v5/6 settings drop) | drops peer-virt, patch, catalog |
 | **bun** | clean | drops resolved-URL forms; needs manifests | preamble synthesized | clean | — |
 
