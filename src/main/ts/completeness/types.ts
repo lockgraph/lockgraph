@@ -4,9 +4,11 @@ import type {
   Graph,
   Manifest,
   OverrideConstraint,
+  PackageMetadataField,
   TarballKey,
 } from '../graph.ts'
 import type { FormatId } from '../index.ts'
+import type { PackumentVersion } from '../registry/types.ts'
 
 export type Knowledge = 'none' | 'partial' | 'complete'
 
@@ -125,7 +127,7 @@ export interface PmConfigEvidence {
 export interface PackageManifestEvidence {
   readonly kind: 'package-manifests'
   readonly authority: 'full-packument' | 'version-manifest' | 'tarball-manifest'
-  readonly manifests: Readonly<Record<TarballKey, Manifest>>
+  readonly manifests: Readonly<Record<TarballKey, PackumentVersion>>
 }
 
 export interface TargetRequest {
@@ -176,6 +178,9 @@ export type CompletenessDiagnosticCode =
   | 'COMPLETENESS_EVIDENCE_SCOPE_MISMATCH'
   | 'COMPLETENESS_FEATURE_UNMODELED'
   | 'COMPLETENESS_MANAGER_GENERATION_AMBIGUOUS'
+  | 'COMPLETENESS_PACKAGE_METADATA_INCOMPLETE'
+  | 'COMPLETENESS_PACKAGE_METADATA_MISMATCH'
+  | 'COMPLETENESS_PACKAGE_METADATA_SOURCE_UNSUPPORTED'
 
 export interface CompletenessDiagnostic extends Diagnostic {
   code: CompletenessDiagnosticCode
@@ -202,6 +207,7 @@ export interface ResolvedTargetCapabilities {
   readonly overridesConfigLocation: OverrideConfigLocation
   readonly comparesOverridesInFrozen: boolean
   readonly overridesGrammar: OverrideGrammar
+  readonly metadataFields: ReadonlySet<PackageMetadataField>
 }
 
 export type TargetCapability = keyof ResolvedTargetCapabilities

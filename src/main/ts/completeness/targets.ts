@@ -1,5 +1,8 @@
-import type { EdgeKind } from '../graph.ts'
+import type { EdgeKind, PackageMetadataField } from '../graph.ts'
 import type { FormatId } from '../index.ts'
+import {
+  PACKAGE_METADATA_FIELDS,
+} from '../registry/payload.ts'
 import type {
   ResolvedTargetCapabilities,
   TargetCapability,
@@ -46,6 +49,7 @@ function readonlySet<T>(values: Iterable<T>): ReadonlySet<T> {
 }
 
 const edges = (...kinds: EdgeKind[]): ReadonlySet<EdgeKind> => readonlySet(kinds)
+const metadata = (...fields: PackageMetadataField[]): ReadonlySet<PackageMetadataField> => readonlySet(fields)
 
 function targetManagerOf(format: FormatId): TargetManager {
   if (format.startsWith('npm-')) return 'npm'
@@ -76,6 +80,7 @@ const npm1 = capabilities({
   overridesConfigLocation: 'none',
   comparesOverridesInFrozen: false,
   overridesGrammar: 'none',
+  metadataFields: metadata(),
 })
 
 const npm3 = capabilities({
@@ -85,6 +90,18 @@ const npm3 = capabilities({
   peerRepresentation: 'declared',
   overridesConfigLocation: 'manifest',
   overridesGrammar: 'npm-nested',
+  metadataFields: metadata(
+    'engines',
+    'funding',
+    'license',
+    'bin',
+    'deprecated',
+    'cpu',
+    'os',
+    'libc',
+    'hasInstallScript',
+    'peerDependenciesMeta',
+  ),
 })
 
 const yarnClassic = capabilities({
@@ -102,6 +119,7 @@ const yarnClassic = capabilities({
   overridesConfigLocation: 'manifest',
   comparesOverridesInFrozen: false,
   overridesGrammar: 'yarn-selective',
+  metadataFields: metadata(),
 })
 
 function yarnBerry(format: FormatId): Readonly<ResolvedTargetCapabilities> {
@@ -122,6 +140,9 @@ function yarnBerry(format: FormatId): Readonly<ResolvedTargetCapabilities> {
     overridesConfigLocation: 'manifest',
     comparesOverridesInFrozen: false,
     overridesGrammar: 'yarn-selective',
+    metadataFields: format === 'yarn-berry-v4'
+      ? metadata('bin')
+      : metadata('bin', 'cpu', 'os', 'libc'),
   })
 }
 
@@ -131,6 +152,7 @@ function pnpm(
   comparesOverridesInFrozen: boolean,
   overridesConfigLocation: ResolvedTargetCapabilities['overridesConfigLocation'],
   catalogs: boolean,
+  metadataFields: ReadonlySet<PackageMetadataField>,
 ): Readonly<ResolvedTargetCapabilities> {
   return capabilities({
     edgeKinds: edges('dep', 'dev', 'optional', 'peer'),
@@ -147,10 +169,22 @@ function pnpm(
     overridesConfigLocation,
     comparesOverridesInFrozen,
     overridesGrammar: 'pnpm-flat',
+    metadataFields,
   })
 }
 
-const pnpmV6 = pnpm(true, true, true, 'manifest', false)
+const pnpmV5Metadata = metadata('engines', 'cpu', 'os', 'peerDependencies')
+const pnpmModernMetadata = metadata(
+  'engines',
+  'deprecated',
+  'cpu',
+  'os',
+  'libc',
+  'peerDependencies',
+  'peerDependenciesMeta',
+)
+
+const pnpmV6 = pnpm(true, true, true, 'manifest', false, pnpmModernMetadata)
 
 const bunText = capabilities({
   edgeKinds: edges('dep', 'dev', 'optional', 'peer'),
@@ -167,6 +201,7 @@ const bunText = capabilities({
   overridesConfigLocation: 'manifest',
   comparesOverridesInFrozen: true,
   overridesGrammar: 'bun-flat',
+  metadataFields: metadata(),
 })
 
 const lockgraph = capabilities({
@@ -184,6 +219,7 @@ const lockgraph = capabilities({
   overridesConfigLocation: 'none',
   comparesOverridesInFrozen: false,
   overridesGrammar: 'none',
+  metadataFields: metadata(...PACKAGE_METADATA_FIELDS),
 })
 
 function assertCompatible(format: FormatId, version: ManagerVersion | undefined): void {
@@ -227,13 +263,13 @@ function pnpmV5(
 ): { capabilities: Readonly<ResolvedTargetCapabilities>; ambiguous: readonly TargetCapability[] } {
   if (version === undefined) {
     return {
-      capabilities: pnpm(false, false, false, 'manifest', false),
+      capabilities: pnpm(false, false, false, 'manifest', false, pnpmV5Metadata),
       ambiguous: ['lockOverridesCarrier', 'comparesOverridesInFrozen'],
     }
   }
   const carriesOverrides = version.major >= 6
   return {
-    capabilities: pnpm(false, carriesOverrides, carriesOverrides, 'manifest', false),
+    capabilities: pnpm(false, carriesOverrides, carriesOverrides, 'manifest', false, pnpmV5Metadata),
     ambiguous: [],
   }
 }
@@ -272,7 +308,7 @@ function pnpmV9(
   }
   if (version === undefined) ambiguous.push('overridesConfigLocation')
   return {
-    capabilities: pnpm(true, true, true, configLocation, catalogs),
+    capabilities: pnpm(true, true, true, configLocation, catalogs, pnpmModernMetadata),
     ambiguous,
   }
 }

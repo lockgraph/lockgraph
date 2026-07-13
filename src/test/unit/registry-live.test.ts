@@ -38,6 +38,8 @@ const LODASH_BODY = {
       },
       dependencies: { 'pretend-dep': '^1.0.0' },
       engines:      { node: '>=4' },
+      funding:      { url: 'https://example.test/fund' },
+      scripts:      { install: 'node install.js' },
     },
   },
 }
@@ -80,6 +82,8 @@ describe('registry/live — packument()', () => {
     expect(canonicalDigest(v.integrity!)).toBe('sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==')
     expect(v.dependencies).toEqual({ 'pretend-dep': '^1.0.0' })
     expect(v.engines).toEqual({ node: '>=4' })
+    expect(v.funding).toEqual({ url: 'https://example.test/fund' })
+    expect(v.hasInstallScript).toBe(true)
   })
 
   it('returns undefined on 404 (no throw)', async () => {

@@ -1258,10 +1258,13 @@ function buildPackageEntry(
     entry.engines = flowMap({ ...tarball.engines })
   }
   if (nodeSc?.hasBin === true) entry.hasBin = true
-  if (nodeSc?.os !== undefined && nodeSc.os.length > 0) entry.os = nodeSc.os.slice()
-  if (nodeSc?.cpu !== undefined && nodeSc.cpu.length > 0) entry.cpu = nodeSc.cpu.slice()
-  if (nodeSc?.peerDependencies !== undefined && Object.keys(nodeSc.peerDependencies).length > 0) {
-    entry.peerDependencies = sortRecord(nodeSc.peerDependencies) as YamlMap
+  const os = nodeSc?.os ?? tarball?.os
+  const cpu = nodeSc?.cpu ?? tarball?.cpu
+  if (os !== undefined && os.length > 0) entry.os = os.slice()
+  if (cpu !== undefined && cpu.length > 0) entry.cpu = cpu.slice()
+  const peerDependencies = nodeSc?.peerDependencies ?? tarball?.peerDependencies
+  if (peerDependencies !== undefined && Object.keys(peerDependencies).length > 0) {
+    entry.peerDependencies = sortRecord(peerDependencies) as YamlMap
   }
 
   // Inline transitive dependencies.

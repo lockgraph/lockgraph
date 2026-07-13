@@ -99,6 +99,20 @@ export interface TarballPayload {
   nativeResolution?:    string
 }
 
+export type PackageMetadataField =
+  | 'engines'
+  | 'funding'
+  | 'license'
+  | 'bin'
+  | 'deprecated'
+  | 'cpu'
+  | 'os'
+  | 'libc'
+  | 'hasInstallScript'
+  | 'bundledDependencies'
+  | 'peerDependencies'
+  | 'peerDependenciesMeta'
+
 export type EdgeAttrs = {
   range?:          string
   // The override-FORCED descriptor range for this edge (ADR-0025), set by

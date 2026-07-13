@@ -173,7 +173,7 @@ export type FormatId =
 // `overrides` options below are the surface ADR-0014 §3 / ADR-0025 specify;
 // they are now backed by real types in graph.ts. Capture + per-PM projection
 // land in the ADR-0025 impl rounds; the option shape is stable.
-export type { Manifest, OverrideConstraint } from './graph.ts'
+export type { Manifest, OverrideConstraint, PackageMetadataField } from './graph.ts'
 
 export type ParseOptions = {
   /**

@@ -8,6 +8,7 @@ import {
   type TarballKey,
 } from '../graph.ts'
 import type { FormatId } from '../index.ts'
+import type { PackumentVersion } from '../registry/types.ts'
 import type {
   CompletenessDimension,
   EvidenceContext,
@@ -46,7 +47,7 @@ export interface InternalEvidenceState {
   readonly pmConfigs: readonly PmConfigEvidence[]
   readonly packageManifests: ReadonlyMap<TarballKey, Readonly<{
     authority: PackageManifestEvidence['authority']
-    manifest: Manifest
+    manifest: PackumentVersion
   }>>
   readonly targetOracles: readonly TargetOracleEvidence[]
   readonly conflicts: readonly EvidenceConflictRecord[]
@@ -253,6 +254,92 @@ function assertManifestRecord(value: unknown, label: string): asserts value is R
   }
 }
 
+function assertPeerMetaRecord(value: unknown, label: string): void {
+  assertRecord(value, label)
+  for (const key of enumerableStringKeys(value, label)) {
+    const meta = value[key]
+    assertRecord(meta, `${label}[${JSON.stringify(key)}]`)
+    assertKnownKeys(meta, ['optional'], `${label}[${JSON.stringify(key)}]`)
+    if (meta.optional !== undefined && typeof meta.optional !== 'boolean') {
+      throw new TypeError(`${label}[${JSON.stringify(key)}].optional must be a boolean`)
+    }
+  }
+}
+
+function assertStringArray(value: unknown, label: string): void {
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+    throw new TypeError(`${label} must be a string array`)
+  }
+}
+
+function assertPackageManifest(value: unknown, label: string): asserts value is PackumentVersion {
+  assertRecord(value, label)
+  assertKnownKeys(value, [
+    'name',
+    'version',
+    'integrity',
+    'tarball',
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+    'peerDependenciesMeta',
+    'engines',
+    'funding',
+    'os',
+    'cpu',
+    'libc',
+    'deprecated',
+    'bin',
+    'bundledDependencies',
+    'hasInstallScript',
+    'license',
+    'type',
+    'main',
+    'exports',
+  ], label)
+  if (typeof value.name !== 'string' || value.name.length === 0
+    || typeof value.version !== 'string' || value.version.length === 0) {
+    throw new TypeError(`${label} must contain string name and version fields`)
+  }
+  for (const key of [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+    'engines',
+  ] as const) {
+    if (value[key] !== undefined) assertStringRecord(value[key], `${label}.${key}`)
+  }
+  if (value.peerDependenciesMeta !== undefined) {
+    assertPeerMetaRecord(value.peerDependenciesMeta, `${label}.peerDependenciesMeta`)
+  }
+  for (const key of ['os', 'cpu', 'libc', 'bundledDependencies'] as const) {
+    if (value[key] !== undefined) assertStringArray(value[key], `${label}.${key}`)
+  }
+  for (const key of ['tarball', 'deprecated', 'license', 'type', 'main'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'string') {
+      throw new TypeError(`${label}.${key} must be a string`)
+    }
+  }
+  if (value.bin !== undefined && typeof value.bin !== 'string') {
+    assertStringRecord(value.bin, `${label}.bin`)
+  }
+  if (value.hasInstallScript !== undefined && typeof value.hasInstallScript !== 'boolean') {
+    throw new TypeError(`${label}.hasInstallScript must be a boolean`)
+  }
+}
+
+function assertPackageManifestRecord(
+  value: unknown,
+  label: string,
+): asserts value is Record<string, PackumentVersion> {
+  assertRecord(value, label)
+  for (const key of enumerableStringKeys(value, label)) {
+    assertPackageManifest(value[key], `${label}[${JSON.stringify(key)}]`)
+  }
+}
+
 function assertOverride(value: unknown, label: string): asserts value is OverrideConstraint {
   assertRecord(value, label)
   assertKnownKeys(value, [
@@ -343,7 +430,7 @@ function assertEvidenceInput(input: EvidenceInput): void {
       if (!['full-packument', 'version-manifest', 'tarball-manifest'].includes(input.authority)) {
         throw new TypeError('invalid package manifest authority')
       }
-      assertManifestRecord(input.manifests, 'package manifests')
+      assertPackageManifestRecord(input.manifests, 'package manifests')
       return
     case 'target-oracle':
       assertKnownKeys(input, [

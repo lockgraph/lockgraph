@@ -2560,9 +2560,12 @@ function buildPackageEntry(
     entry.deprecated = tarball.deprecated
   }
   if (nodeSc?.hasBin === true) entry.hasBin = true
-  if (nodeSc?.os !== undefined && nodeSc.os.length > 0) entry.os = nodeSc.os.slice()
-  if (nodeSc?.cpu !== undefined && nodeSc.cpu.length > 0) entry.cpu = nodeSc.cpu.slice()
-  if (nodeSc?.libc !== undefined && nodeSc.libc.length > 0) entry.libc = nodeSc.libc.slice()
+  const os = nodeSc?.os ?? tarball?.os
+  const cpu = nodeSc?.cpu ?? tarball?.cpu
+  const libc = nodeSc?.libc ?? tarball?.libc
+  if (os !== undefined && os.length > 0) entry.os = os.slice()
+  if (cpu !== undefined && cpu.length > 0) entry.cpu = cpu.slice()
+  if (libc !== undefined && libc.length > 0) entry.libc = libc.slice()
   const peerDependencies = nodeSc?.peerDependencies
     ?? projection.ownerPeerDependencies.get(representative.id)
     ?? tarball?.peerDependencies

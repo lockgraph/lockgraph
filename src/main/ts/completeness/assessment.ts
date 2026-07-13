@@ -1,4 +1,5 @@
-import type { Diagnostic, EdgeKind, Graph, Manifest } from '../graph.ts'
+import type { Diagnostic, EdgeKind, Graph, Manifest, PackageMetadataField } from '../graph.ts'
+import { packageMetadataOfPayload } from '../registry/payload.ts'
 import { sourceCapabilitiesOf } from './capabilities.ts'
 import { internalEvidenceOf, type InternalEvidenceState } from './evidence.ts'
 import {
@@ -165,14 +166,38 @@ function edgeEvaluator(kind: EdgeKind): FeatureEvaluator {
   )
 }
 
-function metadataEvaluator(feature: GraphFeature): FeatureEvaluator {
-  return (_graph, _target, contract) => contract === 'snapshot' || contract === 'policy'
-    ? requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
-    : requirement(`target-feature:${feature}`, 'unassessed', 'packageMetadata', [diagnostic(
-      'COMPLETENESS_EVALUATOR_DEFERRED',
-      'deep package metadata projection is not assessed',
-      { feature },
+type MetadataGraphFeature = Extract<GraphFeature, `metadata:${string}`>
+
+const metadataFeatureFields: Readonly<Record<MetadataGraphFeature, readonly PackageMetadataField[]>> = Object.freeze({
+  'metadata:engines': ['engines'],
+  'metadata:funding': ['funding'],
+  'metadata:license': ['license'],
+  'metadata:bin': ['bin'],
+  'metadata:deprecated': ['deprecated'],
+  'metadata:platform': ['cpu', 'os', 'libc'],
+  'metadata:install-script': ['hasInstallScript'],
+  'metadata:bundled-dependencies': ['bundledDependencies'],
+  'metadata:peer-declarations': ['peerDependencies', 'peerDependenciesMeta'],
+})
+
+function metadataEvaluator(feature: MetadataGraphFeature): FeatureEvaluator {
+  return (graph, target, contract) => {
+    if (contract === 'snapshot' || contract === 'policy') {
+      return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
+    }
+    const candidates = metadataFeatureFields[feature]
+    const present = candidates.filter(field => [...graph.tarballs()]
+      .some(([, payload]) => packageMetadataOfPayload(payload)[field] !== undefined))
+    const unsupported = present.filter(field => !target.capabilities.metadataFields.has(field))
+    if (unsupported.length === 0) {
+      return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
+    }
+    return requirement(`target-feature:${feature}`, 'unsatisfied', 'packageMetadata', [diagnostic(
+      'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
+      'target emitter does not preserve canonical package metadata',
+      { feature, fields: unsupported, target: target.format },
     )])
+  }
 }
 
 function workspaceProtocolPresent(graph: Graph): boolean {
@@ -420,10 +445,13 @@ function canonicalRequirements(
         'complete',
         knowledgeRank,
       ),
-      requirement('canonical:package-metadata', 'unassessed', 'packageMetadata', [diagnostic(
-        'COMPLETENESS_EVALUATOR_DEFERRED',
-        'deep package metadata assessment is not implemented',
-      )]),
+      thresholdRequirement(
+        'canonical:package-metadata',
+        'packageMetadata',
+        profile.packageMetadata,
+        'complete',
+        knowledgeRank,
+      ),
       requirement('target:companion-projection', 'unassessed', undefined, [diagnostic(
         'COMPLETENESS_EVALUATOR_DEFERRED',
         'companion file projection is not implemented',

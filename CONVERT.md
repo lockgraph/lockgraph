@@ -174,6 +174,27 @@ planted `.yarnrc.yml` cannot inject into an npm resolve; npm and yarn directives
 never mix). A minted registry tarball is re-hosted onto the lock's own
 scope-inferred registry so a `--frozen-lockfile` install does not rewrite it.
 
+## Package-metadata completeness
+
+The `project` contract requires authoritative package manifests for every
+non-workspace package used by the graph. `full-packument`, `version-manifest`,
+and `tarball-manifest` evidence can establish both presence and absence within
+the closed canonical metadata universe; abbreviated/corgi packuments cannot,
+because omitted fields such as `libc` and `license` remain unknown.
+
+Coverage alone is insufficient. `packageMetadata: complete` requires the
+canonical metadata already stored in each graph tarball payload to equal its
+authoritative manifest projection, including authoritative absence. Detached
+evidence never substitutes for graph state that an emitter cannot see. Peer
+virtual variants share one TarballKey subject. Git, directory, and other
+non-registry subjects remain fail-closed until a source-specific manifest
+evidence input exists.
+
+Target readiness is assessed separately from canonical completeness. A target
+claims support for a metadata field only when its emitter reads that field from
+the canonical tarball payload. A present field that the target cannot preserve
+makes `project` conversion unsatisfied rather than silently lossy.
+
 ## Byte-identity of the target
 
 Freeze-mode acceptance (`npm ci`, `yarn install --immutable`, `pnpm install

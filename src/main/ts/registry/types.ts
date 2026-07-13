@@ -26,12 +26,14 @@ export interface PackumentVersion {
   peerDependencies?:    Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
   engines?:             Record<string, string>
+  funding?:             unknown
   os?:                  string[]
   cpu?:                 string[]
   libc?:                string[]
   deprecated?:          string
   bin?:                 string | Record<string, string>
   bundledDependencies?: string[]
+  hasInstallScript?:    boolean
   /** SPDX license id (or expression). The abbreviated (corgi) packument OMITS
    *  this — it is present only on a FULL single-version manifest (see
    *  `RegistryAdapter.manifest`). Normalised from `license` string / legacy

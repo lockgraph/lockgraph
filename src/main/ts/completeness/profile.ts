@@ -11,6 +11,10 @@ import { getPnpmOverridesCanonical } from '../formats/_pnpm-flat-core.ts'
 import { getPnpmV5OverridesCanonical } from '../formats/pnpm-v5.ts'
 import { captureOverrides } from '../recipe/overrides.ts'
 import { isHashedPeerSetToken } from '../recipe/patch.ts'
+import {
+  packageMetadataOfPayload,
+  payloadOfPackumentVersion,
+} from '../registry/payload.ts'
 import { sourceCapabilitiesOf } from './capabilities.ts'
 import {
   evidenceOf,
@@ -257,6 +261,98 @@ function packageEdgesClassified(graph: Graph, state: InternalEvidenceState): boo
     }))) return false
   }
   return true
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableValue(item)]))
+  }
+  return value
+}
+
+function metadataDiagnostic(
+  code: 'COMPLETENESS_PACKAGE_METADATA_INCOMPLETE'
+    | 'COMPLETENESS_PACKAGE_METADATA_MISMATCH'
+    | 'COMPLETENESS_PACKAGE_METADATA_SOURCE_UNSUPPORTED',
+  subject: string,
+  message: string,
+): Diagnostic {
+  return Object.freeze({
+    code,
+    severity: 'warning',
+    subject,
+    message,
+    data: Object.freeze({ dimension: 'packageMetadata', subject }),
+  })
+}
+
+function assessPackageMetadata(
+  graph: Graph,
+  state: InternalEvidenceState,
+): { complete: boolean, diagnostics: readonly Diagnostic[] } {
+  const diagnostics: Diagnostic[] = []
+  const representatives = new Map<string, Node[]>()
+  let hasNode = false
+  for (const node of graph.nodes()) {
+    hasNode = true
+    if (node.workspacePath !== undefined) continue
+    const key = stripPeerContextFromNodeId(node.id)
+    const nodes = representatives.get(key) ?? []
+    nodes.push(node)
+    representatives.set(key, nodes)
+  }
+
+  for (const [key, nodes] of representatives) {
+    const representative = nodes[0]!
+    const payload = graph.tarballOf(representative.id)
+    const resolutionType = payload?.resolution?.type
+    if (representative.source !== undefined
+      || (resolutionType !== undefined && resolutionType !== 'tarball')) {
+      diagnostics.push(metadataDiagnostic(
+        'COMPLETENESS_PACKAGE_METADATA_SOURCE_UNSUPPORTED',
+        key,
+        'non-registry package metadata requires explicit source-specific manifest evidence',
+      ))
+      continue
+    }
+
+    const evidence = state.packageManifests.get(key)
+    if (evidence === undefined) {
+      diagnostics.push(metadataDiagnostic(
+        'COMPLETENESS_PACKAGE_METADATA_INCOMPLETE',
+        key,
+        'authoritative package manifest evidence is missing',
+      ))
+      continue
+    }
+    if (nodes.some(node => node.name !== evidence.manifest.name
+      || node.version !== evidence.manifest.version)) {
+      diagnostics.push(metadataDiagnostic(
+        'COMPLETENESS_PACKAGE_METADATA_MISMATCH',
+        key,
+        'package manifest identity does not match the graph subject',
+      ))
+      continue
+    }
+
+    const actual = packageMetadataOfPayload(payload)
+    const expected = packageMetadataOfPayload(payloadOfPackumentVersion(evidence.manifest))
+    if (JSON.stringify(stableValue(actual)) !== JSON.stringify(stableValue(expected))) {
+      diagnostics.push(metadataDiagnostic(
+        'COMPLETENESS_PACKAGE_METADATA_MISMATCH',
+        key,
+        'canonical package metadata does not match authoritative manifest evidence',
+      ))
+    }
+  }
+
+  return Object.freeze({
+    complete: hasNode && diagnostics.length === 0 && !hasConflict(state, 'packageMetadata'),
+    diagnostics: Object.freeze(diagnostics),
+  })
 }
 
 function rootManifest(state: InternalEvidenceState): Manifest | undefined {
@@ -643,6 +739,11 @@ export function completenessOf(graph: Graph, context: CompletenessContext = {}):
   if (repositoryPreserved && packageEdgesClassified(graph, state)
     && !hasConflict(state, 'edgeKinds')) {
     profile.edgeKinds = 'complete'
+  }
+  const packageMetadata = assessPackageMetadata(graph, state)
+  diagnostics.push(...packageMetadata.diagnostics)
+  if (packageMetadata.complete && scopeDelta?.nodes !== true && scopeDelta?.tarballs !== true) {
+    profile.packageMetadata = 'complete'
   }
   applyPolicyEvidence(profile, state, repositoryRootComplete(graph, state), diagnostics)
 

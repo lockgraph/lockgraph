@@ -251,10 +251,13 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
   if (isStringMap(raw?.peerDependencies))     out.peerDependencies     = { ...raw.peerDependencies }
   if (isObject(raw?.peerDependenciesMeta))    out.peerDependenciesMeta = { ...raw.peerDependenciesMeta }
   if (isStringMap(raw?.engines))              out.engines              = { ...raw.engines }
+  if (raw?.funding !== undefined)             out.funding              = raw.funding
   if (Array.isArray(raw?.os))                 out.os                   = raw.os.filter((v: any) => typeof v === 'string')
   if (Array.isArray(raw?.cpu))                out.cpu                  = raw.cpu.filter((v: any) => typeof v === 'string')
   if (Array.isArray(raw?.libc))               out.libc                 = raw.libc.filter((v: any) => typeof v === 'string')
   if (typeof raw?.deprecated === 'string')    out.deprecated           = raw.deprecated
+  if (isObject(raw?.scripts) && ['preinstall', 'install', 'postinstall']
+    .some(name => typeof raw.scripts[name] === 'string')) out.hasInstallScript = true
   const license = normaliseLicense(raw)
   if (license !== undefined)                  out.license              = license
   // Module-format fields (full manifest only; corgi omits them) — for custom
