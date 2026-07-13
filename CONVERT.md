@@ -152,6 +152,27 @@ install compares importer specifiers after applying the configured override;
 preserving the original direct-dependency range would make an otherwise
 matching companion and lock carrier fail `--frozen-lockfile`.
 
+## Bundled project conversion
+
+`convertProject(input, options)` returns a lockfile and its companion operations
+only when the complete `project` contract is satisfied. The result is pure and
+immutable; the API never reads or writes project files. Failed or unassessed
+conversions return only their structured assessment, so callers cannot apply a
+partial project bundle accidentally. `projectCompanionsOf` remains available
+when a caller intentionally needs the independently proven companion plan.
+
+Repository manifests may be supplied through the existing `manifests` and
+`manifestCoverage: 'complete'` convenience fields. `evidenceInputs` accepts
+repository manifests, package manifests, and package-manager config authority;
+these inputs are applied after the convenience manifest evidence and conflicts
+fail closed. Graph-scoped target-oracle evidence is not accepted by this
+pre-parse API.
+
+The bundled output, assessment requirements, and native lock policy carrier all
+consume one companion-projection runtime. No second post-emission projection is
+performed, so the returned operation cannot diverge from the authority used to
+emit and assess the lockfile.
+
 ## What is pulled from the registry — and why
 
 **Plain conversion never touches the registry.** Every format carries an

@@ -35,6 +35,10 @@ import {
 import type {
   AssessedOutput,
   ConvertAssessedOptions,
+  ConvertProjectOptions,
+  EvidenceContext,
+  ProjectConversionResult,
+  ProjectEvidenceInput,
   RequirementAssessment,
   StringifyAssessedOptions,
 } from './completeness/types.ts'
@@ -77,6 +81,7 @@ export type {
   ConversionAssessment,
   ConversionContract,
   ConvertAssessedOptions,
+  ConvertProjectOptions,
   EvidenceContext,
   EvidenceInput,
   EvidenceKind,
@@ -90,8 +95,10 @@ export type {
   PinnedTargetRequest,
   PmConfigEvidence,
   PolicyKnowledge,
+  ProjectConversionResult,
   ProjectCompanionOptions,
   ProjectCompanionResult,
+  ProjectEvidenceInput,
   RepositoryManifestEvidence,
   RequirementAssessment,
   RequirementStatus,
@@ -842,11 +849,25 @@ function pnpmWorkspacePeerRuntime(
   }
 }
 
-function stringifyAssessedInternal(
+type CompanionProjectionRuntime = ReturnType<typeof companionProjectionRuntime>
+
+interface AssessedRuntimeBundle {
+  readonly output?: string
+  readonly assessment: AssessedOutput['assessment']
+  readonly companions?: CompanionProjectionRuntime
+}
+
+function assessedOutputOf(runtime: AssessedRuntimeBundle): AssessedOutput {
+  return runtime.output === undefined
+    ? { assessment: runtime.assessment }
+    : { output: runtime.output, assessment: runtime.assessment }
+}
+
+function stringifyAssessedRuntime(
   graph: Graph,
   options: StringifyAssessedOptions,
   onDiagnostic?: (diagnostic: Diagnostic) => void,
-): AssessedOutput {
+): AssessedRuntimeBundle {
   const workspacePeer = pnpmWorkspacePeerRuntime(graph, options)
   const companions = options.contract === 'snapshot'
     ? undefined
@@ -864,7 +885,7 @@ function stringifyAssessedInternal(
   const preflight = assessConversion(graph, options, {
     targetRequirements,
   })
-  if (!probeEligible(preflight)) return { assessment: preflight }
+  if (!probeEligible(preflight)) return { assessment: preflight, companions }
 
   const state = internalEvidenceOf(options.evidence ?? evidenceOf(graph))
   const authority = options.contract === 'snapshot'
@@ -894,7 +915,7 @@ function stringifyAssessedInternal(
       outputProbe: { accepted: false, diagnostics },
       targetRequirements,
     })
-    return { assessment }
+    return { assessment, companions }
   }
 
   let probe: OutputProbeResult
@@ -920,7 +941,9 @@ function stringifyAssessedInternal(
     outputProbe: probe,
     targetRequirements,
   })
-  return assessment.status === 'satisfied' ? { output, assessment } : { assessment }
+  return assessment.status === 'satisfied'
+    ? { output, assessment, companions }
+    : { assessment, companions }
 }
 
 /** Emits only when canonical and target conversion requirements are satisfied. */
@@ -928,7 +951,7 @@ export function stringifyAssessed(
   graph: Graph,
   options: StringifyAssessedOptions,
 ): AssessedOutput {
-  return stringifyAssessedInternal(graph, options)
+  return assessedOutputOf(stringifyAssessedRuntime(graph, options))
 }
 
 function failedAssessedConversion(
@@ -948,11 +971,16 @@ function failedAssessedConversion(
   return { assessment }
 }
 
-/** Parses and emits only when the requested conversion contract is satisfied. */
-export function convertAssessed(
+interface PreparedAssessedConversion {
+  readonly graph: Graph
+  readonly evidence: EvidenceContext
+}
+
+function prepareAssessedConversion(
   input: string,
   options: ConvertAssessedOptions,
-): AssessedOutput {
+  evidenceInputs: readonly ProjectEvidenceInput[] = [],
+): PreparedAssessedConversion | AssessedOutput {
   const from = options.from ?? detect(input)
   if (from === undefined) {
     return failedAssessedConversion(options, assessedDiagnostic(
@@ -992,6 +1020,7 @@ export function convertAssessed(
         coverage: 'complete',
       })
     }
+    for (const inputEvidence of evidenceInputs) evidence = withEvidence(evidence, inputEvidence)
   } catch (error) {
     return failedAssessedConversion(options, assessedDiagnostic(
       'COMPLETENESS_EVIDENCE_INVALID',
@@ -999,11 +1028,49 @@ export function convertAssessed(
     ))
   }
 
-  return stringifyAssessedInternal(graph, {
+  return { graph, evidence }
+}
+
+/** Parses and emits only when the requested conversion contract is satisfied. */
+export function convertAssessed(
+  input: string,
+  options: ConvertAssessedOptions,
+): AssessedOutput {
+  const prepared = prepareAssessedConversion(input, options)
+  if ('assessment' in prepared) return prepared
+  return assessedOutputOf(stringifyAssessedRuntime(prepared.graph, {
     contract: options.contract,
     target: { format: options.to, managerVersion: options.targetVersion },
-    evidence,
+    evidence: prepared.evidence,
+    lineEnding: options.lineEnding,
+    cacheKey: options.cacheKey,
+  }, options.onDiagnostic))
+}
+
+/** Produces a project lockfile and companion operations only as one satisfied bundle. */
+export function convertProject(
+  input: string,
+  options: ConvertProjectOptions,
+): ProjectConversionResult {
+  const assessedOptions: ConvertAssessedOptions = { ...options, contract: 'project' }
+  const prepared = prepareAssessedConversion(input, assessedOptions, options.evidenceInputs)
+  if ('assessment' in prepared) {
+    return Object.freeze({ assessment: prepared.assessment })
+  }
+
+  const runtime = stringifyAssessedRuntime(prepared.graph, {
+    contract: 'project',
+    target: { format: options.to, managerVersion: options.targetVersion },
+    evidence: prepared.evidence,
     lineEnding: options.lineEnding,
     cacheKey: options.cacheKey,
   }, options.onDiagnostic)
+  if (runtime.assessment.status !== 'satisfied') {
+    return Object.freeze({ assessment: runtime.assessment })
+  }
+  return Object.freeze({
+    lockfile: runtime.output!,
+    companions: runtime.companions!.result.patches!,
+    assessment: runtime.assessment,
+  })
 }

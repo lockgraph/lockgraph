@@ -266,8 +266,23 @@ export interface ConvertAssessedOptions {
   readonly manifestCoverage?: ManifestCoverage
 }
 
+export type ProjectEvidenceInput =
+  | RepositoryManifestEvidence
+  | PmConfigEvidence
+  | PackageManifestEvidence
+
+export interface ConvertProjectOptions extends Omit<ConvertAssessedOptions, 'contract'> {
+  readonly evidenceInputs?: readonly ProjectEvidenceInput[]
+}
+
 export interface AssessedOutput {
   readonly output?: string
+  readonly assessment: ConversionAssessment
+}
+
+export interface ProjectConversionResult {
+  readonly lockfile?: string
+  readonly companions?: readonly CompanionSetOperation[]
   readonly assessment: ConversionAssessment
 }
 
