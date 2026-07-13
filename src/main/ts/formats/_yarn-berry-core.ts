@@ -1059,6 +1059,30 @@ export function rememberSidecar(graph: Graph, sidecar: YarnBerryFamilySidecar): 
   sidecarByGraph.set(graph, sidecar)
 }
 
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sourceSidecar = sidecarByGraph.get(source)
+  if (sourceSidecar === undefined) return { graph: target, invalidated: [] }
+  const targetSidecar = sidecarByGraph.get(target)
+  const pruned = pruneSidecar(targetSidecar ?? sourceSidecar, target)
+  const sourceSubjects = new Set([
+    ...(sourceSidecar.peerDependencies?.keys() ?? []),
+    ...(sourceSidecar.conditions?.keys() ?? []),
+    ...(sourceSidecar.dependenciesMeta?.keys() ?? []),
+    ...(sourceSidecar.peerDependenciesMeta?.keys() ?? []),
+    ...(sourceSidecar.unresolvedDeps?.keys() ?? []),
+    ...(sourceSidecar.entryKeyDescriptors?.keys() ?? []),
+  ])
+  const invalidated = [...sourceSubjects].filter(id => target.getNode(id) === undefined).sort()
+  rememberSidecar(target, pruned)
+  return {
+    graph: targetSidecar === undefined ? withSidecarPropagation(target, pruned) : target,
+    invalidated,
+  }
+}
+
 /**
  * Wraps a Graph so that every `.mutate()` call propagates the sidecar
  * (metadata, peerDependencies, conditions) to the resulting graph.

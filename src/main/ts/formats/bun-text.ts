@@ -158,6 +158,24 @@ function rememberSidecar(graph: Graph, sidecar: BunTextSidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }
 
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = pruneSidecar(sidecar, target)
+  rememberSidecar(target, pruned)
+  const invalidated = [
+    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
+    ...[...sidecar.workspaceByPath.entries()]
+      .filter(([path, id]) => pruned.workspaceByPath.get(path) !== id)
+      .map(([path]) => `workspace:${path}`),
+    ...[...sidecar.peerDeclarations.keys()].filter(key => !pruned.peerDeclarations.has(key)),
+  ].sort()
+  return { graph: target, invalidated }
+}
+
 /**
  * Canonical override constraints captured from a bun-text graph's top-level
  * `overrides` block (ADR-0025 §6, A2). Mirrors `getPnpmOverridesCanonical` /

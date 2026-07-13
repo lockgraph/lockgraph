@@ -206,6 +206,21 @@ function rememberSidecar(graph: Graph, sidecar: PnpmV5Sidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }
 
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = prunePnpmSidecar(sidecar, target)
+  rememberSidecar(target, pruned)
+  const invalidated = [
+    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
+    ...[...sidecar.importerEdges.keys()].filter(key => !pruned.importerEdges.has(key)),
+  ].sort()
+  return { graph: target, invalidated }
+}
+
 /**
  * Lock-borne pnpm-v5 overrides as canonical `OverrideConstraint[]`, for
  * `overridesOf`. Reads the verbatim `sidecar.overrides` block; `patch:` entries

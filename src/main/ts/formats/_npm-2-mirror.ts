@@ -154,6 +154,20 @@ export const NPM2_HOOKS: NpmFamilyHooks = {
   },
 }
 
+export function rebindNpm2MirrorState(
+  source: Graph,
+  target: Graph,
+): readonly string[] {
+  const sidecar = mirrorSidecarByGraph.get(source)
+  if (sidecar === undefined) return []
+  const invalidated = [...sidecar.resolvedByNodeId.keys()]
+    .filter(id => target.getNode(id) === undefined)
+    .sort()
+  NPM2_HOOKS.rebindGraph?.(source, target)
+  NPM2_HOOKS.pruneToNodes?.(target, new Set([...target.nodes()].map(node => node.id)))
+  return invalidated
+}
+
 // === Dual-mode drift detection (parse-side) ================================
 
 // Detect mismatches between `packages` and the legacy `dependencies` mirror

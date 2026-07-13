@@ -13,6 +13,9 @@ export type EnrichDiagnosticCode =
   | 'ENRICH_FIELD_FILLED'
   | 'ENRICH_CHECKSUM_DEFERRED'
   | 'ENRICH_NOOP'
+  | 'ENRICH_OVERRIDE_AUTHORITY_UNKNOWN'
+  | 'ENRICH_OVERRIDE_AUTHORITY_CONFLICT'
+  | 'ENRICH_ADAPTER_STATE_INVALIDATED'
 
 export interface EnrichDiagnostic extends Diagnostic {
   code: EnrichDiagnosticCode
@@ -43,5 +46,32 @@ export function enrichNoop(): EnrichDiagnostic {
     // 'graph' literal per ADR-0023 §7.3 — per-call event; NodeId is `string`.
     subject:  'graph',
     message:  'enrich: nothing to fill',
+  }
+}
+
+export function enrichOverrideAuthority(
+  status: 'unknown' | 'conflict',
+): EnrichDiagnostic {
+  return {
+    code: status === 'unknown'
+      ? 'ENRICH_OVERRIDE_AUTHORITY_UNKNOWN'
+      : 'ENRICH_OVERRIDE_AUTHORITY_CONFLICT',
+    severity: 'warning',
+    message: status === 'unknown'
+      ? 'transitive completion requires authoritative override evidence'
+      : 'transitive completion skipped because override authorities conflict',
+    data: { dimension: 'resolutionPolicy' },
+  }
+}
+
+export function enrichAdapterStateInvalidated(
+  format: string,
+  subjects: readonly string[],
+): EnrichDiagnostic {
+  return {
+    code: 'ENRICH_ADAPTER_STATE_INVALIDATED',
+    severity: 'warning',
+    message: `source adapter state was invalidated for ${subjects.length} subject(s)`,
+    data: { format, subjects: [...subjects] },
   }
 }

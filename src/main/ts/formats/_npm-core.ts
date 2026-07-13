@@ -760,6 +760,24 @@ export function getFlatSidecar(graph: Graph): NpmSidecar | undefined {
   return sidecarByGraph.get(graph)
 }
 
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = pruneSidecar(sidecar, target)
+  sidecarByGraph.set(target, pruned)
+  const invalidated = [
+    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
+    ...[...sidecar.edgeRanges.keys()].filter(key => !pruned.edgeRanges.has(key)),
+    ...[...sidecar.workspaceByPath.entries()]
+      .filter(([path, id]) => pruned.workspaceByPath.get(path) !== id)
+      .map(([path]) => `workspace:${path}`),
+  ].sort()
+  return { graph: target, invalidated }
+}
+
 // === Helpers ===============================================================
 
 function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {

@@ -529,6 +529,70 @@ export function authoritativePolicyOverridesOf(
   return config?.overrides
 }
 
+export type CompletionPolicyAuthority =
+  | Readonly<{ status: 'known'; overrides: readonly OverrideConstraint[] }>
+  | Readonly<{ status: 'unknown' | 'conflict' }>
+
+export function completionPolicyAuthorityOf(
+  state: InternalEvidenceState,
+): CompletionPolicyAuthority {
+  const manager = state.source?.manager
+  if (hasConflict(state, 'resolutionPolicy')) return { status: 'conflict' }
+  if (manager === undefined || manager === 'lockgraph') {
+    const manifest = rootManifest(state)
+    const configs = state.pmConfigs
+    if (configs.length > 1) return { status: 'conflict' }
+    if (configs.length === 1) return { status: 'known', overrides: configs[0]!.overrides }
+    return manifest?.overrides === undefined
+      ? { status: 'unknown' }
+      : { status: 'known', overrides: manifest.overrides }
+  }
+
+  const manifest = rootManifest(state)
+  const manifestOverrides = manifest === undefined
+    ? undefined
+    : canonicalManifestOverrides(manifest, manager)
+  if (state.pmConfigs.some(config => config.manager !== manager)) {
+    return { status: 'conflict' }
+  }
+  const matchingConfigs = state.pmConfigs.filter(config => config.manager === manager)
+  if (state.source?.version !== undefined
+    && matchingConfigs.some(config => config.version !== state.source?.version)) {
+    return { status: 'conflict' }
+  }
+  const configOverrides = matchingConfigs.length === 1
+    ? matchingConfigs[0]!.overrides
+    : undefined
+  if (matchingConfigs.length > 1) return { status: 'conflict' }
+  const carrierOverrides = state.observedPolicyCarrier === undefined
+    ? undefined
+    : state.observedPolicyCarrier.overrides
+
+  if (manifestOverrides === undefined && configOverrides === undefined
+    && carrierOverrides === undefined) return { status: 'unknown' }
+
+  if (manager !== 'pnpm') {
+    const candidates = [manifestOverrides, configOverrides, carrierOverrides]
+      .filter((candidate): candidate is readonly OverrideConstraint[] => candidate !== undefined)
+    const authority = candidates[0]!
+    if (candidates.slice(1).some(candidate => !equalOverrides(authority, candidate, manager))) {
+      return { status: 'conflict' }
+    }
+    return { status: 'known', overrides: authority }
+  }
+
+  if (manifestOverrides === undefined && configOverrides === undefined
+    && carrierOverrides !== undefined) {
+    return { status: 'known', overrides: carrierOverrides }
+  }
+  const authority = authoritativePolicyOverridesOf(state)
+  if (authority === undefined) return { status: 'unknown' }
+  if (carrierOverrides !== undefined && !equalOverrides(authority, carrierOverrides, 'pnpm')) {
+    return { status: 'conflict' }
+  }
+  return { status: 'known', overrides: authority }
+}
+
 function applyConflicts(profile: CompletenessProfile, state: InternalEvidenceState): void {
   for (const conflict of state.conflicts) {
     switch (conflict.dimension) {

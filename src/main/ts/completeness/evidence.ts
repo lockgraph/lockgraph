@@ -1,9 +1,12 @@
 import {
+  GraphError,
   newBuilder,
   toTarballKey,
   type Diagnostic,
+  type EdgeTriple,
   type Graph,
   type Manifest,
+  type NodeId,
   type OverrideConstraint,
   type TarballKey,
 } from '../graph.ts'
@@ -51,6 +54,54 @@ export interface InternalEvidenceState {
   }>>
   readonly targetOracles: readonly TargetOracleEvidence[]
   readonly conflicts: readonly EvidenceConflictRecord[]
+}
+
+export type EnrichmentDerivationPhase =
+  | Readonly<{
+      kind: 'source-adapter'
+      before: Graph
+      after: Graph
+    }>
+  | Readonly<{
+      kind: 'completion'
+      before: Graph
+      after: Graph
+      added: readonly NodeId[]
+      wired: readonly EdgeTriple[]
+    }>
+  | Readonly<{
+      kind: 'metadata'
+      before: Graph
+      after: Graph
+      hydrated: readonly TarballKey[]
+    }>
+  | Readonly<{
+      kind: 'artifact'
+      before: Graph
+      after: Graph
+      enriched: readonly NodeId[]
+    }>
+
+interface CanonicalGraphFacts {
+  readonly nodes: ReadonlyMap<string, string>
+  readonly roots: ReadonlySet<string>
+  readonly edges: ReadonlySet<string>
+  readonly tarballs: ReadonlyMap<string, string>
+  readonly layout: string
+}
+
+interface FactDelta {
+  readonly addedNodes: readonly string[]
+  readonly removedNodes: readonly string[]
+  readonly changedNodes: readonly string[]
+  readonly addedRoots: readonly string[]
+  readonly removedRoots: readonly string[]
+  readonly addedEdges: readonly string[]
+  readonly removedEdges: readonly string[]
+  readonly addedTarballs: readonly string[]
+  readonly removedTarballs: readonly string[]
+  readonly changedTarballs: readonly string[]
+  readonly layout: boolean
 }
 
 const contextState = new WeakMap<EvidenceContext, InternalEvidenceState>()
@@ -475,6 +526,160 @@ function equalValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right))
 }
 
+function canonicalFacts(graph: Graph): CanonicalGraphFacts {
+  const nodes = new Map<string, string>()
+  const edges = new Set<string>()
+  for (const node of graph.nodes()) {
+    nodes.set(node.id, JSON.stringify(stableValue(node)))
+    for (const edge of graph.out(node.id)) edges.add(JSON.stringify(stableValue(edge)))
+  }
+  const tarballs = new Map<string, string>()
+  for (const [key, payload] of graph.tarballs()) {
+    tarballs.set(key, JSON.stringify(stableValue(payload)))
+  }
+  return {
+    nodes,
+    roots: new Set(graph.roots()),
+    edges,
+    tarballs,
+    layout: JSON.stringify(stableValue(graph.layoutHints())),
+  }
+}
+
+function mapDelta(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): Readonly<{ added: string[]; removed: string[]; changed: string[] }> {
+  const added: string[] = []
+  const removed: string[] = []
+  const changed: string[] = []
+  for (const key of before.keys()) {
+    const next = after.get(key)
+    if (next === undefined) removed.push(key)
+    else if (next !== before.get(key)) changed.push(key)
+  }
+  for (const key of after.keys()) {
+    if (!before.has(key)) added.push(key)
+  }
+  return {
+    added: added.sort(),
+    removed: removed.sort(),
+    changed: changed.sort(),
+  }
+}
+
+function setDelta(
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>,
+): Readonly<{ added: string[]; removed: string[] }> {
+  return {
+    added: [...after].filter(item => !before.has(item)).sort(),
+    removed: [...before].filter(item => !after.has(item)).sort(),
+  }
+}
+
+function factDelta(before: CanonicalGraphFacts, after: CanonicalGraphFacts): FactDelta {
+  const nodes = mapDelta(before.nodes, after.nodes)
+  const roots = setDelta(before.roots, after.roots)
+  const edges = setDelta(before.edges, after.edges)
+  const tarballs = mapDelta(before.tarballs, after.tarballs)
+  return {
+    addedNodes: nodes.added,
+    removedNodes: nodes.removed,
+    changedNodes: nodes.changed,
+    addedRoots: roots.added,
+    removedRoots: roots.removed,
+    addedEdges: edges.added,
+    removedEdges: edges.removed,
+    addedTarballs: tarballs.added,
+    removedTarballs: tarballs.removed,
+    changedTarballs: tarballs.changed,
+    layout: before.layout !== after.layout,
+  }
+}
+
+function sameCanonicalGraph(left: Graph, right: Graph): boolean {
+  const delta = factDelta(canonicalFacts(left), canonicalFacts(right))
+  return delta.addedNodes.length === 0
+    && delta.removedNodes.length === 0
+    && delta.changedNodes.length === 0
+    && delta.addedRoots.length === 0
+    && delta.removedRoots.length === 0
+    && delta.addedEdges.length === 0
+    && delta.removedEdges.length === 0
+    && delta.addedTarballs.length === 0
+    && delta.removedTarballs.length === 0
+    && delta.changedTarballs.length === 0
+    && !delta.layout
+}
+
+function invariant(message: string): never {
+  throw new GraphError('INVARIANT_VIOLATION', `enrichment derivation: ${message}`)
+}
+
+function assertOnlyTarballsChanged(delta: FactDelta, phase: string): void {
+  if (delta.addedNodes.length > 0 || delta.removedNodes.length > 0 || delta.changedNodes.length > 0
+    || delta.addedRoots.length > 0 || delta.removedRoots.length > 0
+    || delta.addedEdges.length > 0 || delta.removedEdges.length > 0 || delta.layout) {
+    invariant(`${phase} receipt does not cover a structural delta`)
+  }
+}
+
+function tripleKey(value: EdgeTriple): string {
+  return `${value.src}\0${value.kind}\0${value.dst}`
+}
+
+function edgeTripleOf(serialized: string): string {
+  const edge = JSON.parse(serialized) as EdgeTriple
+  return tripleKey(edge)
+}
+
+function assertPhaseReceipt(phase: EnrichmentDerivationPhase): void {
+  const before = canonicalFacts(phase.before)
+  const after = canonicalFacts(phase.after)
+  const delta = factDelta(before, after)
+  if (phase.kind === 'source-adapter') return
+  if (phase.kind === 'completion') {
+    if (delta.removedNodes.length > 0 || delta.changedNodes.length > 0
+      || delta.removedRoots.length > 0 || delta.addedRoots.length > 0
+      || delta.removedEdges.length > 0 || delta.removedTarballs.length > 0
+      || delta.changedTarballs.length > 0 || delta.layout) {
+      invariant('completion receipt contains a non-additive delta')
+    }
+    const expectedNodes = [...new Set(phase.added)].sort()
+    if (!equalValue(delta.addedNodes, expectedNodes)) invariant('completion node receipt is incomplete')
+    const expectedEdges = [...new Set(phase.wired.map(tripleKey))].sort()
+    const actualEdges = [...new Set(delta.addedEdges.map(edgeTripleOf))].sort()
+    if (!equalValue(actualEdges, expectedEdges)) invariant('completion edge receipt is incomplete')
+    const addedNodeKeys = new Set(phase.added.map(id => {
+      const node = phase.after.getNode(id)
+      return node === undefined ? undefined : toTarballKey(node)
+    }).filter((key): key is TarballKey => key !== undefined))
+    for (const key of addedNodeKeys) {
+      if (!before.tarballs.has(key) && !after.tarballs.has(key)) {
+        invariant('completion added a package without a tarball payload')
+      }
+    }
+    if (delta.addedTarballs.some(key => !addedNodeKeys.has(key))) {
+      invariant('completion tarball receipt is incomplete')
+    }
+    return
+  }
+  assertOnlyTarballsChanged(delta, phase.kind)
+  if (delta.removedTarballs.length > 0) {
+    invariant(`${phase.kind} receipt removes a tarball payload`)
+  }
+  const covered = phase.kind === 'metadata'
+    ? new Set(phase.hydrated)
+    : new Set(phase.enriched.map(id => {
+        const node = phase.after.getNode(id)
+        return node === undefined ? undefined : toTarballKey(node)
+      }).filter((key): key is TarballKey => key !== undefined))
+  if ([...delta.addedTarballs, ...delta.changedTarballs].some(key => !covered.has(key))) {
+    invariant(`${phase.kind} tarball receipt is incomplete`)
+  }
+}
+
 function conflictDiagnostic(conflict: EvidenceConflictRecord): Diagnostic {
   return Object.freeze({
     code: 'COMPLETENESS_EVIDENCE_CONFLICT',
@@ -682,6 +887,21 @@ const manifestAuthorityRank: Record<PackageManifestEvidence['authority'], number
   'tarball-manifest': 3,
 }
 
+export function packageResolutionFactsEqual(
+  left: PackumentVersion,
+  right: PackumentVersion,
+): boolean {
+  const project = (manifest: PackumentVersion): unknown => ({
+    name: manifest.name,
+    version: manifest.version,
+    dependencies: manifest.dependencies,
+    optionalDependencies: manifest.optionalDependencies,
+    peerDependencies: manifest.peerDependencies,
+    peerDependenciesMeta: manifest.peerDependenciesMeta,
+  })
+  return equalValue(project(left), project(right))
+}
+
 function mergePackageManifests(
   current: InternalEvidenceState['packageManifests'],
   input: PackageManifestEvidence,
@@ -694,10 +914,7 @@ function mergePackageManifests(
     const frozen = cloneAndFreeze(manifest)
     if (existing !== undefined && !equalValue(existing.manifest, frozen)) {
       const sources = [existing.authority, input.authority]
-      if (!equalValue(
-        repositoryProjection(existing.manifest, 'edgeKinds'),
-        repositoryProjection(frozen, 'edgeKinds'),
-      )) {
+      if (!packageResolutionFactsEqual(existing.manifest, frozen)) {
         addConflict(conflicts, diagnostics, { dimension: 'edgeKinds', subject: key, sources })
         addConflict(conflicts, diagnostics, { dimension: 'peerModel', subject: key, sources })
       }
@@ -774,6 +991,7 @@ export function withEvidence(base: EvidenceContext, input: EvidenceInput | reado
     diagnostics,
   }, Object.freeze({
     anchor: baseState.anchor,
+    anchorSnapshot: baseState.anchorSnapshot,
     source: baseState.source,
     observedPolicyCarrier: baseState.observedPolicyCarrier,
     repositoryManifests,
@@ -838,6 +1056,49 @@ function snapshotGraph(graph: Graph): Graph {
   const layout = graph.layoutHints()
   if (layout !== undefined) builder.layoutHints(cloneAndFreeze(layout))
   return builder.seal()
+}
+
+export function deriveEnrichedEvidence(
+  inputGraph: Graph,
+  finalGraph: Graph,
+  context: EvidenceContext,
+  phases: readonly EnrichmentDerivationPhase[],
+  refs: readonly EvidenceRef[] = [],
+  diagnostics: readonly Diagnostic[] = [],
+): EvidenceContext {
+  const state = stateOf(context)
+  const anchor = state.anchorSnapshot ?? state.anchor
+  if (anchor !== undefined && !sameCanonicalGraph(anchor, inputGraph)) {
+    invariant('input graph does not match the evidence anchor')
+  }
+
+  let cursor = inputGraph
+  for (const phase of phases) {
+    if (!sameCanonicalGraph(cursor, phase.before)) invariant('phase chain is discontinuous')
+    assertPhaseReceipt(phase)
+    cursor = phase.after
+  }
+  if (!sameCanonicalGraph(cursor, finalGraph)) invariant('final graph contains an uncovered delta')
+
+  const nextRefs = [...context.ledger.refs]
+  appendUniqueRefs(nextRefs, refs.map(ref => cloneAndFreeze(ref)))
+  const nextDiagnostics = [...context.ledger.diagnostics]
+  for (const diagnostic of diagnostics) {
+    if (!nextDiagnostics.some(existing => equalValue(existing, diagnostic))) {
+      nextDiagnostics.push(cloneAndFreeze(diagnostic))
+    }
+  }
+  const derived = createContext({
+    source: context.ledger.source,
+    refs: nextRefs,
+    diagnostics: nextDiagnostics,
+  }, Object.freeze({
+    ...state,
+    anchor: finalGraph,
+    anchorSnapshot: snapshotGraph(finalGraph),
+  }))
+  attachEvidence(finalGraph, derived)
+  return derived
 }
 
 export function attachParsedEvidence(

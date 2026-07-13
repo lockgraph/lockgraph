@@ -48,6 +48,10 @@ export interface RefurbishOptions {
    *  it from, so absent it every gap DEFERS. Optional for a prefix-era lock (read
    *  off a sibling's `<cacheKey>/`). */
   cacheKey?:     string
+  /** Cache-key inference policy. `format-default` preserves the direct primitive's
+   *  historical v8+ `10c0` fallback. Target-aware enrichment uses
+   *  `observed-only` so a project generation is never guessed. */
+  cacheKeyInference?: 'format-default' | 'observed-only'
 }
 
 export interface RefurbishResult {
@@ -71,7 +75,7 @@ const isPrefixEraFormat = (format: string): boolean => {
 
 /** The cacheKey to recompute against, or `undefined` when it can't be inferred
  *  in-graph (so the caller DEFERS rather than guess). Precedence:
- *    1. a per-node `<cacheKey>/` prefix on an existing sibling — the only
+ *    1. a unique per-node `<cacheKey>/` prefix on existing siblings — the only
  *       in-graph signal, present in a prefix-era (v8+) lock;
  *    2. for a prefix-era FORMAT with no such sibling (e.g. a fresh cross-family
  *       convert) the Yarn-4 STORE default `10c0` — this assumes the modern STORE
@@ -79,12 +83,20 @@ const isPrefixEraFormat = (format: string): boolean => {
  *       `opts.cacheKey` so a STORE digest is not filled for a mixed lock;
  *    3. otherwise (bare-era v4–v7, no sibling prefix) `undefined` — the caller
  *       must pass `opts.cacheKey` (the lock's `__metadata.cacheKey`) to fill. */
-function berryCacheKeyFor(graph: Graph, format: string): string | undefined {
+export function berryCacheKeyFor(
+  graph: Graph,
+  format: string,
+  inference: NonNullable<RefurbishOptions['cacheKeyInference']>,
+): string | undefined {
+  const observed = new Set<string>()
   for (const node of graph.nodes()) {
     const ck = graph.tarballOf(node.id)?.berryChecksumCacheKey
-    if (ck !== undefined) return ck
+    if (ck !== undefined) observed.add(ck)
   }
-  return isPrefixEraFormat(format) ? '10c0' : undefined
+  if (observed.size === 1) return observed.values().next().value
+  if (observed.size > 1 && inference === 'observed-only') return undefined
+  if (observed.size > 1) return observed.values().next().value
+  return inference === 'format-default' && isPrefixEraFormat(format) ? '10c0' : undefined
 }
 
 /** A `Recompute` reproduces yarn's cache-zip digest for `(tgz, name, cacheKey)`,
@@ -213,7 +225,11 @@ export async function refurbish(
     return { graph: next, enriched, unresolved }
   }
 
-  const cacheKey = opts.cacheKey ?? berryCacheKeyFor(graph, format)
+  const cacheKey = opts.cacheKey ?? berryCacheKeyFor(
+    graph,
+    format,
+    opts.cacheKeyInference ?? 'format-default',
+  )
   // ADR-0035 byte-reproduces the `checksum` with the pinned pure-JS `pako` port for
   // STORE (`cN0`, any era) and `mixed` at cacheKey VERSION 7/8/9 (yarn 2.4 / 3.1–3.8
   // legacy match-hash; yarn-4 RC window / lockfile v7 nodejs-compatible hash —

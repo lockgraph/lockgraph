@@ -709,6 +709,22 @@ function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }
 
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = pruneSidecar(sidecar, target)
+  rememberSidecar(target, pruned)
+  const invalidated = [...new Set([
+    ...sidecar.entrySpecs.keys(),
+    ...(sidecar.entryExtras?.keys() ?? []),
+    ...(sidecar.unresolvedDeps?.keys() ?? []),
+  ].filter(id => target.getNode(id) === undefined))].sort()
+  return { graph: target, invalidated }
+}
+
 function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSidecar {
   const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))
   const entrySpecs = new Map<string, string[]>()

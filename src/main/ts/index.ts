@@ -155,6 +155,9 @@ export type {
 export { optimize } from './optimize/optimize.ts'
 export type { OptimizeOptions, OptimizeResult } from './optimize/optimize.ts'
 
+export { enrich } from './enrich/facade.ts'
+export type { EnrichOptions, EnrichResult, EnrichSources } from './enrich/facade.ts'
+
 export type FormatId =
   | 'yarn-berry-v4'
   | 'yarn-berry-v5'

@@ -129,6 +129,21 @@ function rememberSidecar(graph: Graph, sidecar: NpmSidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }
 
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = pruneSidecar(sidecar, target)
+  rememberSidecar(target, pruned)
+  const invalidated = [
+    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
+    ...[...sidecar.edgeRanges.keys()].filter(key => !pruned.edgeRanges.has(key)),
+  ].sort()
+  return { graph: target, invalidated }
+}
+
 // === Public API: check / parse / stringify / enrich / optimize =============
 
 export function check(input: string): boolean {
