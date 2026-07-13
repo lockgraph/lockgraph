@@ -1,7 +1,7 @@
 // ADR-0014 §3 public surface — dispatcher contract.
 //
 // Covers per-format `parse / stringify / check` dispatch, `detect` matrix
-// across all 13 adapters via `simple` fixture, и `convert` sugar with
+// across all adapters via the `simple` fixture, plus the `convert` orchestrator with
 // (a) happy path yarn-berry-v9 → pnpm-v9, (b) detection failure throw,
 // (c) `onDiagnostic` threading.
 
@@ -128,27 +128,27 @@ describe('public surface — detect', () => {
 })
 
 describe('public surface — convert', () => {
-  it('parses + stringifies happy path (yarn-berry-v9 → pnpm-v9)', () => {
+  it('parses + stringifies happy path (yarn-berry-v9 → pnpm-v9)', async () => {
     const input = fixture('simple', 'yarn-berry-v9.lock')
-    const out = convert(input, { to: 'pnpm-v9' })
+    const out = await convert(input, { to: 'pnpm-v9' })
     expect(check('pnpm-v9', out)).toBe(true)
   })
 
-  it('honours explicit `from` over auto-detect', () => {
+  it('honours explicit `from` when it agrees with detection', async () => {
     const input = fixture('simple', 'yarn-berry-v9.lock')
-    const out = convert(input, { from: 'yarn-berry-v9', to: 'pnpm-v9' })
+    const out = await convert(input, { from: 'yarn-berry-v9', to: 'pnpm-v9' })
     expect(check('pnpm-v9', out)).toBe(true)
   })
 
-  it('throws when source format not detected', () => {
-    expect(() => convert('not a lockfile', { to: 'pnpm-v9' }))
-      .toThrowError('convert: source format not detected')
+  it('throws when source format not detected', async () => {
+    await expect(convert('not a lockfile', { to: 'pnpm-v9' }))
+      .rejects.toThrowError('convert: source format not detected')
   })
 
-  it('threads onDiagnostic through parse + stringify', () => {
+  it('threads onDiagnostic through parse + enrich + stringify', async () => {
     const input = fixture('simple', 'yarn-berry-v9.lock')
     const captured: Diagnostic[] = []
-    convert(input, {
+    await convert(input, {
       to:           'pnpm-v9',
       onDiagnostic: d => { captured.push(d) },
     })
@@ -157,31 +157,31 @@ describe('public surface — convert', () => {
     expect(Array.isArray(captured)).toBe(true)
   })
 
-  it('forwards cacheKey to yarn-berry-v9 emit metadata', () => {
-    // Recipe-layer F1 hex/SRI translation lands в later round — for now
-    // verify the option threads через to the yarn-berry sidecar/metadata.
+  it('forwards cacheKey to yarn-berry-v9 emit metadata', async () => {
+    // Recipe-layer F1 hex/SRI translation lands in a later round. For now,
+    // verify that the option reaches the yarn-berry sidecar/metadata.
     const input = fixture('simple', 'yarn-berry-v9.lock')
-    const out = convert(input, { to: 'yarn-berry-v9', cacheKey: 'ffff' })
+    const out = await convert(input, { to: 'yarn-berry-v9', cacheKey: 'ffff' })
     expect(out).toContain('cacheKey: ffff')
   })
 
-  it('cross-family conversion: npm-3 → pnpm-v9 emits valid pnpm output', () => {
+  it('cross-family conversion: npm-3 → pnpm-v9 emits valid pnpm output', async () => {
     const input = fixture('simple', 'npm-3.lock')
-    const out = convert(input, { to: 'pnpm-v9' })
+    const out = await convert(input, { to: 'pnpm-v9' })
     expect(check('pnpm-v9', out)).toBe(true)
     // round-trip sanity: parse the output as the target format
     const reparsed = parse('pnpm-v9', out)
     expect(reparsed).toBeDefined()
   })
 
-  it('cross-family conversion: yarn-berry-v9 → bun-text observes patch-drop diagnostic', () => {
+  it('cross-family conversion: yarn-berry-v9 → bun-text observes patch-drop diagnostic', async () => {
     // bun-text drops patches per ADR-0014 §4.F2 stringify table (RECIPE_FEATURE_DROPPED).
-    // Today the diagnostic emit lives в the bun-text adapter directly; verify the public
-    // surface threads it через onDiagnostic. Recipe-layer F2 round adds the RECIPE_*
+    // Today the diagnostic emit lives in the bun-text adapter directly; verify the public
+    // surface threads it through onDiagnostic. Recipe-layer F2 adds the RECIPE_*
     // family — for now we assert the callback fires when patches are present in source.
     const input = fixture('patch-yarn', 'yarn-berry-v9.lock')
     const captured: Diagnostic[] = []
-    convert(input, {
+    await convert(input, {
       to:           'bun-text',
       onDiagnostic: d => { captured.push(d) },
     })
@@ -190,12 +190,12 @@ describe('public surface — convert', () => {
     expect(patchRelated.length).toBeGreaterThan(0)
   })
 
-  it('onDiagnostic invoked exactly once per emitted event (no double-fire)', () => {
+  it('onDiagnostic invoked exactly once per emitted event (no double-fire)', async () => {
     // Implementation iterates graph.diagnostics() once post-parse + per-adapter
     // stringify options once; regression-protect against accidental double-emit.
     const input = fixture('patch-yarn', 'yarn-berry-v9.lock')
     const codes: string[] = []
-    convert(input, {
+    await convert(input, {
       to:           'bun-text',
       onDiagnostic: d => { codes.push(`${d.code}|${d.subject ?? ''}`) },
     })

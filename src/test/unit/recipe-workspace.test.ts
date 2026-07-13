@@ -180,7 +180,7 @@ describe('recipe/workspace — workspaceRangeOfEdge', () => {
 
   it('returns undefined when edge.attrs.workspace !== true (not a workspace edge)', () => {
     // ADR-0014 §4.F4 — FIXIT-2: predicate is the explicit edge marker,
-    // not dst.workspacePath. Edges landing on workspace nodes без the
+    // not dst.workspacePath. Edges landing on workspace nodes without the
     // marker are NOT eligible for F4 translation.
     const edge = { attrs: { range: 'workspace:^' } }
     const dst = { workspacePath: 'packages/foo', version: '1.2.3' }
@@ -208,7 +208,7 @@ describe('recipe/workspace — F4 gate predicates', () => {
   it('shouldEmitWorkspaceResolved suppresses (empty) → version spam (B1 gate)', () => {
     expect(shouldEmitWorkspaceResolved({ specifier: 'workspace:^', resolvedVersion: '1.0.0' })).toBe(true)
     expect(shouldEmitWorkspaceResolved({ specifier: 'workspace:*' })).toBe(true)
-    // Empty pending specifier carried nothing к drop — gate to false.
+    // An empty pending specifier carried nothing to drop, so the gate is false.
     expect(shouldEmitWorkspaceResolved({ specifier: '', resolvedVersion: '1.0.0' })).toBe(false)
     expect(shouldEmitWorkspaceResolved({ specifier: '' })).toBe(false)
     expect(shouldEmitWorkspaceResolved(undefined)).toBe(false)
@@ -279,7 +279,7 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     // FIXIT-3 — yarn-berry now marks workspace edges at parse time via
     // `markWorkspaceEdgesAtParse()` (mirrors enrich-time logic so convert
     // path produces F4-ready edges without explicit enrich step). Enrich
-    // is still exercised here для belt-and-suspenders verification, но
+    // is still exercised here for belt-and-suspenders verification, but
     // the parse-side carrier is the primary source of truth.
     const g0 = parse('yarn-berry-v9', fixture('workspace-cross-refs/yarn-berry-v9.lock'))
     const g = yarnBerryV9.enrich(g0).graph
@@ -307,13 +307,13 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     }
   })
 
-  it('npm-2 enrich populates attrs.workspaceRange = { specifier: "", resolvedVersion: <dst.version> } (empty pending)', () => {
+  it('npm-2 enrich populates attrs.workspaceRange = { specifier: "", resolvedVersion: <dst.version> } (empty pending)', async () => {
     // npm-2/3 link entries carry no source-side specifier — F4 canonical
     // is the empty pending sentinel + dst.version best-effort. Use the
     // convert path from yarn-berry-v9 (which carries actual root-to-
     // workspace-member edges) → npm-2, then re-parse + enrich the result
     // to exercise the marking pass on a realistic edge set.
-    const npm2Text = convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    const npm2Text = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-2',
     })
@@ -332,8 +332,8 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     expect(found).toBeGreaterThan(0)
   })
 
-  it('npm-3 enrich populates attrs.workspaceRange = { specifier: "", resolvedVersion: <dst.version> }', () => {
-    const npm3Text = convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+  it('npm-3 enrich populates attrs.workspaceRange = { specifier: "", resolvedVersion: <dst.version> }', async () => {
+    const npm3Text = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-3',
     })
@@ -364,12 +364,12 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
     }
   })
 
-  it('yarn-classic convert from yarn-berry-v9 populates attrs.workspaceRange (sentinel-version-only) on re-parse + enrich', () => {
+  it('yarn-classic convert from yarn-berry-v9 populates attrs.workspaceRange (sentinel-version-only) on re-parse + enrich', async () => {
     // yarn-classic owns workspace marking via enrich (manifests-driven);
     // use the convert path to produce a yarn-classic lockfile carrying
     // workspace edges, then re-parse + enrich with manifests reflecting
     // the cross-refs fixture topology.
-    const yarnText = convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    const yarnText = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
     })
@@ -414,9 +414,9 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
 // === Cross-format conversion ================================================
 
 describe('recipe/workspace — yarn-berry-v9 → pnpm-v9 (both protocol-bearing): no F4 diagnostic', () => {
-  it('workspace specifier survives without RECIPE_WORKSPACE_* fire', () => {
+  it('workspace specifier survives without RECIPE_WORKSPACE_* fire', async () => {
     const diags: Diagnostic[] = []
-    const out = convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    const out = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'pnpm-v9',
       onDiagnostic: d => diags.push(d),
@@ -432,9 +432,9 @@ describe('recipe/workspace — yarn-berry-v9 → pnpm-v9 (both protocol-bearing)
 })
 
 describe('recipe/workspace — yarn-berry-v9 → yarn-classic fires RECIPE_WORKSPACE_RESOLVED', () => {
-  it('emit substitutes resolvedVersion + fires info per edge', () => {
+  it('emit substitutes resolvedVersion + fires info per edge', async () => {
     const diags: Diagnostic[] = []
-    const out = convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    const out = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
       onDiagnostic: d => diags.push(d),
@@ -448,9 +448,9 @@ describe('recipe/workspace — yarn-berry-v9 → yarn-classic fires RECIPE_WORKS
 })
 
 describe('recipe/workspace — yarn-berry-v9 → npm-3 fires RECIPE_WORKSPACE_RESOLVED', () => {
-  it('emit replaces workspace:* with resolvedVersion in package deps + link:true survives', () => {
+  it('emit replaces workspace:* with resolvedVersion in package deps + link:true survives', async () => {
     const diags: Diagnostic[] = []
-    const out = convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    const out = await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-3',
       onDiagnostic: d => diags.push(d),
@@ -462,9 +462,9 @@ describe('recipe/workspace — yarn-berry-v9 → npm-3 fires RECIPE_WORKSPACE_RE
 })
 
 describe('recipe/workspace — yarn-berry-v9 → bun-text fires RECIPE_WORKSPACE_COLLAPSED for richer specifiers', () => {
-  it('source `workspace:^` / `workspace:1.0.0` collapse to workspace:* (info per edge)', () => {
+  it('source `workspace:^` / `workspace:1.0.0` collapse to workspace:* (info per edge)', async () => {
     const diags: Diagnostic[] = []
-    convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'bun-text',
       onDiagnostic: d => diags.push(d),
@@ -475,9 +475,9 @@ describe('recipe/workspace — yarn-berry-v9 → bun-text fires RECIPE_WORKSPACE
 })
 
 describe('recipe/workspace — yarn-berry-v9 → npm-1 fires RECIPE_FEATURE_DROPPED (workspace)', () => {
-  it('npm-1 drops workspace concept entirely per ADR-0021 §A', () => {
+  it('npm-1 drops workspace concept entirely per ADR-0021 §A', async () => {
     const diags: Diagnostic[] = []
-    convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
+    await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-1',
       onDiagnostic: d => diags.push(d),

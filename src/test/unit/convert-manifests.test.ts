@@ -66,15 +66,15 @@ function importerBlock(out: string): string {
 }
 
 describe('#102 — convert() honours a resolutions pin via manifests', () => {
-  it('WITHOUT manifests: the non-satisfying pin is dropped → no csstype dependency under the importer', () => {
-    const out = convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9' })
+  it('WITHOUT manifests: the non-satisfying pin is dropped → no csstype dependency under the importer', async () => {
+    const out = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9' })
     // The root→csstype edge was dropped (no override map, no semver satisfier), so
     // the importer carries no csstype dependency.
     expect(importerBlock(out)).not.toMatch(/csstype/)
   })
 
-  it('WITH manifests: the override map bridges the pin → csstype dependency appears under the importer', () => {
-    const out = convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS })
+  it('WITH manifests: the override map bridges the pin → csstype dependency appears under the importer', async () => {
+    const out = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS })
     // The restored edge re-points root onto the pinned csstype 3.0.9 node, so the
     // importer now carries the csstype dependency resolved to 3.0.9.
     const importer = importerBlock(out)
@@ -82,10 +82,10 @@ describe('#102 — convert() honours a resolutions pin via manifests', () => {
     expect(importer).toMatch(/3\.0\.9/)
   })
 
-  it('matches the equivalent parse({manifests}) → stringify pipeline (pure parse→stringify)', () => {
+  it('matches the equivalent parse({manifests}) → stringify pipeline', async () => {
     // convert is exactly parse(from, …, { manifests }) → stringify(to, …); no
     // override auto-threading. Prove equality against the manual pipeline.
-    const viaConvert = convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS })
+    const viaConvert = await convert(BERRY_LOCK, { from: 'yarn-berry-v8', to: 'pnpm-v9', manifests: MANIFESTS })
     const g = parse('yarn-berry-v8', BERRY_LOCK, { manifests: MANIFESTS })
     const viaPipeline = stringify('pnpm-v9', g)
     expect(viaConvert).toBe(viaPipeline)
@@ -116,8 +116,8 @@ ansi-styles@^3.2.1:
     '': { name: 'app', version: '1.0.0', dependencies: { chalk: '^2.4.2' } },
   }
 
-  it('convert → npm-3 synthesizes the declared root, keeping the dependency as its own node', () => {
-    const npm3 = JSON.parse(convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
+  it('convert → npm-3 synthesizes the declared root, keeping the dependency as its own node', async () => {
+    const npm3 = JSON.parse(await convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
       name: string
       packages: Record<string, { name?: string; dependencies?: Record<string, string> }>
     }
@@ -131,8 +131,8 @@ ansi-styles@^3.2.1:
     expect(Array.from(g.roots())).toEqual(['app@1.0.0'])
   })
 
-  it('the pnpm importer lists the real root dependency (chalk), not a transitive', () => {
-    const out = convert(YARN, { from: 'yarn-classic', to: 'pnpm-v9', manifests: MAN })
+  it('the pnpm importer lists the real root dependency (chalk), not a transitive', async () => {
+    const out = await convert(YARN, { from: 'yarn-classic', to: 'pnpm-v9', manifests: MAN })
     const importer = out.slice(out.indexOf('importers:'), out.indexOf('\npackages:'))
     expect(importer).toMatch(/chalk:/)
     expect(importer).not.toMatch(/ansi-styles:/)
@@ -145,12 +145,12 @@ ansi-styles@^3.2.1:
     expect(Array.from(g.roots())).not.toContain('app@1.0.0')
   })
 
-  it('synthesizes an INDEPENDENT member declared in manifests but absent from the lock', () => {
+  it('synthesizes an INDEPENDENT member declared in manifests but absent from the lock', async () => {
     // yarn 1 records a member in the lock only when something depends on it; an
     // independent member has no lock entry, so its node + declared dep edges are
     // synthesized from its manifest. Here `@s/a` requires chalk, which IS in the
     // lock, so the member converts completely (member entry + top-level symlink).
-    const out = JSON.parse(convert(YARN, {
+    const out = JSON.parse(await convert(YARN, {
       from: 'yarn-classic',
       to: 'npm-3',
       manifests: {
@@ -193,9 +193,9 @@ lodash@4.17.21:
     'packages/b': { name: '@ws/b', version: '1.0.0', dependencies: { '@ws/a': '1.0.0' } },
   }
 
-  it('emits packages/<path> member entries + node_modules/<name> links, and does not warn', () => {
+  it('emits packages/<path> member entries + node_modules/<name> links, and does not warn', async () => {
     const codes: string[] = []
-    const out = JSON.parse(convert(YARN, {
+    const out = JSON.parse(await convert(YARN, {
       from: 'yarn-classic', to: 'npm-3', manifests: MAN, onDiagnostic: d => codes.push(d.code),
     })) as { packages: Record<string, { link?: boolean; resolved?: string; dependencies?: Record<string, string> }> }
 
@@ -230,9 +230,9 @@ is-number@^7.0.0:
     'packages/consumer': { name: '@c/consumer', version: '1.0.0', dependencies: { 'is-number': '^7.0.0' } },
   }
 
-  it('synthesizes the local member + links the root node_modules to it, nesting the external copy', () => {
+  it('synthesizes the local member + links the root node_modules to it, nesting the external copy', async () => {
     const codes: string[] = []
-    const out = JSON.parse(convert(YARN, {
+    const out = JSON.parse(await convert(YARN, {
       from: 'yarn-classic', to: 'npm-3', manifests: MAN, onDiagnostic: d => codes.push(d.code),
     })) as { packages: Record<string, { link?: boolean; resolved?: string; name?: string; version?: string }> }
 
@@ -277,8 +277,8 @@ csstype@3.0.9:
     expect(g.out('root@1.0.0').map(e => e.dst)).toEqual(['csstype@3.0.9'])
   })
 
-  it('convert → npm-3 keeps the csstype dependency and its pinned node', () => {
-    const npm = JSON.parse(convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
+  it('convert → npm-3 keeps the csstype dependency and its pinned node', async () => {
+    const npm = JSON.parse(await convert(YARN, { from: 'yarn-classic', to: 'npm-3', manifests: MAN })) as {
       packages: Record<string, { dependencies?: Record<string, string> }>
     }
     expect(npm.packages['']?.dependencies).toEqual({ csstype: '^3.1.3' })

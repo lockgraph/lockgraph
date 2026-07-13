@@ -113,15 +113,15 @@ describe('integrity parse — yarn-berry checksum is a berry-zip digest, not a t
 })
 
 describe('integrity round-trip WITHIN a family preserves the digest', () => {
-  it('npm-3 → npm-3 keeps the tarball sha512 byte-exact', () => {
-    const g = parse('npm-3', convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'npm-3' }))
+  it('npm-3 → npm-3 keeps the tarball sha512 byte-exact', async () => {
+    const g = parse('npm-3', await convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'npm-3' }))
     expect(canonicalDigest(g.tarballOf('ms@2.1.3')!.integrity!)).toBe(MS_NPM_SRI)
   })
 
-  it('yarn-berry-v4 → yarn-berry-v9 round-trips the berry-zip checksum (cacheKey re-applied)', () => {
+  it('yarn-berry-v4 → yarn-berry-v9 round-trips the berry-zip checksum (cacheKey re-applied)', async () => {
     const v4src = fixture('simple/yarn-berry-v4.lock')
     const v4hex = pickAlgorithm(parse('yarn-berry-v4', v4src).tarballOf('ms@2.1.3')!.integrity!, 'sha512')!.digest
-    const v9 = convert(v4src, { from: 'yarn-berry-v4', to: 'yarn-berry-v9', cacheKey: '10c0' })
+    const v9 = await convert(v4src, { from: 'yarn-berry-v4', to: 'yarn-berry-v9', cacheKey: '10c0' })
     expect(v9).toMatch(new RegExp(`checksum: 10c0/${v4hex}`))
     const sha512 = pickAlgorithm(parse('yarn-berry-v9', v9).tarballOf('ms@2.1.3')!.integrity!, 'sha512')!
     expect(sha512.origin).toBe('berry-zip')
@@ -130,14 +130,14 @@ describe('integrity round-trip WITHIN a family preserves the digest', () => {
 })
 
 describe('integrity cross-family emit — OMITS, never fabricates (the headline fix)', () => {
-  it('yarn-berry-v9 → npm-3: the berry-zip digest is NOT re-encoded as an npm SRI (integrity omitted)', () => {
-    const npm3 = convert(fixture('simple/yarn-berry-v9.lock'), { from: 'yarn-berry-v9', to: 'npm-3' })
+  it('yarn-berry-v9 → npm-3: the berry-zip digest is NOT re-encoded as an npm SRI (integrity omitted)', async () => {
+    const npm3 = await convert(fixture('simple/yarn-berry-v9.lock'), { from: 'yarn-berry-v9', to: 'npm-3' })
     expect(parse('npm-3', npm3).tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
 
-  it('npm-3 → yarn-berry-v9: the tarball sha512 is NOT re-encoded as a berry checksum (line omitted) + RECIPE_INTEGRITY_INCOMPLETE', () => {
+  it('npm-3 → yarn-berry-v9: the tarball sha512 is NOT re-encoded as a berry checksum (line omitted) + RECIPE_INTEGRITY_INCOMPLETE', async () => {
     const captured: Diagnostic[] = []
-    const v9 = convert(fixture('simple/npm-3.lock'), {
+    const v9 = await convert(fixture('simple/npm-3.lock'), {
       from: 'npm-3', to: 'yarn-berry-v9', cacheKey: '10c0', onDiagnostic: d => captured.push(d),
     })
     expect(v9).not.toMatch(/checksum:/)
@@ -146,26 +146,26 @@ describe('integrity cross-family emit — OMITS, never fabricates (the headline 
 
   // Every SRI-family source must omit-not-fabricate on →berry (same codec, but a
   // regression in one adapter's emit would otherwise slip through silently).
-  it('yarn-classic → yarn-berry-v9: tarball SRI not re-encoded as a checksum (omitted) + RECIPE_INTEGRITY_INCOMPLETE', () => {
-    const classic = convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'yarn-classic' })
+  it('yarn-classic → yarn-berry-v9: tarball SRI not re-encoded as a checksum (omitted) + RECIPE_INTEGRITY_INCOMPLETE', async () => {
+    const classic = await convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'yarn-classic' })
     const captured: Diagnostic[] = []
-    const v9 = convert(classic, { from: 'yarn-classic', to: 'yarn-berry-v9', cacheKey: '10c0', onDiagnostic: d => captured.push(d) })
+    const v9 = await convert(classic, { from: 'yarn-classic', to: 'yarn-berry-v9', cacheKey: '10c0', onDiagnostic: d => captured.push(d) })
     expect(v9).not.toMatch(/checksum:/)
     expect(captured.some(d => d.code === 'RECIPE_INTEGRITY_INCOMPLETE' && d.subject === 'ms@2.1.3')).toBe(true)
   })
 
-  it('bun-text → yarn-berry-v9: tarball SRI not re-encoded as a checksum (omitted) + RECIPE_INTEGRITY_INCOMPLETE', () => {
-    const bun = convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'bun-text' })
+  it('bun-text → yarn-berry-v9: tarball SRI not re-encoded as a checksum (omitted) + RECIPE_INTEGRITY_INCOMPLETE', async () => {
+    const bun = await convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'bun-text' })
     const captured: Diagnostic[] = []
-    const v9 = convert(bun, { from: 'bun-text', to: 'yarn-berry-v9', cacheKey: '10c0', onDiagnostic: d => captured.push(d) })
+    const v9 = await convert(bun, { from: 'bun-text', to: 'yarn-berry-v9', cacheKey: '10c0', onDiagnostic: d => captured.push(d) })
     expect(v9).not.toMatch(/checksum:/)
     expect(captured.some(d => d.code === 'RECIPE_INTEGRITY_INCOMPLETE' && d.subject === 'ms@2.1.3')).toBe(true)
   })
 })
 
 describe('integrity cross-family emit WITHIN the SRI family preserves the tarball digest', () => {
-  it('npm-3 → pnpm-v9 keeps the tarball sha512 (both carry tarball SRIs)', () => {
-    const pnpm = convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'pnpm-v9' })
+  it('npm-3 → pnpm-v9 keeps the tarball sha512 (both carry tarball SRIs)', async () => {
+    const pnpm = await convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'pnpm-v9' })
     expect(canonicalDigest(parse('pnpm-v9', pnpm).tarballOf('ms@2.1.3')!.integrity!)).toBe(MS_NPM_SRI)
   })
 })

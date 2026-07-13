@@ -20,7 +20,7 @@ const graph = parse('npm-3', npm3)
 assert.equal(stringify('npm-3', graph), npm3, 'npm-3 round-trip must be byte-identical')
 
 // 2) Cross-family convert (npm-3 -> yarn-classic) — the headline feature.
-const yarnLock = convert(npm3, { from: 'npm-3', to: 'yarn-classic' })
+const yarnLock = await convert(npm3, { from: 'npm-3', to: 'yarn-classic' })
 assert.ok(yarnLock.includes('# yarn lockfile v1'), 'convert must emit a yarn.lock header')
 
 // 3) A dependency edge survives the graph model.

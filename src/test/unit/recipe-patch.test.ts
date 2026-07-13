@@ -193,9 +193,9 @@ describe('recipe/patch — pnpm-v6 parse extracts canonical hash from overrides 
 // === Integration: cross-format conversion ===================================
 
 describe('recipe/patch — convert preserves the patch slot across supporting pairs', () => {
-  it('yarn-berry-v9 → pnpm-v9 — overrides block carries the same canonical hash', () => {
+  it('yarn-berry-v9 → pnpm-v9 — overrides block carries the same canonical hash', async () => {
     const diagnostics: Diagnostic[] = []
-    const output = convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
+    const output = await convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'pnpm-v9',
       workspaceRoot: templateDir('patch-yarn'),
@@ -212,9 +212,9 @@ describe('recipe/patch — convert preserves the patch slot across supporting pa
     expect(drops).toHaveLength(0)
   })
   // OUT-OF-F2-SCOPE: pnpm-v9 → yarn-berry-v9 patch synthesis. The yarn-berry
-  // stringify side reads Node.resolution для the `patch:` locator URL; when
-  // the source is pnpm, that locator is not present on the node, и synthesis
-  // от scratch needs an additional sidecar bridge to flow the pnpm overrides
+  // The stringify side reads Node.resolution for the `patch:` locator URL; when
+  // the source is pnpm, that locator is not present on the node, and synthesis
+  // from scratch needs an additional sidecar bridge to carry the pnpm overrides
   // attribution onto the yarn-berry emit path. Tracked as a follow-up: the
   // F2 forward path (yarn-berry → pnpm) is enough to prove the canonical
   // hash travels through the recipe layer.
@@ -222,9 +222,9 @@ describe('recipe/patch — convert preserves the patch slot across supporting pa
 })
 
 describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is patch-incapable', () => {
-  it('yarn-berry-v9 → bun-text emits RECIPE_FEATURE_DROPPED for the patched node', () => {
+  it('yarn-berry-v9 → bun-text emits RECIPE_FEATURE_DROPPED for the patched node', async () => {
     const diagnostics: Diagnostic[] = []
-    convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
+    await convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'bun-text',
       workspaceRoot: templateDir('patch-yarn'),
@@ -233,9 +233,9 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
     const drops = diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === patchedNodeId('lodash', '4.17.21', EXPECTED_PATCH_HASH))
     expect(drops).toHaveLength(1)
   })
-  it('yarn-berry-v9 → npm-3 emits RECIPE_FEATURE_DROPPED for the patched node', () => {
+  it('yarn-berry-v9 → npm-3 emits RECIPE_FEATURE_DROPPED for the patched node', async () => {
     const diagnostics: Diagnostic[] = []
-    convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
+    await convert(fixture('patch-yarn/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'npm-3',
       workspaceRoot: templateDir('patch-yarn'),
@@ -244,9 +244,9 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
     const drops = diagnostics.filter(d => d.code === 'RECIPE_FEATURE_DROPPED' && d.subject === patchedNodeId('lodash', '4.17.21', EXPECTED_PATCH_HASH))
     expect(drops).toHaveLength(1)
   })
-  it('pnpm-v9 → yarn-classic emits RECIPE_FEATURE_DROPPED for the patched node', () => {
+  it('pnpm-v9 → yarn-classic emits RECIPE_FEATURE_DROPPED for the patched node', async () => {
     const diagnostics: Diagnostic[] = []
-    convert(fixture('patch-yarn/pnpm-v9.lock'), {
+    await convert(fixture('patch-yarn/pnpm-v9.lock'), {
       from: 'pnpm-v9',
       to:   'yarn-classic',
       workspaceRoot: templateDir('patch-yarn'),

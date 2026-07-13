@@ -371,8 +371,8 @@ describe('recipe/resolution — npm-3 parse populates canonical', () => {
 // === Integration — cross-format conversion ==================================
 
 describe('recipe/resolution — convert yarn-berry-v9 → pnpm-v9 (registry tarball is integrity-anchored)', () => {
-  it('a registry tarball loses its pnpm resolution anchor when integrity is dropped (ADR-0031 cross-class)', () => {
-    const output = convert(fixture('simple/yarn-berry-v9.lock'), { from: 'yarn-berry-v9', to: 'pnpm-v9' })
+  it('a registry tarball loses its pnpm resolution anchor when integrity is dropped (ADR-0031 cross-class)', async () => {
+    const output = await convert(fixture('simple/yarn-berry-v9.lock'), { from: 'yarn-berry-v9', to: 'pnpm-v9' })
     const g = parse('pnpm-v9', output)
     const payload = g.tarball({ name: 'ms', version: '2.1.3' })
     // pnpm identifies a registry tarball by its integrity (the default registry
@@ -384,8 +384,8 @@ describe('recipe/resolution — convert yarn-berry-v9 → pnpm-v9 (registry tarb
 })
 
 describe('recipe/resolution — convert npm-3 → yarn-berry-v9 preserves git canonical', () => {
-  it('git resolution survives the pair as canonical', () => {
-    const output = convert(fixture('git-github-tarball/npm-3.lock'), { from: 'npm-3', to: 'yarn-berry-v9' })
+  it('git resolution survives the pair as canonical', async () => {
+    const output = await convert(fixture('git-github-tarball/npm-3.lock'), { from: 'npm-3', to: 'yarn-berry-v9' })
     const g = parse('yarn-berry-v9', output)
     // The npm graph collapsed git aliases onto `@sindresorhus/is@6.3.1`.
     // ADR-0032 — a git source carries a `+src=` slot on its NodeId/TarballKey,
@@ -418,7 +418,7 @@ describe('recipe/resolution — RECIPE_RESOLUTION_UNKNOWN diagnostic surface', (
     expect(diags[0]?.severity).toBe('warning')
   })
   it('npm parse surfaces RECIPE_RESOLUTION_UNKNOWN on garbage `resolved`', () => {
-    // npm-3 lockfile с deliberately garbage `resolved` URL — parse via the
+    // npm-3 lockfile with a deliberately invalid `resolved` URL — parse via the
     // public surface and assert the recipe-level diagnostic fires.
     const lockfile = JSON.stringify({
       name: 'case',
@@ -443,9 +443,9 @@ describe('recipe/resolution — RECIPE_RESOLUTION_UNKNOWN diagnostic surface', (
 // === Cross-format conversion — additional pairs =============================
 
 describe('recipe/resolution — convert pnpm-v9 → npm-3 (link: workspace) preserves workspace membership', () => {
-  it('subtype link degrades to standard workspace member on npm side', () => {
+  it('subtype link degrades to standard workspace member on npm side', async () => {
     const diags: Diagnostic[] = []
-    const output = convert(fixture('workspace-cross-refs/pnpm-v9.lock'), {
+    const output = await convert(fixture('workspace-cross-refs/pnpm-v9.lock'), {
       from: 'pnpm-v9',
       to:   'npm-3',
       onDiagnostic: d => diags.push(d),
@@ -453,16 +453,16 @@ describe('recipe/resolution — convert pnpm-v9 → npm-3 (link: workspace) pres
     // npm-3 stringify produces JSON with a `packages` block that includes
     // workspace member entries (link: true + resolved: <wsPath>). The
     // workspace canonical survives the convert; subtype 'link' has no
-    // dedicated representation on the npm side и degrades silently.
+    // dedicated representation on the npm side and degrades silently.
     expect(output).toContain('"packages"')
     expect(output).toMatch(/"link":\s*true/)
   })
 })
 
 describe('recipe/resolution — convert yarn-berry-v8 → bun-text drops URL and integrity', () => {
-  it('git canonical drops с RECIPE_FEATURE_DROPPED on bun-text', () => {
+  it('git canonical drops with RECIPE_FEATURE_DROPPED on bun-text', async () => {
     const diags: Diagnostic[] = []
-    convert(fixture('git-github-tarball/yarn-berry-v8.lock'), {
+    await convert(fixture('git-github-tarball/yarn-berry-v8.lock'), {
       from: 'yarn-berry-v8',
       to:   'bun-text',
       onDiagnostic: d => diags.push(d),
@@ -473,8 +473,8 @@ describe('recipe/resolution — convert yarn-berry-v8 → bun-text drops URL and
       && d.message.startsWith('git dropped'))
     expect(drops.length).toBeGreaterThan(0)
   })
-  it('registry tarball: URL not emitted (positional slot); integrity dropped (berry-zip ≠ SRI)', () => {
-    const output = convert(fixture('simple/yarn-berry-v9.lock'), {
+  it('registry tarball: URL not emitted (positional slot); integrity dropped (berry-zip ≠ SRI)', async () => {
+    const output = await convert(fixture('simple/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',
       to:   'bun-text',
     })
@@ -496,15 +496,15 @@ describe('recipe/resolution — npm-1 cross-format wiring', () => {
       url:  'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
     })
   })
-  it('npm-3 → npm-1 convert: canonical survives the pair (URL re-emitted)', () => {
-    const output = convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'npm-1' })
+  it('npm-3 → npm-1 convert: canonical survives the pair (URL re-emitted)', async () => {
+    const output = await convert(fixture('simple/npm-3.lock'), { from: 'npm-3', to: 'npm-1' })
     expect(output).toContain('"resolved":')
     expect(output).toContain('registry.npmjs.org/ms')
   })
-  it('npm-1 workspace member emits RECIPE_FEATURE_DROPPED (workspace)', () => {
+  it('npm-1 workspace member emits RECIPE_FEATURE_DROPPED (workspace)', async () => {
     const diags: Diagnostic[] = []
-    // Synthesise a graph с a workspace member by parsing pnpm and converting к npm-1.
-    convert(fixture('workspace-cross-refs/pnpm-v9.lock'), {
+    // Synthesize a graph with a workspace member by parsing pnpm and converting to npm-1.
+    await convert(fixture('workspace-cross-refs/pnpm-v9.lock'), {
       from: 'pnpm-v9',
       to:   'npm-1',
       onDiagnostic: d => diags.push(d),
@@ -515,9 +515,9 @@ describe('recipe/resolution — npm-1 cross-format wiring', () => {
   })
 })
 
-describe('recipe/resolution — yarn-classic codeload canonical projects к npm git+ shape', () => {
-  it('yarn-classic codeload → npm-3 emits git+https URL with sha fragment', () => {
-    const out = convert(fixture('git-github-tarball/yarn-classic.lock'), {
+describe('recipe/resolution — yarn-classic codeload canonical projects to npm git+ shape', () => {
+  it('yarn-classic codeload → npm-3 emits git+https URL with sha fragment', async () => {
+    const out = await convert(fixture('git-github-tarball/yarn-classic.lock'), {
       from: 'yarn-classic',
       to:   'npm-3',
     })

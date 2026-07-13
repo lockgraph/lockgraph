@@ -1,14 +1,12 @@
 // Public surface — ADR-0014 §3.
-//
-// Exposes both the `convert()` sugar and the underlying primitives
-// (`parse / stringify / check / detect`). Recipe-layer normalisation
-// (ADR-0014 §4) lands per-feature in subsequent implementer rounds —
-// this skeleton dispatches to existing adapter parse / stringify
-// hooks without plumbing recipe primitives yet.
+// Exposes the conversion orchestrator and the underlying parse, stringify,
+// check, and detection primitives.
 
 import { newBuilder, type Diagnostic, type Graph, type Manifest, type OverrideConstraint } from './graph.ts'
+import { LockfileError } from './errors.ts'
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from './recipe/overrides.ts'
 import { governingOverrideFor } from './recipe/descriptor-resolve.ts'
+import { isSentinelPatch } from './recipe/patch.ts'
 import { getManifestOverrides, mergeOverrides, rememberManifestOverrides } from './recipe/override-carrier.ts'
 import { getFlatSidecar } from './formats/_npm-core.ts'
 import {
@@ -59,11 +57,31 @@ import * as yarnBerryV9  from './formats/yarn-berry-v9.ts'
 import * as yarnBerryV10 from './formats/yarn-berry-v10.ts'
 import * as yarnClassic  from './formats/yarn-classic.ts'
 import * as lockgraph    from './formats/lockgraph.ts'
+import { enrich as enrichGraph, type EnrichSources } from './enrich/facade.ts'
+import {
+  materializeOverrides,
+  prepareConvertInput,
+  structuralEqual,
+  type PreparedConvertInput,
+} from './convert/input.ts'
+import type {
+  ConvertDependencies,
+  ConvertInput,
+  ConvertOptions,
+} from './convert/types.ts'
 
 export const version = '0.0.0'
 
 export { LockfileError, type LockfileErrorCode } from './errors.ts'
 export type { Diagnostic, Graph } from './graph.ts'
+export type {
+  ConvertFileSystem,
+  ConvertGlobOptions,
+  ConvertInput,
+  ConvertOptions,
+  ProjectInput,
+  ProjectPathInput,
+} from './convert/types.ts'
 
 export { sourceCapabilitiesOf } from './completeness/capabilities.ts'
 export { evidenceOf, withEvidence }
@@ -215,24 +233,6 @@ export type StringifyOptions = {
 type StringifyDispatchOptions = StringifyOptions & {
   pnpmWorkspacePeerProjection?: PnpmWorkspacePeerProjection
   pnpmWorkspaceNames?: ReadonlyMap<string, string>
-}
-
-export type ConvertOptions = {
-  to:             FormatId
-  from?:          FormatId
-  workspaceRoot?: string
-  /**
-   * Declared manifests keyed by workspace path (ADR-0025) — same shape as
-   * {@link ParseOptions.manifests}. Threaded into the underlying `parse()` so a
-   * yarn-family source honours its `resolutions`/`overrides` pins on convert
-   * (the override map bridges a pinned, possibly-NON-satisfying descriptor back
-   * to its node — Bug #99). `convert` stays a pure parse→stringify: the captured
-   * overrides are NOT auto-threaded into the stringify `overrides` slot.
-   */
-  manifests?:     Record<string, Manifest>
-  lineEnding?:    'lf' | 'crlf'
-  cacheKey?:      string
-  onDiagnostic?:  (d: Diagnostic) => void
 }
 
 // Ordered so first-match wins on ambiguous head. Disjoint in practice —
@@ -529,18 +529,152 @@ export function stringify(format: FormatId, graph: Graph, options: StringifyOpti
   return stringifyOne(format, graph, options)
 }
 
-export function convert(input: string, options: ConvertOptions): string {
-  const from = options.from ?? detect(input)
-  if (from === undefined) throw new Error('convert: source format not detected')
-  const graph = parse(from, input, {
+function mergeManifestSources(
+  sourceFormat: FormatId,
+  prepared: PreparedConvertInput['manifests'],
+  legacy: ConvertOptions['manifests'],
+  supplied: EnrichSources['manifests'],
+): Readonly<Record<string, Manifest>> | undefined {
+  const output: Record<string, Manifest> = {}
+  for (const source of [prepared, legacy, supplied]) {
+    if (source === undefined) continue
+    for (const [key, manifest] of Object.entries(source).sort(([left], [right]) => left.localeCompare(right))) {
+      const current = output[key]
+      if (current !== undefined && !structuralEqual(
+        canonicalManifestForMerge(sourceFormat, current),
+        canonicalManifestForMerge(sourceFormat, manifest),
+      )) {
+        throw new LockfileError({
+          code: 'INVALID_INPUT',
+          message: `convert: conflicting manifest sources for ${key === '' ? 'package.json' : `${key}/package.json`}`,
+        })
+      }
+      if (current === undefined) output[key] = manifest
+    }
+  }
+  return Object.keys(output).length === 0 ? undefined : output
+}
+
+function canonicalManifestForMerge(format: FormatId, manifest: Manifest): Manifest {
+  const { native, overrides, ...fields } = manifest
+  if (overrides !== undefined) return { ...fields, overrides: materializeOverrides(overrides) }
+  const pm = pmFamilyOf(format)
+  const block = pm === 'npm'
+    ? native?.npmOverrides
+    : pm === 'yarn'
+      ? native?.yarnResolutions
+      : native?.pnpmOverrides
+  return block === undefined
+    ? fields
+    : { ...fields, overrides: materializeOverrides(captureOverrides(block, pm).canonical) }
+}
+
+function mergedEnrichSources(
+  prepared: PreparedConvertInput,
+  options: ConvertOptions,
+): EnrichSources {
+  const manifests = mergeManifestSources(
+    prepared.source,
+    prepared.manifests,
+    options.manifests,
+    options.sources?.manifests,
+  )
+  return {
+    ...(manifests === undefined ? {} : { manifests }),
+    ...(options.sources?.registry === undefined ? {} : { registry: options.sources.registry }),
+    ...(options.sources?.artifacts === undefined ? {} : { artifacts: options.sources.artifacts }),
+    ...(options.sources?.config === undefined ? {} : { config: options.sources.config }),
+  }
+}
+
+function patchPathOfResolution(resolution: string | undefined): string | undefined {
+  if (resolution === undefined || !resolution.includes('@patch:')) return undefined
+  const hash = resolution.indexOf('#')
+  if (hash < 0) return resolution
+  const fragment = resolution.slice(hash + 1).split('::', 1)[0]!
+  const fileParts = fragment.split('&')
+    .map(part => part.replace(/^optional!/, ''))
+    .filter(part => part !== ''
+      && !part.startsWith('builtin<')
+      && !part.startsWith('~builtin<'))
+  if (fileParts.length === 0) return undefined
+  return fileParts.map(part => {
+    try {
+      return decodeURIComponent(part)
+    } catch {
+      return part
+    }
+  }).join('&')
+}
+
+function patchByteDiagnostics(
+  prepared: PreparedConvertInput,
+  graph: Graph,
+): readonly Diagnostic[] {
+  if (!prepared.source.startsWith('yarn-berry-')) return []
+  const diagnostics: Diagnostic[] = []
+  for (const node of [...graph.nodes()].sort((left, right) => left.id.localeCompare(right.id))) {
+    if (node.patch === undefined || !isSentinelPatch(node.patch)) continue
+    const patchPath = patchPathOfResolution(graph.tarballOf(node.id)?.nativeResolution)
+    if (patchPath === undefined) continue
+    diagnostics.push({
+      code: 'CONVERT_PATCH_BYTES_UNAVAILABLE',
+      severity: 'warning',
+      subject: node.id,
+      message: `${prepared.mode}-mode conversion did not resolve patch bytes for ${patchPath}`,
+      data: {
+        patchPath,
+        reason: prepared.mode === 'path'
+          ? 'path-fs-seam-not-threaded'
+          : prepared.mode === 'project'
+            ? 'project-input-has-no-patch-byte-channel'
+            : 'lock-content-has-no-patch-bytes',
+        remedy: 'pass-workspaceRoot',
+      },
+    })
+  }
+  return diagnostics
+}
+
+async function defaultFileSystem(): Promise<NonNullable<ConvertDependencies['fs']>> {
+  return (await import('./convert/node-fs.ts')).nodeFileSystem
+}
+
+async function _convert(
+  input: ConvertInput,
+  options: ConvertOptions,
+  dependencies: ConvertDependencies,
+): Promise<string> {
+  const prepared = await prepareConvertInput(input, options, { detect }, dependencies)
+  for (const diagnostic of prepared.diagnostics) options.onDiagnostic?.(diagnostic)
+  const sources = mergedEnrichSources(prepared, options)
+  let graph = parse(prepared.source, prepared.lockfile, {
     workspaceRoot: options.workspaceRoot,
-    manifests:     options.manifests,
-    onDiagnostic:  options.onDiagnostic,
-  })
-  return stringify(options.to, graph, {
-    lineEnding:   options.lineEnding,
-    cacheKey:     options.cacheKey,
+    manifests: sources.manifests === undefined ? undefined : { ...sources.manifests },
     onDiagnostic: options.onDiagnostic,
+  })
+  for (const diagnostic of patchByteDiagnostics(prepared, graph)) options.onDiagnostic?.(diagnostic)
+  const enriched = await enrichGraph(graph, sources, {
+    target: {
+      format: options.to,
+      ...(options.targetVersion === undefined ? {} : { managerVersion: options.targetVersion }),
+    },
+    contract: 'snapshot',
+    ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+  })
+  graph = enriched.graph
+  for (const diagnostic of enriched.diagnostics) options.onDiagnostic?.(diagnostic)
+  return stringify(options.to, graph, {
+    lineEnding: options.lineEnding,
+    cacheKey: options.cacheKey,
+    onDiagnostic: options.onDiagnostic,
+  })
+}
+
+export function convert(input: ConvertInput, options: ConvertOptions): Promise<string> {
+  return _convert(input, options, {
+    ...(options.fs === undefined ? {} : { fs: options.fs }),
+    defaultFileSystem,
   })
 }
 

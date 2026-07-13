@@ -47,9 +47,8 @@ describe('synp#6 / #12 — package-lock.json with a github: source (Cannot read 
     },
   }, null, 2)
 
-  it('converts npm->yarn without throwing and preserves the github ref verbatim', () => {
-    let out = ''
-    expect(() => { out = convert(packageLock, { from: 'npm-1', to: 'yarn-classic' }) }).not.toThrow()
+  it('converts npm->yarn without throwing and preserves the github ref verbatim', async () => {
+    const out = await convert(packageLock, { from: 'npm-1', to: 'yarn-classic' })
     // The github locator survives as the yarn descriptor/version — not fabricated,
     // not dropped, not turned into a bad registry tarball.
     expect(out).toContain('github:handsontable/formula.js#aa9d4acc54e4e0959b70dd0f8c6019774d57498d')
@@ -82,9 +81,8 @@ describe('synp#13 — a github: source inside `requires` (Cannot read property "
     },
   }, null, 2)
 
-  it('converts npm->yarn without throwing and keeps the github dependency edge', () => {
-    let out = ''
-    expect(() => { out = convert(packageLock, { from: 'npm-1', to: 'yarn-classic' }) }).not.toThrow()
+  it('converts npm->yarn without throwing and keeps the github dependency edge', async () => {
+    const out = await convert(packageLock, { from: 'npm-1', to: 'yarn-classic' })
     expect(out).toContain('github:amplitude/ua-parser-js#ed538f16f5c6ecd8357da989b617d4f156dcf35d')
   })
 })
@@ -140,8 +138,8 @@ lodash.defaults@^4.0.1:
       'https://codeload.github.com/mixmaxhq/throng/tar.gz/8a015a378c2c0db0c760b2147b2468a1c1e86edf')
   })
 
-  it('converts yarn->npm without throwing', () => {
-    expect(() => convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })).not.toThrow()
+  it('converts yarn->npm without throwing', async () => {
+    await expect(convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })).resolves.toEqual(expect.any(String))
   })
 })
 
@@ -171,8 +169,8 @@ lodash@^3.0.0:
     expect([...g.byName('lodash')].sort()).toEqual(['lodash@3.10.1', 'lodash@4.0.0', 'lodash@4.17.0'])
   })
 
-  it('carries all three versions through a yarn->npm conversion', () => {
-    const out = convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })
+  it('carries all three versions through a yarn->npm conversion', async () => {
+    const out = await convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })
     for (const v of ['4.0.0', '4.17.0', '3.10.1']) expect(out).toContain(v)
   })
 })
@@ -194,8 +192,8 @@ ansi-styles@^3.2.1:
   integrity ${SRI_B}
 `
 
-  it('emits the caret range chalk declared for ansi-styles, not the resolved pin', () => {
-    const out = convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })
+  it('emits the caret range chalk declared for ansi-styles, not the resolved pin', async () => {
+    const out = await convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })
     expect(out).toContain('"ansi-styles": "^3.2.1"')
     expect(out).not.toContain('"ansi-styles": "3.2.1"')
   })
@@ -215,8 +213,8 @@ describe('synp#100 — every module has a populated `requires` (npm install fail
     },
   }, null, 2)
 
-  it('re-emits populated `requires` at every non-leaf node (v3->v1)', () => {
-    const v1 = convert(npm3, { from: 'npm-3', to: 'npm-1' })
+  it('re-emits populated `requires` at every non-leaf node (v3->v1)', async () => {
+    const v1 = await convert(npm3, { from: 'npm-3', to: 'npm-1' })
     expect(v1).toContain('"ansi-styles": "^3.2.1"')   // chalk -> ansi-styles
     expect(v1).toContain('"color-convert": "^1.9.0"') // ansi-styles -> color-convert
     expect(v1).not.toContain('"requires": {}')        // no empty requires anywhere
@@ -253,8 +251,8 @@ describe('synp#103 — optionalDependencies are preserved (yarn->npm)', () => {
       .toContain('@swc/core-darwin-arm64@1.3.105')
   })
 
-  it('carries the platform package into the npm target with its integrity intact', () => {
-    const pkgs = JSON.parse(convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })).packages
+  it('carries the platform package into the npm target with its integrity intact', async () => {
+    const pkgs = JSON.parse(await convert(yarnLock, { from: 'yarn-classic', to: 'npm-3' })).packages
     const darwin = pkgs['node_modules/@swc/core-darwin-arm64']
     expect(darwin).toBeDefined()
     // The optional platform package keeps its resolved URL and integrity — so npm
@@ -277,16 +275,16 @@ describe('synp#99 — npm v3 package-lock (packages-only, no `dependencies` mirr
     },
   }, null, 2)
 
-  it('detects v3 and converts to yarn without throwing', () => {
+  it('detects v3 and converts to yarn without throwing', async () => {
     expect(detect(npmV3)).toBe('npm-3')
-    expect(() => convert(npmV3, { to: 'yarn-classic' })).not.toThrow()
+    await expect(convert(npmV3, { to: 'yarn-classic' })).resolves.toEqual(expect.any(String))
   })
 
-  it('materializes the ms entry as a real node in the yarn output (not just a root dep line)', () => {
+  it('materializes the ms entry as a real node in the yarn output (not just a root dep line)', async () => {
     // Parse the converted yarn.lock back into a graph and assert the ms *entry*
     // survives as its own resolved node — the substring `ms@^2.1.3` alone would
     // also match the root's dependency line, so this checks the entry, not the ref.
-    const g = parse('yarn-classic', convert(npmV3, { to: 'yarn-classic' }))
+    const g = parse('yarn-classic', await convert(npmV3, { to: 'yarn-classic' }))
     expect(g.byName('ms')).toEqual(['ms@2.1.3'])
   })
 })
@@ -318,10 +316,9 @@ __metadata:
   linkType: hard
 `
 
-  it('detects yarn-berry-v6 and converts it to a real npm lock (the ms dep survives)', () => {
+  it('detects yarn-berry-v6 and converts it to a real npm lock (the ms dep survives)', async () => {
     expect(detect(berry6)).toBe('yarn-berry-v6')
-    let out = ''
-    expect(() => { out = convert(berry6, { to: 'npm-3' }) }).not.toThrow()
+    const out = await convert(berry6, { to: 'npm-3' })
     // The conversion actually produces the dependency, not an empty lock: the
     // `ms` package lands as a real node_modules entry under the workspace root.
     const pkgs = JSON.parse(out).packages
@@ -343,10 +340,9 @@ describe('synp#110 — bun.lock support', () => {
   }
 }`
 
-  it('detects bun-text and materializes the ms package in the npm target', () => {
+  it('detects bun-text and materializes the ms package in the npm target', async () => {
     expect(detect(bunLock)).toBe('bun-text')
-    let out = ''
-    expect(() => { out = convert(bunLock, { to: 'npm-3' }) }).not.toThrow()
+    const out = await convert(bunLock, { to: 'npm-3' })
     const ms = JSON.parse(out).packages['node_modules/ms']
     expect(ms).toBeDefined()
     expect(ms.integrity).toBe(SRI_B)

@@ -28,8 +28,8 @@ describe('yarn-berry → npm: a private-registry `::__archiveUrl=` package emits
   linkType: hard
 `
   for (const to of ['npm-1', 'npm-2', 'npm-3'] as const) {
-    it(`${to}: emits the archive URL, never the yarn locator, as resolved`, () => {
-      const out = convert(lock, { to })
+    it(`${to}: emits the archive URL, never the yarn locator, as resolved`, async () => {
+      const out = await convert(lock, { to })
       const leaked = (out.match(/"resolved":\s*"[^"]*"/g) || []).filter(s => s.includes('::') || s.includes('@npm:'))
       expect(leaked).toEqual([])
       expect(out).toContain('https://npm.corp.com/@company/widget/-/widget-1.2.3.tgz')
@@ -64,8 +64,8 @@ describe('yarn-berry → npm: a `patch:` node omits `resolved` rather than leaki
   languageName: node
   linkType: hard
 `
-  it('npm-3: no emitted `resolved` is a leaked `patch:` / `::` locator', () => {
-    const out = convert(lock, { to: 'npm-3' })
+  it('npm-3: no emitted `resolved` is a leaked `patch:` / `::` locator', async () => {
+    const out = await convert(lock, { to: 'npm-3' })
     const leaked = (out.match(/"resolved":\s*"[^"]*"/g) || []).filter(s => s.includes('::') || s.includes('@patch:'))
     expect(leaked).toEqual([])
   })
