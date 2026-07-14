@@ -1,7 +1,7 @@
 # `yarn-berry-v10` — yarn berry `yarn.lock` (`__metadata.version: 10`)
 
-> Status: preview (adapter + round-trip tested; format from yarn 5 dev branch, unreleased upstream — contract may still shift before GA).
-> Updated: 2026-07-13
+> Status: preview (adapter + round-trip tested; frozen certification contract available; format from yarn 5 dev branch, unreleased upstream — schema may still shift before GA).
+> Updated: 2026-07-14
 > Provenance: **Source-only** (reverse-engineered from yarnpkg/berry dev branch).
 > Frozen certification: `prepareFrozen` / `certifyFrozen`; this schema has no bundled calibrated producer, so certification requires an external native-PM oracle receipt from the exact target manager version.
 

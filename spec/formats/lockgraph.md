@@ -1,7 +1,7 @@
 # `lockgraph` — native graph serialization
 
-> Status: **preview** (native format; adapter + round-trip identity suite; no external readers/writers, no contract declared).
-> Updated: 2026-06-16
+> Status: **preview** (native format; adapter + round-trip identity suite; no external readers/writers or compatibility contract; no native-PM frozen oracle).
+> Updated: 2026-07-14
 > Provenance: **Native** — this project owns the format end-to-end (concept,
 > grammar, encoding). It is **not** a package-manager lockfile; it is a
 > portable, versioned serialization of this library's L2 [Graph](#vocabulary).

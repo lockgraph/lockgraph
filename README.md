@@ -339,19 +339,25 @@ packument already in hand (`engines`), `10` needs one full-manifest fetch (`lice
 
 ### Errors
 
-`parse` / `stringify` throw a single `LockfileError` discriminated by
-`code`:
+Format and conversion APIs throw `LockfileError`, discriminated by `code`:
 
 ```ts
 'PARSE_FAILED' | 'FORMAT_DETECT_FAILED' | 'FORMAT_MISMATCH'
-| 'CAPABILITY_LACK' | 'MISSING_MANIFEST' | 'MISSING_REQUIRED_FIELD'
+| 'CAPABILITY_LACK' | 'MISSING_REQUIRED_FIELD'
 | 'INVALID_INPUT' | 'ENRICH_REQUIRED' | 'IRREDUCIBLE_LOSS'
-| 'PIPELINE_DIVERGED' | 'REGISTRY_UNREACHABLE' | 'INVARIANT_VIOLATION'
+| 'INVARIANT_VIOLATION'
 ```
 
-Reducible losses (e.g. dropped patches when emitting `npm-1` from a
-yarn-berry source) surface as `Diagnostic` events via the
-`onDiagnostic` callback, not exceptions.
+Graph construction and mutation use the separate `GraphError` class with
+`INVARIANT_VIOLATION` and `PATCH_REJECTED` codes. Recoverable loss, incomplete
+evidence, and transformation events use the non-throwing `Diagnostic` channel
+(`info` / `warning` / `error`) and can surface through graph/results plus the
+`onDiagnostic` callback. In strict stringify, classified `PROJECTION_LOSS`
+diagnostics become `ENRICH_REQUIRED` or `IRREDUCIBLE_LOSS` with structured
+`losses[].remedy` guidance.
+
+See [ERRORS.md](./ERRORS.md) for the complete exception and diagnostic
+taxonomy, causes, and remedies.
 
 ## Schemas
 

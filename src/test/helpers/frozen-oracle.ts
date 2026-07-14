@@ -239,6 +239,36 @@ export function frozenOracleSkipReason(adapter: FrozenOracleAdapter): string | u
     : undefined
 }
 
+// Windows resolves the per-user home and config roots from USERPROFILE/APPDATA/LOCALAPPDATA. The
+// isolated environment is a fresh object (it deliberately does not inherit process.env), so on win32
+// those are undefined and @pnpm/npm-conf calls path.resolve(undefined) -> ERR_INVALID_ARG_TYPE before
+// any lock work happens. Point the config roots into `base` to keep the run hermetic, and inherit only
+// the OS plumbing a Windows subprocess needs (SystemRoot for crypto/DNS, PATHEXT/COMSPEC for spawn).
+// Returns {} off win32, so Linux/macOS environments are byte-identical to before.
+function windowsEnvironment(base: string, home: string): NodeJS.ProcessEnv {
+  if (process.platform !== 'win32') return {}
+  const appData = resolve(base, 'appdata')
+  const localAppData = resolve(base, 'localappdata')
+  const temp = resolve(base, 'temp')
+  mkdirSync(appData, { recursive: true })
+  mkdirSync(localAppData, { recursive: true })
+  mkdirSync(temp, { recursive: true })
+  const inherit = (name: string): NodeJS.ProcessEnv => {
+    const value = process.env[name]
+    return value === undefined ? {} : { [name]: value }
+  }
+  return {
+    USERPROFILE: home,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    TEMP: temp,
+    TMP: temp,
+    ...inherit('SystemRoot'),
+    ...inherit('PATHEXT'),
+    ...inherit('COMSPEC'),
+  }
+}
+
 function isolatedEnvironment(base: string, family: FrozenOracleFamily): NodeJS.ProcessEnv {
   const home = resolve(base, 'home')
   const cache = resolve(base, 'cache')
@@ -257,6 +287,7 @@ function isolatedEnvironment(base: string, family: FrozenOracleFamily): NodeJS.P
     PNPM_HOME: resolve(base, 'pnpm-home'),
     COREPACK_ENABLE_PROJECT_SPEC: '0',
     LOCKGRAPH_ORACLE_FAMILY: family,
+    ...windowsEnvironment(base, home),
     ...(family === 'bun' ? {
       BUN_INSTALL_CACHE_DIR: cache,
     } : {}),

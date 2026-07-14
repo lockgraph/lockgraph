@@ -62,6 +62,7 @@
   "files": [
     "dist",
     "README.md",
+    "ERRORS.md",
     "SCHEMAS.md",
     "LICENSE"
   ],
