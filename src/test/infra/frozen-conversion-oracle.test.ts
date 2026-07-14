@@ -21,6 +21,24 @@ const tarballPath = resolve(here, '../resources/fixtures/tarballs/ms-2.1.3.tgz')
 const registryScript = resolve(here, '../helpers/frozen-registry.mjs')
 let registry: ChildProcess | undefined
 
+const adapterSelector = (() => {
+  const raw = process.env.LOCKGRAPH_FROZEN_ORACLE_ADAPTERS
+  if (raw === undefined) return undefined
+  const selected = new Set(raw.split(',').map(alias => alias.trim()).filter(Boolean))
+  if (selected.size === 0) throw new Error('LOCKGRAPH_FROZEN_ORACLE_ADAPTERS selects no adapters')
+  const known = new Set(FROZEN_ORACLE_MATRIX.map(adapter => adapter.alias))
+  for (const alias of selected) {
+    if (!known.has(alias)) throw new Error(`unknown frozen oracle adapter: ${alias}`)
+  }
+  return selected
+})()
+
+function adapterSelected(adapter: FrozenOracleAdapter): boolean {
+  return adapterSelector === undefined || adapterSelector.has(adapter.alias)
+}
+
+const fullMatrixIt = adapterSelector === undefined ? it : it.skip
+
 beforeAll(async () => {
   registry = spawn(process.execPath, [registryScript, tarballPath], {
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -127,7 +145,7 @@ function nativeCandidate(adapter: FrozenOracleAdapter): {
 }
 
 describe('infra: frozen conversion native oracle', () => {
-  it('certifies the exact core candidate bundle after a real pinned native verdict', async () => {
+  fullMatrixIt('certifies the exact core candidate bundle after a real pinned native verdict', async () => {
     const adapter = FROZEN_ORACLE_MATRIX.find(entry => entry.alias === 'pm-npm-9')!
     const files = createNativeLock(adapter, {
       'package.json': `${JSON.stringify({
@@ -166,7 +184,7 @@ describe('infra: frozen conversion native oracle', () => {
     expect(certified.companions).toBe(prepared.candidate!.companions)
   }, 60_000)
 
-  it('accepts a converted bun-text candidate with the exact pinned Bun binary', async () => {
+  fullMatrixIt('accepts a converted bun-text candidate with the exact pinned Bun binary', async () => {
     const adapter = FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'bun')!
     const files = createNativeLock(adapter, projectFiles(adapter))
     const lockfile = await convert(String(files[lockPath(adapter)]!), {
@@ -201,7 +219,7 @@ describe('infra: frozen conversion native oracle', () => {
     expect(oracle.receipt!.configDigest).toMatch(/^sha256:[a-f0-9]{64}$/)
   }, 60_000)
 
-  for (const adapter of FROZEN_ORACLE_MATRIX) {
+  for (const adapter of FROZEN_ORACLE_MATRIX.filter(adapterSelected)) {
     const runnable = runnableFor(adapter)
     runnable.run(`${adapter.alias} accepts one exact byte-stable candidate${runnable.suffix}`, () => {
       const { candidate, files } = nativeCandidate(adapter)
@@ -232,6 +250,7 @@ describe('infra: frozen conversion native oracle', () => {
         target: candidate.target,
         projectionDigest: candidate.projectionDigest,
         verification: 'frozen-verified',
+        platform: `${process.platform}-${process.arch}`,
       })
     }, 60_000)
   }
@@ -242,7 +261,7 @@ describe('infra: frozen conversion native oracle', () => {
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'yarn-berry'),
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'pnpm'),
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'bun'),
-  ]
+  ].filter(adapterSelected)
   for (const adapter of staleAdapters) {
     const runnable = runnableFor(adapter)
     runnable.run(`${adapter.alias} produces no receipt for a manifest that would rewrite the lock${runnable.suffix}`, () => {
@@ -261,7 +280,7 @@ describe('infra: frozen conversion native oracle', () => {
     }, 60_000)
   }
 
-  it('pins narrow family-specific generated-output allowlists in both directions', () => {
+  fullMatrixIt('pins narrow family-specific generated-output allowlists in both directions', () => {
     const families: readonly FrozenOracleFamily[] = ['npm', 'yarn-classic', 'yarn-berry', 'pnpm', 'bun']
     for (const family of families) {
       expect(isFrozenOracleOutputAllowed(family, 'node_modules/.state')).toBe(true)

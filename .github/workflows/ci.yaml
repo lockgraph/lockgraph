@@ -89,6 +89,61 @@ jobs:
       # Node 20 floor and delegates only the pnpm 6 subprocess to preserved Node 18.
       - run: npm run test:frozen:pnpm-6
 
+  frozen-bookends:
+    name: Frozen bookends (${{ matrix.os }}, Node 22)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 18
+
+      # The grouped jobs themselves run Vitest on Node 22. Only the pnpm 6
+      # subprocess keeps its calibrated Node 18 binary, on both shells/OSes.
+      - name: Preserve Node 18 for the pnpm 6 subprocess
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'LOCKGRAPH_PNPM6_NODE=' + process.execPath + '\n')"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install exact oracle pins
+        timeout-minutes: 5
+        run: npm ci
+
+      - name: pnpm 6.35.1 / pnpm-v5 positive + stale negative
+        timeout-minutes: 3
+        env:
+          LOCKGRAPH_FROZEN_ORACLE_ADAPTERS: pm-pnpm-6
+        run: npm run test:frozen:bookend
+
+      - name: Bun 1.3.14 / bun-text positive + stale negative
+        timeout-minutes: 3
+        env:
+          LOCKGRAPH_FROZEN_ORACLE_ADAPTERS: bun
+        run: npm run test:frozen:bookend
+
+      - name: Yarn 3.1.1 / yarn-berry-v5 positive + stale negative
+        timeout-minutes: 3
+        env:
+          LOCKGRAPH_FROZEN_ORACLE_ADAPTERS: pm-yarn-berry-v5
+        run: npm run test:frozen:bookend
+
+      - name: Yarn 4.14.1 / yarn-berry-v9 positive + stale negative
+        timeout-minutes: 3
+        env:
+          LOCKGRAPH_FROZEN_ORACLE_ADAPTERS: pm-yarn-berry-v9
+        run: npm run test:frozen:bookend
+
   smoke:
     name: Smoke (Node ${{ matrix.node }})
     needs: build
