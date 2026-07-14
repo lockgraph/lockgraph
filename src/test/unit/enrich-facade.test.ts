@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   completenessOf,
   enrich,
@@ -340,8 +340,24 @@ describe('target-aware enrich facade', () => {
     const first = await enrich(input, sources, npmTarget)
     const second = await enrich(input, sources, npmTarget)
 
-    expect(stringify('lockgraph', second.graph, { strict: false }))
-      .toBe(stringify('lockgraph', first.graph, { strict: false }))
+    const pinnedGeneratedAt = '2026-01-01T00:00:00Z'
+    const pinGeneratedAt = (output: string): string => output.replace(
+      /^generatedAt [^\r\n]+$/m,
+      `generatedAt ${pinnedGeneratedAt}`,
+    )
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.999Z'))
+      const firstOutput = stringify('lockgraph', first.graph, { strict: false })
+      vi.setSystemTime(new Date('2026-01-01T00:00:01.001Z'))
+      const secondOutput = stringify('lockgraph', second.graph, { strict: false })
+
+      expect(firstOutput).toContain('generatedAt 2026-01-01T00:00:00Z')
+      expect(secondOutput).toContain('generatedAt 2026-01-01T00:00:01Z')
+      expect(pinGeneratedAt(secondOutput)).toBe(pinGeneratedAt(firstOutput))
+    } finally {
+      vi.useRealTimers()
+    }
     expect(second.diagnostics).toEqual(first.diagnostics)
   })
 
