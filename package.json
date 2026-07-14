@@ -91,7 +91,7 @@
     "@types/node": "^22.10.0",
     "@types/pako": "^2.0.4",
     "@types/semver": "^7.7.1",
-    "@vitest/coverage-v8": "^2.1.9",
+    "@vitest/coverage-v8": "^4.1.10",
     "@yarnpkg/libzip": "^3.2.2",
     "bun": "1.2.0",
     "pm-npm-10": "npm:npm@10.9.2",
