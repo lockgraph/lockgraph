@@ -112,7 +112,7 @@
     "rollup-plugin-esbuild": "^6.2.1",
     "size-limit": "^12.1.0",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
     "@yarnpkg/libzip": ">=3.0.0"
