@@ -3,9 +3,66 @@ version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/"
-
     schedule:
       interval: "weekly"
-
+    open-pull-requests-limit: 3
     exclude-paths:
       - "src/test/resources/fixtures/**"
+    groups:
+      development-dependencies:
+        applies-to: "version-updates"
+        dependency-type: "development"
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "pm-npm-*"
+          - "pm-pnpm-*"
+          - "pm-yarn-*"
+          - "bun"
+          - "@yarnpkg/cli-dist"
+        update-types:
+          - "minor"
+          - "patch"
+    # Oracle package-manager pins are updated manually because each new binary
+    # must be recalibrated against its native lockfile schema and frozen mode.
+    # SemVer update-type ignores affect version updates, not security updates.
+    ignore:
+      - dependency-name: "pm-npm-*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "pm-pnpm-*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "pm-yarn-*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "bun"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "@yarnpkg/cli-dist"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
