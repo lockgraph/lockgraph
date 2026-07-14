@@ -7,7 +7,7 @@ import {
   type Graph,
   type Node,
 } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 
 import {
   parse as parseV3,

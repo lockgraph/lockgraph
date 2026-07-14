@@ -10,7 +10,7 @@ import {
   statSync,
 } from 'node:fs'
 import path from 'node:path'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:([\\/]|$)/
 type FileStat = NonNullable<ReturnType<typeof statSync>>

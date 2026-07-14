@@ -1,6 +1,6 @@
 import type { Manifest } from '../graph.ts'
 import type { EnrichSources } from '../enrich/facade.ts'
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 
 export interface ProjectInput {
   readonly files: Readonly<Record<string, string | Uint8Array>>

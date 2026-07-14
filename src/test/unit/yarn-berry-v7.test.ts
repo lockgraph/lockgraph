@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path'
 const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
 const MODIFIED_SRI = 'sha512-' + createHash('sha512').update('modified-ms-integrity').digest('base64')
 import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import {
   check as checkV7,
   enrich as enrichV7,

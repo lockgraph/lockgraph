@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import {
   check as checkV10,
   enrich as enrichV10,

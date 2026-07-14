@@ -1,5 +1,5 @@
 import type { EdgeKind, PackageMetadataField } from '../graph.ts'
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import {
   PACKAGE_METADATA_FIELDS,
 } from '../registry/payload.ts'

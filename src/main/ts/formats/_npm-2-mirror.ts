@@ -32,7 +32,7 @@
 
 import { type Graph, type Node, type Diagnostic } from '../graph.ts'
 import { emitSriForRegistry } from '../recipe/integrity.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import {
   isYarnBerryLocator,
   stringifyForNpm,

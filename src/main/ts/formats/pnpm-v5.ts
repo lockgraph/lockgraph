@@ -83,7 +83,7 @@ import {
 import { emitSriForRegistry } from '../recipe/integrity.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
 import {

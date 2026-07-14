@@ -1,9 +1,9 @@
 import path from 'node:path'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { readYaml } from '../formats/_pnpm-yaml.ts'
 import type { Diagnostic, Manifest, OverrideConstraint, OverridePM } from '../graph.ts'
 import { captureOverrides } from '../recipe/overrides.ts'
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import { expandBraces, matchesGlobSet } from './glob.ts'
 import type {
   ConvertDependencies,

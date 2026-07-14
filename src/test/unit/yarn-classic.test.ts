@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path'
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const MODIFIED_SRI = sriOf('modified-ms-integrity')
 import { newBuilder, serializeNodeId, type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { check as checkV4, parse as parseV4 } from '../../main/ts/formats/yarn-berry-v4.ts'
 import { check as checkV5, parse as parseV5 } from '../../main/ts/formats/yarn-berry-v5.ts'
 import { check as checkV6, parse as parseV6 } from '../../main/ts/formats/yarn-berry-v6.ts'

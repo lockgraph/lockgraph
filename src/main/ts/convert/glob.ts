@@ -1,4 +1,4 @@
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 
 const MAGIC_RE = /[*?[\]{}]/
 const MAX_BRACE_EXPANSIONS = 256

@@ -34,7 +34,7 @@ import {
   type Node,
   type TarballKeyInputs,
 } from '../graph.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   emitDropped as patchEmitDropped,

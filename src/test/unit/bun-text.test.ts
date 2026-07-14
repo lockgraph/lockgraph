@@ -17,7 +17,7 @@ import {
   type EdgeKind,
   type Graph,
 } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')
 const MODIFIED_SRI = sriOf('modified-ms-integrity')

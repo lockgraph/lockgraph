@@ -1,7 +1,7 @@
 // L2 model — see spec/02-graph.md (gitignored locally).
 // Public surface follows spec/bindings/ts.md#graph-types.
 
-import { LockfileError } from './errors.ts'
+import { LockfileError } from './api/errors.ts'
 import type { Integrity } from './recipe/integrity.ts'
 import type { ResolutionCanonical } from './recipe/resolution.ts'
 import type { WorkspaceRange } from './recipe/workspace.ts'

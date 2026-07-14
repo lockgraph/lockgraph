@@ -849,7 +849,7 @@ Published-self-link amendment (2026-05-29):
 - `src/main/ts/formats/_yarn-berry-core.ts:1541-1551` —
   `normalizedEdgeRange` / `hasExplicitProtocol`: range normalisation
   (bare → `npm:`) and the protocol-prefix detector the seal reuses
-- `src/main/ts/errors.ts:4-16` — `LockfileErrorCode` enum (unchanged;
+- `src/main/ts/api/errors.ts:4-16` — `LockfileErrorCode` enum (unchanged;
   `SEAL_PUBLISHED_SELF_LINK` is a `Diagnostic` code, not added here)
 - `src/main/ts/optimize/optimize.ts:~82` — workspace nodes seeded live
   unconditionally (ADR-0024 interaction; no conflict)

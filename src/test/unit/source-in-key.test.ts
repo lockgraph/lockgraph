@@ -9,7 +9,7 @@ import {
   toTarballKey,
   validateSourceToken,
 } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { parse, stringify } from '../../main/ts/index.ts'
 
 // ADR-0032 (#91 / #2b-general, "source-in-key"): the same `name@version` from

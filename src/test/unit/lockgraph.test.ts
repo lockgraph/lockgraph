@@ -26,7 +26,7 @@ import {
   type Node,
   type TarballPayload,
 } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import {
   parse,
   stringify,

@@ -59,7 +59,7 @@ import {
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'

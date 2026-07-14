@@ -12,7 +12,7 @@ const BUMPED_SRI = sriOf('bumped-ms-integrity')
 const MS_SRI =
   'sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=='
 import { newBuilder, type Diagnostic, type Graph, type GraphDiff } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import {
   buildDependenciesTree,
   check,

@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Graph } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseYarnBerry } from '../../main/ts/formats/yarn-berry-v9.ts'
 import { parse as parseNpm3 } from '../../main/ts/formats/npm-3.ts'

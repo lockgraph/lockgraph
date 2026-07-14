@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { type Graph } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import {
   check,
   enrich,

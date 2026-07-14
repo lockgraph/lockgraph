@@ -7,7 +7,7 @@ import {
   type OverrideConstraint,
   type TarballKey,
 } from '../graph.ts'
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import { completeTransitives } from '../complete/tree-complete.ts'
 import {
   deriveEnrichedEvidence,

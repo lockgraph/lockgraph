@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { detect, parse, stringify } from '../../main/ts/index.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 
 // Robustness gaps from the yarn-audit-fix real-world sweep (snapshot.49).
 // Minimal repros only — no external fixtures.

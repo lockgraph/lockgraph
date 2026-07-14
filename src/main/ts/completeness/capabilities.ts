@@ -1,4 +1,4 @@
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import type {
   CompletenessDimension,
   CompletenessProfile,

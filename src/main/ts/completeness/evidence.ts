@@ -10,7 +10,7 @@ import {
   type OverrideConstraint,
   type TarballKey,
 } from '../graph.ts'
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import type { PackumentVersion } from '../registry/types.ts'
 import type {
   CompletenessDimension,

@@ -1,8 +1,8 @@
 // Cross-layer error class — see spec/bindings/ts.md#error-model.
 // Single discriminated class for parse/stringify and graph gates.
 
-import type { Diagnostic } from './graph.ts'
-import type { FormatId } from './index.ts'
+import type { Diagnostic } from '../graph.ts'
+import type { FormatId } from './format-contract.ts'
 
 export type LockfileErrorCode =
   | 'PARSE_FAILED'

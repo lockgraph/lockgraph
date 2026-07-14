@@ -15,7 +15,7 @@ import {
   type Node,
   type NodeId,
 } from '../graph.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { resolveFindUp } from '../complete/find-up.ts'
 import { payloadOfPackumentVersion } from '../registry/payload.ts'
 import type { ModifyContext } from './context.ts'
@@ -169,4 +169,3 @@ function hasEdge(graph: Graph, src: NodeId, dst: NodeId, kind: EdgeKind): boolea
   }
   return false
 }
-

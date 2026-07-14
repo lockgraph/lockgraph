@@ -25,7 +25,7 @@ import {
   relativeImporterPath,
 } from '../../main/ts/formats/_pnpm-flat-core.ts'
 
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 
 import { fixture } from '../helpers/lockfile-test-utils.ts'
 

@@ -9,7 +9,7 @@ import {
   type Node,
   type NodeId,
 } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { mkIntegrity } from '../_integrity-fixtures.ts'
 
 const n = (id: NodeId, name: string, version: string, peers: NodeId[] = [], extra: Partial<Node> = {}): Node => ({

@@ -16,7 +16,7 @@ import type {
   Graph,
   NodeId,
 } from '../graph.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { modifyNodeRemoved } from './diagnostics.ts'
 
 export interface RemoveDependencyResult {

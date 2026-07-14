@@ -16,7 +16,7 @@ import {
   type TarballKeyInputs,
 } from '../graph.ts'
 import semver from 'semver'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { parseSri, emitSri, isEmptyIntegrity, urlFragmentSha1, type Integrity } from '../recipe/integrity.ts'
 import {
   ambiguousResolutionDiagnostic,

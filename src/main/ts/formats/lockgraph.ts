@@ -95,7 +95,7 @@ import {
 } from '../graph.ts'
 import type { Hash, HashOrigin, Integrity } from '../recipe/integrity.ts'
 import type { ResolutionCanonical } from '../recipe/resolution.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 
 export const version = '0.0.0'
 

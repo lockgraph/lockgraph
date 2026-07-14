@@ -7,7 +7,7 @@ import type {
   PackageMetadataField,
   TarballKey,
 } from '../graph.ts'
-import type { FormatId } from '../index.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import type { ConvertInput, ConvertOptions } from '../convert/types.ts'
 import type { PackumentVersion } from '../registry/types.ts'
 

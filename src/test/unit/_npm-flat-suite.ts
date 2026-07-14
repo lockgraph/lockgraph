@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Graph } from '../../main/ts/graph.ts'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { parse as parseClassic } from '../../main/ts/formats/yarn-classic.ts'
 import { parse as parseV9 } from '../../main/ts/formats/yarn-berry-v9.ts'
 

@@ -50,7 +50,7 @@ import {
   type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
   NPM_EDGE_RANGE_ATTR,

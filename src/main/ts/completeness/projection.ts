@@ -3,8 +3,8 @@ import type {
   ProjectionLoss,
   ProjectionLossClass,
   ProjectionRemedy,
-} from '../errors.ts'
-import type { FormatId } from '../index.ts'
+} from '../api/errors.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import { emitBerryChecksum, emitSri } from '../recipe/integrity.ts'
 import { detectGraphFeatures, type GraphFeature } from './features.ts'
 import { targetProfileOf } from './targets.ts'

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
 
 const sriOf = (s: string): string => 'sha512-' + createHash('sha512').update(s).digest('base64')

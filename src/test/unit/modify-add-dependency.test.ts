@@ -1,7 +1,7 @@
 // ADR-0023 §9.2 — addDependency acceptance gate.
 
 import { describe, expect, it } from 'vitest'
-import { LockfileError } from '../../main/ts/errors.ts'
+import { LockfileError } from '../../main/ts/api/errors.ts'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
 import { addDependency } from '../../main/ts/modify/add-dependency.ts'
 import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'

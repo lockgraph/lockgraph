@@ -21,7 +21,7 @@ import {
   type Diagnostic,
   type OverrideConstraint,
 } from '../graph.ts'
-import { LockfileError } from '../errors.ts'
+import { LockfileError } from '../api/errors.ts'
 import { readWorkspaceFileBytes } from './_path.ts'
 import {
   parse as parseSyml,
