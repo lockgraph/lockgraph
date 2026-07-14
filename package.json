@@ -80,6 +80,8 @@
     "test:watch": "vitest",
     "test:smoke": "node scripts/smoke.mjs",
     "test:size": "size-limit",
+    "measure": "npm run build:dist && node scripts/measure.mjs",
+    "measure:verify": "npm run build:dist && node scripts/measure.mjs --deterministic-only --verify-determinism",
     "prepublishOnly": "npm run build:dist"
   },
   "dependencies": {
