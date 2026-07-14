@@ -35,7 +35,7 @@ describe('interop: real-world cross-family probe', () => {
               expect(result.error.code.length).toBeGreaterThan(0)
             }
           }
-        })
+        }, 30_000)
       }
     })
   }

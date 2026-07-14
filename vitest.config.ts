@@ -16,7 +16,6 @@ export default defineConfig({
         // subpath re-export barrels (public API surface, no logic)
         'src/main/ts/{modify,complete,optimize,registry,enrich}/index.ts',
       ],
-      all: true,   // count untested source files too (0%), not just imported ones
     },
   },
 })

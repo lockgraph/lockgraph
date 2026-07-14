@@ -62,7 +62,7 @@ jobs:
           retention-days: 7
 
   frozen-pnpm-6:
-    name: Frozen oracle (pnpm 6, Node 18)
+    name: Frozen oracle (Vitest Node 20, pnpm 6 Node 18)
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -73,13 +73,20 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 18
+
+      - name: Preserve Node 18 for the pnpm 6 subprocess
+        run: echo "LOCKGRAPH_PNPM6_NODE=$(command -v node)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
           cache: 'npm'
 
       - run: npm ci
 
       # pnpm 6's native registry path is calibrated on Node 18; newer legacy
-      # candidates hit an upstream client incompatibility. Node 26 skips this row.
-      # This job runs only its byte-stable positive and dedicated stale negative.
+      # candidates hit an upstream client incompatibility. Vitest 4 runs on its
+      # Node 20 floor and delegates only the pnpm 6 subprocess to preserved Node 18.
       - run: npm run test:frozen:pnpm-6
 
   smoke:

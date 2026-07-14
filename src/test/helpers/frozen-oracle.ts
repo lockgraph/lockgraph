@@ -29,6 +29,7 @@ export interface FrozenOracleAdapter {
   readonly alias: string
   readonly binName: 'npm' | 'yarn' | 'pnpm'
   readonly nodeRange?: string
+  readonly nodeBinaryEnv?: 'LOCKGRAPH_PNPM6_NODE'
 }
 
 export interface FrozenOracleResult {
@@ -65,6 +66,7 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     alias: 'pm-pnpm-6',
     binName: 'pnpm',
     nodeRange: '>=14 <24',
+    nodeBinaryEnv: 'LOCKGRAPH_PNPM6_NODE',
   },
   { family: 'pnpm', format: 'pnpm-v5', version: '7.33.7', alias: 'pm-pnpm-7', binName: 'pnpm' },
   { family: 'pnpm', format: 'pnpm-v6', version: '8.15.9', alias: 'pm-pnpm-8', binName: 'pnpm' },
@@ -140,7 +142,10 @@ function commandFor(adapter: FrozenOracleAdapter, binary: string, argv: readonly
   readonly command: string
   readonly args: readonly string[]
 } {
-  return { command: process.execPath, args: [binary, ...argv] }
+  const command = adapter.nodeBinaryEnv === undefined
+    ? process.execPath
+    : process.env[adapter.nodeBinaryEnv] ?? process.execPath
+  return { command, args: [binary, ...argv] }
 }
 
 function isolatedEnvironment(base: string, family: FrozenOracleFamily): NodeJS.ProcessEnv {
