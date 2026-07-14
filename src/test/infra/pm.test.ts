@@ -46,11 +46,26 @@ const MATRIX: PmEntry[] = [
   },
   { alias: 'pm-yarn-1', binName: 'yarn', expectedVersion: '1.22.22', runtime: 'node' },
   { alias: 'pm-yarn-2', binName: 'yarn', expectedVersion: '2.4.3', runtime: 'node' },
-  { alias: 'pm-pnpm-6', binName: 'pnpm', expectedVersion: '6.35.1', runtime: 'node' },
-  { alias: 'pm-pnpm-7', binName: 'pnpm', expectedVersion: '7.33.7', runtime: 'node' },
-  { alias: 'pm-pnpm-8', binName: 'pnpm', expectedVersion: '8.15.9', runtime: 'node' },
-  { alias: 'pm-pnpm-9', binName: 'pnpm', expectedVersion: '9.15.0', runtime: 'node' },
-  { alias: 'pm-pnpm-10', binName: 'pnpm', expectedVersion: '10.0.0', runtime: 'node' },
+  {
+    alias: 'pm-pnpm-6', binName: 'pnpm', expectedVersion: '6.35.1', runtime: 'node',
+    nodeRange: '>=12.17',
+  },
+  {
+    alias: 'pm-pnpm-7', binName: 'pnpm', expectedVersion: '7.33.7', runtime: 'node',
+    nodeRange: '>=14.6',
+  },
+  {
+    alias: 'pm-pnpm-8', binName: 'pnpm', expectedVersion: '8.15.9', runtime: 'node',
+    nodeRange: '>=16.14',
+  },
+  {
+    alias: 'pm-pnpm-9', binName: 'pnpm', expectedVersion: '9.15.9', runtime: 'node',
+    nodeRange: '>=18.12',
+  },
+  {
+    alias: 'pm-pnpm-10', binName: 'pnpm', expectedVersion: '10.34.5', runtime: 'node',
+    nodeRange: '>=18.12',
+  },
   { alias: 'bun', binName: 'bun', expectedVersion: '1.2.0', runtime: 'native' },
 ]
 

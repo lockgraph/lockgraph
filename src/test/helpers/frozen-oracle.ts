@@ -29,6 +29,7 @@ export interface FrozenOracleAdapter {
   readonly alias: string
   readonly binName: 'npm' | 'yarn' | 'pnpm'
   readonly nativeLockfileVersion?: 1 | 2 | 3
+  readonly nativePnpmLockfileVersion?: '5.3' | '5.4' | '6.0' | '9.0'
   readonly nodeRange?: string
   readonly nodeBinaryEnv?: 'LOCKGRAPH_PNPM6_NODE'
 }
@@ -85,13 +86,26 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     version: '6.35.1',
     alias: 'pm-pnpm-6',
     binName: 'pnpm',
-    nodeRange: '>=14 <24',
+    nativePnpmLockfileVersion: '5.3',
+    nodeRange: '>=12.17',
     nodeBinaryEnv: 'LOCKGRAPH_PNPM6_NODE',
   },
-  { family: 'pnpm', format: 'pnpm-v5', version: '7.33.7', alias: 'pm-pnpm-7', binName: 'pnpm' },
-  { family: 'pnpm', format: 'pnpm-v6', version: '8.15.9', alias: 'pm-pnpm-8', binName: 'pnpm' },
-  { family: 'pnpm', format: 'pnpm-v9', version: '9.15.0', alias: 'pm-pnpm-9', binName: 'pnpm' },
-  { family: 'pnpm', format: 'pnpm-v9', version: '10.0.0', alias: 'pm-pnpm-10', binName: 'pnpm' },
+  {
+    family: 'pnpm', format: 'pnpm-v5', version: '7.33.7', alias: 'pm-pnpm-7', binName: 'pnpm',
+    nativePnpmLockfileVersion: '5.4', nodeRange: '>=14.6',
+  },
+  {
+    family: 'pnpm', format: 'pnpm-v6', version: '8.15.9', alias: 'pm-pnpm-8', binName: 'pnpm',
+    nativePnpmLockfileVersion: '6.0', nodeRange: '>=16.14',
+  },
+  {
+    family: 'pnpm', format: 'pnpm-v9', version: '9.15.9', alias: 'pm-pnpm-9', binName: 'pnpm',
+    nativePnpmLockfileVersion: '9.0', nodeRange: '>=18.12',
+  },
+  {
+    family: 'pnpm', format: 'pnpm-v9', version: '10.34.5', alias: 'pm-pnpm-10', binName: 'pnpm',
+    nativePnpmLockfileVersion: '9.0', nodeRange: '>=18.12',
+  },
 ])
 
 const LOCK_PATH: Readonly<Partial<Record<FormatId, string>>> = Object.freeze({
@@ -162,10 +176,20 @@ function commandFor(adapter: FrozenOracleAdapter, binary: string, argv: readonly
   readonly command: string
   readonly args: readonly string[]
 } {
+  const skipReason = frozenOracleSkipReason(adapter)
+  if (skipReason !== undefined) throw new Error(skipReason)
   const command = adapter.nodeBinaryEnv === undefined
     ? process.execPath
-    : process.env[adapter.nodeBinaryEnv] ?? process.execPath
+    : process.env[adapter.nodeBinaryEnv]!
   return { command, args: [binary, ...argv] }
+}
+
+export function frozenOracleSkipReason(adapter: FrozenOracleAdapter): string | undefined {
+  if (adapter.nodeBinaryEnv === undefined) return undefined
+  const configured = process.env[adapter.nodeBinaryEnv]
+  return configured === undefined || configured.length === 0
+    ? `${adapter.nodeBinaryEnv} is not configured for ${adapter.alias}`
+    : undefined
 }
 
 function isolatedEnvironment(base: string, family: FrozenOracleFamily): NodeJS.ProcessEnv {
@@ -335,6 +359,8 @@ export function runFrozenOracle(
   adapter: FrozenOracleAdapter,
   files: Readonly<Record<string, string | Uint8Array>>,
 ): FrozenOracleResult {
+  const skipReason = frozenOracleSkipReason(adapter)
+  if (skipReason !== undefined) return { reason: `oracle skipped: ${skipReason}` }
   if (candidate.target.format !== adapter.format || candidate.target.managerVersion !== adapter.version) {
     return { reason: 'candidate target does not match calibrated adapter' }
   }

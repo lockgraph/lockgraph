@@ -8,6 +8,7 @@ import { certifyFrozen, prepareFrozen } from '../../main/ts/index.ts'
 import {
   createNativeLock,
   FROZEN_ORACLE_MATRIX,
+  frozenOracleSkipReason,
   isFrozenOracleOutputAllowed,
   runFrozenOracle,
   type FrozenOracleCandidate,
@@ -69,6 +70,19 @@ function lockPath(adapter: FrozenOracleAdapter): string {
   if (adapter.family === 'npm') return 'package-lock.json'
   if (adapter.family === 'pnpm') return 'pnpm-lock.yaml'
   return 'yarn.lock'
+}
+
+function runnableFor(adapter: FrozenOracleAdapter): {
+  readonly run: typeof it | typeof it.skip
+  readonly suffix: string
+} {
+  const reason = frozenOracleSkipReason(adapter)
+    ?? (adapter.nodeRange !== undefined && !semver.satisfies(process.versions.node, adapter.nodeRange)
+      ? `Node ${process.versions.node} does not satisfy ${adapter.nodeRange}`
+      : undefined)
+  return reason === undefined
+    ? { run: it, suffix: '' }
+    : { run: it.skip, suffix: ` [skip: ${reason}]` }
 }
 
 function nativeCandidate(adapter: FrozenOracleAdapter): {
@@ -135,14 +149,17 @@ describe('infra: frozen conversion native oracle', () => {
   }, 60_000)
 
   for (const adapter of FROZEN_ORACLE_MATRIX) {
-    const runnable = adapter.nodeRange !== undefined
-      && !semver.satisfies(process.versions.node, adapter.nodeRange)
-      ? it.skip
-      : it
-    runnable(`${adapter.alias} accepts one exact byte-stable candidate`, () => {
+    const runnable = runnableFor(adapter)
+    runnable.run(`${adapter.alias} accepts one exact byte-stable candidate${runnable.suffix}`, () => {
       const { candidate, files } = nativeCandidate(adapter)
       if (adapter.family === 'npm') {
         expect(JSON.parse(candidate.lockfile).lockfileVersion).toBe(adapter.nativeLockfileVersion)
+      }
+      if (adapter.family === 'pnpm') {
+        const observed = candidate.lockfile.match(
+          /^lockfileVersion:\s*['"]?([^'"\s]+)['"]?\s*$/m,
+        )?.[1]
+        expect(observed).toBe(adapter.nativePnpmLockfileVersion)
       }
       const oracle = runFrozenOracle(candidate, adapter, files)
       expect(oracle.reason).toBeUndefined()
@@ -159,14 +176,11 @@ describe('infra: frozen conversion native oracle', () => {
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'npm'),
     FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-classic')!,
     FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-berry')!,
-    FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'pnpm' && entry.version === '7.33.7')!,
+    ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'pnpm'),
   ]
   for (const adapter of staleAdapters) {
-    const runnable = adapter.nodeRange !== undefined
-      && !semver.satisfies(process.versions.node, adapter.nodeRange)
-      ? it.skip
-      : it
-    runnable(`${adapter.alias} produces no receipt for a manifest that would rewrite the lock`, () => {
+    const runnable = runnableFor(adapter)
+    runnable.run(`${adapter.alias} produces no receipt for a manifest that would rewrite the lock${runnable.suffix}`, () => {
       const { candidate, files } = nativeCandidate(adapter)
       const staleManifest = {
         ...JSON.parse(String(files['package.json']!)),
@@ -181,26 +195,6 @@ describe('infra: frozen conversion native oracle', () => {
       expect(oracle.reason).toMatch(/rejected|changed|output/)
     }, 60_000)
   }
-
-  const pnpm6 = FROZEN_ORACLE_MATRIX.find(entry => entry.alias === 'pm-pnpm-6')!
-  const pnpm6Runnable = pnpm6.nodeRange !== undefined
-    && !semver.satisfies(process.versions.node, pnpm6.nodeRange)
-    ? it.skip
-    : it
-  pnpm6Runnable(`${pnpm6.alias} produces no receipt for a manifest that would rewrite the lock`, () => {
-    const { candidate, files } = nativeCandidate(pnpm6)
-    const staleManifest = {
-      ...JSON.parse(String(files['package.json']!)),
-      dependencies: { 'left-pad': '1.3.0' },
-    }
-    const staleFiles = {
-      ...files,
-      'package.json': `${JSON.stringify(staleManifest, null, 2)}\n`,
-    }
-    const oracle = runFrozenOracle(candidate, pnpm6, staleFiles)
-    expect(oracle.receipt).toBeUndefined()
-    expect(oracle.reason).toMatch(/rejected|changed|output/)
-  }, 60_000)
 
   it('pins narrow family-specific generated-output allowlists in both directions', () => {
     const families: readonly FrozenOracleFamily[] = ['npm', 'yarn-classic', 'yarn-berry', 'pnpm']

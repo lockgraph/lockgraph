@@ -37,13 +37,13 @@ describe('project companions: pnpm frozen oracle', () => {
     evidence = withEvidence(evidence, {
       kind: 'pm-config',
       manager: 'pnpm',
-      version: '10.0.0',
+      version: '10.34.5',
       source: 'package.json',
       surface: 'overrides',
       coverage: 'complete',
       overrides: [{ package: 'lodash', to: '4.17.20' }],
     })
-    const target = { format: 'pnpm-v9' as const, managerVersion: '10.0.0' }
+    const target = { format: 'pnpm-v9' as const, managerVersion: '10.34.5' }
     const companions = projectCompanionsOf(graph, { target, evidence })
     const assessed = stringifyAssessed(graph, { contract: 'policy', target, evidence })
 
@@ -61,7 +61,7 @@ describe('project companions: pnpm frozen oracle', () => {
         name: 'case-simple',
         version: '0.0.0',
         private: true,
-        packageManager: 'pnpm@10.0.0',
+        packageManager: 'pnpm@10.34.5',
         dependencies: { lodash: '4.17.21', ms: '2.1.3' },
         pnpm: { overrides: companions.patches![0]!.value },
       }, null, 2))
@@ -117,13 +117,13 @@ describe('project companions: pnpm frozen oracle', () => {
     evidence = withEvidence(evidence, {
       kind: 'pm-config',
       manager: 'pnpm',
-      version: '10.0.0',
+      version: '10.34.5',
       source: 'package.json',
       surface: 'overrides',
       coverage: 'complete',
       overrides: [{ package: 'lodash', parentPath: ['app'], to: '4.17.20' }],
     })
-    const target = { format: 'pnpm-v9' as const, managerVersion: '10.0.0' }
+    const target = { format: 'pnpm-v9' as const, managerVersion: '10.34.5' }
     const companions = projectCompanionsOf(graph, { target, evidence })
     const assessed = stringifyAssessed(graph, { contract: 'policy', target, evidence })
 
@@ -139,7 +139,7 @@ describe('project companions: pnpm frozen oracle', () => {
         name: 'workspace-oracle',
         version: '1.0.0',
         private: true,
-        packageManager: 'pnpm@10.0.0',
+        packageManager: 'pnpm@10.34.5',
         pnpm: { overrides: companions.patches![0]!.value },
       }, null, 2))
       writeFileSync(resolve(app, 'package.json'), JSON.stringify({
