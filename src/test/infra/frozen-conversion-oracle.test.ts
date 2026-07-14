@@ -171,6 +171,26 @@ describe('infra: frozen conversion native oracle', () => {
     }, 60_000)
   }
 
+  const pnpm6 = FROZEN_ORACLE_MATRIX.find(entry => entry.alias === 'pm-pnpm-6')!
+  const pnpm6Runnable = pnpm6.nodeRange !== undefined
+    && !semver.satisfies(process.versions.node, pnpm6.nodeRange)
+    ? it.skip
+    : it
+  pnpm6Runnable(`${pnpm6.alias} produces no receipt for a manifest that would rewrite the lock`, () => {
+    const { candidate, files } = nativeCandidate(pnpm6)
+    const staleManifest = {
+      ...JSON.parse(String(files['package.json']!)),
+      dependencies: { 'left-pad': '1.3.0' },
+    }
+    const staleFiles = {
+      ...files,
+      'package.json': `${JSON.stringify(staleManifest, null, 2)}\n`,
+    }
+    const oracle = runFrozenOracle(candidate, pnpm6, staleFiles)
+    expect(oracle.receipt).toBeUndefined()
+    expect(oracle.reason).toMatch(/rejected|changed|output/)
+  }, 60_000)
+
   it('pins narrow family-specific generated-output allowlists in both directions', () => {
     const families: readonly FrozenOracleFamily[] = ['npm', 'yarn-classic', 'yarn-berry', 'pnpm']
     for (const family of families) {

@@ -61,6 +61,27 @@ jobs:
           path: target/coverage
           retention-days: 7
 
+  frozen-pnpm-6:
+    name: Frozen oracle (pnpm 6, Node 18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - run: npm ci
+
+      # pnpm 6's native registry path is calibrated on Node 18; newer legacy
+      # candidates hit an upstream client incompatibility. Node 26 skips this row.
+      # This job runs only its byte-stable positive and dedicated stale negative.
+      - run: npm run test:frozen:pnpm-6
+
   smoke:
     name: Smoke (Node ${{ matrix.node }})
     needs: build
