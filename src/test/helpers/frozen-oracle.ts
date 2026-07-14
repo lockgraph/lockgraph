@@ -30,7 +30,7 @@ export interface FrozenOracleAdapter {
   readonly binName: 'npm' | 'yarn' | 'pnpm' | 'bun'
   readonly runtime?: 'node' | 'native'
   readonly nativeLockfileVersion?: 1 | 2 | 3
-  readonly nativeYarnLockfileVersion?: 1 | 4
+  readonly nativeYarnLockfileVersion?: 1 | 4 | 5 | 6 | 7 | 8 | 9
   readonly nativePnpmLockfileVersion?: '5.3' | '5.4' | '6.0' | '9.0'
   readonly nativeBunLockfileVersion?: 1
   readonly nodeRange?: string
@@ -90,6 +90,26 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     nativeYarnLockfileVersion: 4, nodeRange: '>=10',
   },
   {
+    family: 'yarn-berry', format: 'yarn-berry-v5', version: '3.1.1', alias: 'pm-yarn-berry-v5', binName: 'yarn',
+    nativeYarnLockfileVersion: 5, nodeRange: '>=12 <14 || 14.2 - 14.9 || >14.10.0',
+  },
+  {
+    family: 'yarn-berry', format: 'yarn-berry-v6', version: '3.8.7', alias: 'pm-yarn-berry-v6', binName: 'yarn',
+    nativeYarnLockfileVersion: 6, nodeRange: '>=12 <14 || 14.2 - 14.9 || >14.10.0',
+  },
+  {
+    family: 'yarn-berry', format: 'yarn-berry-v7', version: '4.0.0-rc.46', alias: 'pm-yarn-berry-v7', binName: 'yarn',
+    nativeYarnLockfileVersion: 7, nodeRange: '>=14.15.0',
+  },
+  {
+    family: 'yarn-berry', format: 'yarn-berry-v8', version: '4.13.0', alias: 'pm-yarn-berry-v8', binName: 'yarn',
+    nativeYarnLockfileVersion: 8, nodeRange: '>=18.12.0',
+  },
+  {
+    family: 'yarn-berry', format: 'yarn-berry-v9', version: '4.14.1', alias: 'pm-yarn-berry-v9', binName: 'yarn',
+    nativeYarnLockfileVersion: 9, nodeRange: '>=18.12.0',
+  },
+  {
     family: 'pnpm',
     format: 'pnpm-v5',
     version: '6.35.1',
@@ -127,6 +147,11 @@ const LOCK_PATH: Readonly<Partial<Record<FormatId, string>>> = Object.freeze({
   'npm-3': 'package-lock.json',
   'yarn-classic': 'yarn.lock',
   'yarn-berry-v4': 'yarn.lock',
+  'yarn-berry-v5': 'yarn.lock',
+  'yarn-berry-v6': 'yarn.lock',
+  'yarn-berry-v7': 'yarn.lock',
+  'yarn-berry-v8': 'yarn.lock',
+  'yarn-berry-v9': 'yarn.lock',
   'pnpm-v5': 'pnpm-lock.yaml',
   'pnpm-v6': 'pnpm-lock.yaml',
   'pnpm-v9': 'pnpm-lock.yaml',
@@ -178,7 +203,9 @@ function argvFor(adapter: FrozenOracleAdapter, mode: 'create' | 'frozen'): reado
   }
   if (adapter.family === 'yarn-berry') {
     return mode === 'create'
-      ? ['install']
+      ? adapter.nativeYarnLockfileVersion === 4
+        ? ['install']
+        : ['install', '--no-immutable']
       : ['install', '--immutable']
   }
   if (adapter.family === 'bun') {

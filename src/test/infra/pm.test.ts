@@ -53,6 +53,26 @@ const MATRIX: PmEntry[] = [
     nodeRange: '>=10',
   },
   {
+    alias: 'pm-yarn-berry-v5', binName: 'yarn', expectedVersion: '3.1.1', runtime: 'node',
+    nodeRange: '>=12 <14 || 14.2 - 14.9 || >14.10.0',
+  },
+  {
+    alias: 'pm-yarn-berry-v6', binName: 'yarn', expectedVersion: '3.8.7', runtime: 'node',
+    nodeRange: '>=12 <14 || 14.2 - 14.9 || >14.10.0',
+  },
+  {
+    alias: 'pm-yarn-berry-v7', binName: 'yarn', expectedVersion: '4.0.0-rc.46', runtime: 'node',
+    nodeRange: '>=14.15.0',
+  },
+  {
+    alias: 'pm-yarn-berry-v8', binName: 'yarn', expectedVersion: '4.13.0', runtime: 'node',
+    nodeRange: '>=18.12.0',
+  },
+  {
+    alias: 'pm-yarn-berry-v9', binName: 'yarn', expectedVersion: '4.14.1', runtime: 'node',
+    nodeRange: '>=18.12.0',
+  },
+  {
     alias: 'pm-pnpm-6', binName: 'pnpm', expectedVersion: '6.35.1', runtime: 'node',
     nodeRange: '>=12.17',
   },

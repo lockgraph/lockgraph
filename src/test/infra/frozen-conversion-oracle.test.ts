@@ -239,7 +239,7 @@ describe('infra: frozen conversion native oracle', () => {
   const staleAdapters = [
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'npm'),
     FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-classic')!,
-    FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-berry')!,
+    ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'yarn-berry'),
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'pnpm'),
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'bun'),
   ]
