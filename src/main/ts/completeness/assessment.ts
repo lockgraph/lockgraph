@@ -454,14 +454,14 @@ function canonicalRequirements(
       ),
       requirement('target:companion-projection', 'unassessed', undefined, [diagnostic(
         'COMPLETENESS_EVALUATOR_DEFERRED',
-        'companion file projection is not implemented',
+        'runtime companion projection evidence is required',
       )]),
     )
   }
   if (contract === 'frozen') {
     requirements.push(requirement('target:frozen-verification', 'unassessed', 'verification', [diagnostic(
       'COMPLETENESS_EVALUATOR_DEFERRED',
-      'frozen conversion verification is not implemented',
+      'runtime frozen-verification evidence is required',
     )]))
   }
   return requirements

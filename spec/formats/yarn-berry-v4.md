@@ -1,8 +1,9 @@
 # `yarn-berry-v4` — yarn berry `yarn.lock` (`__metadata.version: 4`)
 
-> Status: preview (adapter + round-trip tested; family anchor — Source-only, no frozen contract).
-> Updated: 2026-06-16
+> Status: preview (adapter + round-trip tested; family anchor; frozen certification contract available).
+> Updated: 2026-07-13
 > Provenance: **Source-only**.
+> Frozen certification: `prepareFrozen` / `certifyFrozen`; the repository bundles a calibrated Yarn 2.4.3 producer for this schema, and certification requires an exact-version native-PM oracle receipt.
 
 The version-invariant emit contract — the *Graph-level roundtrip*
 property, canonical form, field schedule, SYML quoting, line endings,

@@ -1,8 +1,9 @@
 # `yarn-berry-v10` — yarn berry `yarn.lock` (`__metadata.version: 10`)
 
 > Status: preview (adapter + round-trip tested; format from yarn 5 dev branch, unreleased upstream — contract may still shift before GA).
-> Updated: 2026-06-16
+> Updated: 2026-07-13
 > Provenance: **Source-only** (reverse-engineered from yarnpkg/berry dev branch).
+> Frozen certification: `prepareFrozen` / `certifyFrozen`; this schema has no bundled calibrated producer, so certification requires an external native-PM oracle receipt from the exact target manager version.
 
 The completeness contract — stringify, modify, enrich, optimize —
 inherits from [yarn-berry-v9](./yarn-berry-v9.md): the shared,

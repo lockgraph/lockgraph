@@ -1,8 +1,9 @@
 # `yarn-berry-v7` — yarn berry `yarn.lock` (`__metadata.version: 7`)
 
-> Status: preview (adapter + round-trip tested; v6/v8 hybrid — Source-only, no frozen contract).
-> Updated: 2026-06-16
+> Status: preview (adapter + round-trip tested; v6/v8 hybrid; frozen certification contract available).
+> Updated: 2026-07-13
 > Provenance: **Source-only**.
+> Frozen certification: `prepareFrozen` / `certifyFrozen`; this schema has no bundled calibrated producer, so certification requires an external native-PM oracle receipt from the exact target manager version.
 
 The version-invariant emit contract — the *Graph-level roundtrip*
 property, canonical form, field schedule, SYML quoting, line endings,

@@ -58,6 +58,7 @@ zero-padded to 4 digits.
 | [0031](./0031-integrity-multi-hash-model.md) | Integrity as a multi-hash carrier with origin tags — **amends ADR-0014 §4.F1** | accepted | 2026-06-02 |
 | [0032](./0032-source-in-key.md) | `source-in-key`: a `+src=` NodeId slot for non-registry sources — **amends ADR-0006/0010/0011** | accepted | 2026-06-08 |
 | [0033](./0033-advisory-diagnose-plan.md) | Advisory feed: `Diagnose` + `Plan` stages (`/advise`) — **completes ADR-0023 §1.5 pipeline** | proposed | 2026-06-09 |
+| [0038](./0038-conversion-completeness-model.md) | Evidence-layered conversion assessment and frozen certification | accepted | 2026-07-13 |
 
 > ADR-0027 §5 satisfies ADR-0026 acceptance gates 1/5/6 (the `layoutOf`/`rememberLayout` placement carrier): the #10 fix shipped 0026's replay *behaviour* via the `installPaths` sidecar; 0027 builds the read/write accessor.
 
@@ -68,4 +69,4 @@ zero-padded to 4 digits.
 > (PnP `resolver-registry` deferred to a separate effort). ADR-0001's L3 bullet is
 > superseded by ADR-0028 §11.
 
-Next free number: **0034**.
+Next free number: **0039**.

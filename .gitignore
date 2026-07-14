@@ -142,6 +142,9 @@ spec/pm/*
 !spec/registry/
 spec/registry/*
 !spec/registry/*.md
+!spec/decisions/
+spec/decisions/*
+!spec/decisions/0038-conversion-completeness-model.md
 
 # Internal interactions / per-project artel runtime
 .artel
