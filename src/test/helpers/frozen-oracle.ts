@@ -20,17 +20,19 @@ import type {
   FrozenVerificationReceipt,
 } from '../../main/ts/index.ts'
 
-export type FrozenOracleFamily = 'npm' | 'yarn-classic' | 'yarn-berry' | 'pnpm'
+export type FrozenOracleFamily = 'npm' | 'yarn-classic' | 'yarn-berry' | 'pnpm' | 'bun'
 
 export interface FrozenOracleAdapter {
   readonly family: FrozenOracleFamily
   readonly format: FormatId
   readonly version: string
   readonly alias: string
-  readonly binName: 'npm' | 'yarn' | 'pnpm'
+  readonly binName: 'npm' | 'yarn' | 'pnpm' | 'bun'
+  readonly runtime?: 'node' | 'native'
   readonly nativeLockfileVersion?: 1 | 2 | 3
   readonly nativeYarnLockfileVersion?: 1 | 4
   readonly nativePnpmLockfileVersion?: '5.3' | '5.4' | '6.0' | '9.0'
+  readonly nativeBunLockfileVersion?: 1
   readonly nodeRange?: string
   readonly nodeBinaryEnv?: 'LOCKGRAPH_PNPM6_NODE'
 }
@@ -113,6 +115,10 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     family: 'pnpm', format: 'pnpm-v9', version: '10.34.5', alias: 'pm-pnpm-10', binName: 'pnpm',
     nativePnpmLockfileVersion: '9.0', nodeRange: '>=18.12',
   },
+  {
+    family: 'bun', format: 'bun-text', version: '1.3.14', alias: 'bun', binName: 'bun',
+    runtime: 'native', nativeBunLockfileVersion: 1,
+  },
 ])
 
 const LOCK_PATH: Readonly<Partial<Record<FormatId, string>>> = Object.freeze({
@@ -124,6 +130,7 @@ const LOCK_PATH: Readonly<Partial<Record<FormatId, string>>> = Object.freeze({
   'pnpm-v5': 'pnpm-lock.yaml',
   'pnpm-v6': 'pnpm-lock.yaml',
   'pnpm-v9': 'pnpm-lock.yaml',
+  'bun-text': 'bun.lock',
 })
 
 function sha256(bytes: string | Uint8Array): string {
@@ -174,6 +181,11 @@ function argvFor(adapter: FrozenOracleAdapter, mode: 'create' | 'frozen'): reado
       ? ['install']
       : ['install', '--immutable']
   }
+  if (adapter.family === 'bun') {
+    return mode === 'create'
+      ? ['install', '--lockfile-only', '--ignore-scripts']
+      : ['install', '--frozen-lockfile', '--ignore-scripts']
+  }
   return mode === 'create'
     ? ['install', '--lockfile-only', '--ignore-scripts']
     : ['install', '--frozen-lockfile', '--ignore-scripts']
@@ -185,6 +197,7 @@ function commandFor(adapter: FrozenOracleAdapter, binary: string, argv: readonly
 } {
   const skipReason = frozenOracleSkipReason(adapter)
   if (skipReason !== undefined) throw new Error(skipReason)
+  if (adapter.runtime === 'native') return { command: binary, args: argv }
   const command = adapter.nodeBinaryEnv === undefined
     ? process.execPath
     : process.env[adapter.nodeBinaryEnv]!
@@ -217,6 +230,9 @@ function isolatedEnvironment(base: string, family: FrozenOracleFamily): NodeJS.P
     PNPM_HOME: resolve(base, 'pnpm-home'),
     COREPACK_ENABLE_PROJECT_SPEC: '0',
     LOCKGRAPH_ORACLE_FAMILY: family,
+    ...(family === 'bun' ? {
+      BUN_INSTALL_CACHE_DIR: cache,
+    } : {}),
     ...(family === 'yarn-classic' ? {
       YARN_CACHE_FOLDER: cache,
     } : {}),
@@ -224,7 +240,7 @@ function isolatedEnvironment(base: string, family: FrozenOracleFamily): NodeJS.P
       YARN_ENABLE_GLOBAL_CACHE: 'false',
       YARN_ENABLE_SCRIPTS: 'false',
     } : {}),
-    ...(registry === undefined || (family !== 'npm' && family !== 'pnpm') ? {} : {
+    ...(registry === undefined || (family !== 'npm' && family !== 'pnpm' && family !== 'bun') ? {} : {
       npm_config_registry: registry,
     }),
     ...(registry === undefined || family !== 'yarn-classic' ? {} : {
@@ -418,7 +434,11 @@ export function runFrozenOracle(
       protocol: 'lockgraph-native-frozen/v1',
       family: adapter.family,
       binary: sha256(readFileSync(binary)),
-      command: command.command === process.execPath ? sha256(readFileSync(process.execPath)) : command.command,
+      command: command.command === process.execPath
+        ? sha256(readFileSync(process.execPath))
+        : command.command === binary
+          ? sha256(readFileSync(binary))
+          : command.command,
       argv: command.args,
       node: process.version,
       env: Object.fromEntries(Object.entries(env).sort()),

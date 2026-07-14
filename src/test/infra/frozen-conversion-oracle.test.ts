@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { certifyFrozen, prepareFrozen } from '../../main/ts/index.ts'
+import { certifyFrozen, convert, prepareFrozen } from '../../main/ts/index.ts'
 import {
   createNativeLock,
   FROZEN_ORACLE_MATRIX,
@@ -69,6 +69,7 @@ function projectFiles(adapter: FrozenOracleAdapter): Readonly<Record<string, str
 function lockPath(adapter: FrozenOracleAdapter): string {
   if (adapter.family === 'npm') return 'package-lock.json'
   if (adapter.family === 'pnpm') return 'pnpm-lock.yaml'
+  if (adapter.family === 'bun') return 'bun.lock'
   return 'yarn.lock'
 }
 
@@ -165,6 +166,41 @@ describe('infra: frozen conversion native oracle', () => {
     expect(certified.companions).toBe(prepared.candidate!.companions)
   }, 60_000)
 
+  it('accepts a converted bun-text candidate with the exact pinned Bun binary', async () => {
+    const adapter = FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'bun')!
+    const files = createNativeLock(adapter, projectFiles(adapter))
+    const lockfile = await convert(String(files[lockPath(adapter)]!), {
+      from: adapter.format,
+      to: adapter.format,
+      strict: false,
+      manifests: {
+        '': {
+          name: 'lockgraph-frozen-oracle-case',
+          dependencies: { ms: '2.1.3' },
+          overrides: [],
+        },
+      },
+    })
+    expect(lockfile).toMatch(/^\s*"lockfileVersion":\s*1,?\s*$/m)
+    const projectionDigest = `sha256:${createHash('sha256').update(JSON.stringify({
+      target: { format: adapter.format, managerVersion: adapter.version },
+      lockfile,
+      companions: [],
+    })).digest('hex')}`
+    const candidate: FrozenOracleCandidate = Object.freeze({
+      protocol: 'lockgraph-frozen-projection/v1',
+      target: Object.freeze({ format: adapter.format, managerVersion: adapter.version }),
+      projectionDigest,
+      lockfile,
+      companions: Object.freeze([]),
+    })
+
+    const oracle = runFrozenOracle(candidate, adapter, files)
+    expect(oracle.reason).toBeUndefined()
+    expect(oracle.receipt).toBeDefined()
+    expect(oracle.receipt!.configDigest).toMatch(/^sha256:[a-f0-9]{64}$/)
+  }, 60_000)
+
   for (const adapter of FROZEN_ORACLE_MATRIX) {
     const runnable = runnableFor(adapter)
     runnable.run(`${adapter.alias} accepts one exact byte-stable candidate${runnable.suffix}`, () => {
@@ -182,6 +218,13 @@ describe('infra: frozen conversion native oracle', () => {
         )?.[1]
         expect(observed).toBe(adapter.nativePnpmLockfileVersion)
       }
+      if (adapter.family === 'bun') {
+        const observed = candidate.lockfile.match(
+          /^\s*"lockfileVersion":\s*(\d+),?\s*$/m,
+        )?.[1]
+        expect(observed === undefined ? undefined : Number(observed))
+          .toBe(adapter.nativeBunLockfileVersion)
+      }
       const oracle = runFrozenOracle(candidate, adapter, files)
       expect(oracle.reason).toBeUndefined()
       expect(oracle.receipt).toBeDefined()
@@ -198,6 +241,7 @@ describe('infra: frozen conversion native oracle', () => {
     FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-classic')!,
     FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-berry')!,
     ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'pnpm'),
+    ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'bun'),
   ]
   for (const adapter of staleAdapters) {
     const runnable = runnableFor(adapter)
@@ -218,7 +262,7 @@ describe('infra: frozen conversion native oracle', () => {
   }
 
   it('pins narrow family-specific generated-output allowlists in both directions', () => {
-    const families: readonly FrozenOracleFamily[] = ['npm', 'yarn-classic', 'yarn-berry', 'pnpm']
+    const families: readonly FrozenOracleFamily[] = ['npm', 'yarn-classic', 'yarn-berry', 'pnpm', 'bun']
     for (const family of families) {
       expect(isFrozenOracleOutputAllowed(family, 'node_modules/.state')).toBe(true)
       expect(isFrozenOracleOutputAllowed(family, 'package.json')).toBe(false)
@@ -229,10 +273,12 @@ describe('infra: frozen conversion native oracle', () => {
       expect(isFrozenOracleOutputAllowed(family, '.yarnrc.yml')).toBe(false)
       expect(isFrozenOracleOutputAllowed(family, 'pnpm-workspace.yaml')).toBe(false)
       expect(isFrozenOracleOutputAllowed(family, 'patches/change.patch')).toBe(false)
+      expect(isFrozenOracleOutputAllowed(family, '.bun/install/cache/pkg')).toBe(false)
     }
     expect(isFrozenOracleOutputAllowed('yarn-berry', '.yarn/install-state.gz')).toBe(true)
     expect(isFrozenOracleOutputAllowed('yarn-berry', '.yarn/cache/pkg.zip')).toBe(true)
     expect(isFrozenOracleOutputAllowed('npm', '.yarn/install-state.gz')).toBe(false)
     expect(isFrozenOracleOutputAllowed('pnpm', '.pnpm-store/state.json')).toBe(false)
+    expect(isFrozenOracleOutputAllowed('bun', 'bun.lockb')).toBe(false)
   })
 })
