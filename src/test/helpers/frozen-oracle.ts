@@ -28,6 +28,7 @@ export interface FrozenOracleAdapter {
   readonly version: string
   readonly alias: string
   readonly binName: 'npm' | 'yarn' | 'pnpm'
+  readonly nativeLockfileVersion?: 1 | 2 | 3
   readonly nodeRange?: string
   readonly nodeBinaryEnv?: 'LOCKGRAPH_PNPM6_NODE'
 }
@@ -43,18 +44,37 @@ export interface FrozenOracleCandidate extends FrozenVerificationSubject {
 }
 
 export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freeze([
-  { family: 'npm', format: 'npm-1', version: '6.14.18', alias: 'pm-npm-6', binName: 'npm' },
-  { family: 'npm', format: 'npm-2', version: '7.24.2', alias: 'pm-npm-7', binName: 'npm' },
-  { family: 'npm', format: 'npm-2', version: '8.19.4', alias: 'pm-npm-8', binName: 'npm' },
-  { family: 'npm', format: 'npm-3', version: '9.9.4', alias: 'pm-npm-9', binName: 'npm' },
-  { family: 'npm', format: 'npm-3', version: '10.9.2', alias: 'pm-npm-10', binName: 'npm' },
-  { family: 'npm', format: 'npm-3', version: '11.0.0', alias: 'pm-npm-11', binName: 'npm' },
+  {
+    family: 'npm', format: 'npm-1', version: '6.14.18', alias: 'pm-npm-6', binName: 'npm',
+    nativeLockfileVersion: 1, nodeRange: '6 >=6.2.0 || 8 || >=9.3.0',
+  },
+  {
+    family: 'npm', format: 'npm-2', version: '7.24.2', alias: 'pm-npm-7', binName: 'npm',
+    nativeLockfileVersion: 2, nodeRange: '>=10',
+  },
+  {
+    family: 'npm', format: 'npm-2', version: '8.19.4', alias: 'pm-npm-8', binName: 'npm',
+    nativeLockfileVersion: 2, nodeRange: '^12.13.0 || ^14.15.0 || >=16.0.0',
+  },
+  {
+    family: 'npm', format: 'npm-3', version: '9.9.4', alias: 'pm-npm-9', binName: 'npm',
+    nativeLockfileVersion: 3, nodeRange: '^14.17.0 || ^16.13.0 || >=18.0.0',
+  },
+  {
+    family: 'npm', format: 'npm-3', version: '10.9.8', alias: 'pm-npm-10', binName: 'npm',
+    nativeLockfileVersion: 3, nodeRange: '^18.17.0 || >=20.5.0',
+  },
+  {
+    family: 'npm', format: 'npm-3', version: '11.18.0', alias: 'pm-npm-11', binName: 'npm',
+    nativeLockfileVersion: 3, nodeRange: '^20.17.0 || >=22.9.0',
+  },
   {
     family: 'npm',
     format: 'npm-3',
     version: '12.0.1',
     alias: 'pm-npm-12',
     binName: 'npm',
+    nativeLockfileVersion: 3,
     nodeRange: '^22.22.2 || ^24.15.0 || >=26.0.0',
   },
   { family: 'yarn-classic', format: 'yarn-classic', version: '1.22.22', alias: 'pm-yarn-1', binName: 'yarn' },

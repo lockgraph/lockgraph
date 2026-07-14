@@ -8,38 +8,68 @@ import semver from 'semver'
 interface PmEntry {
   alias: string
   binName: string
-  expectedPrefix: string
+  expectedVersion: string
   runtime: 'node' | 'native'
   // Node engine range the PM binary itself needs to run. When the running Node
-  // does not satisfy it, the binary errors, so the check is skipped. npm 12
-  // dropped Node ≤ 21 and needs recent 22.x/24.x — unrunnable on the Node-20 CI
-  // job (and on a 24.x below 24.15).
+  // does not satisfy it, the binary errors, so the check is skipped.
   nodeRange?: string
 }
 
 const MATRIX: PmEntry[] = [
-  { alias: 'pm-npm-6',   binName: 'npm',  expectedPrefix: '6.',   runtime: 'node' },
-  { alias: 'pm-npm-7',   binName: 'npm',  expectedPrefix: '7.',   runtime: 'node' },
-  { alias: 'pm-npm-8',   binName: 'npm',  expectedPrefix: '8.',   runtime: 'node' },
-  { alias: 'pm-npm-9',   binName: 'npm',  expectedPrefix: '9.',   runtime: 'node' },
-  { alias: 'pm-npm-10',  binName: 'npm',  expectedPrefix: '10.',  runtime: 'node' },
-  { alias: 'pm-npm-11',  binName: 'npm',  expectedPrefix: '11.',  runtime: 'node' },
-  { alias: 'pm-npm-12',  binName: 'npm',  expectedPrefix: '12.',  runtime: 'node', nodeRange: '^22.22.2 || ^24.15.0 || >=26.0.0' },
-  { alias: 'pm-yarn-1',  binName: 'yarn', expectedPrefix: '1.',   runtime: 'node' },
-  { alias: 'pm-yarn-2',  binName: 'yarn', expectedPrefix: '2.',   runtime: 'node' },
-  { alias: 'pm-pnpm-6',  binName: 'pnpm', expectedPrefix: '6.',   runtime: 'node' },
-  { alias: 'pm-pnpm-7',  binName: 'pnpm', expectedPrefix: '7.',   runtime: 'node' },
-  { alias: 'pm-pnpm-8',  binName: 'pnpm', expectedPrefix: '8.',   runtime: 'node' },
-  { alias: 'pm-pnpm-9',  binName: 'pnpm', expectedPrefix: '9.',   runtime: 'node' },
-  { alias: 'pm-pnpm-10', binName: 'pnpm', expectedPrefix: '10.',  runtime: 'node' },
-  { alias: 'bun',        binName: 'bun',  expectedPrefix: '1.2.', runtime: 'native' },
+  {
+    alias: 'pm-npm-6', binName: 'npm', expectedVersion: '6.14.18', runtime: 'node',
+    nodeRange: '6 >=6.2.0 || 8 || >=9.3.0',
+  },
+  {
+    alias: 'pm-npm-7', binName: 'npm', expectedVersion: '7.24.2', runtime: 'node',
+    nodeRange: '>=10',
+  },
+  {
+    alias: 'pm-npm-8', binName: 'npm', expectedVersion: '8.19.4', runtime: 'node',
+    nodeRange: '^12.13.0 || ^14.15.0 || >=16.0.0',
+  },
+  {
+    alias: 'pm-npm-9', binName: 'npm', expectedVersion: '9.9.4', runtime: 'node',
+    nodeRange: '^14.17.0 || ^16.13.0 || >=18.0.0',
+  },
+  {
+    alias: 'pm-npm-10', binName: 'npm', expectedVersion: '10.9.8', runtime: 'node',
+    nodeRange: '^18.17.0 || >=20.5.0',
+  },
+  {
+    alias: 'pm-npm-11', binName: 'npm', expectedVersion: '11.18.0', runtime: 'node',
+    nodeRange: '^20.17.0 || >=22.9.0',
+  },
+  {
+    alias: 'pm-npm-12', binName: 'npm', expectedVersion: '12.0.1', runtime: 'node',
+    nodeRange: '^22.22.2 || ^24.15.0 || >=26.0.0',
+  },
+  { alias: 'pm-yarn-1', binName: 'yarn', expectedVersion: '1.22.22', runtime: 'node' },
+  { alias: 'pm-yarn-2', binName: 'yarn', expectedVersion: '2.4.3', runtime: 'node' },
+  { alias: 'pm-pnpm-6', binName: 'pnpm', expectedVersion: '6.35.1', runtime: 'node' },
+  { alias: 'pm-pnpm-7', binName: 'pnpm', expectedVersion: '7.33.7', runtime: 'node' },
+  { alias: 'pm-pnpm-8', binName: 'pnpm', expectedVersion: '8.15.9', runtime: 'node' },
+  { alias: 'pm-pnpm-9', binName: 'pnpm', expectedVersion: '9.15.0', runtime: 'node' },
+  { alias: 'pm-pnpm-10', binName: 'pnpm', expectedVersion: '10.0.0', runtime: 'node' },
+  { alias: 'bun', binName: 'bun', expectedVersion: '1.2.0', runtime: 'native' },
 ]
+
+interface PmPackage {
+  readonly version?: string
+  readonly engines?: Readonly<{ node?: string }>
+  readonly bin?: string | Readonly<Record<string, string>>
+}
+
+function readPmPackage(alias: string): PmPackage {
+  const pkgRoot = path.resolve(process.cwd(), 'node_modules', alias)
+  return JSON.parse(fs.readFileSync(path.resolve(pkgRoot, 'package.json'), 'utf-8')) as PmPackage
+}
 
 // `require.resolve('<alias>/package.json')` fails on packages that gate
 // `./package.json` behind their `exports` field (pnpm 8+).
 function resolveBinPath(alias: string, binName: string): string {
   const pkgRoot = path.resolve(process.cwd(), 'node_modules', alias)
-  const pkg = JSON.parse(fs.readFileSync(path.resolve(pkgRoot, 'package.json'), 'utf-8'))
+  const pkg = readPmPackage(alias)
   const bin = pkg.bin
   if (typeof bin === 'string') return path.resolve(pkgRoot, bin)
   if (bin && typeof bin === 'object' && bin[binName]) return path.resolve(pkgRoot, bin[binName])
@@ -62,14 +92,20 @@ function getVersion(entry: PmEntry): string {
 
 describe('infra: every PM binary in the matrix is reachable and prints its pinned version', () => {
   for (const entry of MATRIX) {
-    // Skip a PM whose own Node floor the current runtime doesn't meet (npm 12).
+    it(`${entry.alias} package metadata matches its calibrated identity`, () => {
+      const pkg = readPmPackage(entry.alias)
+      expect(pkg.version).toBe(entry.expectedVersion)
+      if (entry.nodeRange !== undefined) expect(pkg.engines?.node).toBe(entry.nodeRange)
+    })
+
+    // Skip a PM whose own Node engine range the current runtime does not meet.
     const run = entry.nodeRange !== undefined && !semver.satisfies(process.versions.node, entry.nodeRange)
       ? it.skip
       : it
-    run(`${entry.alias} → ${entry.binName} --version starts with "${entry.expectedPrefix}"`, () => {
+    run(`${entry.alias} → ${entry.binName} --version is exactly "${entry.expectedVersion}"`, () => {
       const version = getVersion(entry)
       expect(version, `${entry.alias} returned ${JSON.stringify(version)}`)
-        .toMatch(new RegExp(`^${entry.expectedPrefix.replace(/\./g, '\\.')}`))
+        .toBe(entry.expectedVersion)
     })
   }
 })

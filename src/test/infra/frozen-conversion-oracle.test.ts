@@ -141,6 +141,9 @@ describe('infra: frozen conversion native oracle', () => {
       : it
     runnable(`${adapter.alias} accepts one exact byte-stable candidate`, () => {
       const { candidate, files } = nativeCandidate(adapter)
+      if (adapter.family === 'npm') {
+        expect(JSON.parse(candidate.lockfile).lockfileVersion).toBe(adapter.nativeLockfileVersion)
+      }
       const oracle = runFrozenOracle(candidate, adapter, files)
       expect(oracle.reason).toBeUndefined()
       expect(oracle.receipt).toBeDefined()
@@ -152,10 +155,18 @@ describe('infra: frozen conversion native oracle', () => {
     }, 60_000)
   }
 
-  for (const family of ['npm', 'yarn-classic', 'yarn-berry', 'pnpm'] as const) {
-    const adapter = FROZEN_ORACLE_MATRIX.find(entry =>
-      entry.family === family && (family !== 'pnpm' || entry.version === '7.33.7'))!
-    it(`${family} produces no receipt for a manifest that would rewrite the lock`, () => {
+  const staleAdapters = [
+    ...FROZEN_ORACLE_MATRIX.filter(entry => entry.family === 'npm'),
+    FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-classic')!,
+    FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'yarn-berry')!,
+    FROZEN_ORACLE_MATRIX.find(entry => entry.family === 'pnpm' && entry.version === '7.33.7')!,
+  ]
+  for (const adapter of staleAdapters) {
+    const runnable = adapter.nodeRange !== undefined
+      && !semver.satisfies(process.versions.node, adapter.nodeRange)
+      ? it.skip
+      : it
+    runnable(`${adapter.alias} produces no receipt for a manifest that would rewrite the lock`, () => {
       const { candidate, files } = nativeCandidate(adapter)
       const staleManifest = {
         ...JSON.parse(String(files['package.json']!)),
