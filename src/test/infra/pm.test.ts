@@ -44,8 +44,14 @@ const MATRIX: PmEntry[] = [
     alias: 'pm-npm-12', binName: 'npm', expectedVersion: '12.0.1', runtime: 'node',
     nodeRange: '^22.22.2 || ^24.15.0 || >=26.0.0',
   },
-  { alias: 'pm-yarn-1', binName: 'yarn', expectedVersion: '1.22.22', runtime: 'node' },
-  { alias: 'pm-yarn-2', binName: 'yarn', expectedVersion: '2.4.3', runtime: 'node' },
+  {
+    alias: 'pm-yarn-1', binName: 'yarn', expectedVersion: '1.22.22', runtime: 'node',
+    nodeRange: '>=4.0.0',
+  },
+  {
+    alias: 'pm-yarn-2', binName: 'yarn', expectedVersion: '2.4.3', runtime: 'node',
+    nodeRange: '>=10',
+  },
   {
     alias: 'pm-pnpm-6', binName: 'pnpm', expectedVersion: '6.35.1', runtime: 'node',
     nodeRange: '>=12.17',

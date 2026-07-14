@@ -29,6 +29,7 @@ export interface FrozenOracleAdapter {
   readonly alias: string
   readonly binName: 'npm' | 'yarn' | 'pnpm'
   readonly nativeLockfileVersion?: 1 | 2 | 3
+  readonly nativeYarnLockfileVersion?: 1 | 4
   readonly nativePnpmLockfileVersion?: '5.3' | '5.4' | '6.0' | '9.0'
   readonly nodeRange?: string
   readonly nodeBinaryEnv?: 'LOCKGRAPH_PNPM6_NODE'
@@ -78,8 +79,14 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     nativeLockfileVersion: 3,
     nodeRange: '^22.22.2 || ^24.15.0 || >=26.0.0',
   },
-  { family: 'yarn-classic', format: 'yarn-classic', version: '1.22.22', alias: 'pm-yarn-1', binName: 'yarn' },
-  { family: 'yarn-berry', format: 'yarn-berry-v4', version: '2.4.3', alias: 'pm-yarn-2', binName: 'yarn' },
+  {
+    family: 'yarn-classic', format: 'yarn-classic', version: '1.22.22', alias: 'pm-yarn-1', binName: 'yarn',
+    nativeYarnLockfileVersion: 1, nodeRange: '>=4.0.0',
+  },
+  {
+    family: 'yarn-berry', format: 'yarn-berry-v4', version: '2.4.3', alias: 'pm-yarn-2', binName: 'yarn',
+    nativeYarnLockfileVersion: 4, nodeRange: '>=10',
+  },
   {
     family: 'pnpm',
     format: 'pnpm-v5',

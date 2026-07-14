@@ -72,6 +72,23 @@ function lockPath(adapter: FrozenOracleAdapter): string {
   return 'yarn.lock'
 }
 
+function nativeYarnLockfileVersion(
+  adapter: FrozenOracleAdapter,
+  lockfile: string,
+): number | undefined {
+  if (adapter.family === 'yarn-classic') {
+    const observed = lockfile.match(/^# yarn lockfile v(\d+)[ \t]*\r?$/m)?.[1]
+    return observed === undefined ? undefined : Number(observed)
+  }
+  if (adapter.family === 'yarn-berry') {
+    const observed = lockfile.match(
+      /^__metadata:[ \t]*\r?\n[ \t]+version:[ \t]+(\d+)[ \t]*\r?$/m,
+    )?.[1]
+    return observed === undefined ? undefined : Number(observed)
+  }
+  return undefined
+}
+
 function runnableFor(adapter: FrozenOracleAdapter): {
   readonly run: typeof it | typeof it.skip
   readonly suffix: string
@@ -154,6 +171,10 @@ describe('infra: frozen conversion native oracle', () => {
       const { candidate, files } = nativeCandidate(adapter)
       if (adapter.family === 'npm') {
         expect(JSON.parse(candidate.lockfile).lockfileVersion).toBe(adapter.nativeLockfileVersion)
+      }
+      if (adapter.family === 'yarn-classic' || adapter.family === 'yarn-berry') {
+        expect(nativeYarnLockfileVersion(adapter, candidate.lockfile))
+          .toBe(adapter.nativeYarnLockfileVersion)
       }
       if (adapter.family === 'pnpm') {
         const observed = candidate.lockfile.match(
