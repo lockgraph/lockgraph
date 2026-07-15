@@ -183,8 +183,8 @@ jobs:
     needs: smoke
     # zx-semrel pre-wired (OIDC scheme + permissions) but kept inactive until the
     # publish gate opens. Flip to the live condition when 0.1.0 ships:
-    #   if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    if: false
+    # if: false
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
