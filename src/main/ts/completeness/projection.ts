@@ -281,7 +281,9 @@ export function projectionPreflightLosses(
 
 function featureOfDiagnostic(diagnostic: Diagnostic, target: FormatId): string {
   const feature = diagnostic.data?.feature
-  return typeof feature === 'string' ? feature : diagnostic.code.toLowerCase().replaceAll('_', '-')
+  // String.prototype.replaceAll is Node 15+; the package floor is Node 14.18 and
+  // esbuild does not polyfill runtime methods for target:node14, so use a regex.
+  return typeof feature === 'string' ? feature : diagnostic.code.toLowerCase().replace(/_/g, '-')
     .replace(
       'recipe-integrity-incomplete',
       target.startsWith('yarn-berry-') ? 'integrity:berry-checksum' : 'integrity:tarball-sri',

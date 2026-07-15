@@ -136,11 +136,18 @@ function artifactIdentified(graph: Graph, nodeId: string): boolean {
     && (payload.resolution !== undefined || payload.nativeResolution !== undefined)
 }
 
+// Object.hasOwn is Node 16.9+; the package floor is Node 14.18 and esbuild does
+// not polyfill runtime methods for target:node14, so use the prototype method.
+// Own-property semantics matter: a dependency named "toString" must not match
+// via the prototype chain the way `name in object` would.
+const hasOwn = (object: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(object, key)
+
 function declaredKind(manifest: Manifest, name: string): 'dep' | 'dev' | 'optional' | 'peer' | undefined {
-  if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)) return 'optional'
-  if (Object.hasOwn(manifest.peerDependencies ?? {}, name)) return 'peer'
-  if (Object.hasOwn(manifest.devDependencies ?? {}, name)) return 'dev'
-  if (Object.hasOwn(manifest.dependencies ?? {}, name)) return 'dep'
+  if (hasOwn(manifest.optionalDependencies ?? {}, name)) return 'optional'
+  if (hasOwn(manifest.peerDependencies ?? {}, name)) return 'peer'
+  if (hasOwn(manifest.devDependencies ?? {}, name)) return 'dev'
+  if (hasOwn(manifest.dependencies ?? {}, name)) return 'dep'
   return undefined
 }
 
