@@ -30,18 +30,16 @@ yarn add lockgraph
 
 ## Status
 
-**Snapshot preview.** Every format below parses and stringifies; conversion is
-*semantically equivalent*, not byte-identical (see [Concept](#concept)).
-Published as `0.0.0-snapshot.*` builds — the first stable release is pending.
-[SCHEMAS.md](./SCHEMAS.md) maps each format id to the package-manager versions
-that emit it.
+**First public release.** Every format below parses and stringifies. Cross-family
+conversion is *semantically equivalent*, not byte-identical (see [Concept](#concept)),
+and **fail-closed by default** — a lossy projection throws rather than silently dropping
+data (`strict: false` opts out). [SCHEMAS.md](./SCHEMAS.md) maps each format id to the
+package-manager versions that emit it; [Known limitations](#known-limitations) lists what
+a point release will close.
 
-> **ℹ️ Active R&D — snapshot channel.** While the project is under active research &
-> development, every release ships to the **snapshot channel** (`0.0.0-snapshot.N`,
-> published under the `snapshot` npm dist-tag) rather than `latest`. Install the newest
-> snapshot with `npm i lockgraph@snapshot`, or pin an exact build
-> (e.g. `npm i lockgraph@0.0.0-snapshot.61`). The first stable `latest`
-> release is pending.
+> **ℹ️ 0.x — early but honest.** The public API is stabilising; expect additive changes
+> within the 0.x line. Every limitation is fail-closed — the tool never emits a lock it
+> cannot prove — so nothing degrades silently.
 
 | Format | `detect` | `parse` | `stringify` |
 |--------|:-:|:-:|:-:|
@@ -54,6 +52,27 @@ that emit it.
 Graph-level operations apply to **any** parsed graph, regardless of source
 format: `convert` (parse any → stringify any), `modify` (audit-fix,
 override-pin, license-filter), and `optimize` (orphan GC / dedup).
+
+### Known limitations
+
+Every item below is **fail-closed** — the tool throws (or diagnoses) rather than
+emitting a lock it cannot prove. All are point-release targets.
+
+- **`modify` on pnpm / bun / npm graphs carrying native replay state.** `convert`
+  preserves native fidelity fully; `modify` (audit-fix, override-pin, license-filter)
+  propagates it today only for **Yarn**. On a pnpm/bun/npm graph whose native state is
+  load-bearing (pnpm `packageExtensionsChecksum` / `pnpmfileChecksum` / `settings`;
+  bun `trustedDependencies` / `patchedDependencies`; npm native layout), a mutation
+  detaches that state, so strict `modify` **fails closed** rather than silently emitting
+  a frozen-invalid lock. Pass `strict: false` to accept the loss, or use Yarn.
+- **pnpm-v5 workspace-peer projection** is unsupported and fail-closed — the v6/v9
+  workspace-peer machinery is not yet ported to the standalone v5 grammar. Ordinary
+  pnpm-v5 parse/stringify is fully supported.
+- **npm → Yarn Classic git locators** fail the output self-check and fail closed;
+  registry dependencies are unaffected.
+- **pnpm catalogs and build-trust policy** are preserved in same-format round trips;
+  cross-family conversions that would need external workspace evidence fail closed on
+  the unsupported loss.
 
 ## Concept
 
