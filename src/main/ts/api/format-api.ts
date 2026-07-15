@@ -268,13 +268,22 @@ export function stableValue(
   }
 }
 
+function sortByStableJson<T>(values: T[]): T[] {
+  // The index is deliberately per call: each value is serialized once without
+  // letting same-identity graph mutations stale a shared summary.
+  return values
+    .map(value => ({ key: JSON.stringify(value), value }))
+    .sort((left, right) => left.key.localeCompare(right.key))
+    .map(entry => entry.value)
+}
+
 export function canonicalGraphSnapshot(
   graph: Graph,
   contract: ConversionContract,
   overrides?: readonly OverrideConstraint[],
   workspaceNames?: ReadonlyMap<string, string>,
 ): string {
-  const nodes = [...graph.nodes()].map(node => stableValue({
+  const nodes = sortByStableJson([...graph.nodes()].map(node => stableValue({
     id: node.id,
     name: node.name,
     version: node.version,
@@ -282,9 +291,8 @@ export function canonicalGraphSnapshot(
     ...(node.patch === undefined ? {} : { patch: node.patch }),
     ...(node.source === undefined ? {} : { source: node.source }),
     ...(node.workspacePath === undefined ? {} : { workspacePath: node.workspacePath }),
-  }))
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
-  const edges = [...graph.nodes()].flatMap(node => [...graph.out(node.id)])
+  })))
+  const edges = sortByStableJson([...graph.nodes()].flatMap(node => [...graph.out(node.id)])
     .map(edge => {
       const source = graph.getNode(edge.src)
       const target = graph.getNode(edge.dst)
@@ -320,8 +328,7 @@ export function canonicalGraphSnapshot(
           },
         }),
       })
-    })
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+    }))
   const tarballs = [...graph.tarballs()].map(([key, payload]) => [key, stableValue({
     ...(payload.integrity === undefined ? {} : { integrity: payload.integrity }),
     ...(payload.berryChecksumCacheKey === undefined ? {} : {
