@@ -41,13 +41,11 @@ import {
   GraphError,
   newBuilder,
   serializeNodeId,
-  toTarballKey,
   type Diagnostic,
   type Edge,
   type EdgeKind,
   type Graph,
   type Node,
-  type TarballKeyInputs,
   type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
@@ -61,6 +59,7 @@ import {
   type NpmFlatSidecar,
   type NpmSidecar,
 } from './_npm-flat-types.ts'
+import { optimizeUnreachable } from './_optimize.ts'
 import { derivePeerCandidates, pruneSidecar } from './_npm-core.ts'
 import { emitDropped as patchEmitDropped, emitDropped as recipeEmitDropped } from '../recipe/diagnostics.ts'
 import {
@@ -561,59 +560,23 @@ export function optimize(
   _options: Npm1OptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph)
-  const reachable = new Set(graph.walk(Array.from(graph.roots())))
-  const unreachableNodes = Array.from(graph.nodes(), node => node.id)
-    .filter(nodeId => !reachable.has(nodeId))
-    .sort(cmpStr)
-
-  if (unreachableNodes.length === 0) {
-    return {
-      graph,
-      diagnostics: graph.diagnostics().filter(diagnostic => diagnostic.severity === 'warning'),
-    }
-  }
-
-  const unreachable = new Set(unreachableNodes)
-  const referencedTarballs = new Set<string>()
-  const tarballsToRemove = new Map<string, TarballKeyInputs>()
-  const internalEdges = unreachableNodes
-    .flatMap(src =>
-      graph.out(src)
-        .filter(edge => unreachable.has(edge.dst))
-        .map(edge => ({ src: edge.src, dst: edge.dst, kind: edge.kind })),
-    )
-    .sort((a, b) =>
-      cmpStr(`${a.src} ${a.kind} ${a.dst}`, `${b.src} ${b.kind} ${b.dst}`),
-    )
-
-  for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
-    const key = toTarballKey(inputs)
-    if (unreachable.has(node.id)) {
-      tarballsToRemove.set(key, inputs)
-      continue
-    }
-    referencedTarballs.add(key)
-  }
-
-  const result = graph.mutate(m => {
-    for (const edge of internalEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-    }
-    for (const nodeId of unreachableNodes) {
-      m.removeNode(nodeId)
-    }
-    for (const [key, inputs] of Array.from(tarballsToRemove.entries()).sort((a, b) => cmpStr(a[0], b[0]))) {
-      if (!referencedTarballs.has(key)) {
-        m.removeTarball(inputs)
-      }
-    }
+  const result = optimizeUnreachable(graph, {
+    seeds: Array.from(graph.roots()),
+    compare: cmpStr,
+    edgeSeparator: ' ',
+    tarballInputs: node => ({
+      name: node.name,
+      version: node.version,
+      patch: node.patch,
+      source: node.source,
+    }),
+    skipMissingTarballs: false,
   })
 
-  if (sidecar !== undefined) {
+  if (result.graph !== graph && sidecar !== undefined) {
     rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
   }
-  return { graph: result.graph, diagnostics: result.unresolved }
+  return result
 }
 
 // === Helpers ===============================================================

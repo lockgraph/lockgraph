@@ -35,13 +35,13 @@ import {
 
 const PROFILE: PnpmLayoutProfile = { profile: 'v6-collapsed-root' }
 
-export interface PnpmV6ParseOptions extends PnpmFamilyParseOptions {}
-export interface PnpmV6StringifyOptions extends PnpmFamilyStringifyOptions {}
-export interface PnpmV6EnrichOptions extends PnpmFamilyEnrichOptions {}
-export interface PnpmV6OptimizeOptions extends PnpmFamilyOptimizeOptions {}
+export type PnpmV6ParseOptions = PnpmFamilyParseOptions
+export type PnpmV6StringifyOptions = PnpmFamilyStringifyOptions
+export type PnpmV6EnrichOptions = PnpmFamilyEnrichOptions
+export type PnpmV6OptimizeOptions = PnpmFamilyOptimizeOptions
 
-export interface PnpmV6Manifest extends PnpmManifest {}
-export interface PnpmV6Settings extends PnpmSettings {}
+export type PnpmV6Manifest = PnpmManifest
+export type PnpmV6Settings = PnpmSettings
 
 export function check(input: string): boolean {
   return checkFamily(input, PROFILE)

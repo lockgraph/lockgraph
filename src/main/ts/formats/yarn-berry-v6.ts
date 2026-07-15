@@ -19,10 +19,10 @@ const CONFIG = {
   conditionsAllowed: true,
 } as const
 
-export interface YarnBerryParseOptions extends YarnBerryFamilyParseOptions {}
-export interface YarnBerryStringifyOptions extends YarnBerryFamilyStringifyOptions {}
-export interface YarnBerryEnrichOptions extends YarnBerryFamilyEnrichOptions {}
-export interface YarnBerryOptimizeOptions extends YarnBerryFamilyOptimizeOptions {}
+export type YarnBerryParseOptions = YarnBerryFamilyParseOptions
+export type YarnBerryStringifyOptions = YarnBerryFamilyStringifyOptions
+export type YarnBerryEnrichOptions = YarnBerryFamilyEnrichOptions
+export type YarnBerryOptimizeOptions = YarnBerryFamilyOptimizeOptions
 
 export function check(input: string): boolean {
   return checkFamily(input, CONFIG)

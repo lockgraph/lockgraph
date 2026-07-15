@@ -33,13 +33,13 @@ import {
 
 const PROFILE: PnpmLayoutProfile = { profile: 'v9-importers-snapshots' }
 
-export interface PnpmV9ParseOptions extends PnpmFamilyParseOptions {}
-export interface PnpmV9StringifyOptions extends PnpmFamilyStringifyOptions {}
-export interface PnpmV9EnrichOptions extends PnpmFamilyEnrichOptions {}
-export interface PnpmV9OptimizeOptions extends PnpmFamilyOptimizeOptions {}
+export type PnpmV9ParseOptions = PnpmFamilyParseOptions
+export type PnpmV9StringifyOptions = PnpmFamilyStringifyOptions
+export type PnpmV9EnrichOptions = PnpmFamilyEnrichOptions
+export type PnpmV9OptimizeOptions = PnpmFamilyOptimizeOptions
 
-export interface PnpmV9Manifest extends PnpmManifest {}
-export interface PnpmV9Settings extends PnpmSettings {}
+export type PnpmV9Manifest = PnpmManifest
+export type PnpmV9Settings = PnpmSettings
 
 export function check(input: string): boolean {
   return checkFamily(input, PROFILE)

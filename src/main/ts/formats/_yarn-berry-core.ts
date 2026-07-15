@@ -17,11 +17,11 @@ import {
   stripPeerContextFromNodeId,
   type TarballPayload,
   toTarballKey,
-  type TarballKeyInputs,
   type Diagnostic,
   type OverrideConstraint,
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
+import { optimizeUnreachable } from './_optimize.ts'
 import { readWorkspaceFileBytes } from './_path.ts'
 import {
   parse as parseSyml,
@@ -174,7 +174,7 @@ export interface YarnBerryFamilyEnrichOptions {
   // (Anton's Option-1 posture); no async network entry ships in this scope.
   peerMetaResolver?: (parentName: string, parentVersion: string, peerName: string) => boolean | undefined
 }
-export interface YarnBerryFamilyOptimizeOptions {}
+export type YarnBerryFamilyOptimizeOptions = {}
 
 export interface YarnBerryFamilyConfig {
   lockfileVersion: number
@@ -1001,57 +1001,21 @@ export function optimizeFamily(
   _options: YarnBerryFamilyOptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph) ?? EMPTY_SIDECAR
-  const reachable = new Set(graph.walk(Array.from(graph.roots())))
-  const unreachableNodes = Array.from(graph.nodes(), node => node.id)
-    .filter(nodeId => !reachable.has(nodeId))
-    .sort(cmpStr)
-
-  if (unreachableNodes.length === 0) {
-    return {
-      graph,
-      diagnostics: graph.diagnostics().filter(diagnostic => diagnostic.severity === 'warning'),
-    }
-  }
-
-  const unreachable = new Set(unreachableNodes)
-  const referencedTarballs = new Set<string>()
-  const tarballsToRemove = new Map<string, TarballKeyInputs>()
-  const internalEdges = unreachableNodes
-    .flatMap(src =>
-      graph.out(src)
-        .filter(edge => unreachable.has(edge.dst))
-        .map(edge => ({ src: edge.src, dst: edge.dst, kind: edge.kind })),
-    )
-    .sort((a, b) =>
-      cmpStr(`${a.src}\u0000${a.kind}\u0000${a.dst}`, `${b.src}\u0000${b.kind}\u0000${b.dst}`),
-    )
-
-  for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
-    const key = toTarballKey(inputs)
-    if (unreachable.has(node.id)) {
-      tarballsToRemove.set(key, inputs)
-      continue
-    }
-    referencedTarballs.add(key)
-  }
-
-  const result = graph.mutate(m => {
-    for (const edge of internalEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-    }
-    for (const nodeId of unreachableNodes) {
-      m.removeNode(nodeId)
-    }
-    for (const [key, inputs] of Array.from(tarballsToRemove.entries()).sort((a, b) => cmpStr(a[0], b[0]))) {
-      if (!referencedTarballs.has(key)) {
-        m.removeTarball(inputs)
-      }
-    }
+  const result = optimizeUnreachable(graph, {
+    seeds: Array.from(graph.roots()),
+    compare: cmpStr,
+    edgeSeparator: '\u0000',
+    tarballInputs: node => ({
+      name: node.name,
+      version: node.version,
+      patch: node.patch,
+      source: node.source,
+    }),
+    skipMissingTarballs: false,
   })
 
-  rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
-  return { graph: result.graph, diagnostics: result.unresolved ?? [] }
+  if (result.graph !== graph) rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
+  return result
 }
 
 export function rememberSidecar(graph: Graph, sidecar: YarnBerryFamilySidecar): void {

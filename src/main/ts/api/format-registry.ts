@@ -42,91 +42,68 @@ type FormatAdapter = FormatAdapterContract<
   StringifyDispatchContext
 >
 
+const yarnBerryAdapter = (
+  adapter: Pick<typeof yarnBerryV4, 'check' | 'parse' | 'stringify'>,
+): FormatAdapter => ({
+  check: adapter.check,
+  parse: (input, context) => adapter.parse(input, {
+    workspaceRoot: context.workspaceRoot,
+    overrides: context.overrides,
+  }),
+  stringify: (graph, context) => adapter.stringify(graph, {
+    lineEnding: context.lineEnding,
+    cacheKey: context.cacheKey,
+    onDiagnostic: context.onDiagnostic,
+  }),
+})
+
+const npmFlatAdapter = (
+  adapter: Pick<typeof npm2, 'check' | 'parse' | 'stringify'>,
+): FormatAdapter => ({
+  check: adapter.check,
+  parse: input => adapter.parse(input),
+  stringify: (graph, context) => adapter.stringify(graph, {
+    lineEnding: context.lineEnding,
+    onDiagnostic: context.onDiagnostic,
+    overrides: context.overrides,
+  }),
+})
+
+const pnpmFlatAdapter = (
+  adapter: Pick<typeof pnpmV6, 'check' | 'parse' | 'stringify'>,
+  profile: 'v6-collapsed-root' | 'v9-importers-snapshots',
+): FormatAdapter => ({
+  check: adapter.check,
+  parse: (input, context) => adapter.parse(input, { workspaceRoot: context.workspaceRoot }),
+  stringify: (graph, context) => context.pnpmWorkspacePeerProjection === undefined
+    ? adapter.stringify(graph, {
+        lineEnding: context.lineEnding,
+        onDiagnostic: context.onDiagnostic,
+        overrides: context.overrides,
+      })
+    : stringifyPnpmFamily(
+        graph,
+        { profile },
+        {
+          lineEnding: context.lineEnding,
+          onDiagnostic: context.onDiagnostic,
+          overrides: context.overrides,
+        },
+        {
+          workspacePeerProjection: context.pnpmWorkspacePeerProjection,
+          workspaceNames: context.pnpmWorkspaceNames,
+        },
+      ),
+})
+
 export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
-  'yarn-berry-v4': {
-    check: yarnBerryV4.check,
-    parse: (input, context) => yarnBerryV4.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV4.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
-  'yarn-berry-v5': {
-    check: yarnBerryV5.check,
-    parse: (input, context) => yarnBerryV5.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV5.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
-  'yarn-berry-v6': {
-    check: yarnBerryV6.check,
-    parse: (input, context) => yarnBerryV6.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV6.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
-  'yarn-berry-v7': {
-    check: yarnBerryV7.check,
-    parse: (input, context) => yarnBerryV7.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV7.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
-  'yarn-berry-v8': {
-    check: yarnBerryV8.check,
-    parse: (input, context) => yarnBerryV8.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV8.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
-  'yarn-berry-v9': {
-    check: yarnBerryV9.check,
-    parse: (input, context) => yarnBerryV9.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV9.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
-  'yarn-berry-v10': {
-    check: yarnBerryV10.check,
-    parse: (input, context) => yarnBerryV10.parse(input, {
-      workspaceRoot: context.workspaceRoot,
-      overrides: context.overrides,
-    }),
-    stringify: (graph, context) => yarnBerryV10.stringify(graph, {
-      lineEnding: context.lineEnding,
-      cacheKey: context.cacheKey,
-      onDiagnostic: context.onDiagnostic,
-    }),
-  },
+  'yarn-berry-v4': yarnBerryAdapter(yarnBerryV4),
+  'yarn-berry-v5': yarnBerryAdapter(yarnBerryV5),
+  'yarn-berry-v6': yarnBerryAdapter(yarnBerryV6),
+  'yarn-berry-v7': yarnBerryAdapter(yarnBerryV7),
+  'yarn-berry-v8': yarnBerryAdapter(yarnBerryV8),
+  'yarn-berry-v9': yarnBerryAdapter(yarnBerryV9),
+  'yarn-berry-v10': yarnBerryAdapter(yarnBerryV10),
   'yarn-classic': {
     check: yarnClassic.check,
     parse: (input, context) => yarnClassic.parse(input, { overrides: context.overrides }),
@@ -143,24 +120,8 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
       onDiagnostic: context.onDiagnostic,
     }),
   },
-  'npm-2': {
-    check: npm2.check,
-    parse: input => npm2.parse(input),
-    stringify: (graph, context) => npm2.stringify(graph, {
-      lineEnding: context.lineEnding,
-      onDiagnostic: context.onDiagnostic,
-      overrides: context.overrides,
-    }),
-  },
-  'npm-3': {
-    check: npm3.check,
-    parse: input => npm3.parse(input),
-    stringify: (graph, context) => npm3.stringify(graph, {
-      lineEnding: context.lineEnding,
-      onDiagnostic: context.onDiagnostic,
-      overrides: context.overrides,
-    }),
-  },
+  'npm-2': npmFlatAdapter(npm2),
+  'npm-3': npmFlatAdapter(npm3),
   'pnpm-v5': {
     check: pnpmV5.check,
     parse: input => pnpmV5.parse(input),
@@ -174,52 +135,8 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
       { workspaceNames: context.pnpmWorkspaceNames },
     ),
   },
-  'pnpm-v6': {
-    check: pnpmV6.check,
-    parse: (input, context) => pnpmV6.parse(input, { workspaceRoot: context.workspaceRoot }),
-    stringify: (graph, context) => context.pnpmWorkspacePeerProjection === undefined
-      ? pnpmV6.stringify(graph, {
-          lineEnding: context.lineEnding,
-          onDiagnostic: context.onDiagnostic,
-          overrides: context.overrides,
-        })
-      : stringifyPnpmFamily(
-          graph,
-          { profile: 'v6-collapsed-root' },
-          {
-            lineEnding: context.lineEnding,
-            onDiagnostic: context.onDiagnostic,
-            overrides: context.overrides,
-          },
-          {
-            workspacePeerProjection: context.pnpmWorkspacePeerProjection,
-            workspaceNames: context.pnpmWorkspaceNames,
-          },
-        ),
-  },
-  'pnpm-v9': {
-    check: pnpmV9.check,
-    parse: (input, context) => pnpmV9.parse(input, { workspaceRoot: context.workspaceRoot }),
-    stringify: (graph, context) => context.pnpmWorkspacePeerProjection === undefined
-      ? pnpmV9.stringify(graph, {
-          lineEnding: context.lineEnding,
-          onDiagnostic: context.onDiagnostic,
-          overrides: context.overrides,
-        })
-      : stringifyPnpmFamily(
-          graph,
-          { profile: 'v9-importers-snapshots' },
-          {
-            lineEnding: context.lineEnding,
-            onDiagnostic: context.onDiagnostic,
-            overrides: context.overrides,
-          },
-          {
-            workspacePeerProjection: context.pnpmWorkspacePeerProjection,
-            workspaceNames: context.pnpmWorkspaceNames,
-          },
-        ),
-  },
+  'pnpm-v6': pnpmFlatAdapter(pnpmV6, 'v6-collapsed-root'),
+  'pnpm-v9': pnpmFlatAdapter(pnpmV9, 'v9-importers-snapshots'),
   'bun-text': {
     check: bunText.check,
     parse: input => bunText.parse(input),

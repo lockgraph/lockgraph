@@ -142,7 +142,7 @@ export interface NpmFamilyHooks {
   pruneToNodes?: (graph: Graph, reachableNodeIds: ReadonlySet<string>) => void
 }
 
-export interface NpmFamilyParseOptions {}
+export type NpmFamilyParseOptions = {}
 
 export interface NpmFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -153,8 +153,8 @@ export interface NpmFamilyStringifyOptions {
   overrides?: OverrideConstraint[]
 }
 
-export interface NpmFamilyEnrichOptions {}
-export interface NpmFamilyOptimizeOptions {}
+export type NpmFamilyEnrichOptions = {}
+export type NpmFamilyOptimizeOptions = {}
 
 // === JSON entry schemas ====================================================
 

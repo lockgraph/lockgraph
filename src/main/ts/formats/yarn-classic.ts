@@ -4,7 +4,6 @@ import {
   nameOf,
   serializeNodeId,
   stripPeerContextFromNodeId,
-  toTarballKey,
   type Diagnostic,
   type Edge,
   type EdgeAttrs,
@@ -13,10 +12,10 @@ import {
   type Mutator,
   type Node,
   type OverrideConstraint,
-  type TarballKeyInputs,
 } from '../graph.ts'
 import semver from 'semver'
 import { LockfileError } from '../api/errors.ts'
+import { optimizeUnreachable } from './_optimize.ts'
 import { parseSri, emitSri, isEmptyIntegrity, urlFragmentSha1, type Integrity } from '../recipe/integrity.ts'
 import {
   ambiguousResolutionDiagnostic,
@@ -649,59 +648,23 @@ export function optimize(
   _options: YarnClassicOptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph)
-  const reachable = new Set(graph.walk(Array.from(graph.roots())))
-  const unreachableNodes = Array.from(graph.nodes(), node => node.id)
-    .filter(nodeId => !reachable.has(nodeId))
-    .sort(cmpUtf16)
-
-  if (unreachableNodes.length === 0) {
-    return {
-      graph,
-      diagnostics: graph.diagnostics().filter(diagnostic => diagnostic.severity === 'warning'),
-    }
-  }
-
-  const unreachable = new Set(unreachableNodes)
-  const referencedTarballs = new Set<string>()
-  const tarballsToRemove = new Map<string, TarballKeyInputs>()
-  const internalEdges = unreachableNodes
-    .flatMap(src =>
-      graph.out(src)
-        .filter(edge => unreachable.has(edge.dst))
-        .map(edge => ({ src: edge.src, dst: edge.dst, kind: edge.kind })),
-    )
-    .sort((a, b) =>
-      cmpUtf16(`${a.src}\u0000${a.kind}\u0000${a.dst}`, `${b.src}\u0000${b.kind}\u0000${b.dst}`),
-    )
-
-  for (const node of graph.nodes()) {
-    const inputs = { name: node.name, version: node.version, patch: node.patch, source: node.source }
-    const key = toTarballKey(inputs)
-    if (unreachable.has(node.id)) {
-      tarballsToRemove.set(key, inputs)
-      continue
-    }
-    referencedTarballs.add(key)
-  }
-
-  const result = graph.mutate(m => {
-    for (const edge of internalEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-    }
-    for (const nodeId of unreachableNodes) {
-      m.removeNode(nodeId)
-    }
-    for (const [key, inputs] of Array.from(tarballsToRemove.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))) {
-      if (!referencedTarballs.has(key) && graph.tarball(inputs) !== undefined) {
-        m.removeTarball(inputs)
-      }
-    }
+  const result = optimizeUnreachable(graph, {
+    seeds: Array.from(graph.roots()),
+    compare: cmpUtf16,
+    edgeSeparator: '\u0000',
+    tarballInputs: node => ({
+      name: node.name,
+      version: node.version,
+      patch: node.patch,
+      source: node.source,
+    }),
+    skipMissingTarballs: true,
   })
 
-  if (sidecar !== undefined) {
+  if (result.graph !== graph && sidecar !== undefined) {
     rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
   }
-  return { graph: result.graph, diagnostics: result.unresolved }
+  return result
 }
 
 function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {

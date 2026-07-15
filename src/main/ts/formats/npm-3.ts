@@ -29,10 +29,10 @@ const CONFIG: NpmFamilyConfig = {
   diagnosticPrefix: 'NPM_V3',
 }
 
-export interface Npm3ParseOptions extends NpmFamilyParseOptions {}
-export interface Npm3StringifyOptions extends NpmFamilyStringifyOptions {}
-export interface Npm3EnrichOptions extends NpmFamilyEnrichOptions {}
-export interface Npm3OptimizeOptions extends NpmFamilyOptimizeOptions {}
+export type Npm3ParseOptions = NpmFamilyParseOptions
+export type Npm3StringifyOptions = NpmFamilyStringifyOptions
+export type Npm3EnrichOptions = NpmFamilyEnrichOptions
+export type Npm3OptimizeOptions = NpmFamilyOptimizeOptions
 
 export function check(input: string): boolean {
   return checkFamily(input, CONFIG)

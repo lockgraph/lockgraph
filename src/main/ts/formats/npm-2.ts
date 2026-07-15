@@ -38,10 +38,10 @@ const CONFIG: NpmFamilyConfig = {
   hooks: NPM2_HOOKS,
 }
 
-export interface Npm2ParseOptions extends NpmFamilyParseOptions {}
-export interface Npm2StringifyOptions extends NpmFamilyStringifyOptions {}
-export interface Npm2EnrichOptions extends NpmFamilyEnrichOptions {}
-export interface Npm2OptimizeOptions extends NpmFamilyOptimizeOptions {}
+export type Npm2ParseOptions = NpmFamilyParseOptions
+export type Npm2StringifyOptions = NpmFamilyStringifyOptions
+export type Npm2EnrichOptions = NpmFamilyEnrichOptions
+export type Npm2OptimizeOptions = NpmFamilyOptimizeOptions
 
 export function check(input: string): boolean {
   return checkFamily(input, CONFIG)
