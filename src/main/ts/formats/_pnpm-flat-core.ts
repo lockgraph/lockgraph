@@ -446,25 +446,54 @@ export function checkFamily(input: string, profile: PnpmLayoutProfile): boolean 
   return re.test(input)
 }
 
-export function parseFamily(
+type PnpmGraphBuilder = ReturnType<typeof newBuilder>
+
+interface PnpmParseContext {
+  readonly shape: PnpmLayoutShape
+  readonly yaml: YamlMap
+  readonly builder: PnpmGraphBuilder
+  readonly diagnostics: Diagnostic[]
+  readonly sidecar: PnpmSidecar
+  readonly patchDirectives: PatchDirective[]
+  readonly packagesMap: Record<string, any>
+  readonly effectiveImporters: Record<string, unknown>
+  readonly importerPaths: string[]
+  readonly seenIds: Set<string>
+  readonly idByPackagesKey: Map<string, string>
+}
+
+function createPnpmParseContext(
   input: string,
   options: PnpmFamilyParseOptions,
   profile: PnpmLayoutProfile,
-): Graph {
+): PnpmParseContext {
   const shape = resolveProfile(profile)
-  const normalized = normalizeLineEndings(input)
-  const yaml = readYaml(normalized)
-
-  const version = yaml.lockfileVersion
-  if (version !== shape.lockfileVersion) {
+  const yaml = readYaml(normalizeLineEndings(input))
+  if (yaml.lockfileVersion !== shape.lockfileVersion) {
     throw new LockfileError({
       code: 'FORMAT_MISMATCH',
-      message: `pnpm-v${shape.lockfileVersion.split('.')[0]} adapter: expected lockfileVersion ${JSON.stringify(shape.lockfileVersion)}, got ${JSON.stringify(version)}`,
+      message: `pnpm-v${shape.lockfileVersion.split('.')[0]} adapter: expected lockfileVersion ${JSON.stringify(shape.lockfileVersion)}, got ${JSON.stringify(yaml.lockfileVersion)}`,
     })
   }
 
-  const builder = newBuilder()
-  const diagnostics: Diagnostic[] = []
+  const sidecar = capturePnpmParseSidecar(yaml)
+  return {
+    shape,
+    yaml,
+    builder: newBuilder(),
+    diagnostics: [],
+    sidecar,
+    patchDirectives: parseOverridePatches(sidecar.overrides, options.workspaceRoot),
+    packagesMap: isPlainObject(yaml.packages) ? yaml.packages : {},
+    effectiveImporters: {},
+    importerPaths: [],
+    seenIds: new Set<string>(),
+    idByPackagesKey: new Map<string, string>(),
+  }
+}
+
+/** Capture pnpm's frozen-compared top-level metadata before graph projection. */
+function capturePnpmParseSidecar(yaml: YamlMap): PnpmSidecar {
   const sidecar: PnpmSidecar = {
     rootId: '',
     settings: extractSettings(yaml.settings),
@@ -476,88 +505,53 @@ export function parseFamily(
     workspacePeerCollisions: new Set<string>(),
   }
 
-  // Capture the full `settings:` block verbatim for same-PM frozen-clean emit;
-  // extractSettings above keeps only the model's resolution-affecting subset.
   if (yaml.settings !== undefined && typeof yaml.settings === 'object') {
     sidecar.settingsVerbatim = yaml.settings as YamlMap
   }
-
   if (yaml.overrides !== undefined && typeof yaml.overrides === 'object') {
     sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
   }
-
-  // Top-level `catalogs:` block (pnpm v9+ catalog protocol) — captured verbatim,
-  // replayed on emit. Importer `specifier: 'catalog:'` refs round-trip on edges;
-  // dropping the `catalogs:` definitions orphans them → invalid lockfile.
   if (yaml.catalogs !== undefined && typeof yaml.catalogs === 'object') {
     sidecar.catalogs = yaml.catalogs as YamlMap
   }
-  // pnpm frozen-compares this manifest-config digest; capture it so a same-PM
-  // round-trip doesn't drop it into a recompute-mismatch (breaks --frozen-lockfile).
   if (typeof yaml.packageExtensionsChecksum === 'string') {
     sidecar.packageExtensionsChecksum = yaml.packageExtensionsChecksum
   }
-  // Patch-file declarations (`name@version → { hash, path }`); the `path` is not
-  // carried by the modeled `patch_hash=` markers, so preserve the block verbatim
-  // or a same-PM round-trip drops it into a frozen-compare mismatch.
   if (yaml.patchedDependencies !== undefined && typeof yaml.patchedDependencies === 'object') {
     sidecar.patchedDependencies = yaml.patchedDependencies as YamlMap
   }
-  // pnpm's `.pnpmfile.cjs` digest — another frozen-compared config scalar.
   if (typeof yaml.pnpmfileChecksum === 'string') {
     sidecar.pnpmfileChecksum = yaml.pnpmfileChecksum
   }
+  return sidecar
+}
 
-  // ADR-0014 §4.F2 — compile patch directives from the overrides block.
-  // Each directive carries the literal `overrides:` key (preserved verbatim
-  // per ADR-0011), a parsed matcher (bare / range / exact per pnpm key
-  // grammar), and the pre-computed canonical sha512-hex when source bytes
-  // were readable. Per-node lookup resolves the matcher against (name,
-  // version) and falls back to the ADR-0011 sentinel
-  // `unresolved-<sha256(<name>@<version>:<literal-key>)>` when bytes are
-  // unavailable. Consumed during node-add below so node.patch is set BEFORE
-  // the tarball key is derived.
-  const patchDirectives = parseOverridePatches(sidecar.overrides, options.workspaceRoot)
-
-  const packagesMap = isPlainObject(yaml.packages) ? yaml.packages : {}
-
-  // --- Pass 0: importer synthesis — workspace member nodes + path→NodeId map. ---
-  //
-  // MUST run BEFORE Pass 1: a workspace peer (#8b-A) encodes its importer
-  // directory in the peer version slot with `/` → `+` (e.g.
-  // `vue@packages+vue` → importer `packages/vue`). Pass 1 bakes the resolved
-  // peerContext into the NodeId via `serializeNodeId`, so `importerByPath`
-  // must already be populated when the snapshot/packages keys are parsed.
-  // Importer EDGES still wire in Pass 3 (they need Pass-1 `seenIds`).
-  //
-  // v9: `importers` is ALWAYS present. Single-importer collapses to `.`.
-  // v6: `importers` is present ONLY for multi-importer projects;
-  //     single-importer mode uses top-level `dependencies` instead.
-
+/**
+ * Materialise the implicit root importer and explicit workspace importers.
+ * This must precede package parsing: workspace peers encode importer paths in
+ * peer locators, and those paths participate in the package NodeId.
+ */
+function synthesisePnpmImporterNodes(context: PnpmParseContext): void {
+  const { yaml, shape, builder, sidecar, effectiveImporters, importerPaths } = context
   const importersMap = isPlainObject(yaml.importers) ? yaml.importers : undefined
   const collapsedRootDeps = isCollapsedRoot(yaml, shape)
     ? buildCollapsedRootImporter(yaml)
     : undefined
 
-  // Build the effective importer map.
-  const effectiveImporters: Record<string, unknown> = {}
   if (importersMap !== undefined) {
     for (const key of Object.keys(importersMap)) {
       effectiveImporters[key] = importersMap[key]
     }
   }
   if (collapsedRootDeps !== undefined) {
-    // v6 collapsed-root: the implicit `.` importer pulled from top-level dep blocks.
     effectiveImporters['.'] = collapsedRootDeps
   }
-  // If neither importers nor collapsed-root, synthesise an empty root importer.
   if (Object.keys(effectiveImporters).length === 0) {
     effectiveImporters['.'] = {}
   }
 
-  const importerPaths = Object.keys(effectiveImporters).sort(cmpStr)
+  importerPaths.push(...Object.keys(effectiveImporters).sort(cmpStr))
   const rootImporterPath = importerPaths.includes('.') ? '.' : importerPaths[0] ?? '.'
-
   const rootName = '.'
   const rootVersion = '0.0.0'
   const rootId = `${rootName}@${rootVersion}`
@@ -586,88 +580,115 @@ export function parseFamily(
     })
   }
   sidecar.importerPaths = importerPaths.slice()
+}
 
-  // --- Pass 1: build node set from packages or snapshots. ---
-  //
-  // v9: `snapshots` keys are authoritative — peer-virt instances exist as
-  // separate snapshot entries with matching bare `packages[bare-id]`.
-  // v6: `packages` keys are authoritative — peer-virt is encoded directly
-  // on the packages key (no separate snapshots block).
-
-  const seenIds = new Set<string>()
-  const idByPackagesKey = new Map<string, string>()
-
-  if (shape.hasSnapshots) {
-    // v9 mode: walk snapshots, cross-reference packages.
-    const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
-    const snapshotKeys = Object.keys(snapshotsMap)
-    for (const snapshotKey of snapshotKeys) {
-      const parsed = parsePackagesOrSnapshotKey(snapshotKey)
-      if (parsed === undefined) {
-        diagnostics.push({
-          code: 'PNPM_BAD_ENTRY',
-          severity: 'warning',
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot key ${JSON.stringify(snapshotKey)} not parseable`,
-        })
-        continue
-      }
-      const { name, version, peers, opaquePeers } = parsed
-      const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
-      const nodeId = serializeNodeId(name, version, peerContext)
-      if (seenIds.has(nodeId)) continue
-      seenIds.add(nodeId)
-
-      const bareKey = `${name}@${version}`
-      const pkgEntry = packagesMap[bareKey]
-      if (pkgEntry === undefined) {
-        diagnostics.push({
-          code: `${shape.diagnosticPrefix}_SNAPSHOTS_MISSING`,
-          severity: 'warning',
-          subject: nodeId,
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot ${JSON.stringify(snapshotKey)} has no matching packages[${JSON.stringify(bareKey)}] baseline`,
-        })
-        continue
-      }
-      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
-      const snapEntry = snapshotsMap[snapshotKey]
-      if (isPlainObject(snapEntry) && Array.isArray(snapEntry.transitivePeerDependencies)) {
-        const sc = sidecar.nodes.get(nodeId)
-        if (sc !== undefined) {
-          sc.transitivePeerDependencies = (snapEntry.transitivePeerDependencies as string[]).slice()
-        }
-      }
-    }
+/** Add every resolved package instance using the profile's authoritative key space. */
+function addPnpmPackageNodes(context: PnpmParseContext): void {
+  if (context.shape.hasSnapshots) {
+    addPnpmSnapshotPackageNodes(context)
   } else {
-    // v6 mode: walk packages — keys carry peer-context directly.
-    for (const pkgKey of Object.keys(packagesMap)) {
-      const stripped = stripPackagesKeyPrefix(pkgKey, shape.packagesKeyShape)
-      const parsed = parsePackagesOrSnapshotKey(stripped)
-      if (parsed === undefined) {
-        diagnostics.push({
-          code: 'PNPM_BAD_ENTRY',
-          severity: 'warning',
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]} packages key ${JSON.stringify(pkgKey)} not parseable`,
-        })
-        continue
-      }
-      const { name, version, peers, opaquePeers } = parsed
-      const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
-      const nodeId = serializeNodeId(name, version, peerContext)
-      if (seenIds.has(nodeId)) continue
-      seenIds.add(nodeId)
-      idByPackagesKey.set(pkgKey, nodeId)
-      const pkgEntry = packagesMap[pkgKey]!
-      addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
-      // v6 carries `dev` per-entry — capture for round-trip.
-      if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
-        const sc = sidecar.nodes.get(nodeId)
-        if (sc !== undefined) sc.dev = pkgEntry.dev
+    addPnpmInlinePackageNodes(context)
+  }
+}
+
+function addPnpmSnapshotPackageNodes(context: PnpmParseContext): void {
+  const { yaml, shape, builder, diagnostics, sidecar, patchDirectives, packagesMap, seenIds } = context
+  const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
+  for (const snapshotKey of Object.keys(snapshotsMap)) {
+    const parsed = parsePackagesOrSnapshotKey(snapshotKey)
+    if (parsed === undefined) {
+      diagnostics.push({
+        code: 'PNPM_BAD_ENTRY',
+        severity: 'warning',
+        message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot key ${JSON.stringify(snapshotKey)} not parseable`,
+      })
+      continue
+    }
+    const { name, version, peers, opaquePeers } = parsed
+    const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
+    const nodeId = serializeNodeId(name, version, peerContext)
+    if (seenIds.has(nodeId)) continue
+    seenIds.add(nodeId)
+
+    const bareKey = `${name}@${version}`
+    const pkgEntry = packagesMap[bareKey]
+    if (pkgEntry === undefined) {
+      diagnostics.push({
+        code: `${shape.diagnosticPrefix}_SNAPSHOTS_MISSING`,
+        severity: 'warning',
+        subject: nodeId,
+        message: `pnpm-v${shape.lockfileVersion.split('.')[0]} snapshot ${JSON.stringify(snapshotKey)} has no matching packages[${JSON.stringify(bareKey)}] baseline`,
+      })
+      continue
+    }
+    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+    const snapEntry = snapshotsMap[snapshotKey]
+    if (isPlainObject(snapEntry) && Array.isArray(snapEntry.transitivePeerDependencies)) {
+      const nodeSidecar = sidecar.nodes.get(nodeId)
+      if (nodeSidecar !== undefined) {
+        nodeSidecar.transitivePeerDependencies = (snapEntry.transitivePeerDependencies as string[]).slice()
       }
     }
   }
+}
 
-  // --- Pass 3: importer edges — root + member → snapshot nodes. ---
-  // (Importer member nodes + `importerByPath` were synthesised in Pass 0.)
+function addPnpmInlinePackageNodes(context: PnpmParseContext): void {
+  const { shape, builder, diagnostics, sidecar, patchDirectives, packagesMap, seenIds, idByPackagesKey } = context
+  for (const pkgKey of Object.keys(packagesMap)) {
+    const stripped = stripPackagesKeyPrefix(pkgKey, shape.packagesKeyShape)
+    const parsed = parsePackagesOrSnapshotKey(stripped)
+    if (parsed === undefined) {
+      diagnostics.push({
+        code: 'PNPM_BAD_ENTRY',
+        severity: 'warning',
+        message: `pnpm-v${shape.lockfileVersion.split('.')[0]} packages key ${JSON.stringify(pkgKey)} not parseable`,
+      })
+      continue
+    }
+    const { name, version, peers, opaquePeers } = parsed
+    const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
+    const nodeId = serializeNodeId(name, version, peerContext)
+    if (seenIds.has(nodeId)) continue
+    seenIds.add(nodeId)
+    idByPackagesKey.set(pkgKey, nodeId)
+    const pkgEntry = packagesMap[pkgKey]!
+    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+    if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
+      const nodeSidecar = sidecar.nodes.get(nodeId)
+      if (nodeSidecar !== undefined) nodeSidecar.dev = pkgEntry.dev
+    }
+  }
+}
+
+type PnpmImporterEdgeKind = 'dep' | 'dev' | 'optional'
+
+interface PnpmImporterDependency {
+  readonly importerPath: string
+  readonly srcId: string
+  readonly kind: PnpmImporterEdgeKind
+  readonly depName: string
+  readonly specifier: string | undefined
+  readonly version: string
+}
+
+interface PnpmImporterDependencyBlock {
+  readonly importerPath: string
+  readonly srcId: string
+  readonly importerEntry: Record<string, any>
+  readonly kind: PnpmImporterEdgeKind
+  readonly blockName: 'dependencies' | 'devDependencies' | 'optionalDependencies'
+}
+
+interface PnpmImporterEdgeInput {
+  readonly srcId: string
+  readonly targetId: string
+  readonly kind: PnpmImporterEdgeKind
+  readonly attrs: EdgeAttrs
+}
+
+/** Wire every importer dependency after the package node set is complete. */
+function addPnpmImporterEdges(context: PnpmParseContext): void {
+  const { importerPaths, effectiveImporters, sidecar } = context
   for (const importerPath of importerPaths) {
     const srcId = sidecar.importerByPath.get(importerPath)
     if (srcId === undefined) continue
@@ -679,141 +700,181 @@ export function parseFamily(
       ['dev', 'devDependencies'],
       ['optional', 'optionalDependencies'],
     ] as const) {
-      const block = importerEntry[blockName]
-      if (!isPlainObject(block)) continue
-      const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
-      for (const [depName, depValue] of entries) {
-        const spec = importerSpec(depValue)
-        if (spec === undefined) continue
-        const { specifier, version } = spec
-
-        // workspace:* / link: resolution.
-        if (version.startsWith('link:')) {
-          const linkPath = resolveLinkPath(importerPath, version.slice(5))
-          const targetId = sidecar.importerByPath.get(linkPath)
-          if (targetId === undefined) {
-            diagnostics.push({
-              code: 'PNPM_UNRESOLVED_DEP',
-              severity: 'warning',
-              subject: srcId,
-              message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: importer ${JSON.stringify(importerPath)} dep ${depName} resolves to unknown workspace ${JSON.stringify(linkPath)}`,
-            })
-            continue
-          }
-          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
-          // pnpm carries `workspace:<spec>` via the importer specifier
-          // map; the `link:<path>` value is resolution, not range.
-          // resolvedVersion is the synthesised member node version
-          // (`<importerPath>@<version>` — version is the synthesis
-          // default at parse time, manifests may refine via enrich).
-          const rawSpecifier = specifier ?? ''
-          const targetVersion = nodeVersionOf(targetId)
-          const workspaceRange = targetVersion !== undefined && targetVersion !== ''
-            ? { specifier: rawSpecifier, resolvedVersion: targetVersion }
-            : { specifier: rawSpecifier }
-          const attrs: { range: string; workspace: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = {
-            range: specifier ?? version,
-            workspace: true,
-            workspaceRange,
-          }
-          try {
-            builder.addEdge(srcId, targetId, kind, attrs)
-          } catch (error) {
-            if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-            throw error
-          }
-          // Key includes the alias slot so parallel importer edges to the SAME
-          // target don't collide (workspace deps are never aliased → empty slot).
-          const edgeKey = `${srcId}\0${kind}\0${targetId}\0`
-          sidecar.importerEdges.set(edgeKey, { resolvedVersion: version, specifier })
-          continue
-        }
-
-        // Bare version — resolve to a node. pnpm encodes npm-alias deps
-        // with `version: <target>@<ver>` (e.g.
-        // `react-is-cjs: { specifier: 'npm:react-is@^17', version: 'react-is@17.0.2' }`)
-        // — try the canonical form when the dep block key produces no
-        // snapshot match, and record the descriptor key as the alias.
-        let targetId = resolveSnapshotTarget(seenIds, depName, version, sidecar.importerByPath)
-        let aliasSlot: string | undefined
-        if (targetId === undefined) {
-          const aliasTarget = resolveAliasedSnapshotTarget(seenIds, version, sidecar.importerByPath)
-          if (aliasTarget !== undefined) {
-            targetId = aliasTarget
-            aliasSlot = depName
-          }
-        }
-        if (targetId === undefined) {
-          diagnostics.push({
-            code: 'PNPM_UNRESOLVED_DEP',
-            severity: 'warning',
-            subject: srcId,
-            message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: importer ${JSON.stringify(importerPath)} dep ${depName}@${version} resolves to no snapshot`,
-          })
-          continue
-        }
-        try {
-          const attrs: { range: string; alias?: string } = { range: specifier ?? version }
-          if (aliasSlot !== undefined) attrs.alias = aliasSlot
-          builder.addEdge(srcId, targetId, kind, attrs)
-        } catch (error) {
-          if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-          throw error
-        }
-        // Include the alias slot — a plain `react: ^x` dep and an aliased
-        // `foo: npm:react@^x` dep resolve to the SAME target node; keying without
-        // the alias collides them and the plain edge inherits the alias descriptor.
-        const edgeKey = `${srcId}\0${kind}\0${targetId}\0${aliasSlot ?? ''}`
-        sidecar.importerEdges.set(edgeKey, { resolvedVersion: version, specifier })
-      }
+      addPnpmImporterDependencyBlock(context, {
+        importerPath,
+        srcId,
+        importerEntry,
+        kind,
+        blockName,
+      })
     }
   }
+}
 
-  // --- Pass 4: resolved-tree edges (snapshot → snapshot for v9, package → package for v6). ---
-  //
-  // #8b-C — peer-of-a-peer collapse dedup. After the depth-0 split (#8b-B),
-  // several distinct snapshot keys that differ ONLY in NESTED peer-of-peer
-  // versions (e.g. `(pkg-a@8.0.8(pkg-b@1.0.0))` vs `(…(pkg-b@2.0.0))`)
-  // project to ONE depth-0 NodeId. Pass 1 keeps the first via `seenIds`, but
-  // Pass 4 walks EVERY snapshot key, so a collapsed source would emit each of
-  // its resolved-tree edges once PER colliding key → seal `duplicate edge`.
-  // `emittedEdges` tracks the seal's tripleKey (src\0kind\0dst\0alias) per
-  // source so an edge already wired by an earlier colliding key is skipped;
-  // edges with a DISTINCT resolved target (e.g. the two `vite` variants) keep
-  // their own slot. This stays in bijection with peerContext (identical for
-  // all colliding keys) under the seal's base-key projection.
+function addPnpmImporterDependencyBlock(
+  context: PnpmParseContext,
+  input: PnpmImporterDependencyBlock,
+): void {
+  const { importerPath, srcId, importerEntry, kind, blockName } = input
+  const block = importerEntry[blockName]
+  if (!isPlainObject(block)) return
+  const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
+  for (const [depName, depValue] of entries) {
+    const spec = importerSpec(depValue)
+    if (spec === undefined) continue
+    const dependency: PnpmImporterDependency = {
+      importerPath,
+      srcId,
+      kind,
+      depName,
+      specifier: spec.specifier,
+      version: spec.version,
+    }
+    if (dependency.version.startsWith('link:')) {
+      addPnpmWorkspaceImporterDependency(context, dependency)
+    } else {
+      addPnpmResolvedImporterDependency(context, dependency)
+    }
+  }
+}
+
+/** Resolve a link locator through the importer path map and preserve its workspace range. */
+function addPnpmWorkspaceImporterDependency(
+  context: PnpmParseContext,
+  dependency: PnpmImporterDependency,
+): void {
+  const { shape, builder, diagnostics, sidecar } = context
+  const { importerPath, srcId, kind, depName, specifier, version } = dependency
+  const linkPath = resolveLinkPath(importerPath, version.slice(5))
+  const targetId = sidecar.importerByPath.get(linkPath)
+  if (targetId === undefined) {
+    diagnostics.push({
+      code: 'PNPM_UNRESOLVED_DEP',
+      severity: 'warning',
+      subject: srcId,
+      message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: importer ${JSON.stringify(importerPath)} dep ${depName} resolves to unknown workspace ${JSON.stringify(linkPath)}`,
+    })
+    return
+  }
+
+  const rawSpecifier = specifier ?? ''
+  const targetVersion = nodeVersionOf(targetId)
+  const workspaceRange = targetVersion !== undefined && targetVersion !== ''
+    ? { specifier: rawSpecifier, resolvedVersion: targetVersion }
+    : { specifier: rawSpecifier }
+  const attrs = {
+    range: specifier ?? version,
+    workspace: true,
+    workspaceRange,
+  }
+  if (!addPnpmImporterEdge(builder, { srcId, targetId, kind, attrs })) return
+  sidecar.importerEdges.set(`${srcId}\0${kind}\0${targetId}\0`, { resolvedVersion: version, specifier })
+}
+
+/** Resolve a registry or alias locator through the parsed snapshot node set. */
+function addPnpmResolvedImporterDependency(
+  context: PnpmParseContext,
+  dependency: PnpmImporterDependency,
+): void {
+  const { shape, builder, diagnostics, sidecar, seenIds } = context
+  const { importerPath, srcId, kind, depName, specifier, version } = dependency
+  let targetId = resolveSnapshotTarget(seenIds, depName, version, sidecar.importerByPath)
+  let aliasSlot: string | undefined
+  if (targetId === undefined) {
+    const aliasTarget = resolveAliasedSnapshotTarget(seenIds, version, sidecar.importerByPath)
+    if (aliasTarget !== undefined) {
+      targetId = aliasTarget
+      aliasSlot = depName
+    }
+  }
+  if (targetId === undefined) {
+    diagnostics.push({
+      code: 'PNPM_UNRESOLVED_DEP',
+      severity: 'warning',
+      subject: srcId,
+      message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: importer ${JSON.stringify(importerPath)} dep ${depName}@${version} resolves to no snapshot`,
+    })
+    return
+  }
+
+  const attrs: { range: string; alias?: string } = { range: specifier ?? version }
+  if (aliasSlot !== undefined) attrs.alias = aliasSlot
+  if (!addPnpmImporterEdge(builder, { srcId, targetId, kind, attrs })) return
+  const edgeKey = `${srcId}\0${kind}\0${targetId}\0${aliasSlot ?? ''}`
+  sidecar.importerEdges.set(edgeKey, { resolvedVersion: version, specifier })
+}
+
+/** Add an importer edge while treating the graph builder's duplicate invariant as idempotence. */
+function addPnpmImporterEdge(
+  builder: PnpmGraphBuilder,
+  input: PnpmImporterEdgeInput,
+): boolean {
+  const { srcId, targetId, kind, attrs } = input
+  try {
+    builder.addEdge(srcId, targetId, kind, attrs)
+    return true
+  } catch (error) {
+    if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') return false
+    throw error
+  }
+}
+
+/**
+ * Wire package-to-package adjacency from snapshots (v9) or inline entries (v6).
+ * `emittedEdges` deduplicates snapshot keys that collapse to one depth-0
+ * peer-context NodeId while retaining edges to genuinely distinct targets.
+ */
+function addPnpmResolvedTreeEdges(context: PnpmParseContext): void {
   const emittedEdges = new Map<string, Set<string>>()
-  if (shape.hasSnapshots) {
-    const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
-    for (const snapshotKey of Object.keys(snapshotsMap)) {
-      const parsed = parsePackagesOrSnapshotKey(snapshotKey)
-      if (parsed === undefined) continue
-      const { name, version, peers, opaquePeers } = parsed
-      const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
-      const srcId = serializeNodeId(name, version, peerContext)
-      if (!seenIds.has(srcId)) continue
-      const snapEntry = snapshotsMap[snapshotKey]
-      if (!isPlainObject(snapEntry)) continue
-      addResolvedTreeEdges(builder, diagnostics, srcId, snapEntry, peers, seenIds, sidecar, shape, emittedEdges)
-    }
+  if (context.shape.hasSnapshots) {
+    addPnpmSnapshotTreeEdges(context, emittedEdges)
   } else {
-    // v6: walk packages entries themselves for inline dependencies + peerDependencies.
-    for (const pkgKey of Object.keys(packagesMap)) {
-      const srcId = idByPackagesKey.get(pkgKey)
-      if (srcId === undefined) continue
-      const stripped = stripPackagesKeyPrefix(pkgKey, shape.packagesKeyShape)
-      const parsed = parsePackagesOrSnapshotKey(stripped)
-      if (parsed === undefined) continue
-      const pkgEntry = packagesMap[pkgKey]
-      if (!isPlainObject(pkgEntry)) continue
-      addResolvedTreeEdges(builder, diagnostics, srcId, pkgEntry, parsed.peers, seenIds, sidecar, shape, emittedEdges)
-    }
+    addPnpmInlineTreeEdges(context, emittedEdges)
   }
+}
 
+function addPnpmSnapshotTreeEdges(
+  context: PnpmParseContext,
+  emittedEdges: Map<string, Set<string>>,
+): void {
+  const { yaml, shape, builder, diagnostics, sidecar, seenIds } = context
+  const snapshotsMap = isPlainObject(yaml.snapshots) ? yaml.snapshots : {}
+  for (const snapshotKey of Object.keys(snapshotsMap)) {
+    const parsed = parsePackagesOrSnapshotKey(snapshotKey)
+    if (parsed === undefined) continue
+    const { name, version, peers, opaquePeers } = parsed
+    const peerContext = buildPeerContext(peers, sidecar.importerByPath, opaquePeers)
+    const srcId = serializeNodeId(name, version, peerContext)
+    if (!seenIds.has(srcId)) continue
+    const snapEntry = snapshotsMap[snapshotKey]
+    if (!isPlainObject(snapEntry)) continue
+    addResolvedTreeEdges(builder, diagnostics, srcId, snapEntry, peers, seenIds, sidecar, shape, emittedEdges)
+  }
+}
+
+function addPnpmInlineTreeEdges(
+  context: PnpmParseContext,
+  emittedEdges: Map<string, Set<string>>,
+): void {
+  const { shape, builder, diagnostics, sidecar, packagesMap, seenIds, idByPackagesKey } = context
+  for (const pkgKey of Object.keys(packagesMap)) {
+    const srcId = idByPackagesKey.get(pkgKey)
+    if (srcId === undefined) continue
+    const stripped = stripPackagesKeyPrefix(pkgKey, shape.packagesKeyShape)
+    const parsed = parsePackagesOrSnapshotKey(stripped)
+    if (parsed === undefined) continue
+    const pkgEntry = packagesMap[pkgKey]
+    if (!isPlainObject(pkgEntry)) continue
+    addResolvedTreeEdges(builder, diagnostics, srcId, pkgEntry, parsed.peers, seenIds, sidecar, shape, emittedEdges)
+  }
+}
+
+/** Attach parse diagnostics, seal graph invariants, and retain adapter state. */
+function sealPnpmParseContext(context: PnpmParseContext): Graph {
+  const { shape, builder, diagnostics, sidecar } = context
   for (const diagnostic of diagnostics) {
     builder.diagnostic(diagnostic)
   }
-
   try {
     const graph = builder.seal()
     rememberSidecar(graph, sidecar)
@@ -827,6 +888,19 @@ export function parseFamily(
     }
     throw error
   }
+}
+
+export function parseFamily(
+  input: string,
+  options: PnpmFamilyParseOptions,
+  profile: PnpmLayoutProfile,
+): Graph {
+  const context = createPnpmParseContext(input, options, profile)
+  synthesisePnpmImporterNodes(context)
+  addPnpmPackageNodes(context)
+  addPnpmImporterEdges(context)
+  addPnpmResolvedTreeEdges(context)
+  return sealPnpmParseContext(context)
 }
 
 function readonlyAttributionMap(
@@ -1015,22 +1089,49 @@ export function resolvePnpmWorkspacePeerProjection(
   })
 }
 
-export function stringifyFamily(
+interface PnpmStringifyContext {
+  readonly graph: Graph
+  readonly shape: PnpmLayoutShape
+  readonly sidecar: PnpmSidecar | undefined
+  readonly workspacePeerProjection: PnpmWorkspacePeerProjection
+  readonly options: PnpmFamilyStringifyOptions
+  readonly internal: PnpmFamilyStringifyInternalOptions
+  readonly emitDiagnostic: (diagnostic: Diagnostic) => void
+  readonly effectiveOverrides: Record<string, string>
+  readonly rootNode: Node | undefined
+  readonly workspaceNodes: Node[]
+  readonly resolvedNodes: Node[]
+  readonly out: YamlMap
+}
+
+function createPnpmStringifyContext(
   graph: Graph,
   profile: PnpmLayoutProfile,
-  options: PnpmFamilyStringifyOptions = {},
-  internal: PnpmFamilyStringifyInternalOptions = {},
-): string {
-  const shape = resolveProfile(profile)
+  options: PnpmFamilyStringifyOptions,
+  internal: PnpmFamilyStringifyInternalOptions,
+): PnpmStringifyContext {
   const sidecar = sidecarByGraph.get(graph)
   const workspacePeerProjection = internal.workspacePeerProjection
     ?? resolvePnpmWorkspacePeerProjection(graph, internal.workspacePeerEvidence)
-  const emitDiagnostic = (diagnostic: Diagnostic): void => {
-    options.onDiagnostic?.(diagnostic)
+  return {
+    graph,
+    shape: resolveProfile(profile),
+    sidecar,
+    workspacePeerProjection,
+    options,
+    internal,
+    emitDiagnostic: diagnostic => options.onDiagnostic?.(diagnostic),
+    effectiveOverrides: synthesiseOverridePatches(graph, sidecar),
+    rootNode: locatePnpmRootNode(graph, sidecar),
+    workspaceNodes: [],
+    resolvedNodes: [],
+    out: {},
   }
+}
 
-  // Surface any workspace-peer attribution gap as a typed diagnostic; the missing
-  // native locator is never fabricated.
+/** Surface native workspace-peer locators that cannot be reproduced safely. */
+function emitPnpmWorkspacePeerDiagnostics(context: PnpmStringifyContext): void {
+  const { shape, workspacePeerProjection, emitDiagnostic } = context
   for (const gap of workspacePeerProjection.gaps) {
     emitDiagnostic({
       code: 'PNPM_WORKSPACE_PEER_ATTR_MISSING',
@@ -1047,31 +1148,23 @@ export function stringifyFamily(
       message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: workspace-peer ${conflict.owner} →peer ${conflict.workspace} has conflicting native-locator attribution.`,
     })
   }
+}
 
-  // ADR-0014 §4.F2 — pnpm v6/v9 SUPPORT patch slots via the `overrides:`
-  // block carrier. `synthesiseOverridePatches` merges sidecar.overrides
-  // attribution (round-trip case) with per-Node.patch synthesised entries
-  // (cross-format conversion case where source-side path is recovered
-  // from `Node.resolution`). No drop diagnostic in this family.
-  const effectiveOverrides = synthesiseOverridePatches(graph, sidecar)
-
-  // ADR-0025 §4 — overlay caller-declared overrides onto the synthesised
-  // block. Caller wins per key, EXCEPT pre-existing `patch:` directives (F2),
-  // which survive: a forced override and a patch slot are orthogonal concerns,
-  // and silently dropping the patch would un-apply a fix on round-trip.
-  if (options.overrides !== undefined && options.overrides.length > 0) {
-    const projected = projectOverrides(options.overrides, 'pnpm', emitDiagnostic)
-    for (const [key, value] of Object.entries(projected)) {
-      const existing = effectiveOverrides[key]
-      if (typeof existing === 'string' && existing.startsWith('patch:')) continue
-      effectiveOverrides[key] = value as string
-    }
+/** Merge caller overrides without displacing an existing patch carrier. */
+function overlayPnpmStringifyOverrides(context: PnpmStringifyContext): void {
+  const { options, effectiveOverrides, emitDiagnostic } = context
+  if (options.overrides === undefined || options.overrides.length === 0) return
+  const projected = projectOverrides(options.overrides, 'pnpm', emitDiagnostic)
+  for (const [key, value] of Object.entries(projected)) {
+    const existing = effectiveOverrides[key]
+    if (typeof existing === 'string' && existing.startsWith('patch:')) continue
+    effectiveOverrides[key] = value as string
   }
+}
 
-  // --- Step 1: classify nodes — root + workspace members + resolved nodes. ---
-  const rootNode = locatePnpmRootNode(graph, sidecar)
-  const workspaceNodes: Node[] = []
-  const resolvedNodes: Node[] = []
+/** Partition graph nodes into workspace importers and resolved package instances. */
+function classifyPnpmStringifyNodes(context: PnpmStringifyContext): void {
+  const { graph, rootNode, workspaceNodes, resolvedNodes } = context
   for (const node of graph.nodes()) {
     if (node.id === rootNode?.id) continue
     if (node.workspacePath !== undefined && node.workspacePath !== '') {
@@ -1082,24 +1175,18 @@ export function stringifyFamily(
   }
   workspaceNodes.sort((a, b) => cmpStr(a.workspacePath ?? '', b.workspacePath ?? ''))
   resolvedNodes.sort((a, b) => cmpStr(a.id, b.id))
+}
 
-  // --- Step 2: build the YAML structure. ---
-  const out: YamlMap = {}
-  // Quoted scalar: codec emits `lockfileVersion: '9.0'` (vs bare `9.0` which
-  // YAML would parse as a number on some implementations).
+/** Emit the version handshake, settings, overrides, and frozen-compared metadata. */
+function writePnpmStringifyMetadata(context: PnpmStringifyContext): void {
+  const { shape, sidecar, options, effectiveOverrides, out } = context
   out.lockfileVersion = quoted(shape.lockfileVersion)
-
-  // settings — overlay caller's option over sidecar over defaults.
   const settings: PnpmSettings = {
     autoInstallPeers: true,
     excludeLinksFromLockfile: false,
     ...sidecar?.settings,
     ...options.settings,
   }
-  // Prefer the verbatim source block same-PM (preserves dedupePeers and any other
-  // key pnpm frozen-compares), overlaid by caller-supplied settings; reconstruct
-  // from the resolution-affecting subset cross-PM (no verbatim block — `settings`
-  // already folds in options.settings).
   out.settings = (
     sidecar?.settingsVerbatim !== undefined
       ? { ...sidecar.settingsVerbatim, ...options.settings }
@@ -1112,35 +1199,33 @@ export function stringifyFamily(
   if (Object.keys(effectiveOverrides).length > 0) {
     out.overrides = sortRecord(effectiveOverrides) as YamlMap
   }
-
-  // Replay the captured top-level `catalogs:` block verbatim (pnpm v9+); emit
-  // order (settings → catalogs → overrides) matches pnpm via TOP_LEVEL_ORDER_V9.
   if (sidecar?.catalogs !== undefined && Object.keys(sidecar.catalogs).length > 0) {
     out.catalogs = sidecar.catalogs
   }
-
-  // Replay the captured `packageExtensionsChecksum:` verbatim (pnpm v6+). pnpm
-  // frozen-compares this digest; a same-PM round-trip that drops it forces a
-  // recompute-mismatch and breaks --frozen-lockfile. Sidecar-only (derived from
-  // manifest config, not the graph) → naturally absent cross-PM.
   if (sidecar?.packageExtensionsChecksum !== undefined) {
     out.packageExtensionsChecksum = sidecar.packageExtensionsChecksum
   }
-
-  // Replay the `patchedDependencies:` block verbatim (pnpm v6+); same frozen-compare
-  // rationale as packageExtensionsChecksum. Sidecar-only → absent cross-PM.
   if (sidecar?.patchedDependencies !== undefined && Object.keys(sidecar.patchedDependencies).length > 0) {
     out.patchedDependencies = sidecar.patchedDependencies
   }
-
-  // Replay `pnpmfileChecksum:` verbatim (pnpm v9+); same frozen-compare rationale.
   if (sidecar?.pnpmfileChecksum !== undefined) {
     out.pnpmfileChecksum = sidecar.pnpmfileChecksum
   }
+}
 
-  // importers vs collapsed dependencies — v9 always emits importers; v6
-  // collapses single-importer to top-level `dependencies` (plus any
-  // workspace-member importers separately).
+/** Emit importer dependency blocks, including pnpm v6's single-root collapse. */
+function writePnpmStringifyImporters(context: PnpmStringifyContext): void {
+  const {
+    graph,
+    shape,
+    sidecar,
+    workspacePeerProjection,
+    options,
+    internal,
+    rootNode,
+    workspaceNodes,
+    out,
+  } = context
   const rootImporterEntry = buildImporterEntry(
     graph,
     sidecar,
@@ -1151,63 +1236,35 @@ export function stringifyFamily(
     internal.workspaceNames,
   )
 
-  if (shape.topLevelShape === 'dependencies-collapsed') {
-    const hasMultiImporters = workspaceNodes.length > 0
-    if (hasMultiImporters) {
-      // Multi-importer mode — emit importers block (with `.: {}` for root if
-      // the root carries no direct dep blocks; otherwise emit root deps under
-      // `.` too).
-      const importers: YamlMap = {}
-      if (Object.keys(rootImporterEntry).length === 0) {
-        importers['.'] = flowMap({}) // emit as `.: {}` flow-empty
-      } else {
-        importers['.'] = rootImporterEntry
-      }
-      for (const wsNode of workspaceNodes) {
-        const wsPath = wsNode.workspacePath ?? wsNode.name
-        importers[wsPath] = buildImporterEntry(
-          graph,
-          sidecar,
-          workspacePeerProjection,
-          wsNode,
-          wsPath,
-          options.overrides,
-          internal.workspaceNames,
-        )
-      }
-      out.importers = sortRecord(importers) as YamlMap
-    } else {
-      // Single-importer mode — top-level dep blocks (collapsed). Pull dep
-      // blocks out of the importer entry and elevate them.
-      for (const block of ['dependencies', 'devDependencies', 'optionalDependencies'] as const) {
-        const value = rootImporterEntry[block]
-        if (value !== undefined) out[block] = value
-      }
+  if (shape.topLevelShape === 'dependencies-collapsed' && workspaceNodes.length === 0) {
+    for (const block of ['dependencies', 'devDependencies', 'optionalDependencies'] as const) {
+      const value = rootImporterEntry[block]
+      if (value !== undefined) out[block] = value
     }
-  } else {
-    // v9 importers-always mode.
-    const importers: YamlMap = {}
-    if (Object.keys(rootImporterEntry).length === 0) {
-      importers['.'] = flowMap({})
-    } else {
-      importers['.'] = rootImporterEntry
-    }
-    for (const wsNode of workspaceNodes) {
-      const wsPath = wsNode.workspacePath ?? wsNode.name
-      importers[wsPath] = buildImporterEntry(
-        graph,
-        sidecar,
-        workspacePeerProjection,
-        wsNode,
-        wsPath,
-        options.overrides,
-        internal.workspaceNames,
-      )
-    }
-    out.importers = sortRecord(importers) as YamlMap
+    return
   }
 
-  // packages — keyed by bare or slash-leading `<id>` per shape.packagesKeyShape.
+  const importers: YamlMap = {
+    '.': Object.keys(rootImporterEntry).length === 0 ? flowMap({}) : rootImporterEntry,
+  }
+  for (const workspaceNode of workspaceNodes) {
+    const workspacePath = workspaceNode.workspacePath ?? workspaceNode.name
+    importers[workspacePath] = buildImporterEntry(
+      graph,
+      sidecar,
+      workspacePeerProjection,
+      workspaceNode,
+      workspacePath,
+      options.overrides,
+      internal.workspaceNames,
+    )
+  }
+  out.importers = sortRecord(importers) as YamlMap
+}
+
+/** Emit package metadata under bare snapshot keys (v9) or peer-qualified keys (v6). */
+function writePnpmStringifyPackages(context: PnpmStringifyContext): void {
+  const { graph, shape, sidecar, workspacePeerProjection, resolvedNodes, out } = context
   const packagesUsed = new Set<string>()
   for (const node of resolvedNodes) {
     packagesUsed.add(packagesKeyForNode(node, shape, workspacePeerProjection))
@@ -1215,45 +1272,61 @@ export function stringifyFamily(
 
   const packages: YamlMap = {}
   if (shape.peerContextLocation === 'snapshots-keys') {
-    // v9: collapse peer-virt siblings onto bare key.
     const bareToNodes = new Map<string, Node[]>()
     for (const node of resolvedNodes) {
       const bareKey = `${node.name}@${node.version}`
-      const arr = bareToNodes.get(bareKey) ?? []
-      arr.push(node)
-      bareToNodes.set(bareKey, arr)
+      const siblings = bareToNodes.get(bareKey) ?? []
+      siblings.push(node)
+      bareToNodes.set(bareKey, siblings)
     }
     for (const bareKey of Array.from(bareToNodes.keys()).sort(cmpStr)) {
       const siblings = bareToNodes.get(bareKey)!
       if (!packagesUsed.has(bareKey)) continue
-      const first = siblings[0]!
-      packages[bareKey] = buildPackageEntry(graph, sidecar, workspacePeerProjection, first, shape)
+      packages[bareKey] = buildPackageEntry(
+        graph,
+        sidecar,
+        workspacePeerProjection,
+        siblings[0]!,
+        shape,
+      )
     }
   } else {
-    // v6: one packages entry per peer-virt instance, key includes peer-context.
-    const sortedNodes = resolvedNodes.slice().sort((a, b) => cmpStr(packagesKeyForNode(a, shape, workspacePeerProjection), packagesKeyForNode(b, shape, workspacePeerProjection)))
+    const sortedNodes = resolvedNodes.slice().sort((left, right) => cmpStr(
+      packagesKeyForNode(left, shape, workspacePeerProjection),
+      packagesKeyForNode(right, shape, workspacePeerProjection),
+    ))
     for (const node of sortedNodes) {
       const key = packagesKeyForNode(node, shape, workspacePeerProjection)
       packages[key] = buildPackageEntry(graph, sidecar, workspacePeerProjection, node, shape)
     }
   }
   out.packages = packages
+}
 
-  // snapshots — emitted only on v9.
-  if (shape.hasSnapshots) {
-    const snapshots: YamlMap = {}
-    for (const node of resolvedNodes) {
-      const snapshotKey = nodeIdToSnapshotKey(node, workspacePeerProjection)
-      snapshots[snapshotKey] = buildSnapshotEntry(graph, sidecar, workspacePeerProjection, node)
-    }
-    out.snapshots = sortRecord(snapshots) as YamlMap
+/** Emit resolved dependency adjacency in the separate pnpm v9 snapshots section. */
+function writePnpmStringifySnapshots(context: PnpmStringifyContext): void {
+  const { graph, shape, sidecar, workspacePeerProjection, resolvedNodes, out } = context
+  if (!shape.hasSnapshots) return
+  const snapshots: YamlMap = {}
+  for (const node of resolvedNodes) {
+    const snapshotKey = nodeIdToSnapshotKey(node, workspacePeerProjection)
+    snapshots[snapshotKey] = buildSnapshotEntry(graph, sidecar, workspacePeerProjection, node)
   }
+  out.snapshots = sortRecord(snapshots) as YamlMap
+}
 
-  // ADR-0028 INV-RESOLVE — verify the just-built encoding BEFORE serialising:
-  // every declared dep/dev/optional edge must resolve through the emitted
-  // adjacency back to its target, via the SAME oracle parse uses. A miss is a
-  // generator defect surfaced as a soft `LAYOUT_RESOLVE_VIOLATION` (error) — no
-  // throw, so stringify still produces output (lean-safety, npm INV-FINDUP §).
+/** Verify emitted adjacency, serialise deterministic YAML, and apply line endings. */
+function emitPnpmStringifyResult(context: PnpmStringifyContext): string {
+  const {
+    graph,
+    shape,
+    workspacePeerProjection,
+    options,
+    emitDiagnostic,
+    rootNode,
+    resolvedNodes,
+    out,
+  } = context
   assertResolveValid(
     graph,
     shape,
@@ -1263,12 +1336,28 @@ export function stringifyFamily(
     emitDiagnostic,
     workspacePeerProjection,
   )
-
   const text = emitYaml(out, {
     topLevelOrder: shape.topLevelOrder,
     topLevelSectionKeys: shape.topLevelSectionKeys,
   })
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
+}
+
+export function stringifyFamily(
+  graph: Graph,
+  profile: PnpmLayoutProfile,
+  options: PnpmFamilyStringifyOptions = {},
+  internal: PnpmFamilyStringifyInternalOptions = {},
+): string {
+  const context = createPnpmStringifyContext(graph, profile, options, internal)
+  emitPnpmWorkspacePeerDiagnostics(context)
+  overlayPnpmStringifyOverrides(context)
+  classifyPnpmStringifyNodes(context)
+  writePnpmStringifyMetadata(context)
+  writePnpmStringifyImporters(context)
+  writePnpmStringifyPackages(context)
+  writePnpmStringifySnapshots(context)
+  return emitPnpmStringifyResult(context)
 }
 
 // ADR-0028 INV-RESOLVE (pnpm v9/v6) — the resolution-graph verifier.
@@ -1405,89 +1494,125 @@ function assertResolveValid(
   }
 }
 
+interface PnpmEnrichContext {
+  readonly graph: Graph
+  readonly shape: PnpmLayoutShape
+  readonly sidecar: PnpmSidecar | undefined
+  readonly diagnostics: Diagnostic[]
+}
+
+interface PnpmPeerDeclaration {
+  readonly node: Node
+  readonly name: string
+  readonly range: string
+}
+
+/** Diagnose declared peers that are absent from the on-disk peer context. */
+function collectPnpmPeerFallbackDiagnostics(context: PnpmEnrichContext): void {
+  const { graph, sidecar } = context
+  for (const node of graph.nodes()) {
+    const rawPeers = sidecar?.nodes.get(node.id)?.peerDependencies
+    if (rawPeers === undefined) continue
+    for (const peerName of Object.keys(rawPeers).sort(cmpStr)) {
+      const peerRange = rawPeers[peerName]
+      if (peerRange === undefined) continue
+      const alreadyBound = node.peerContext
+        .some(peer => stripPeerContextFromNodeId(peer).startsWith(`${peerName}@`))
+      if (alreadyBound) continue
+      diagnosePnpmPeerFallback(context, { node, name: peerName, range: peerRange })
+    }
+  }
+}
+
+function diagnosePnpmPeerFallback(
+  context: PnpmEnrichContext,
+  declaration: PnpmPeerDeclaration,
+): void {
+  const { graph, shape, diagnostics } = context
+  const { node, name, range } = declaration
+  const candidates = derivePeerCandidates(graph, name, range)
+  if (candidates.length === 1) {
+    diagnostics.push({
+      code: `${shape.diagnosticPrefix}_PEER_BOUND`,
+      severity: 'info',
+      subject: node.id,
+      message: `peer ${JSON.stringify(name)} range ${JSON.stringify(range)} → ${candidates[0]} (1-candidate fallback; on-disk peer-context absent)`,
+    })
+  } else if (candidates.length === 0) {
+    diagnostics.push({
+      code: `${shape.diagnosticPrefix}_PEER_UNSATISFIED`,
+      severity: 'warning',
+      subject: node.id,
+      message: `peer ${JSON.stringify(name)} range ${JSON.stringify(range)} matches no installed version`,
+    })
+  } else {
+    diagnostics.push({
+      code: `${shape.diagnosticPrefix}_PEER_AMBIGUOUS`,
+      severity: 'warning',
+      subject: node.id,
+      message: `peer ${JSON.stringify(name)} range ${JSON.stringify(range)} matches multiple candidates: ${candidates.join(', ')}`,
+    })
+  }
+}
+
+/** Report when workspace hints cannot be concretised without manifest evidence. */
+function diagnoseMissingPnpmManifests(context: PnpmEnrichContext): void {
+  const { graph, shape, diagnostics } = context
+  const hasWorkspaceHint = Array.from(graph.nodes())
+    .some(node => node.workspacePath !== undefined && node.workspacePath !== '')
+  if (!hasWorkspaceHint) return
+  diagnostics.push({
+    code: `${shape.diagnosticPrefix}_NO_MANIFESTS`,
+    severity: 'warning',
+    message: `pnpm-v${shape.lockfileVersion.split('.')[0]} workspace concretisation requires manifests; leaving graph unclassified`,
+  })
+}
+
+/** Apply the manifest-derived root and workspace edge plan as one graph mutation. */
+function applyPnpmManifestEnrich(
+  context: PnpmEnrichContext,
+  manifests: Record<string, PnpmManifest>,
+): Graph {
+  const { graph, sidecar } = context
+  const plan = planManifestEnrich(graph, sidecar, manifests)
+  if (plan.addRootEdges.length === 0 && plan.markWorkspaceEdges.length === 0 && plan.removeRootEdges.length === 0) {
+    return graph
+  }
+
+  const result = graph.mutate(mutation => {
+    for (const edge of plan.removeRootEdges) {
+      mutation.removeEdge(edge.src, edge.dst, edge.kind)
+    }
+    for (const edge of plan.addRootEdges) {
+      mutation.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+    for (const edge of plan.markWorkspaceEdges) {
+      mutation.removeEdge(edge.src, edge.dst, edge.kind)
+      mutation.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+  })
+  if (sidecar !== undefined) rememberSidecar(result.graph, sidecar)
+  return result.graph
+}
+
 export function enrichFamily(
   graph: Graph,
   profile: PnpmLayoutProfile,
   options: PnpmFamilyEnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  const shape = resolveProfile(profile)
-  const sidecar = sidecarByGraph.get(graph)
-  const diagnostics: Diagnostic[] = []
-
-  // §C — peer-virt three-branch derivation per ADR-0006 reference impl.
-  // Dominant path: peer-context already on disk (read at parse). Fallback
-  // runs when on-disk peer-context is incomplete.
-  for (const node of graph.nodes()) {
-    const nodeSc = sidecar?.nodes.get(node.id)
-    const rawPeers = nodeSc?.peerDependencies
-    if (rawPeers === undefined) continue
-    const declaredPeers = Object.keys(rawPeers).sort(cmpStr)
-    for (const peerName of declaredPeers) {
-      const peerRange = rawPeers[peerName]
-      if (peerRange === undefined) continue
-      const alreadyBound = node.peerContext.some(p => stripPeerContextFromNodeId(p).startsWith(`${peerName}@`))
-      if (alreadyBound) continue
-
-      const candidates = derivePeerCandidates(graph, peerName, peerRange)
-      if (candidates.length === 1) {
-        diagnostics.push({
-          code: `${shape.diagnosticPrefix}_PEER_BOUND`,
-          severity: 'info',
-          subject: node.id,
-          message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} → ${candidates[0]} (1-candidate fallback; on-disk peer-context absent)`,
-        })
-      } else if (candidates.length === 0) {
-        diagnostics.push({
-          code: `${shape.diagnosticPrefix}_PEER_UNSATISFIED`,
-          severity: 'warning',
-          subject: node.id,
-          message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches no installed version`,
-        })
-      } else {
-        diagnostics.push({
-          code: `${shape.diagnosticPrefix}_PEER_AMBIGUOUS`,
-          severity: 'warning',
-          subject: node.id,
-          message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches multiple candidates: ${candidates.join(', ')}`,
-        })
-      }
-    }
+  const context: PnpmEnrichContext = {
+    graph,
+    shape: resolveProfile(profile),
+    sidecar: sidecarByGraph.get(graph),
+    diagnostics: [],
   }
-
-  // Workspace concretisation.
+  collectPnpmPeerFallbackDiagnostics(context)
   if (options.manifests === undefined) {
-    const hasWorkspaceHint = Array.from(graph.nodes())
-      .some(n => n.workspacePath !== undefined && n.workspacePath !== '')
-    if (hasWorkspaceHint) {
-      diagnostics.push({
-        code: `${shape.diagnosticPrefix}_NO_MANIFESTS`,
-        severity: 'warning',
-        message: `pnpm-v${shape.lockfileVersion.split('.')[0]} workspace concretisation requires manifests; leaving graph unclassified`,
-      })
-    }
-    return { graph, diagnostics }
+    diagnoseMissingPnpmManifests(context)
+    return { graph, diagnostics: context.diagnostics }
   }
-
-  const plan = planManifestEnrich(graph, sidecar, options.manifests)
-  if (plan.addRootEdges.length === 0 && plan.markWorkspaceEdges.length === 0 && plan.removeRootEdges.length === 0) {
-    return { graph, diagnostics }
-  }
-
-  const result = graph.mutate(m => {
-    for (const edge of plan.removeRootEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-    }
-    for (const edge of plan.addRootEdges) {
-      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
-    }
-    for (const edge of plan.markWorkspaceEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
-    }
-  })
-
-  if (sidecar !== undefined) rememberSidecar(result.graph, sidecar)
-  return { graph: result.graph, diagnostics }
+  const enrichedGraph = applyPnpmManifestEnrich(context, options.manifests)
+  return { graph: enrichedGraph, diagnostics: context.diagnostics }
 }
 
 export function optimizeFamily(
