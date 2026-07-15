@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 18   # backstop — a hung job can't burn more than this
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -45,7 +45,7 @@ jobs:
       # NO secrets. It only *generates* the bundle and the coverage report and
       # caches them as artifacts; publishing them (npm + Qlty) happens downstream
       # in `release` — the only phase with secret access.
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: build
           path: |
@@ -55,7 +55,7 @@ jobs:
 
       - name: Cache coverage report for downstream publish
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: target/coverage
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -98,7 +98,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -157,7 +157,7 @@ jobs:
       matrix:
         node: ['14', '26']
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -170,7 +170,7 @@ jobs:
       - if: matrix.node == '14'
         run: npm i -g npm@8
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: build
 
@@ -195,7 +195,7 @@ jobs:
       id-token:  write   # OIDC to the npm registry — passwordless publish + provenance
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -206,11 +206,11 @@ jobs:
           node-version: 26
           # no `cache: npm` — release installs nothing (see below)
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: build
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: coverage
           path: target/coverage
