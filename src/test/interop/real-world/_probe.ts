@@ -210,8 +210,12 @@ function summarizeDiagnostics(diagnostics: readonly Diagnostic[]): DiagnosticSum
 // adapter format — a pure, ~600-case CPU matrix. vitest parallelizes by FILE
 // (one file = one worker = one core), so the matrix is sharded across sibling
 // `.test.ts` files by fixture index; the union of shards is the whole corpus,
-// exactly once. Keep PROBE_SHARD_COUNT equal to the number of shard files.
-export const PROBE_SHARD_COUNT = 4
+// exactly once. Kept at 2, NOT more: CI runners are ~2-core, so sharding wider
+// than the core count over-subscribes the CPU — each conversion then gets a
+// fraction of a core and slow real-world locks blow the per-test timeout. Two
+// shards match a 2-core runner (one worker per core) while still ~halving local
+// wall time. Keep PROBE_SHARD_COUNT equal to the number of shard files.
+export const PROBE_SHARD_COUNT = 2
 
 export function defineProbeShard(shardIndex: number): void {
   const all = loadRealWorldFixtures()
@@ -251,7 +255,7 @@ export function defineProbeShard(shardIndex: number): void {
                 expect(result.error.code.length).toBeGreaterThan(0)
               }
             }
-          }, 30_000)
+          }, 60_000)
         }
       })
     }
