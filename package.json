@@ -83,7 +83,7 @@
     "test:size": "size-limit",
     "measure": "npm run build:dist && node scripts/measure.mjs",
     "measure:verify": "npm run build:dist && node scripts/measure.mjs --deterministic-only --verify-determinism",
-    "prepublishOnly": "npm run build:dist"
+    "_prepublishOnly": "npm run build:dist"
   },
   "dependencies": {
     "node-fetch-native": "^1.6.7",
