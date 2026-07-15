@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -202,5 +203,72 @@ function summarizeDiagnostics(diagnostics: readonly Diagnostic[]): DiagnosticSum
     interop,
     adapter: diagnostics.length - recipe - interop,
     byCode,
+  }
+}
+
+// The cross-family probe converts every real-world fixture to every other
+// adapter format — a pure, ~600-case CPU matrix. vitest parallelizes by FILE
+// (one file = one worker = one core), so the matrix is sharded across sibling
+// `.test.ts` files by fixture index; the union of shards is the whole corpus,
+// exactly once. Keep PROBE_SHARD_COUNT equal to the number of shard files.
+export const PROBE_SHARD_COUNT = 4
+
+export function defineProbeShard(shardIndex: number): void {
+  const all = loadRealWorldFixtures()
+  const fixtures = all.filter((_, index) => index % PROBE_SHARD_COUNT === shardIndex)
+
+  describe(`interop: real-world cross-family probe (shard ${shardIndex + 1}/${PROBE_SHARD_COUNT})`, () => {
+    // The corpus-discovery guard is orthogonal to sharding; assert it once.
+    if (shardIndex === 0) {
+      it('discovers committed real-world fixtures', () => {
+        expect(all.length).toBeGreaterThan(0)
+      })
+    }
+
+    for (const fixture of fixtures) {
+      describe(`${fixture.repoHandle}/${fixture.fileName} (${fixture.sourceFormat})`, () => {
+        const targets = ALL_FORMATS.filter(format => format !== fixture.sourceFormat)
+
+        it('covers every other adapter format id', () => {
+          expect(targets).toHaveLength(ALL_FORMATS.length - 1)
+        })
+
+        for (const target of targets) {
+          it(`probes ${fixture.sourceFormat} -> ${target}`, () => {
+            const result = probeConversion(fixture, target)
+
+            if (result.outcome === 'success') {
+              assertDiagnosticArray(result.diagnostics)
+              expect(result.summary.total).toBe(result.diagnostics.length)
+              expect(result.summary.recipe).toBeGreaterThanOrEqual(0)
+              expect(result.summary.interop).toBeGreaterThanOrEqual(0)
+              expect(result.summary.adapter).toBeGreaterThanOrEqual(0)
+            } else {
+              expect(result.phase).toMatch(/convert|target-check|target-parse/)
+              expect(result.error.name.length).toBeGreaterThan(0)
+              expect(result.error.message.length).toBeGreaterThan(0)
+              if (result.error.code !== undefined) {
+                expect(result.error.code.length).toBeGreaterThan(0)
+              }
+            }
+          }, 30_000)
+        }
+      })
+    }
+  })
+}
+
+function assertDiagnosticArray(diagnostics: readonly Diagnostic[]): void {
+  expect(Array.isArray(diagnostics)).toBe(true)
+
+  for (const diagnostic of diagnostics) {
+    expect(typeof diagnostic.code).toBe('string')
+    expect(diagnostic.code.length).toBeGreaterThan(0)
+    expect(['info', 'warning', 'error']).toContain(diagnostic.severity)
+    expect(typeof diagnostic.message).toBe('string')
+    expect(diagnostic.message.length).toBeGreaterThan(0)
+    if (diagnostic.subject !== undefined) {
+      expect(typeof diagnostic.subject === 'string' || typeof diagnostic.subject === 'object').toBe(true)
+    }
   }
 }
