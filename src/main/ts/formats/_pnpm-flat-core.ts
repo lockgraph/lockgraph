@@ -360,6 +360,10 @@ export interface PnpmSidecar {
 
 const sidecarByGraph = new WeakMap<Graph, PnpmSidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 function rememberSidecar(graph: Graph, sidecar: PnpmSidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }

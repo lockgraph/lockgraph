@@ -5,9 +5,12 @@ import type {
   StringifyOptions,
 } from './format-contract.ts'
 import {
+  hasAdapterState as hasPnpmFlatAdapterState,
   stringifyFamily as stringifyPnpmFamily,
   type PnpmWorkspacePeerProjection,
 } from '../formats/_pnpm-flat-core.ts'
+import { hasAdapterState as hasNpmFlatAdapterState } from '../formats/_npm-core.ts'
+import { hasAdapterState as hasYarnBerryAdapterState } from '../formats/_yarn-berry-core.ts'
 
 import * as bunText from '../formats/bun-text.ts'
 import * as npm1 from '../formats/npm-1.ts'
@@ -201,4 +204,21 @@ export function stringifyFormat(
   context: StringifyDispatchContext = {},
 ): string {
   return FORMAT_REGISTRY[format].stringify(graph, context)
+}
+
+/** Whether the graph identity still carries its source adapter's native replay state. */
+export function hasFormatAdapterState(format: FormatId, graph: Graph): boolean {
+  if (format.startsWith('yarn-berry-')) return hasYarnBerryAdapterState(graph)
+  switch (format) {
+    case 'yarn-classic': return yarnClassic.hasAdapterState(graph)
+    case 'npm-1': return npm1.hasAdapterState(graph)
+    case 'npm-2':
+    case 'npm-3': return hasNpmFlatAdapterState(graph)
+    case 'pnpm-v5': return pnpmV5.hasAdapterState(graph)
+    case 'pnpm-v6':
+    case 'pnpm-v9': return hasPnpmFlatAdapterState(graph)
+    case 'bun-text': return bunText.hasAdapterState(graph)
+    case 'lockgraph': return false
+  }
+  return false
 }

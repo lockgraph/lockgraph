@@ -2,6 +2,7 @@
 // Public surface follows spec/bindings/ts.md#graph-types.
 
 import { LockfileError } from './api/errors.ts'
+import { inheritMutationLineage } from './api/mutation-lineage.ts'
 import type { Integrity } from './recipe/integrity.ts'
 import type { ResolutionCanonical } from './recipe/resolution.ts'
 import type { WorkspaceRange } from './recipe/workspace.ts'
@@ -1124,8 +1125,10 @@ class GraphImpl implements Graph {
     validate(next)
     reindex(next)
 
+    const nextGraph = new GraphImpl(next)
+    inheritMutationLineage(this, nextGraph)
     return {
-      graph:      new GraphImpl(next),
+      graph:      nextGraph,
       applied,
       unresolved: next.diagnostics.filter(d => d.severity === 'warning'),
     }

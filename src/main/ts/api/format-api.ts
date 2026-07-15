@@ -13,10 +13,15 @@ import type {
 import {
   checkFormat,
   detectFormat,
+  hasFormatAdapterState,
   parseFormat,
   stringifyFormat,
   type StringifyDispatchContext,
 } from './format-registry.ts'
+import {
+  adapterMutationLineageOf,
+  attachParsedMutationLineage,
+} from './mutation-lineage.ts'
 import { getFlatSidecar } from '../formats/_npm-core.ts'
 import { getPnpmOverridesCanonical } from '../formats/_pnpm-flat-core.ts'
 import * as bunText from '../formats/bun-text.ts'
@@ -86,6 +91,20 @@ export function stringifyProjected(
   options: StringifyDispatchOptions = {},
 ): ProjectionResult {
   const emittedDiagnostics: Diagnostic[] = []
+  const lineage = adapterMutationLineageOf(graph)
+  if (lineage?.mutated === true
+    && lineage.adapterStateRequired
+    && !hasFormatAdapterState(lineage.sourceFormat, graph)) {
+    emittedDiagnostics.push(assessedDiagnostic(
+      'COMPLETENESS_ADAPTER_STATE_LOST',
+      `public mutation detached load-bearing ${lineage.sourceFormat} adapter state; strict output cannot prove frozen fidelity`,
+      {
+        feature: 'adapter-state',
+        sourceFormat: lineage.sourceFormat,
+        target: format,
+      },
+    ))
+  }
   if (options.overrides !== undefined
     && options.overrides.length > 0
     && format.startsWith('yarn')) {
@@ -166,6 +185,7 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
     options.manifests,
     observedPolicyCarrier(format, graph),
   )
+  attachParsedMutationLineage(graph, format, hasFormatAdapterState(format, graph))
   return graph
 }
 

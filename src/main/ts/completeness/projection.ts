@@ -326,6 +326,7 @@ function diagnosticLossClass(
     return 'enrichable'
   }
   if (code === 'RECIPE_FEATURE_DROPPED'
+    || code === 'COMPLETENESS_ADAPTER_STATE_LOST'
     || code === 'RECIPE_WORKSPACE_RESOLVED'
     || code === 'RECIPE_WORKSPACE_COLLAPSED'
     || code === 'OVERRIDE_PARENT_REF_DROPPED'

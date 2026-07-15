@@ -32,6 +32,7 @@ import {
   modifySentinelRefused,
   type ModifyDiagnostic,
 } from './diagnostics.ts'
+import { pruneOrphanTarballs } from './tarball-gc.ts'
 
 export interface ReplaceVersionSelector {
   name:       string
@@ -151,6 +152,7 @@ export async function replaceVersion(
       currentGraph = currentGraph.mutate(m => {
         m.setTarball({ name: target.name, version: target.version, patch: node.patch }, payload)
       }).graph
+      currentGraph = pruneOrphanTarballs(currentGraph, [node])
       // The rebound node still carries the OLD version's outgoing deps. Clear
       // the dep/optional out-edges so completeTransitives rewires them from the
       // NEW manifest — else the stale deps linger and MERGE with the new set,
@@ -203,6 +205,7 @@ export async function replaceVersion(
       m.diagnostic(mergeReplacedDiag)
     })
     currentGraph = mergeResult.graph
+    currentGraph = pruneOrphanTarballs(currentGraph, [node])
     replaced.push({ from: node.id, to: targetId })
     removed.push(node.id)
     recentlyOrphaned.add(node.id)

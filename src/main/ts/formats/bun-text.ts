@@ -153,6 +153,10 @@ interface BunTextSidecar {
 
 const sidecarByGraph = new WeakMap<Graph, BunTextSidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 function rememberSidecar(graph: Graph, sidecar: BunTextSidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }

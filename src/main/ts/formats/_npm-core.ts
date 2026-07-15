@@ -111,6 +111,10 @@ export {
 
 const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 // === checkFamily ===========================================================
 
 export function checkFamily(input: string, config: NpmFamilyConfig): boolean {

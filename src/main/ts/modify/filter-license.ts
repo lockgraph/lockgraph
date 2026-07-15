@@ -23,6 +23,7 @@ import {
   modifyLicenseFlagged,
   modifyNodeRemoved,
 } from './diagnostics.ts'
+import { pruneOrphanTarballs } from './tarball-gc.ts'
 
 export interface FilterLicenseOptions {
   /** Whitelist of license identifiers; missing or none-of permitted licenses → flagged. */
@@ -178,6 +179,7 @@ function gcOrphans(
     m.removeNode(nodeId)
     m.diagnostic(removedDiag)
   }).graph
+  graph = pruneOrphanTarballs(graph, [node])
   removed.push(nodeId)
   recentlyOrphaned.add(nodeId)
   emit(removedDiag)

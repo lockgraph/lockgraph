@@ -274,6 +274,10 @@ interface PendingDiagnostic extends Omit<Diagnostic, 'subject'> {
 
 const sidecarByGraph = new WeakMap<Graph, YarnBerryFamilySidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 export function checkFamily(input: string, config: YarnBerryFamilyConfig): boolean {
   const head = input.slice(0, 4096)
   return new RegExp(

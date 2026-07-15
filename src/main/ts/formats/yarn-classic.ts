@@ -156,6 +156,10 @@ export interface YarnClassicOptimizeOptions {}
 
 const sidecarByGraph = new WeakMap<Graph, YarnClassicSidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 // Mined from legacy/main/ts/formats/yarn-classic.ts:30, but tightened to the
 // exact §A header shape rather than a loose substring probe.
 function stripBom(input: string): string {

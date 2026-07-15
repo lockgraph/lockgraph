@@ -201,6 +201,10 @@ interface PnpmV5Sidecar {
 
 const sidecarByGraph = new WeakMap<Graph, PnpmV5Sidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 function rememberSidecar(graph: Graph, sidecar: PnpmV5Sidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }

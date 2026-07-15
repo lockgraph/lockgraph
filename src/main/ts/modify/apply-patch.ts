@@ -26,6 +26,7 @@ import {
   modifyPatchApplied,
   modifySentinelRefused,
 } from './diagnostics.ts'
+import { pruneOrphanTarballs } from './tarball-gc.ts'
 
 export interface ApplyPatchSpec {
   name:    string
@@ -128,6 +129,7 @@ export async function applyPatch(
       m.setTarball({ name: node.name, version: node.version, patch: hash }, payload)
     })
     currentGraph = tarballResult.graph
+    currentGraph = pruneOrphanTarballs(currentGraph, [node])
 
     // newId !== node.id here — the equal case already `continue`d above.
     patched.push({ from: node.id, to: newId })

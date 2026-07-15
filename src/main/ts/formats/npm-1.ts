@@ -124,6 +124,10 @@ interface Npm1Lockfile {
 
 const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
 
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
 function rememberSidecar(graph: Graph, sidecar: NpmSidecar): void {
   sidecarByGraph.set(graph, sidecar)
 }
