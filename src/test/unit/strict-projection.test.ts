@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { LockfileError, stringify, type FormatId } from '../../main/ts/index.ts'
-import { newBuilder, type Graph } from '../../main/ts/graph.ts'
+import {
+  LockfileError,
+  stringify,
+  type FormatId,
+} from '../../main/ts/index.ts'
+import { stringifyProjected } from '../../main/ts/api/format-api.ts'
+import { isStructuralExpectedDrop } from '../../main/ts/completeness/projection.ts'
+import { newBuilder, type Graph, type TarballPayload } from '../../main/ts/graph.ts'
 import * as yarnBerryV9 from '../../main/ts/formats/yarn-berry-v9.ts'
 import type { Integrity } from '../../main/ts/recipe/integrity.ts'
 
@@ -29,6 +35,32 @@ function metadataGraph(integrity: Integrity = sriIntegrity): Graph {
     peerDependencies: { peer: '^1.0.0' },
     peerDependenciesMeta: { peer: { optional: true } },
     resolution: { type: 'tarball', url: 'https://registry.example/dep/-/dep-1.0.0.tgz' },
+  })
+  return builder.seal()
+}
+
+function singleMetadataGraph(
+  metadata: Partial<TarballPayload>,
+  integrity: Integrity = sriIntegrity,
+  targetShape?: 'yarn-classic' | 'yarn-berry-v8',
+): Graph {
+  const builder = newBuilder()
+  builder.addNode({
+    id: 'project@0.0.0',
+    name: 'project',
+    version: '0.0.0',
+    peerContext: [],
+    ...(targetShape === 'yarn-classic' ? {} : { workspacePath: '' }),
+  })
+  builder.addNode({ id: 'dep@1.0.0', name: 'dep', version: '1.0.0', peerContext: [] })
+  builder.addEdge('project@0.0.0', 'dep@1.0.0', 'dep', {
+    range: targetShape === 'yarn-berry-v8' ? 'npm:1.0.0' : '1.0.0',
+  })
+  builder.setTarball({ name: 'dep', version: '1.0.0' }, {
+    integrity: { hashes: [...integrity.hashes] },
+    ...(targetShape === 'yarn-berry-v8' ? { berryChecksumCacheKey: '10c0' } : {}),
+    resolution: { type: 'tarball', url: 'https://registry.npmjs.org/dep/-/dep-1.0.0.tgz' },
+    ...metadata,
   })
   return builder.seal()
 }
@@ -71,6 +103,84 @@ function caught(format: FormatId, graph: Graph): LockfileError {
 }
 
 describe('strict projection gate', () => {
+  it.each([
+    ['yarn-classic', sriIntegrity],
+    ['yarn-berry-v8', berryIntegrity],
+  ] as const)('%s accepts an allowlisted engines drop and reports it', (format, integrity) => {
+    const graph = singleMetadataGraph({ engines: { node: '>=18' } }, integrity, format)
+    const projected = stringifyProjected(format, graph)
+
+    expect(projected.losses).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        class: 'structural-expected',
+        feature: 'metadata:engines',
+        target: format,
+      }),
+    ]))
+    expect(() => stringify(format, graph)).not.toThrow()
+    expect(projected.diagnostics.some(diagnostic =>
+      diagnostic.code === 'PROJECTION_LOSS'
+        && diagnostic.data?.class === 'structural-expected')).toBe(true)
+  })
+
+  it('keeps the structural allowlist pair-specific', () => {
+    const graph = singleMetadataGraph({
+      engines: { node: '>=18' },
+      deprecated: 'use dep-next',
+      bin: { dep: 'cli.js' },
+    }, sriIntegrity, 'yarn-classic')
+    const classic = stringifyProjected('yarn-classic', graph)
+    expect(classic.losses.map(loss => [loss.class, loss.feature])).toEqual([
+      ['structural-expected', 'metadata:bin'],
+      ['structural-expected', 'metadata:deprecated'],
+      ['structural-expected', 'metadata:engines'],
+    ])
+
+    const pnpm = caught('pnpm-v9', graph)
+    expect(pnpm.losses?.some(loss =>
+      loss.class === 'inherent-meaningful' && loss.feature === 'metadata:bin')).toBe(true)
+
+    for (const field of [
+      'cpu',
+      'os',
+      'libc',
+      'hasInstallScript',
+      'funding',
+      'license',
+      'bundledDependencies',
+    ] as const) {
+      expect(isStructuralExpectedDrop(field, 'yarn-classic')).toBe(false)
+    }
+  })
+
+  it('fails closed for minted bun platform metadata', () => {
+    const error = caught('bun-text', singleMetadataGraph({ os: ['linux'], cpu: ['x64'] }))
+    expect(error.code).toBe('IRREDUCIBLE_LOSS')
+    expect(error.losses?.some(loss =>
+      loss.class === 'inherent-meaningful' && loss.feature === 'metadata:platform')).toBe(true)
+  })
+
+  it('fails closed for minted pnpm bin metadata', () => {
+    const error = caught('pnpm-v9', singleMetadataGraph({ bin: { dep: 'cli.js' } }))
+    expect(error.code).toBe('IRREDUCIBLE_LOSS')
+    expect(error.losses?.some(loss =>
+      loss.class === 'inherent-meaningful' && loss.feature === 'metadata:bin')).toBe(true)
+  })
+
+  it('still rejects a target-stored field when emission loses its canonical carrier', () => {
+    const error = caught(
+      'yarn-berry-v8',
+      singleMetadataGraph(
+        { os: ['linux'], cpu: ['x64'] },
+        berryIntegrity,
+        'yarn-berry-v8',
+      ),
+    )
+    expect(error.code).toBe('IRREDUCIBLE_LOSS')
+    expect(error.losses?.some(loss =>
+      loss.feature === 'completeness-output-graph-mismatch')).toBe(true)
+  })
+
   it.each([
     'npm-1',
     'pnpm-v5',

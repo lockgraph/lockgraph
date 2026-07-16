@@ -30,6 +30,46 @@ const metadataFeatureFields: Readonly<Record<Extract<GraphFeature, `metadata:${s
 
 const metadataFeatures = new Set<GraphFeature>(Object.keys(metadataFeatureFields) as GraphFeature[])
 
+const yarnMetadataDropTargets = Object.freeze(new Set<FormatId>([
+  'yarn-classic',
+  'yarn-berry-v4',
+  'yarn-berry-v5',
+  'yarn-berry-v6',
+  'yarn-berry-v7',
+  'yarn-berry-v8',
+  'yarn-berry-v9',
+  'yarn-berry-v10',
+]))
+
+/** Frozen-clean metadata drops verified per (field, target) pair. This is an
+ * explicit allowlist, not the complement of the target capability table. */
+const structuralExpectedMetadataDrops: ReadonlyMap<PackageMetadataField, ReadonlySet<FormatId>> =
+  new Map([
+    ['engines', yarnMetadataDropTargets],
+    ['deprecated', yarnMetadataDropTargets],
+    ['bin', Object.freeze(new Set<FormatId>(['yarn-classic']))],
+  ])
+
+export function isStructuralExpectedDrop(
+  field: PackageMetadataField,
+  target: FormatId,
+): boolean {
+  return structuralExpectedMetadataDrops.get(field)?.has(target) === true
+}
+
+export function projectedStructuralMetadataDrops(
+  graph: Graph,
+  target: FormatId,
+): ReadonlyMap<string, ReadonlySet<PackageMetadataField>> | undefined {
+  const projected = new Map<string, ReadonlySet<PackageMetadataField>>()
+  for (const [key, payload] of graph.tarballs()) {
+    const fields = [...structuralExpectedMetadataDrops.keys()]
+      .filter(field => payload[field] !== undefined && isStructuralExpectedDrop(field, target))
+    if (fields.length > 0) projected.set(key, Object.freeze(new Set(fields)))
+  }
+  return projected.size === 0 ? undefined : projected
+}
+
 function allowLoss(): ProjectionRemedy {
   return Object.freeze({ kind: 'allow-loss', option: 'strict', value: false })
 }
@@ -105,6 +145,28 @@ function inherentFeature(
   )
 }
 
+function structuralExpectedFeature(
+  field: PackageMetadataField,
+  target: FormatId,
+): ProjectionLoss {
+  const feature = `metadata:${field}`
+  const remedy = allowLoss()
+  return loss(
+    'structural-expected',
+    feature,
+    target,
+    projectionDiagnostic(
+      'structural-expected',
+      feature,
+      target,
+      `target ${target} structurally omits frozen-clean package metadata field ${field}`,
+      undefined,
+      remedy,
+    ),
+    remedy,
+  )
+}
+
 function workspaceProtocolPresent(graph: Graph): boolean {
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
@@ -151,11 +213,20 @@ function metadataPreflight(
       payload[field] !== undefined))
     const unsupported = present.filter(field => !target.capabilities.metadataFields.has(field))
     if (unsupported.length === 0) continue
-    losses.push(inherentFeature(
-      feature,
-      target.format,
-      `target ${target.format} cannot preserve package metadata fields: ${unsupported.join(', ')}`,
-    ))
+    const structuralExpected = unsupported.filter(field =>
+      isStructuralExpectedDrop(field, target.format))
+    const inherent = unsupported.filter(field =>
+      !isStructuralExpectedDrop(field, target.format))
+    for (const field of structuralExpected) {
+      losses.push(structuralExpectedFeature(field, target.format))
+    }
+    if (inherent.length > 0) {
+      losses.push(inherentFeature(
+        feature,
+        target.format,
+        `target ${target.format} cannot preserve package metadata fields: ${inherent.join(', ')}`,
+      ))
+    }
   }
   return losses
 }
@@ -378,11 +449,18 @@ export function dedupeProjectionLosses(
     'inherent-meaningful': 0,
     enrichable: 1,
     'berry-checksum': 2,
+    'structural-expected': 3,
   }
   return Object.freeze([...output.values()].sort((left, right) =>
     classOrder[left.class] - classOrder[right.class]
       || left.feature.localeCompare(right.feature)
       || subjectKey(left.subject).localeCompare(subjectKey(right.subject))))
+}
+
+export function blockingProjectionLosses(
+  losses: readonly ProjectionLoss[],
+): readonly ProjectionLoss[] {
+  return dedupeProjectionLosses(losses.filter(item => item.class !== 'structural-expected'))
 }
 
 export function projectionWarning(loss: ProjectionLoss): Diagnostic {
