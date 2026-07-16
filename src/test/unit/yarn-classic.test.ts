@@ -47,6 +47,10 @@ import { parse as parseResolution } from '../../main/ts/recipe/resolution.ts'
 import { toTarballKey } from '../../main/ts/graph.ts'
 import { mkIntegrity, sri } from '../_integrity-fixtures.ts'
 import { canonicalDigest } from '../../main/ts/recipe/integrity.ts'
+import {
+  canonicalGraphSnapshot,
+  stringify as stringifyApi,
+} from '../../main/ts/api/format-api.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -269,6 +273,134 @@ describe('yarn-classic — entry key keeps the declared descriptor across a vers
   it('an EXACT pin does NOT survive an out-of-range bump (4.17.11 ∌ 4.18.0) — resets, as yarn would', async () => {
     // The pin no longer matches; the manifest pin must change too, so `lodash@4.18.0` is correct.
     expect(await bumpKey('lodash@4.17.11')).toBe('lodash@4.18.0:')
+  })
+
+  it('strict output stays clean when a bump has no registry payload', async () => {
+    const graph = parse(lockWith('lodash@^4.17.0'))
+    const bumped = await replaceVersion(
+      graph,
+      { name: 'lodash', fromRange: '^4.17.0' },
+      '4.18.0',
+      {
+        registry: {
+          async packument() { return undefined },
+          async resolve(name: string) { return { name, version: '4.18.0' } },
+        },
+      },
+    )
+    const reparsed = parse(stringify(bumped.graph))
+
+    expect([...bumped.graph.tarballs()]).toEqual([])
+    expect(canonicalGraphSnapshot(reparsed, 'snapshot'))
+      .toBe(canonicalGraphSnapshot(bumped.graph, 'snapshot'))
+  })
+
+  it('strict output stays clean when a bump has a proper Integrity payload', async () => {
+    const integrity = sri('sha512-' + Buffer.alloc(64, 9).toString('base64'))
+    const graph = parse(lockWith('lodash@^4.17.0'))
+    const bumped = await replaceVersion(
+      graph,
+      { name: 'lodash', fromRange: '^4.17.0' },
+      '4.18.0',
+      {
+        registry: {
+          async packument() { return undefined },
+          async resolve(name: string) { return { name, version: '4.18.0', integrity } },
+        },
+      },
+    )
+    const reparsed = parse(stringify(bumped.graph))
+
+    expect(bumped.graph.tarball({ name: 'lodash', version: '4.18.0' })).toEqual({ integrity })
+    expect(canonicalGraphSnapshot(reparsed, 'snapshot'))
+      .toBe(canonicalGraphSnapshot(bumped.graph, 'snapshot'))
+  })
+
+  it('strict output stays clean for a raw SRI string with a registry tarball URL', async () => {
+    const rawIntegrity = 'sha512-' + Buffer.alloc(64, 11).toString('base64')
+    const graph = parse(lockWith('lodash@^4.17.0'))
+    const bumped = await replaceVersion(
+      graph,
+      { name: 'lodash', fromRange: '^4.17.0' },
+      '4.18.0',
+      {
+        registry: {
+          async packument() { return undefined },
+          async resolve(name: string) {
+            return {
+              name,
+              version: '4.18.0',
+              integrity: rawIntegrity as never,
+              tarball: 'https://registry.yarnpkg.com/lodash/-/lodash-4.18.0.tgz',
+            }
+          },
+        },
+      },
+    )
+    const reparsed = parse(stringify(bumped.graph))
+
+    expect(bumped.graph.tarball({ name: 'lodash', version: '4.18.0' })?.integrity)
+      .toEqual(sri(rawIntegrity))
+    expect(canonicalGraphSnapshot(reparsed, 'snapshot'))
+      .toBe(canonicalGraphSnapshot(bumped.graph, 'snapshot'))
+  })
+
+  it('strict output compares a minted npmjs URL after yarn-classic rehosting', async () => {
+    const sha1 = 'd'.repeat(40)
+    const integrity = {
+      hashes: [
+        { algorithm: 'sha512', digest: 'e'.repeat(128), origin: 'registry' as const },
+        { algorithm: 'sha1', digest: sha1, origin: 'url-fragment' as const },
+      ],
+    }
+    const graph = parse(lockWith('lodash@^4.17.0'))
+    const bumped = await replaceVersion(
+      graph,
+      { name: 'lodash', fromRange: '^4.17.0' },
+      '4.18.0',
+      {
+        registry: {
+          async packument() { return undefined },
+          async resolve(name: string) {
+            return {
+              name,
+              version: '4.18.0',
+              integrity,
+              tarball: 'https://registry.npmjs.org/lodash/-/lodash-4.18.0.tgz',
+            }
+          },
+        },
+      },
+    )
+
+    const output = stringifyApi('yarn-classic', bumped.graph, { strict: true })
+    expect(output).toContain(
+      `resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.18.0.tgz#${sha1}"`,
+    )
+  })
+
+  it('strict output rejects a url-fragment checksum with no resolution carrier', async () => {
+    const integrity = {
+      hashes: [
+        { algorithm: 'sha512', digest: 'f'.repeat(128), origin: 'registry' as const },
+        { algorithm: 'sha1', digest: 'a'.repeat(40), origin: 'url-fragment' as const },
+      ],
+    }
+    const graph = parse(lockWith('lodash@^4.17.0'))
+    const bumped = await replaceVersion(
+      graph,
+      { name: 'lodash', fromRange: '^4.17.0' },
+      '4.18.0',
+      {
+        registry: {
+          async packument() { return undefined },
+          async resolve(name: string) { return { name, version: '4.18.0', integrity } },
+        },
+      },
+    )
+
+    expect(() => stringifyApi('yarn-classic', bumped.graph, { strict: true }))
+      .toThrowError(/completeness-output-graph-mismatch/)
   })
 })
 

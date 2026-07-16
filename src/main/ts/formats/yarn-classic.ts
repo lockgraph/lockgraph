@@ -4,6 +4,7 @@ import {
   nameOf,
   serializeNodeId,
   stripPeerContextFromNodeId,
+  toTarballKey,
   type Diagnostic,
   type Edge,
   type EdgeAttrs,
@@ -12,11 +13,19 @@ import {
   type Mutator,
   type Node,
   type OverrideConstraint,
+  type TarballKey,
 } from '../graph.ts'
 import semver from 'semver'
 import { LockfileError } from '../api/errors.ts'
 import { optimizeUnreachable } from './_optimize.ts'
-import { parseSri, emitSri, isEmptyIntegrity, urlFragmentSha1, type Integrity } from '../recipe/integrity.ts'
+import {
+  parseSri,
+  emitSri,
+  isEmptyIntegrity,
+  isTarballOrigin,
+  urlFragmentSha1,
+  type Integrity,
+} from '../recipe/integrity.ts'
 import {
   ambiguousResolutionDiagnostic,
   emitDropped as patchEmitDropped,
@@ -31,6 +40,7 @@ import {
   parse as parseResolutionRecipe,
   sourceDiscriminatorOf,
   stringifyForYarnClassic,
+  type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import {
   isWorkspaceEdge,
@@ -2020,19 +2030,88 @@ export function inferRegistryBases(graph: Graph): (name: string) => string {
     majority(perScope.get(scopeOf(name))) ?? unscoped ?? DEFAULT_YARN_CLASSIC_REGISTRY
 }
 
+/** Canonical resolution after yarn-classic's target-aware registry projection.
+ * Native entries never call this path: their verbatim `nativeResolution` wins.
+ * Keeping this transform separate lets strict output comparison apply the exact
+ * same host rewrite to newly minted graph payloads before comparing a reparse. */
+export function projectCanonicalResolution(
+  canonical: ResolutionCanonical | undefined,
+  registryBase?: string,
+): ResolutionCanonical | undefined {
+  if (canonical?.type !== 'tarball' || registryBase === undefined) return canonical
+  const m = REGISTRY_TARBALL_TAIL.exec(canonical.url)
+  return m === null
+    ? canonical
+    : { ...canonical, url: registryBase + canonical.url.slice(m.index) }
+}
+
+/** Target-projected canonical resolutions keyed like `Graph.tarballs()`.
+ * Only minted payloads participate; native entries are emitted verbatim and
+ * therefore already compare against their original canonical URL. */
+export function projectedCanonicalResolutions(
+  graph: Graph,
+  options: Pick<YarnClassicStringifyOptions, 'registryFor'> = {},
+): ReadonlyMap<TarballKey, ResolutionCanonical> {
+  const projected = new Map<TarballKey, ResolutionCanonical>()
+  const inferBase = inferRegistryBases(graph)
+  for (const node of graph.nodes()) {
+    const payload = graph.tarballOf(node.id)
+    if (payload?.nativeResolution !== undefined || payload?.resolution === undefined) continue
+    const registryBase = options.registryFor?.(node.name) ?? inferBase(node.name)
+    const resolution = projectCanonicalResolution(payload.resolution, registryBase)
+    if (resolution !== payload.resolution && resolution !== undefined) {
+      projected.set(toTarballKey(node), resolution)
+    }
+  }
+  return projected
+}
+
+/** Integrity after a minted payload is serialized to classic's two carriers and
+ * reparsed: SRI-emittable hashes acquire the neutral `sri` provenance. A
+ * `url-fragment` sha1 is removed from the projected Integrity only when the
+ * emitter actually carries it in `resolved`; otherwise it stays and makes the
+ * strict snapshot expose the checksum drop. Unsupported origins stay for the
+ * same fail-closed reason. */
+export function projectedCanonicalIntegrities(
+  graph: Graph,
+  options: Pick<YarnClassicStringifyOptions, 'registryFor'> = {},
+): ReadonlyMap<TarballKey, Integrity | undefined> {
+  const projected = new Map<TarballKey, Integrity | undefined>()
+  const inferBase = inferRegistryBases(graph)
+  for (const node of graph.nodes()) {
+    const payload = graph.tarballOf(node.id)
+    if (payload?.nativeResolution !== undefined || payload?.integrity === undefined) continue
+    const sha1Fragment = urlFragmentSha1(payload.integrity)
+    const registryBase = options.registryFor?.(node.name) ?? inferBase(node.name)
+    const resolved = deriveResolvedFromCanonical(
+      payload.resolution,
+      payload.integrity,
+      registryBase,
+    )
+    const carriesSha1Fragment = sha1Fragment !== undefined
+      && resolved?.includes(`#${sha1Fragment}`) === true
+    const hashes = payload.integrity.hashes
+      .filter(hash => !(carriesSha1Fragment
+        && hash.algorithm === 'sha1'
+        && hash.origin === 'url-fragment'
+        && hash.digest === sha1Fragment))
+      .map(hash => isTarballOrigin(hash.origin)
+        ? { ...hash, origin: 'sri' as const }
+        : hash)
+    projected.set(toTarballKey(node), hashes.length === 0 ? undefined : { hashes })
+  }
+  return projected
+}
+
 export function deriveResolvedFromCanonical(
-  canonical: import('../recipe/resolution.ts').ResolutionCanonical | undefined,
+  canonical: ResolutionCanonical | undefined,
   integrity?: Integrity,
   registryBase?: string,
 ): string | undefined {
   if (canonical === undefined) return undefined
   // Rehost a registry tarball to the lock's registry base (see above); leave git / file /
   // non-`<registry>/<name>/-/…` tarballs untouched.
-  let canon = canonical
-  if (canonical.type === 'tarball' && registryBase !== undefined) {
-    const m = REGISTRY_TARBALL_TAIL.exec(canonical.url)
-    if (m !== null) canon = { ...canonical, url: registryBase + canonical.url.slice(m.index) }
-  }
+  const canon = projectCanonicalResolution(canonical, registryBase) ?? canonical
   // A MINTED tarball node carries the tarball sha1 as a `url-fragment` hash (from the
   // registry's `dist.shasum`); yarn-classic writes it as the `resolved#<sha1>` fragment,
   // matching yarn 1's convention so a bumped entry stays `--frozen-lockfile`-clean.

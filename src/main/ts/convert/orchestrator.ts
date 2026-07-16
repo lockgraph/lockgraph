@@ -9,7 +9,7 @@ import {
 import type { FormatId } from '../api/format-contract.ts'
 import {
   assessedDiagnostic,
-  canonicalGraphSnapshot,
+  canonicalProjectionGraphSnapshot,
   check,
   detect,
   diagnosticKey,
@@ -420,8 +420,20 @@ function outputProbe(
   const sourceState = internalEvidenceOf(sourceEvidence ?? evidenceOf(graph))
   const authority = contract === 'snapshot' ? undefined : authoritativePolicyOverridesOf(sourceState)
   const comparisonOverrides = target.startsWith('pnpm-') ? authority : undefined
-  const sourceSnapshot = canonicalGraphSnapshot(graph, contract, comparisonOverrides, workspaceNames)
-  const targetSnapshot = canonicalGraphSnapshot(reparsed, contract, comparisonOverrides, workspaceNames)
+  const sourceSnapshot = canonicalProjectionGraphSnapshot(
+    graph,
+    target,
+    contract,
+    comparisonOverrides,
+    workspaceNames,
+  )
+  const targetSnapshot = canonicalProjectionGraphSnapshot(
+    reparsed,
+    target,
+    contract,
+    comparisonOverrides,
+    workspaceNames,
+  )
   if (sourceSnapshot !== targetSnapshot) {
     diagnostics.push(assessedDiagnostic(
       'COMPLETENESS_OUTPUT_GRAPH_MISMATCH',

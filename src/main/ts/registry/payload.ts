@@ -1,4 +1,10 @@
-import type { PackageMetadataField, TarballPayload } from '../graph.ts'
+import type {
+  Mutator,
+  PackageMetadataField,
+  TarballKeyInputs,
+  TarballPayload,
+} from '../graph.ts'
+import { parseSri, type Integrity } from '../recipe/integrity.ts'
 import type { PackumentVersion } from './types.ts'
 
 export const PACKAGE_METADATA_FIELDS = Object.freeze([
@@ -17,6 +23,40 @@ export const PACKAGE_METADATA_FIELDS = Object.freeze([
 ] as const)
 
 export type PackageMetadataPayload = Pick<TarballPayload, PackageMetadataField>
+
+function isRuntimeHash(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const hash = value as {
+    readonly algorithm?: unknown
+    readonly digest?: unknown
+    readonly origin?: unknown
+  }
+  return [hash.algorithm, hash.digest, hash.origin].every(field => typeof field === 'string')
+}
+
+function integrityOfPackumentVersion(value: unknown): Integrity | undefined {
+  if (typeof value === 'string') {
+    // A raw value is an SRI field, not a provenance-tagged registry carrier.
+    // Format parsers reconstruct emitted SRI with this same neutral origin.
+    const parsed = parseSri(value)
+    return parsed.hashes.length === 0 ? undefined : parsed
+  }
+  if (value === null || typeof value !== 'object') return undefined
+  const hashes = (value as { readonly hashes?: unknown }).hashes
+  if (!Array.isArray(hashes) || hashes.length === 0) return undefined
+  const valid = hashes.every(isRuntimeHash)
+  return valid ? value as Integrity : undefined
+}
+
+/** Store registry-minted payloads only when they carry a usable fact. */
+export function setMintedTarball(
+  mutator: Mutator,
+  inputs: TarballKeyInputs,
+  payload: TarballPayload,
+): void {
+  if (Object.values(payload).every(value => value === undefined)) return
+  mutator.setTarball(inputs, payload)
+}
 
 function canonicalMetadataValue(
   field: PackageMetadataField,
@@ -50,7 +90,7 @@ function canonicalMetadataValue(
  */
 export function payloadOfPackumentVersion(pv: PackumentVersion): TarballPayload {
   const projected: TarballPayload = {
-    integrity:            pv.integrity,
+    integrity:            integrityOfPackumentVersion(pv.integrity),
     engines:              pv.engines,
     funding:              pv.funding,
     license:              pv.license,

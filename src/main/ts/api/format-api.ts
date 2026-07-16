@@ -43,6 +43,8 @@ import {
 } from '../completeness/projection.ts'
 import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from '../recipe/overrides.ts'
 import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
+import type { Integrity } from '../recipe/integrity.ts'
+import type { ResolutionCanonical } from '../recipe/resolution.ts'
 import {
   getManifestOverrides,
   mergeOverrides,
@@ -302,6 +304,8 @@ export function canonicalGraphSnapshot(
   contract: ConversionContract,
   overrides?: readonly OverrideConstraint[],
   workspaceNames?: ReadonlyMap<string, string>,
+  projectedResolutions?: ReadonlyMap<string, ResolutionCanonical>,
+  projectedIntegrities?: ReadonlyMap<string, Integrity | undefined>,
 ): string {
   const nodes = sortByStableJson([...graph.nodes()].map(node => stableValue({
     id: node.id,
@@ -349,33 +353,39 @@ export function canonicalGraphSnapshot(
         }),
       })
     }))
-  const tarballs = [...graph.tarballs()].map(([key, payload]) => [key, stableValue({
-    ...(payload.integrity === undefined ? {} : { integrity: payload.integrity }),
-    ...(payload.berryChecksumCacheKey === undefined ? {} : {
-      berryChecksumCacheKey: payload.berryChecksumCacheKey,
-    }),
-    ...(payload.engines === undefined ? {} : { engines: payload.engines }),
-    ...(payload.funding === undefined ? {} : { funding: payload.funding }),
-    ...(payload.license === undefined ? {} : { license: payload.license }),
-    ...(payload.bin === undefined ? {} : { bin: payload.bin }),
-    ...(payload.deprecated === undefined ? {} : { deprecated: payload.deprecated }),
-    ...(payload.cpu === undefined ? {} : { cpu: payload.cpu }),
-    ...(payload.os === undefined ? {} : { os: payload.os }),
-    ...(payload.libc === undefined ? {} : { libc: payload.libc }),
-    ...(payload.hasInstallScript === undefined ? {} : {
-      hasInstallScript: payload.hasInstallScript,
-    }),
-    ...(payload.bundledDependencies === undefined ? {} : {
-      bundledDependencies: payload.bundledDependencies,
-    }),
-    ...(payload.resolution === undefined ? {} : { resolution: payload.resolution }),
-    ...(payload.peerDependencies === undefined ? {} : {
-      peerDependencies: payload.peerDependencies,
-    }),
-    ...(payload.peerDependenciesMeta === undefined ? {} : {
-      peerDependenciesMeta: payload.peerDependenciesMeta,
-    }),
-  })] as const)
+  const tarballs = [...graph.tarballs()].map(([key, payload]) => {
+    const resolution = projectedResolutions?.get(key) ?? payload.resolution
+    const integrity = projectedIntegrities?.has(key)
+      ? projectedIntegrities.get(key)
+      : payload.integrity
+    return [key, stableValue({
+      ...(integrity === undefined ? {} : { integrity }),
+      ...(payload.berryChecksumCacheKey === undefined ? {} : {
+        berryChecksumCacheKey: payload.berryChecksumCacheKey,
+      }),
+      ...(payload.engines === undefined ? {} : { engines: payload.engines }),
+      ...(payload.funding === undefined ? {} : { funding: payload.funding }),
+      ...(payload.license === undefined ? {} : { license: payload.license }),
+      ...(payload.bin === undefined ? {} : { bin: payload.bin }),
+      ...(payload.deprecated === undefined ? {} : { deprecated: payload.deprecated }),
+      ...(payload.cpu === undefined ? {} : { cpu: payload.cpu }),
+      ...(payload.os === undefined ? {} : { os: payload.os }),
+      ...(payload.libc === undefined ? {} : { libc: payload.libc }),
+      ...(payload.hasInstallScript === undefined ? {} : {
+        hasInstallScript: payload.hasInstallScript,
+      }),
+      ...(payload.bundledDependencies === undefined ? {} : {
+        bundledDependencies: payload.bundledDependencies,
+      }),
+      ...(resolution === undefined ? {} : { resolution }),
+      ...(payload.peerDependencies === undefined ? {} : {
+        peerDependencies: payload.peerDependencies,
+      }),
+      ...(payload.peerDependenciesMeta === undefined ? {} : {
+        peerDependenciesMeta: payload.peerDependenciesMeta,
+      }),
+    })] as const
+  })
     .sort(([left], [right]) => left.localeCompare(right))
   return JSON.stringify({
     nodes,
@@ -383,6 +393,33 @@ export function canonicalGraphSnapshot(
     roots: [...graph.roots()].sort(),
     tarballs,
   })
+}
+
+/** Snapshot the graph as the target adapter will project it. Most targets use
+ * the canonical graph unchanged. Yarn classic is the exception for freshly
+ * minted registry tarballs: it rehosts their canonical URL to the configured /
+ * inferred classic registry while native entries remain verbatim. */
+export function canonicalProjectionGraphSnapshot(
+  graph: Graph,
+  target: FormatId,
+  contract: ConversionContract,
+  overrides?: readonly OverrideConstraint[],
+  workspaceNames?: ReadonlyMap<string, string>,
+): string {
+  const projectedResolutions = target === 'yarn-classic'
+    ? yarnClassic.projectedCanonicalResolutions(graph)
+    : undefined
+  const projectedIntegrities = target === 'yarn-classic'
+    ? yarnClassic.projectedCanonicalIntegrities(graph)
+    : undefined
+  return canonicalGraphSnapshot(
+    graph,
+    contract,
+    overrides,
+    workspaceNames,
+    projectedResolutions,
+    projectedIntegrities,
+  )
 }
 
 function projectionOutputDiagnostics(
@@ -413,8 +450,8 @@ function projectionOutputDiagnostics(
   }
 
   const comparisonOverrides = target.startsWith('pnpm-') ? overrides : undefined
-  if (canonicalGraphSnapshot(graph, 'project', comparisonOverrides, workspaceNames)
-    !== canonicalGraphSnapshot(reparsed, 'project', comparisonOverrides, workspaceNames)) {
+  if (canonicalProjectionGraphSnapshot(graph, target, 'project', comparisonOverrides, workspaceNames)
+    !== canonicalProjectionGraphSnapshot(reparsed, target, 'project', comparisonOverrides, workspaceNames)) {
     diagnostics.push(assessedDiagnostic(
       'COMPLETENESS_OUTPUT_GRAPH_MISMATCH',
       'target output does not preserve the canonical graph',

@@ -17,7 +17,7 @@ import {
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
 import { resolveFindUp } from '../complete/find-up.ts'
-import { payloadOfPackumentVersion } from '../registry/payload.ts'
+import { payloadOfPackumentVersion, setMintedTarball } from '../registry/payload.ts'
 import type { ModifyContext } from './context.ts'
 import {
   modifyEdgeRewired,
@@ -131,7 +131,7 @@ export async function addDependency(
     const addedDiag = modifyNodeAdded(parentId, newId)
     const result = graph.mutate(m => {
       m.addNode(newNode)
-      m.setTarball({ name: resolved.name, version: resolved.version }, payload)
+      setMintedTarball(m, { name: resolved.name, version: resolved.version }, payload)
       m.addEdge(parentId, newId, kind, { range })
       m.diagnostic(addedDiag)
     })

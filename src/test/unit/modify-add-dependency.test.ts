@@ -34,6 +34,7 @@ describe('modify/addDependency', () => {
     expect(result.added).toEqual(['dotenv@16.3.1'])
     expect(result.graph.getNode('dotenv@16.3.1')).toBeDefined()
     expect(result.graph.out('app@0.0.0').some(e => e.dst === 'dotenv@16.3.1' && e.kind === 'dep')).toBe(true)
+    expect([...result.graph.tarballs()]).toEqual([])
 
     const codes = result.unresolved.map(d => d.code)
     expect(codes).toContain('MODIFY_NODE_ADDED')
