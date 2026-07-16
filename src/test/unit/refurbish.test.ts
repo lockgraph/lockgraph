@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { LockfileError, parse, stringify } from '../../main/ts/index.ts'
 import { refurbish, type TarballSource } from '../../main/ts/enrich/refurbish.ts'
 import { computeBerryChecksum } from '../../main/ts/recipe/berry-checksum.ts'
 import { emitBerryChecksum, emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
@@ -14,6 +15,10 @@ import { graphOf, addPackage } from './_modify-test-utils.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const tgz = (rel: string): Buffer => readFileSync(resolve(here, '../resources/fixtures/tarballs', rel))
+const berryV8Lock = (): string => readFileSync(
+  resolve(here, '../resources/fixtures/lockfiles/simple/yarn-berry-v8.lock'),
+  'utf8',
+)
 
 const sourceOf = (map: Record<string, Buffer>): TarballSource => ({
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -51,15 +56,52 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
 
     expect(r.enriched).toEqual(['ms@2.1.3'])
     const payload = r.graph.tarballOf('ms@2.1.3')
-    // A fill never sets `berryChecksumCacheKey` (that field round-trips a PARSED
-    // prefix); the prefix-era `<cacheKey>/` rendering is the format's job.
-    expect(payload?.berryChecksumCacheKey).toBeUndefined()
+    // Prefix-era fill matches what emit→parse records on the payload.
+    expect(payload?.berryChecksumCacheKey).toBe('10c0')
     expect(emitBerryChecksum(payload!.integrity!)).toBe(
       computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '10c0'),
     )
     expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_FIELD_FILLED'])
     // dual-channel — also on Graph.diagnostics()
     expect(r.graph.diagnostics().map(d => d.code)).toContain('ENRICH_FIELD_FILLED')
+  })
+
+  it('strictly round-trips a prefix-era checksum filled from a tarball', async () => {
+    const gap = berryV8Lock().replace(/^  checksum: 10c0\/d924[^\n]*\n/m, '')
+    const graph = parse('yarn-berry-v8', gap)
+    const r = await refurbish(
+      graph,
+      'yarn-berry-v8',
+      sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }),
+    )
+
+    expect(r.graph.tarballOf('ms@2.1.3')?.berryChecksumCacheKey).toBe('10c0')
+    expect(() => stringify('yarn-berry-v8', r.graph)).not.toThrow()
+  })
+
+  it('still fails closed when a dropped checksum cannot be recomputed', async () => {
+    const graph = parse('yarn-berry-v8', berryV8Lock())
+    const payload = graph.tarballOf('ms@2.1.3')!
+    const stripped = graph.mutate(mutator => {
+      mutator.setTarball(
+        { name: 'ms', version: '2.1.3' },
+        { ...payload, integrity: undefined },
+      )
+    }).graph
+    const r = await refurbish(stripped, 'yarn-berry-v8', sourceOf({}))
+
+    expect(r.enriched).toEqual([])
+    expect(r.unresolved.some(diagnostic =>
+      diagnostic.code === 'ENRICH_CHECKSUM_DEFERRED')).toBe(true)
+    let thrown: unknown
+    try {
+      stringify('yarn-berry-v8', r.graph)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(LockfileError)
+    expect((thrown as LockfileError).losses?.some(loss =>
+      loss.class === 'berry-checksum')).toBe(true)
   })
 
   it('defers (warning, line omitted) when the tarball is unavailable', async () => {

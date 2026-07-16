@@ -336,10 +336,16 @@ export async function refurbish(
       c.payload.integrity ?? emptyIntegrity(),
       { hashes: [{ algorithm: 'sha512', digest: hex, origin: 'berry-zip' }] },
     )
-    // No `berryChecksumCacheKey`: a FILL is not a parsed prefix to round-trip,
-    // so the bare-vs-`<cacheKey>/` rendering is left to the format's
-    // `checksumPrefix` (else a bare-era v6 lock would get a foreign `8/` prefix).
-    return { kind: 'fill', node: c.node, merged: { ...c.payload, integrity } }
+    // Prefix-era emit always writes `<cacheKey>/<hex>`, and reparse records that
+    // prefix on the payload. Stamp the same canonical carrier at fill time so a
+    // strict emit→parse probe compares equal. Bare-era v4–v7 stays undefined and
+    // therefore never gains a foreign `8/`/`9/` prefix.
+    const berryChecksumCacheKey = isPrefixEraFormat(format) ? c.cacheKey : undefined
+    return {
+      kind: 'fill',
+      node: c.node,
+      merged: { ...c.payload, integrity, berryChecksumCacheKey },
+    }
   })
 
   // 3) Apply sequentially in node order — graph mutation is in-memory + fast, and
