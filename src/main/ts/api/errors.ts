@@ -19,6 +19,7 @@ export type ProjectionLossClass =
   | 'enrichable'
   | 'inherent-meaningful'
   | 'berry-checksum'
+  | 'structural-expected'
 
 export type ProjectionRemedy =
   | Readonly<{

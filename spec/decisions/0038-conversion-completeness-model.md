@@ -261,3 +261,82 @@ signed-attestation system establishes authenticity.
   optimization phases.
 - [ADR-0025](./0025-manifest-overrides.md) — authored policy carriers and the
   evidence-lifecycle precedent.
+
+## §8 Revision (2026-07-16) — Structural-expected package-metadata projection
+
+### Concern
+
+Completion and mint (`payloadOfPackumentVersion`) hydrate packument metadata onto
+minted nodes. Projecting a node whose target lock format has no slot for such a field
+currently fails strict as an `inherent-meaningful` loss, which §4 raises to
+`IRREDUCIBLE_LOSS` and requires `strict:false` to bypass. This blocks the common
+audit-fix case: a completed transitive dependency that declares `engines` (or, from a
+full-manifest fetch, `deprecated` or `bin`) cannot round-trip through yarn-classic or
+yarn-berry strict, even though no yarn lock format persists those fields and dropping
+them is frozen-clean. Two gates fire independently: the `metadataPreflight` classifier,
+and the output probe, because `canonicalGraphSnapshot` carries these fields so an emit
+that omits them yields `COMPLETENESS_OUTPUT_GRAPH_MISMATCH`.
+
+### Decision
+
+The §4 taxonomy gains a fourth projection-loss class, `structural-expected`: a canonical
+package-metadata field whose drop on a specific target is confirmed frozen-clean — the
+target lock never persists the field, so an immutable install never rewrites or rejects
+for it — and advisory. It emits a warning diagnostic and does not raise `IRREDUCIBLE_LOSS`;
+strict projection does not block on it.
+
+The safe `(field, target)` pairs are an explicit allowlist, the single source of truth
+for both the classifier and the output probe. The allowlist is not derived from
+`target.capabilities.metadataFields`: that table is a conservative blunt guard, not a
+safe-to-drop oracle. Two tables under-report what their format stores — `bun.lock`
+records `os`, `cpu`, and `bin` per package while its table is empty, and pnpm records
+`bin` as `hasBin` — so deriving "safe to drop" from the table complement would certify a
+frozen-breaking loss. The allowlist admits only per-pair-verified true negatives.
+
+Initial allowlist:
+
+| field | targets | basis |
+| --- | --- | --- |
+| `engines` | yarn-classic, yarn-berry-v4 … v10 | no yarn lock stores `engines`; engine-strict is opt-in |
+| `deprecated` | yarn-classic, yarn-berry-v4 … v10 | no yarn lock stores `deprecated` |
+| `bin` | yarn-classic | classic v1 stores no per-package metadata; `bin` derives from the installed manifest |
+
+Pairs deliberately excluded and kept `inherent-meaningful`: `bin` on yarn-berry, bun, and
+pnpm (all store it); `os` and `cpu` on bun (platform gating it stores and regenerates);
+`engines` on pnpm and npm (both store it). Everything absent from the allowlist stays
+`inherent-meaningful`. The allowlist is extended only when a new pair is independently
+verified frozen-clean, never by table inference.
+
+### Mechanism
+
+Both layers are driven by the allowlist. The `metadataPreflight` classifier partitions a
+detected metadata loss: allowlisted fields become `structural-expected`, the rest remain
+`inherent-meaningful`. The strict gate (`format-api` and `convert/orchestrator`) throws
+only on the non-`structural-expected` losses; `structural-expected` losses surface as
+warnings. `canonicalProjectionGraphSnapshot` drops an allowlisted field for its target
+from both sides of the snapshot comparison; a field not on the allowlist is retained and
+compared, so any real drop still mismatches and fails closed.
+
+### Consequences
+
+- The audit-fix completion case goes green for the allowlisted pairs while the assessment
+  still surfaces each drop as a warning diagnostic.
+- The allowlist is a small, per-pair-verified, inspectable table, extended only on proof.
+- `inherent-meaningful` is unchanged for install-affecting features and for every
+  non-allowlisted metadata pair; `strict:false` remains the escape hatch.
+- The `bun` and `pnpm` `metadataFields` inaccuracies are recorded as a separate follow-up;
+  they affect other capability decisions and the feasibility of minted bun and pnpm
+  metadata round-trips, not the soundness of this decision.
+
+### Alternatives rejected
+
+- *Reclassify the `target.capabilities.metadataFields` complement* — rejected as unsound:
+  an adversarial review confirmed it certifies frozen-breaking losses for `bun`
+  (`os`/`cpu`/`bin`) and pnpm (`bin`) because the tables under-report stored fields.
+- *Drop target-unstorable metadata at completion instead of projecting per-target* —
+  rejected because it couples completion to one target and loses metadata for targets that
+  do store it (for example `engines` on pnpm), violating the §1 separation of canonical
+  completeness from target readiness.
+- *Fix the capability tables to be precise and keep using the complement* — deferred to a
+  separate track; not required once the allowlist is the source of truth, and larger in
+  blast radius.

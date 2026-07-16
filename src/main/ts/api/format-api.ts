@@ -3,6 +3,7 @@ import type {
   Graph,
   Manifest,
   OverrideConstraint,
+  PackageMetadataField,
 } from '../graph.ts'
 import { LockfileError } from './errors.ts'
 import type {
@@ -34,7 +35,9 @@ import { detectGraphFeatures } from '../completeness/features.ts'
 import type { ConversionContract } from '../completeness/types.ts'
 import {
   dedupeProjectionLosses,
+  blockingProjectionLosses,
   genericProjectionLoss,
+  projectedStructuralMetadataDrops,
   projectionDiagnosticLosses,
   projectionError,
   projectionPreflightLosses,
@@ -131,11 +134,14 @@ export function stringifyProjected(
     options.overrides,
     options.pnpmWorkspaceNames,
   )
-  if (losses.length === 0 && probeDiagnostics.length > 0) {
+  if (blockingProjectionLosses(losses).length === 0 && probeDiagnostics.length > 0) {
     const classified = projectionDiagnosticLosses(probeDiagnostics, format)
-    losses = dedupeProjectionLosses(classified.length > 0
-      ? classified
-      : [genericProjectionLoss(format, probeDiagnostics[0]!)])
+    losses = dedupeProjectionLosses([
+      ...losses,
+      ...(classified.length > 0
+        ? classified
+        : [genericProjectionLoss(format, probeDiagnostics[0]!)]),
+    ])
   }
   const diagnostics = uniqueDiagnostics([
     ...emittedDiagnostics,
@@ -254,8 +260,9 @@ export function stringify(
   options: StringifyOptions = {},
 ): string {
   const projected = stringifyProjected(format, graph, options)
-  if ((options.strict ?? true) && projected.losses.length > 0) {
-    throw new LockfileError(projectionError(projected.losses))
+  const blocking = blockingProjectionLosses(projected.losses)
+  if ((options.strict ?? true) && blocking.length > 0) {
+    throw new LockfileError(projectionError(blocking))
   }
   return projected.output
 }
@@ -306,6 +313,7 @@ export function canonicalGraphSnapshot(
   workspaceNames?: ReadonlyMap<string, string>,
   projectedResolutions?: ReadonlyMap<string, ResolutionCanonical>,
   projectedIntegrities?: ReadonlyMap<string, Integrity | undefined>,
+  projectedMetadataDrops?: ReadonlyMap<string, ReadonlySet<PackageMetadataField>>,
 ): string {
   const nodes = sortByStableJson([...graph.nodes()].map(node => stableValue({
     id: node.id,
@@ -358,30 +366,31 @@ export function canonicalGraphSnapshot(
     const integrity = projectedIntegrities?.has(key)
       ? projectedIntegrities.get(key)
       : payload.integrity
+    const metadataDrops = projectedMetadataDrops?.get(key)
     return [key, stableValue({
       ...(integrity === undefined ? {} : { integrity }),
       ...(payload.berryChecksumCacheKey === undefined ? {} : {
         berryChecksumCacheKey: payload.berryChecksumCacheKey,
       }),
-      ...(payload.engines === undefined ? {} : { engines: payload.engines }),
-      ...(payload.funding === undefined ? {} : { funding: payload.funding }),
-      ...(payload.license === undefined ? {} : { license: payload.license }),
-      ...(payload.bin === undefined ? {} : { bin: payload.bin }),
-      ...(payload.deprecated === undefined ? {} : { deprecated: payload.deprecated }),
-      ...(payload.cpu === undefined ? {} : { cpu: payload.cpu }),
-      ...(payload.os === undefined ? {} : { os: payload.os }),
-      ...(payload.libc === undefined ? {} : { libc: payload.libc }),
-      ...(payload.hasInstallScript === undefined ? {} : {
+      ...(payload.engines === undefined || metadataDrops?.has('engines') ? {} : { engines: payload.engines }),
+      ...(payload.funding === undefined || metadataDrops?.has('funding') ? {} : { funding: payload.funding }),
+      ...(payload.license === undefined || metadataDrops?.has('license') ? {} : { license: payload.license }),
+      ...(payload.bin === undefined || metadataDrops?.has('bin') ? {} : { bin: payload.bin }),
+      ...(payload.deprecated === undefined || metadataDrops?.has('deprecated') ? {} : { deprecated: payload.deprecated }),
+      ...(payload.cpu === undefined || metadataDrops?.has('cpu') ? {} : { cpu: payload.cpu }),
+      ...(payload.os === undefined || metadataDrops?.has('os') ? {} : { os: payload.os }),
+      ...(payload.libc === undefined || metadataDrops?.has('libc') ? {} : { libc: payload.libc }),
+      ...(payload.hasInstallScript === undefined || metadataDrops?.has('hasInstallScript') ? {} : {
         hasInstallScript: payload.hasInstallScript,
       }),
-      ...(payload.bundledDependencies === undefined ? {} : {
+      ...(payload.bundledDependencies === undefined || metadataDrops?.has('bundledDependencies') ? {} : {
         bundledDependencies: payload.bundledDependencies,
       }),
       ...(resolution === undefined ? {} : { resolution }),
-      ...(payload.peerDependencies === undefined ? {} : {
+      ...(payload.peerDependencies === undefined || metadataDrops?.has('peerDependencies') ? {} : {
         peerDependencies: payload.peerDependencies,
       }),
-      ...(payload.peerDependenciesMeta === undefined ? {} : {
+      ...(payload.peerDependenciesMeta === undefined || metadataDrops?.has('peerDependenciesMeta') ? {} : {
         peerDependenciesMeta: payload.peerDependenciesMeta,
       }),
     })] as const
@@ -412,6 +421,7 @@ export function canonicalProjectionGraphSnapshot(
   const projectedIntegrities = target === 'yarn-classic'
     ? yarnClassic.projectedCanonicalIntegrities(graph)
     : undefined
+  const projectedMetadataDrops = projectedStructuralMetadataDrops(graph, target)
   return canonicalGraphSnapshot(
     graph,
     contract,
@@ -419,6 +429,7 @@ export function canonicalProjectionGraphSnapshot(
     workspaceNames,
     projectedResolutions,
     projectedIntegrities,
+    projectedMetadataDrops,
   )
 }
 

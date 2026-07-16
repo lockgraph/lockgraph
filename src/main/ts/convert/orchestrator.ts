@@ -30,6 +30,7 @@ import {
 import { assessConversion, type OutputProbeResult } from '../completeness/assessment.ts'
 import { detectGraphFeatures } from '../completeness/features.ts'
 import {
+  blockingProjectionLosses,
   classifiedProjectionLoss,
   dedupeProjectionLosses,
   projectionDiagnosticLosses,
@@ -306,7 +307,8 @@ async function _convert(
       ...snapshotProjectionLosses(graph, options.to, options.targetVersion),
       ...projected.losses,
     ])
-    if (losses.length > 0) throw new LockfileError(projectionError(losses))
+    const blocking = blockingProjectionLosses(losses)
+    if (blocking.length > 0) throw new LockfileError(projectionError(blocking))
   }
   return projected.output
 }
