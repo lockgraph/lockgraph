@@ -23,7 +23,7 @@ import {
   type NodeId,
 } from '../graph.ts'
 import { isSentinelPatch } from '../recipe/patch.ts'
-import { payloadOfPackumentVersion } from '../registry/payload.ts'
+import { payloadOfPackumentVersion, setMintedTarball } from '../registry/payload.ts'
 import type { ModifyContext } from './context.ts'
 import {
   modifyEdgeRewired,
@@ -124,7 +124,13 @@ export async function replaceVersion(
     }
 
     // 3. Compute target NodeId — preserve peerContext per §3.2 step 3.
-    const targetId = serializeNodeId(target.name, target.version, node.peerContext, node.patch)
+    const targetId = serializeNodeId(
+      target.name,
+      target.version,
+      node.peerContext,
+      node.patch,
+      node.source,
+    )
 
     if (targetId === node.id) {
       // No-op replacement (same version selected) — degenerate but legal.
@@ -140,18 +146,24 @@ export async function replaceVersion(
         version: target.version,
       }
       const replacedDiag = modifyNodeReplaced(node.id, targetId)
+      const payload = payloadOfPackumentVersion(target)
       const result = currentGraph.mutate(m => {
         m.replaceNode(node.id, newNode)
+        setMintedTarball(
+          m,
+          {
+            name: target.name,
+            version: target.version,
+            patch: node.patch,
+            source: node.source,
+          },
+          payload,
+        )
         // ADR-0023 §8.6: land the diagnostic on Graph.diagnostics() inside
         // the mutate transaction that performs the replace.
         m.diagnostic(replacedDiag)
       })
       currentGraph = result.graph
-      // setTarball with the registry-supplied payload — preserves integrity / engines / etc.
-      const payload = payloadOfPackumentVersion(target)
-      currentGraph = currentGraph.mutate(m => {
-        m.setTarball({ name: target.name, version: target.version, patch: node.patch }, payload)
-      }).graph
       currentGraph = pruneOrphanTarballs(currentGraph, [node])
       // The rebound node still carries the OLD version's outgoing deps. Clear
       // the dep/optional out-edges so completeTransitives rewires them from the

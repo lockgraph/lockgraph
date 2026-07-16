@@ -80,6 +80,26 @@ describe('package metadata completeness', () => {
     }))
   })
 
+  it('normalizes raw registry SRI strings and drops malformed strings', () => {
+    const digest = Buffer.alloc(64, 7)
+    const raw = `sha512-${digest.toString('base64')}`
+    const parsed = payloadOfPackumentVersion({
+      name: 'pkg',
+      version: '1.0.0',
+      integrity: raw as never,
+    })
+    const malformed = payloadOfPackumentVersion({
+      name: 'pkg',
+      version: '1.0.0',
+      integrity: 'not-an-sri' as never,
+    })
+
+    expect(parsed.integrity).toEqual({
+      hashes: [{ algorithm: 'sha512', digest: digest.toString('hex'), origin: 'sri' }],
+    })
+    expect(malformed.integrity).toBeUndefined()
+  })
+
   it('normalizes semantically empty metadata before comparison', () => {
     const projected = packageMetadataOfPayload(payloadOfPackumentVersion({
       name: 'pkg',

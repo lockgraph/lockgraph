@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
 import { replaceVersion } from '../../main/ts/modify/replace-version.ts'
 import { sentinelHashOf } from '../../main/ts/recipe/patch.ts'
+import { mkIntegrity } from '../_integrity-fixtures.ts'
 import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'
 
 describe('modify/replaceVersion', () => {
@@ -68,6 +69,35 @@ describe('modify/replaceVersion', () => {
     expect(result.recentlyAdded.has('lodash@4.17.21')).toBe(true)
     expect(result.graph.getNode('lodash@4.17.21')).toBeDefined()
     expect(result.graph.getNode('lodash@4.17.20')).toBeUndefined()
+    expect([...result.graph.tarballs()]).toEqual([])
+  })
+
+  it('mints a populated tarball under the preserved source key', async () => {
+    const source = '0123456789abcdef'
+    const integrity = mkIntegrity('replacement-target')
+    const graph = graphOf(builder => {
+      addPackage(builder, { name: 'pkg', version: '1.0.0', source })
+    })
+    const fakeRegistry = {
+      async packument() { return undefined },
+      async resolve(name: string, range: string) {
+        return name === 'pkg' && range === '2.0.0'
+          ? { name: 'pkg', version: '2.0.0', integrity }
+          : undefined
+      },
+    }
+
+    const result = await replaceVersion(
+      graph,
+      { name: 'pkg', fromRange: '1.0.0' },
+      '2.0.0',
+      { registry: fakeRegistry },
+    )
+
+    const targetId = `pkg@2.0.0+src=${source}`
+    expect(result.graph.getNode(targetId)).toBeDefined()
+    expect(result.graph.tarball({ name: 'pkg', version: '2.0.0', source })).toEqual({ integrity })
+    expect(result.graph.tarball({ name: 'pkg', version: '2.0.0' })).toBeUndefined()
   })
 
   it('a dependency-changing bump clears the old version\'s outgoing deps (yaf lockgraph-message)', async () => {

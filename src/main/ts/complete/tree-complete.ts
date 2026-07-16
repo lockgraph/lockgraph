@@ -20,7 +20,7 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
-import { payloadOfPackumentVersion } from '../registry/payload.ts'
+import { payloadOfPackumentVersion, setMintedTarball } from '../registry/payload.ts'
 import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
 import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
 import {
@@ -452,7 +452,7 @@ export async function completeTransitives(
         const result = currentGraph.mutate(m => {
           if (currentGraph.getNode(newId) === undefined) {
             m.addNode(newNode)
-            m.setTarball(inputs, payload)
+            setMintedTarball(m, inputs, payload)
             m.diagnostic(nodeAddedDiag)
           } else {
             alreadyAdded = true

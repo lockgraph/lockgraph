@@ -660,11 +660,8 @@ function assertPhaseReceipt(phase: EnrichmentDerivationPhase): void {
       const node = phase.after.getNode(id)
       return node === undefined ? undefined : toTarballKey(node)
     }).filter((key): key is TarballKey => key !== undefined))
-    for (const key of addedNodeKeys) {
-      if (!before.tarballs.has(key) && !after.tarballs.has(key)) {
-        invariant('completion added a package without a tarball payload')
-      }
-    }
+    // Registry completion can legitimately know only package identity. In that
+    // case absence must remain absence: an empty tarball record is not evidence.
     if (delta.addedTarballs.some(key => !addedNodeKeys.has(key))) {
       invariant('completion tarball receipt is incomplete')
     }

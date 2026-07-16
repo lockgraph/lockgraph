@@ -342,7 +342,7 @@ describe('complete/constraints — selectConstrained directly', () => {
 // mint of the same version — else the constraint path could write a lock the PM
 // rewrites (integrity/libc/field drift). This is the load-bearing guard.
 describe('complete/constraints — frozen-clean parity', () => {
-  const REAL_SRI = 'sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHqxhoLj0jyGCwlChSjhO66etF1Yx9pE7Q=='
+  const REAL_SRI = 'sha512-' + Buffer.alloc(64, 5).toString('base64')
   // bar 1.0.0 AND 1.5.0 both satisfy engines>=18 (declared >=16), so the
   // constrained path selects the SAME version the unconstrained path does (1.5.0).
   const pkgs = (): Record<string, Record<string, PackumentVersion>> => ({

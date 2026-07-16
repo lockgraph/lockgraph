@@ -191,6 +191,7 @@ describe('complete/completeTransitives', () => {
     const result = await completeTransitives(graph, fakeRegistry)
     expect(result.added).toContain('ms@2.1.3')
     expect(result.graph.getNode('ms@2.1.3')).toBeDefined()
+    expect(result.graph.tarball({ name: 'ms', version: '2.1.3' })).toBeUndefined()
     // Edge wired: lodash → ms
     const lodashOut = result.graph.out('lodash@4.17.21')
     expect(lodashOut.some(e => e.dst === 'ms@2.1.3' && e.kind === 'dep')).toBe(true)
