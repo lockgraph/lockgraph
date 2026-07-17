@@ -278,15 +278,40 @@ export function check(input: string): boolean {
 export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
   const normalized = normalizeLineEndings(input)
   const yaml = readYaml(normalized)
+  assertPnpmV5Version(normalized, yaml)
+  const context = createPnpmV5ParseContext(yaml)
+  addPnpmV5PackageNodes(context)
+  const importers = collectPnpmV5Importers(context)
+  addPnpmV5ImporterNodes(context, importers)
+  addPnpmV5ImporterEdges(context, importers)
+  addPnpmV5ResolvedTreeEdges(context)
+  return sealPnpmV5Parse(context)
+}
 
-  // The YAML reader is shape-agnostic for scalars — both `5.4` (decimal)
-  // and `'6.0'` (quoted) come back as the same JS string. The reader
-  // never coerces. The byte-level regex below is therefore the
-  // authoritative discriminator between v5 (unquoted) and v6/v9 (quoted);
-  // the accepted-literal set check is a secondary sanity gate. Both run
-  // so that hand-edited inputs whose literal lies outside `{5.0..5.4}`
-  // surface a clear FORMAT_MISMATCH with the parsed-but-rejected value
-  // in the message.
+interface PnpmV5ParseContext {
+  yaml: YamlMap
+  builder: ReturnType<typeof newBuilder>
+  diagnostics: Diagnostic[]
+  sidecar: PnpmV5Sidecar
+  packagesMap: Record<string, unknown>
+  seenIds: Set<string>
+  idByPackagesKey: Map<string, string>
+}
+
+interface PnpmV5ImporterLayout {
+  effective: Record<string, unknown>
+  paths: string[]
+  rootPath: string
+}
+
+interface PnpmV5ImporterEdgeContext {
+  parse: PnpmV5ParseContext
+  importerPath: string
+  srcId: string
+  specMap: Record<string, unknown> | undefined
+}
+
+function assertPnpmV5Version(normalized: string, yaml: YamlMap): void {
   if (!/^\s*lockfileVersion\s*:\s*5\.\d+\s*(?:#.*)?$/m.test(normalized)) {
     throw new LockfileError({
       code: 'FORMAT_MISMATCH',
@@ -300,34 +325,33 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
       message: `pnpm-v5 adapter: expected lockfileVersion in {5.0…5.4}, got ${JSON.stringify(yaml.lockfileVersion)}`,
     })
   }
+}
 
-  const builder = newBuilder()
-  const diagnostics: Diagnostic[] = []
+function createPnpmV5ParseContext(yaml: YamlMap): PnpmV5ParseContext {
   const sidecar: PnpmV5Sidecar = {
-    rootId: '',
-    importerPaths: [],
-    importerByPath: new Map<string, string>(),
-    importerSpecifiers: new Map<string, Record<string, string>>(),
-    nodes: new Map<string, PnpmV5NodeSidecar>(),
-    importerEdges: new Map<string, PnpmV5EdgeSidecar>(),
+    rootId: '', importerPaths: [], importerByPath: new Map(),
+    importerSpecifiers: new Map(), nodes: new Map(), importerEdges: new Map(),
   }
-
-  // Top-level `overrides:` block — pnpm 6–7 write it into v5.4 and frozen-compare
-  // it against config. Captured verbatim so a bump stays --frozen-lockfile-clean.
   if (yaml.overrides !== undefined && typeof yaml.overrides === 'object') {
     sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
   }
+  return {
+    yaml,
+    builder: newBuilder(),
+    diagnostics: [],
+    sidecar,
+    packagesMap: isPlainObject(yaml.packages) ? yaml.packages : {},
+    seenIds: new Set(),
+    idByPackagesKey: new Map(),
+  }
+}
 
-  const packagesMap = isPlainObject(yaml.packages) ? yaml.packages : {}
-
-  // --- Pass 1: build node set from packages keys (peer-context lives
-  //             directly on key per right-to-left peel grammar). ---
-  const seenIds = new Set<string>()
-  const idByPackagesKey = new Map<string, string>()
-  for (const pkgKey of Object.keys(packagesMap)) {
+// Pass 1: package keys carry the v5 underscore peer context.
+function addPnpmV5PackageNodes(context: PnpmV5ParseContext): void {
+  for (const pkgKey of Object.keys(context.packagesMap)) {
     const parsed = parsePackagesKey(pkgKey)
     if (parsed === undefined) {
-      diagnostics.push({
+      context.diagnostics.push({
         code: 'PNPM_BAD_ENTRY',
         severity: 'warning',
         message: `pnpm-v5 packages key ${JSON.stringify(pkgKey)} not parseable`,
@@ -337,206 +361,217 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
     const { name, version: ver, peers } = parsed
     const peerContext = peers.map(p => `${p.name}@${p.version}`).sort(cmpStr)
     const nodeId = serializeNodeId(name, ver, peerContext)
-    if (seenIds.has(nodeId)) continue
-    seenIds.add(nodeId)
-    idByPackagesKey.set(pkgKey, nodeId)
-    addPackageNode(builder, sidecar, name, ver, peerContext, nodeId, packagesMap[pkgKey], diagnostics)
+    if (context.seenIds.has(nodeId)) continue
+    context.seenIds.add(nodeId)
+    context.idByPackagesKey.set(pkgKey, nodeId)
+    addPackageNode(
+      context.builder, context.sidecar, name, ver, peerContext, nodeId,
+      context.packagesMap[pkgKey], context.diagnostics,
+    )
   }
+}
 
-  // --- Pass 2: importers — single-importer collapsed-root vs multi. ---
-  //
-  // Layout discriminant: `importers` block present ⇒ multi-importer
-  // mode (each importer carries its own `specifiers` + `dependencies`
-  // sub-blocks). Otherwise single-importer mode (top-level
-  // `specifiers` + `dependencies` collapse to the root importer).
-  //
-  // PNPM_V5_DUAL_TOP_LEVEL_DRIFT — hand-edited input may carry both
-  // shapes; `importers` wins on parse.
+// Pass 2 layout: `importers` wins over a hand-edited collapsed-root duplicate.
+function collectPnpmV5Importers(context: PnpmV5ParseContext): PnpmV5ImporterLayout {
+  const { yaml } = context
   const importersMap = isPlainObject(yaml.importers) ? yaml.importers : undefined
-  const hasTopLevelDeps = yaml.specifiers !== undefined
-    || yaml.dependencies !== undefined
-    || yaml.devDependencies !== undefined
-    || yaml.optionalDependencies !== undefined
+  const hasTopLevelDeps = hasPnpmV5TopLevelDependencies(yaml)
   if (importersMap !== undefined && hasTopLevelDeps) {
-    diagnostics.push({
+    context.diagnostics.push({
       code: 'PNPM_V5_DUAL_TOP_LEVEL_DRIFT',
       severity: 'warning',
       message: 'pnpm-v5: input carries both top-level `specifiers`/`dependencies` and `importers`; `importers` wins',
     })
   }
-
-  const effectiveImporters: Record<string, unknown> = {}
+  const effective: Record<string, unknown> = {}
   if (importersMap !== undefined) {
-    for (const key of Object.keys(importersMap)) {
-      effectiveImporters[key] = importersMap[key]
-    }
+    for (const key of Object.keys(importersMap)) effective[key] = importersMap[key]
   } else if (hasTopLevelDeps) {
-    effectiveImporters['.'] = buildCollapsedRootImporter(yaml)
+    effective['.'] = buildCollapsedRootImporter(yaml)
   }
-  if (Object.keys(effectiveImporters).length === 0) {
-    effectiveImporters['.'] = {}
-  }
+  if (Object.keys(effective).length === 0) effective['.'] = {}
+  const paths = Object.keys(effective).sort(cmpStr)
+  return { effective, paths, rootPath: paths.includes('.') ? '.' : (paths[0] ?? '.') }
+}
 
-  const importerPaths = Object.keys(effectiveImporters).sort(cmpStr)
-  const rootImporterPath = importerPaths.includes('.') ? '.' : (importerPaths[0] ?? '.')
+function hasPnpmV5TopLevelDependencies(yaml: YamlMap): boolean {
+  return yaml.specifiers !== undefined
+    || yaml.dependencies !== undefined
+    || yaml.devDependencies !== undefined
+    || yaml.optionalDependencies !== undefined
+}
 
-  const rootName = '.'
-  const rootVersion = '0.0.0'
-  const rootId = `${rootName}@${rootVersion}`
-  builder.addNode({
-    id: rootId,
-    name: rootName,
-    version: rootVersion,
-    peerContext: [],
-    workspacePath: '',
-  })
-  sidecar.rootId = rootId
-  sidecar.importerByPath.set(rootImporterPath, rootId)
-
-  for (const importerPath of importerPaths) {
-    if (importerPath === rootImporterPath) continue
+function addPnpmV5ImporterNodes(context: PnpmV5ParseContext, layout: PnpmV5ImporterLayout): void {
+  const rootId = '.@0.0.0'
+  context.builder.addNode({ id: rootId, name: '.', version: '0.0.0', peerContext: [], workspacePath: '' })
+  context.sidecar.rootId = rootId
+  context.sidecar.importerByPath.set(layout.rootPath, rootId)
+  for (const importerPath of layout.paths) {
+    if (importerPath === layout.rootPath) continue
     const memberName = importerPath
-    const memberVersion = '0.0.0'
-    const memberId = `${memberName}@${memberVersion}`
-    sidecar.importerByPath.set(importerPath, memberId)
-    builder.addNode({
-      id: memberId,
-      name: memberName,
-      version: memberVersion,
-      peerContext: [],
-      workspacePath: importerPath,
-    })
+    const memberId = `${memberName}@0.0.0`
+    context.sidecar.importerByPath.set(importerPath, memberId)
+    context.builder.addNode({ id: memberId, name: memberName, version: '0.0.0', peerContext: [], workspacePath: importerPath })
   }
-  sidecar.importerPaths = importerPaths.slice()
+  context.sidecar.importerPaths = layout.paths.slice()
+}
 
-  // --- Pass 3: importer edges + specifiers sidecar. ---
-  for (const importerPath of importerPaths) {
-    const srcId = sidecar.importerByPath.get(importerPath)
+// Pass 3: importer specifiers and resolved dependency edges.
+function addPnpmV5ImporterEdges(context: PnpmV5ParseContext, layout: PnpmV5ImporterLayout): void {
+  for (const importerPath of layout.paths) {
+    const srcId = context.sidecar.importerByPath.get(importerPath)
     if (srcId === undefined) continue
-    const importerEntry = effectiveImporters[importerPath]
+    const importerEntry = layout.effective[importerPath]
     if (!isPlainObject(importerEntry)) continue
-
-    // Capture specifiers sidecar verbatim.
-    const specMap = importerEntry.specifiers
-    if (isPlainObject(specMap)) {
-      const localSpecs: Record<string, string> = {}
-      for (const [k, v] of Object.entries(specMap)) {
-        if (typeof v === 'string') localSpecs[k] = v
-      }
-      if (Object.keys(localSpecs).length > 0) {
-        sidecar.importerSpecifiers.set(importerPath, localSpecs)
-      }
-    }
-
+    const specMap = isPlainObject(importerEntry.specifiers) ? importerEntry.specifiers : undefined
+    capturePnpmV5ImporterSpecifiers(context, importerPath, specMap)
+    const edgeContext: PnpmV5ImporterEdgeContext = { parse: context, importerPath, srcId, specMap }
     for (const [kind, blockName] of [
       ['dep', 'dependencies'],
       ['dev', 'devDependencies'],
       ['optional', 'optionalDependencies'],
     ] as const) {
-      const block = importerEntry[blockName]
-      if (!isPlainObject(block)) continue
-      const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
-      for (const [depName, depValue] of entries) {
-        if (typeof depValue !== 'string') continue
-        const specifier = isPlainObject(specMap) && typeof specMap[depName] === 'string'
-          ? (specMap[depName] as string)
-          : undefined
-
-        // `link:` resolution (workspace cross-refs).
-        if (depValue.startsWith('link:')) {
-          const linkPath = resolveLinkPath(importerPath, depValue.slice(5))
-          const targetId = sidecar.importerByPath.get(linkPath)
-          if (targetId === undefined) {
-            diagnostics.push({
-              code: 'PNPM_UNRESOLVED_DEP',
-              severity: 'warning',
-              subject: srcId,
-              message: `pnpm-v5: importer ${JSON.stringify(importerPath)} dep ${depName} resolves to unknown workspace ${JSON.stringify(linkPath)}`,
-            })
-            continue
-          }
-          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
-          // pnpm-v5 carries `workspace:<spec>` via the specifiers map;
-          // the dep value (`link:<path>`) is resolution, not range.
-          // resolvedVersion is the synthesised member node version
-          // parsed from the targetId (`<importerPath>@<version>`).
-          const rawSpecifier = specifier ?? ''
-          const targetVersion = nodeVersionOf(targetId)
-          const workspaceRange = targetVersion !== undefined && targetVersion !== ''
-            ? { specifier: rawSpecifier, resolvedVersion: targetVersion }
-            : { specifier: rawSpecifier }
-          const attrs: { range: string; workspace: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = {
-            range: specifier ?? depValue,
-            workspace: true,
-            workspaceRange,
-          }
-          try {
-            builder.addEdge(srcId, targetId, kind, attrs)
-          } catch (error) {
-            if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-            throw error
-          }
-          // Alias slot in the key so a plain dep and an npm-alias to the SAME
-          // target don't collide (workspace deps are never aliased → empty slot).
-          const edgeKey = `${srcId}\0${kind}\0${targetId}\0`
-          sidecar.importerEdges.set(edgeKey, { resolvedVersion: depValue, specifier })
-          continue
-        }
-
-        // Bare version (with optional `_peer@version` suffix per v5 syntax).
-        let targetId = resolveDependencyTarget(seenIds, depName, depValue)
-        let aliasSlot: string | undefined
-        if (targetId === undefined) {
-          const aliased = resolveAliasedDependencyTarget(seenIds, depValue)
-          if (aliased !== undefined) {
-            targetId = aliased
-            aliasSlot = depName
-          }
-        }
-        if (targetId === undefined) {
-          diagnostics.push({
-            code: 'PNPM_UNRESOLVED_DEP',
-            severity: 'warning',
-            subject: srcId,
-            message: `pnpm-v5: importer ${JSON.stringify(importerPath)} dep ${depName}@${depValue} resolves to no packages entry`,
-          })
-          continue
-        }
-        try {
-          const attrs: { range: string; alias?: string } = { range: specifier ?? depValue }
-          if (aliasSlot !== undefined) attrs.alias = aliasSlot
-          builder.addEdge(srcId, targetId, kind, attrs)
-        } catch (error) {
-          if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-          throw error
-        }
-        // Alias slot in the key — a plain `react:^x` dep and an aliased
-        // `foo: react@x` dep resolve to the SAME node; without the alias the plain
-        // edge reads back the alias descriptor (specifier/version corruption).
-        const edgeKey = `${srcId}\0${kind}\0${targetId}\0${aliasSlot ?? ''}`
-        sidecar.importerEdges.set(edgeKey, { resolvedVersion: depValue, specifier })
-      }
+      addPnpmV5ImporterBlockEdges(edgeContext, importerEntry[blockName], kind)
     }
   }
+}
 
-  // --- Pass 4: resolved-tree edges from packages entries (inline transitives). ---
-  for (const pkgKey of Object.keys(packagesMap)) {
-    const srcId = idByPackagesKey.get(pkgKey)
+function capturePnpmV5ImporterSpecifiers(
+  context: PnpmV5ParseContext,
+  importerPath: string,
+  specMap: Record<string, unknown> | undefined,
+): void {
+  if (specMap === undefined) return
+  const localSpecs: Record<string, string> = {}
+  for (const [key, value] of Object.entries(specMap)) {
+    if (typeof value === 'string') localSpecs[key] = value
+  }
+  if (Object.keys(localSpecs).length > 0) context.sidecar.importerSpecifiers.set(importerPath, localSpecs)
+}
+
+function addPnpmV5ImporterBlockEdges(
+  context: PnpmV5ImporterEdgeContext,
+  block: unknown,
+  kind: 'dep' | 'dev' | 'optional',
+): void {
+  if (!isPlainObject(block)) return
+  for (const [depName, depValue] of Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))) {
+    if (typeof depValue !== 'string') continue
+    const rawSpecifier = context.specMap?.[depName]
+    const specifier = typeof rawSpecifier === 'string' ? rawSpecifier : undefined
+    addPnpmV5ImporterDependency(context, kind, depName, depValue, specifier)
+  }
+}
+
+function addPnpmV5ImporterDependency(
+  context: PnpmV5ImporterEdgeContext,
+  kind: 'dep' | 'dev' | 'optional',
+  depName: string,
+  depValue: string,
+  specifier: string | undefined,
+): void {
+  if (depValue.startsWith('link:')) {
+    addPnpmV5WorkspaceDependency(context, kind, depName, depValue, specifier)
+  } else {
+    addPnpmV5ResolvedDependency(context, kind, depName, depValue, specifier)
+  }
+}
+
+function addPnpmV5WorkspaceDependency(
+  context: PnpmV5ImporterEdgeContext,
+  kind: 'dep' | 'dev' | 'optional',
+  depName: string,
+  depValue: string,
+  specifier: string | undefined,
+): void {
+  const { parse, importerPath, srcId } = context
+  const linkPath = resolveLinkPath(importerPath, depValue.slice(5))
+  const targetId = parse.sidecar.importerByPath.get(linkPath)
+  if (targetId === undefined) {
+    parse.diagnostics.push({
+      code: 'PNPM_UNRESOLVED_DEP', severity: 'warning', subject: srcId,
+      message: `pnpm-v5: importer ${JSON.stringify(importerPath)} dep ${depName} resolves to unknown workspace ${JSON.stringify(linkPath)}`,
+    })
+    return
+  }
+  const targetVersion = nodeVersionOf(targetId)
+  const workspaceRange = targetVersion !== undefined && targetVersion !== ''
+    ? { specifier: specifier ?? '', resolvedVersion: targetVersion }
+    : { specifier: specifier ?? '' }
+  const added = tryAddPnpmV5Edge(parse.builder, srcId, targetId, kind, {
+    range: specifier ?? depValue, workspace: true, workspaceRange,
+  })
+  if (!added) return
+  parse.sidecar.importerEdges.set(`${srcId}\0${kind}\0${targetId}\0`, { resolvedVersion: depValue, specifier })
+}
+
+function addPnpmV5ResolvedDependency(
+  context: PnpmV5ImporterEdgeContext,
+  kind: 'dep' | 'dev' | 'optional',
+  depName: string,
+  depValue: string,
+  specifier: string | undefined,
+): void {
+  const { parse, importerPath, srcId } = context
+  let targetId = resolveDependencyTarget(parse.seenIds, depName, depValue)
+  let aliasSlot: string | undefined
+  if (targetId === undefined) {
+    targetId = resolveAliasedDependencyTarget(parse.seenIds, depValue)
+    if (targetId !== undefined) aliasSlot = depName
+  }
+  if (targetId === undefined) {
+    parse.diagnostics.push({
+      code: 'PNPM_UNRESOLVED_DEP', severity: 'warning', subject: srcId,
+      message: `pnpm-v5: importer ${JSON.stringify(importerPath)} dep ${depName}@${depValue} resolves to no packages entry`,
+    })
+    return
+  }
+  const attrs: { range: string; alias?: string } = { range: specifier ?? depValue }
+  if (aliasSlot !== undefined) attrs.alias = aliasSlot
+  if (!tryAddPnpmV5Edge(parse.builder, srcId, targetId, kind, attrs)) return
+  parse.sidecar.importerEdges.set(
+    `${srcId}\0${kind}\0${targetId}\0${aliasSlot ?? ''}`,
+    { resolvedVersion: depValue, specifier },
+  )
+}
+
+function tryAddPnpmV5Edge(
+  builder: ReturnType<typeof newBuilder>,
+  srcId: string,
+  targetId: string,
+  kind: 'dep' | 'dev' | 'optional',
+  attrs: Edge['attrs'],
+): boolean {
+  try {
+    builder.addEdge(srcId, targetId, kind, attrs)
+    return true
+  } catch (error) {
+    if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') return false
+    throw error
+  }
+}
+
+// Pass 4: inline package dependency trees.
+function addPnpmV5ResolvedTreeEdges(context: PnpmV5ParseContext): void {
+  for (const pkgKey of Object.keys(context.packagesMap)) {
+    const srcId = context.idByPackagesKey.get(pkgKey)
     if (srcId === undefined) continue
     const parsed = parsePackagesKey(pkgKey)
     if (parsed === undefined) continue
-    const pkgEntry = packagesMap[pkgKey]
+    const pkgEntry = context.packagesMap[pkgKey]
     if (!isPlainObject(pkgEntry)) continue
-    addResolvedTreeEdges(builder, diagnostics, srcId, pkgEntry, parsed.peers, seenIds, sidecar)
+    addResolvedTreeEdges(
+      context.builder, context.diagnostics, srcId, pkgEntry, parsed.peers,
+      context.seenIds, context.sidecar,
+    )
   }
+}
 
-  for (const diagnostic of diagnostics) {
-    builder.diagnostic(diagnostic)
-  }
-
+function sealPnpmV5Parse(context: PnpmV5ParseContext): Graph {
+  for (const diagnostic of context.diagnostics) context.builder.diagnostic(diagnostic)
   try {
-    const graph = builder.seal()
-    rememberSidecar(graph, sidecar)
+    const graph = context.builder.seal()
+    rememberSidecar(graph, context.sidecar)
     return graph
   } catch (error) {
     if (error instanceof GraphError) {
@@ -554,39 +589,69 @@ export function stringify(
   options: PnpmV5StringifyOptions = {},
   internal: PnpmV5StringifyInternalOptions = {},
 ): string {
-  const sidecar = sidecarByGraph.get(graph)
-  const emitDiagnostic = (diagnostic: Diagnostic): void => {
-    options.onDiagnostic?.(diagnostic)
-  }
+  const context = createPnpmV5StringifyContext(graph, options, internal)
+  reportPnpmV5UnsupportedFeatures(context)
+  const nodes = partitionPnpmV5StringifyNodes(context)
+  const out = createPnpmV5Output(context)
+  writePnpmV5Overrides(context, out)
+  writePnpmV5ImporterLayout(context, nodes.workspace, out)
+  writePnpmV5Packages(context, nodes.resolved, out)
+  assertResolveValid(graph, out, context.rootNode, nodes.resolved, context.emitDiagnostic)
+  const text = emitYaml(out, { topLevelOrder: TOP_LEVEL_ORDER, topLevelSectionKeys: TOP_LEVEL_SECTION_KEYS })
+  return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
+}
 
-  // Patch slot is not part of v5 schema in the working corpus — warn and drop.
+interface PnpmV5StringifyContext {
+  graph: Graph
+  options: PnpmV5StringifyOptions
+  internal: PnpmV5StringifyInternalOptions
+  sidecar: PnpmV5Sidecar | undefined
+  rootNode: Node | undefined
+  emitDiagnostic: (diagnostic: Diagnostic) => void
+}
+
+function createPnpmV5StringifyContext(
+  graph: Graph,
+  options: PnpmV5StringifyOptions,
+  internal: PnpmV5StringifyInternalOptions,
+): PnpmV5StringifyContext {
+  const sidecar = sidecarByGraph.get(graph)
+  return {
+    graph, options, internal, sidecar,
+    rootNode: locatePnpmRootNode(graph, sidecar),
+    emitDiagnostic: diagnostic => options.onDiagnostic?.(diagnostic),
+  }
+}
+
+function reportPnpmV5UnsupportedFeatures(context: PnpmV5StringifyContext): void {
   const warnedPatches = new Set<string>()
-  for (const node of graph.nodes()) {
+  for (const node of context.graph.nodes()) {
     if (node.patch !== undefined && !warnedPatches.has(node.id)) {
       warnedPatches.add(node.id)
       patchEmitDropped(
         node.id,
         'patch',
         `pnpm-v5 has no patch slot in the working corpus; ${JSON.stringify(node.patch)} dropped`,
-        emitDiagnostic,
+        context.emitDiagnostic,
       )
     }
   }
-
-  // Settings carried via cross-version composition (v6/v9 sidecar) — drop on emit.
-  if (sidecar?.inboundSettings !== undefined && Object.keys(sidecar.inboundSettings).length > 0) {
-    emitDiagnostic({
+  if (context.sidecar?.inboundSettings !== undefined && Object.keys(context.sidecar.inboundSettings).length > 0) {
+    context.emitDiagnostic({
       code: 'PNPM_V5_SETTINGS_DROPPED',
       severity: 'warning',
       message: 'pnpm-v5 has no `settings` block; dropping cross-version settings on emit',
     })
   }
+}
 
-  const rootNode = locatePnpmRootNode(graph, sidecar)
+function partitionPnpmV5StringifyNodes(
+  context: PnpmV5StringifyContext,
+): { workspace: Node[]; resolved: Node[] } {
   const workspaceNodes: Node[] = []
   const resolvedNodes: Node[] = []
-  for (const node of graph.nodes()) {
-    if (node.id === rootNode?.id) continue
+  for (const node of context.graph.nodes()) {
+    if (node.id === context.rootNode?.id) continue
     if (node.workspacePath !== undefined && node.workspacePath !== '') {
       workspaceNodes.push(node)
     } else {
@@ -595,85 +660,78 @@ export function stringify(
   }
   workspaceNodes.sort((a, b) => cmpStr(a.workspacePath ?? '', b.workspacePath ?? ''))
   resolvedNodes.sort((a, b) => cmpStr(packagesKeyForNode(a), packagesKeyForNode(b)))
+  return { workspace: workspaceNodes, resolved: resolvedNodes }
+}
 
+function createPnpmV5Output(_context: PnpmV5StringifyContext): YamlMap {
   const out: YamlMap = {}
-  // Decimal scalar — NO quoted wrapper (numeric scalar emit path).
   out.lockfileVersion = V5_LOCKFILE_VERSION_CANONICAL
+  return out
+}
 
-  // Top-level `overrides:` — caller `options.overrides` (canonical → pnpm flat
-  // `>`-selectors) overlaid onto the captured lock-borne block (caller wins per
-  // key). pnpm 6–7 frozen-compare this against config, so a missing/mismatched
-  // block fails `--frozen-lockfile`. Ordered after lockfileVersion (TOP_LEVEL_ORDER).
-  let effectiveOverrides: Record<string, string> | undefined = sidecar?.overrides
-  if (options.overrides !== undefined) {
-    const projected = options.overrides.length > 0
-      ? (projectOverrides(options.overrides, 'pnpm', emitDiagnostic) as Record<string, string>)
+function writePnpmV5Overrides(context: PnpmV5StringifyContext, out: YamlMap): void {
+  let effectiveOverrides: Record<string, string> | undefined = context.sidecar?.overrides
+  if (context.options.overrides !== undefined) {
+    const projected = context.options.overrides.length > 0
+      ? (projectOverrides(context.options.overrides, 'pnpm', context.emitDiagnostic) as Record<string, string>)
       : {}
-    effectiveOverrides = { ...(sidecar?.overrides ?? {}), ...projected }
+    effectiveOverrides = { ...(context.sidecar?.overrides ?? {}), ...projected }
   }
   if (effectiveOverrides !== undefined && Object.keys(effectiveOverrides).length > 0) {
     out.overrides = sortRecord(effectiveOverrides) as YamlMap
   }
+}
 
-  // Layout discriminant: single-importer collapsed-root vs multi-importer.
-  const hasMulti = workspaceNodes.length > 0
-  if (hasMulti) {
+function writePnpmV5ImporterLayout(
+  context: PnpmV5StringifyContext,
+  workspaceNodes: readonly Node[],
+  out: YamlMap,
+): void {
+  if (workspaceNodes.length > 0) {
     const importers: YamlMap = {}
     importers['.'] = buildImporterEntry(
-      graph,
-      sidecar,
-      rootNode,
+      context.graph,
+      context.sidecar,
+      context.rootNode,
       '.',
-      options.overrides,
-      internal.workspaceNames,
+      context.options.overrides,
+      context.internal.workspaceNames,
     )
     for (const wsNode of workspaceNodes) {
       const wsPath = wsNode.workspacePath ?? wsNode.name
       importers[wsPath] = buildImporterEntry(
-        graph,
-        sidecar,
+        context.graph,
+        context.sidecar,
         wsNode,
         wsPath,
-        options.overrides,
-        internal.workspaceNames,
+        context.options.overrides,
+        context.internal.workspaceNames,
       )
     }
     out.importers = sortRecord(importers) as YamlMap
-  } else {
-    // Single-importer collapsed-root: top-level specifiers + deps blocks.
-    const rootEntry = buildImporterEntry(
-      graph,
-      sidecar,
-      rootNode,
-      '.',
-      options.overrides,
-      internal.workspaceNames,
-    )
-    if (rootEntry.specifiers !== undefined) out.specifiers = rootEntry.specifiers
-    else out.specifiers = {}
-    if (rootEntry.dependencies !== undefined) out.dependencies = rootEntry.dependencies
-    if (rootEntry.devDependencies !== undefined) out.devDependencies = rootEntry.devDependencies
-    if (rootEntry.optionalDependencies !== undefined) out.optionalDependencies = rootEntry.optionalDependencies
+    return
   }
+  const rootEntry = buildImporterEntry(
+    context.graph, context.sidecar, context.rootNode, '.',
+    context.options.overrides, context.internal.workspaceNames,
+  )
+  out.specifiers = rootEntry.specifiers ?? {}
+  if (rootEntry.dependencies !== undefined) out.dependencies = rootEntry.dependencies
+  if (rootEntry.devDependencies !== undefined) out.devDependencies = rootEntry.devDependencies
+  if (rootEntry.optionalDependencies !== undefined) out.optionalDependencies = rootEntry.optionalDependencies
+}
 
-  // packages — keyed `/<name>/<version>[<peer-tail>]` per node.
+function writePnpmV5Packages(
+  context: PnpmV5StringifyContext,
+  resolvedNodes: readonly Node[],
+  out: YamlMap,
+): void {
   const packages: YamlMap = {}
   for (const node of resolvedNodes) {
     const key = packagesKeyForNode(node)
-    packages[key] = buildPackageEntry(graph, sidecar, node)
+    packages[key] = buildPackageEntry(context.graph, context.sidecar, node)
   }
   out.packages = packages
-
-  // ADR-0028 INV-RESOLVE — verify the v5 encoding before serialising. v5 ships
-  // a STANDALONE pipeline (it does not call `stringifyFamily`), so the verifier
-  // is wired here separately or it ships uncovered.
-  assertResolveValid(graph, out, rootNode, resolvedNodes, emitDiagnostic)
-
-  const text = emitYaml(out, {
-    topLevelOrder: TOP_LEVEL_ORDER,
-    topLevelSectionKeys: TOP_LEVEL_SECTION_KEYS,
-  })
-  return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
 // ADR-0028 INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
@@ -771,67 +829,80 @@ export function enrich(
   options: PnpmV5EnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph)
-  const diagnostics: Diagnostic[] = []
-
-  // §C peer-virt three-branch fallback (dominant path: peer-context
-  // already read at parse from underscore-suffixed packages keys).
-  for (const node of graph.nodes()) {
-    const nodeSc = sidecar?.nodes.get(node.id)
-    const rawPeers = nodeSc?.peerDependencies
-    if (rawPeers === undefined) continue
-    const declaredPeers = Object.keys(rawPeers).sort(cmpStr)
-    for (const peerName of declaredPeers) {
-      const peerRange = rawPeers[peerName]
-      if (peerRange === undefined) continue
-      const alreadyBound = node.peerContext.some(p => stripPeerContextFromNodeId(p).startsWith(`${peerName}@`))
-      if (alreadyBound) continue
-
-      const candidates = derivePeerCandidates(graph, peerName, peerRange)
-      if (candidates.length === 1) {
-        diagnostics.push({
-          code: 'PNPM_V5_PEER_BOUND',
-          severity: 'info',
-          subject: node.id,
-          message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} → ${candidates[0]} (1-candidate fallback; on-disk peer-context absent)`,
-        })
-      } else if (candidates.length === 0) {
-        diagnostics.push({
-          code: 'PNPM_V5_PEER_UNSATISFIED',
-          severity: 'warning',
-          subject: node.id,
-          message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches no installed version`,
-        })
-      } else {
-        diagnostics.push({
-          code: 'PNPM_V5_PEER_AMBIGUOUS',
-          severity: 'warning',
-          subject: node.id,
-          message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches multiple candidates: ${candidates.join(', ')}`,
-        })
-      }
-    }
-  }
-
-  // Workspace concretisation.
+  const diagnostics = collectPnpmV5PeerDiagnostics(graph, sidecar)
   if (options.manifests === undefined) {
-    const hasWorkspaceHint = Array.from(graph.nodes())
-      .some(n => n.workspacePath !== undefined && n.workspacePath !== '')
-    if (hasWorkspaceHint) {
-      diagnostics.push({
-        code: 'PNPM_V5_NO_MANIFESTS',
-        severity: 'warning',
-        message: 'pnpm-v5 workspace concretisation requires manifests; leaving graph unclassified',
-      })
-    }
+    reportPnpmV5MissingManifests(graph, diagnostics)
     return { graph, diagnostics }
   }
-
   const plan = planManifestEnrich(graph, sidecar, options.manifests)
   if (plan.addRootEdges.length === 0 && plan.markWorkspaceEdges.length === 0) {
     return { graph, diagnostics }
   }
+  const enriched = applyPnpmV5ManifestPlan(graph, plan)
+  if (sidecar !== undefined) rememberSidecar(enriched, sidecar)
+  return { graph: enriched, diagnostics }
+}
 
-  const result = graph.mutate(m => {
+function collectPnpmV5PeerDiagnostics(
+  graph: Graph,
+  sidecar: PnpmV5Sidecar | undefined,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  for (const node of graph.nodes()) {
+    const nodeSc = sidecar?.nodes.get(node.id)
+    const rawPeers = nodeSc?.peerDependencies
+    if (rawPeers === undefined) continue
+    for (const peerName of Object.keys(rawPeers).sort(cmpStr)) {
+      const peerRange = rawPeers[peerName]
+      if (peerRange === undefined) continue
+      const alreadyBound = node.peerContext.some(p => stripPeerContextFromNodeId(p).startsWith(`${peerName}@`))
+      if (alreadyBound) continue
+      diagnostics.push(pnpmV5PeerDiagnostic(graph, node, peerName, peerRange))
+    }
+  }
+  return diagnostics
+}
+
+function pnpmV5PeerDiagnostic(
+  graph: Graph,
+  node: Node,
+  peerName: string,
+  peerRange: string,
+): Diagnostic {
+  const candidates = derivePeerCandidates(graph, peerName, peerRange)
+  if (candidates.length === 1) {
+    return {
+      code: 'PNPM_V5_PEER_BOUND', severity: 'info', subject: node.id,
+      message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} → ${candidates[0]} (1-candidate fallback; on-disk peer-context absent)`,
+    }
+  }
+  if (candidates.length === 0) {
+    return {
+      code: 'PNPM_V5_PEER_UNSATISFIED', severity: 'warning', subject: node.id,
+      message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches no installed version`,
+    }
+  }
+  return {
+    code: 'PNPM_V5_PEER_AMBIGUOUS', severity: 'warning', subject: node.id,
+    message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches multiple candidates: ${candidates.join(', ')}`,
+  }
+}
+
+function reportPnpmV5MissingManifests(graph: Graph, diagnostics: Diagnostic[]): void {
+  const hasWorkspaceHint = Array.from(graph.nodes())
+    .some(node => node.workspacePath !== undefined && node.workspacePath !== '')
+  if (!hasWorkspaceHint) return
+  diagnostics.push({
+    code: 'PNPM_V5_NO_MANIFESTS',
+    severity: 'warning',
+    message: 'pnpm-v5 workspace concretisation requires manifests; leaving graph unclassified',
+  })
+}
+
+type PnpmV5ManifestPlan = ReturnType<typeof planManifestEnrich>
+
+function applyPnpmV5ManifestPlan(graph: Graph, plan: PnpmV5ManifestPlan): Graph {
+  return graph.mutate(m => {
     for (const edge of plan.addRootEdges) {
       m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
     }
@@ -839,10 +910,7 @@ export function enrich(
       m.removeEdge(edge.src, edge.dst, edge.kind)
       m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
     }
-  })
-
-  if (sidecar !== undefined) rememberSidecar(result.graph, sidecar)
-  return { graph: result.graph, diagnostics }
+  }).graph
 }
 
 export function optimize(

@@ -848,7 +848,7 @@ function addPnpmSnapshotTreeEdges(
     if (!seenIds.has(srcId)) continue
     const snapEntry = snapshotsMap[snapshotKey]
     if (!isPlainObject(snapEntry)) continue
-    addResolvedTreeEdges(builder, diagnostics, srcId, snapEntry, peers, seenIds, sidecar, shape, emittedEdges)
+    addResolvedTreeEdges(context, emittedEdges, { srcId, entry: snapEntry, peers })
   }
 }
 
@@ -865,7 +865,7 @@ function addPnpmInlineTreeEdges(
     if (parsed === undefined) continue
     const pkgEntry = packagesMap[pkgKey]
     if (!isPlainObject(pkgEntry)) continue
-    addResolvedTreeEdges(builder, diagnostics, srcId, pkgEntry, parsed.peers, seenIds, sidecar, shape, emittedEdges)
+    addResolvedTreeEdges(context, emittedEdges, { srcId, entry: pkgEntry, peers: parsed.peers })
   }
 }
 
@@ -1327,15 +1327,15 @@ function emitPnpmStringifyResult(context: PnpmStringifyContext): string {
     resolvedNodes,
     out,
   } = context
-  assertResolveValid(
+  assertResolveValid({
     graph,
     shape,
     out,
     rootNode,
     resolvedNodes,
-    emitDiagnostic,
+    onDiagnostic: emitDiagnostic,
     workspacePeerProjection,
-  )
+  })
   const text = emitYaml(out, {
     topLevelOrder: shape.topLevelOrder,
     topLevelSectionKeys: shape.topLevelSectionKeys,
@@ -1382,116 +1382,154 @@ export function stringifyFamily(
 // oracle. This reads the EMITTED `out` structure (the ground truth), so a
 // wrong slot key — e.g. an npm-aliased dep keyed by `d.name` instead of its
 // alias — surfaces as a violation.
-function assertResolveValid(
-  graph: Graph,
-  shape: PnpmLayoutShape,
-  out: YamlMap,
-  rootNode: Node | undefined,
-  resolvedNodes: readonly Node[],
-  onDiagnostic: (d: Diagnostic) => void,
-  workspacePeerProjection: PnpmWorkspacePeerProjection,
-): void {
-  // The set of NodeIds that actually got a packages/snapshots entry — exactly
-  // the `seenIds` the parse oracle checks membership against.
-  const seenIds = new Set<string>(resolvedNodes.map(n => n.id))
+interface ResolveValidationInput {
+  readonly graph: Graph
+  readonly shape: PnpmLayoutShape
+  readonly out: YamlMap
+  readonly rootNode: Node | undefined
+  readonly resolvedNodes: readonly Node[]
+  readonly onDiagnostic: (d: Diagnostic) => void
+  readonly workspacePeerProjection: PnpmWorkspacePeerProjection
+}
 
-  // Reconstruct the `importerByPath` the parse oracle uses (workspace path →
-  // member node id) so the verifier's resolve calls drop the SAME workspace
-  // peers (#8b-A / #70). Keys are importer paths: `.` for the root, plus each
-  // member node's `workspacePath`. Only the KEY set matters here (the workspace-
-  // peer filter just needs truthiness on a `+`-decoded path).
+interface ResolveValidationContext extends ResolveValidationInput {
+  readonly seenIds: Set<string>
+  readonly importerByPath: Map<string, string>
+  readonly importersMap: Record<string, unknown> | undefined
+  readonly snapshotsMap: Record<string, unknown> | undefined
+  readonly packagesMap: Record<string, unknown> | undefined
+}
+
+interface ResolveConsumerView {
+  readonly consumer: Node
+  readonly importer: boolean
+  readonly block: Record<string, unknown>
+  readonly blockNames: readonly string[]
+}
+
+function assertResolveValid(input: ResolveValidationInput): void {
+  const context = createResolveValidationContext(input)
+  for (const consumer of context.graph.nodes()) {
+    assertConsumerResolveValid(context, consumer)
+  }
+}
+
+function createResolveValidationContext(input: ResolveValidationInput): ResolveValidationContext {
   const importerByPath = new Map<string, string>()
-  if (rootNode !== undefined) importerByPath.set('.', rootNode.id)
-  for (const node of graph.nodes()) {
+  if (input.rootNode !== undefined) importerByPath.set('.', input.rootNode.id)
+  for (const node of input.graph.nodes()) {
     if (node.workspacePath !== undefined && node.workspacePath !== '') {
       importerByPath.set(node.workspacePath, node.id)
     }
   }
-
-  // The emitted consumer blocks, by consumer NodeId. v9 always has an
-  // `importers` map; v6 multi-importer too; v6 single-importer collapses the
-  // root's deps to top-level `out` blocks (no `importers`).
-  const importersMap = isPlainObject(out.importers) ? (out.importers as Record<string, unknown>) : undefined
-  const consumerBlockOf = (consumer: Node): Record<string, unknown> | undefined => {
-    const path = consumer.id === rootNode?.id ? '.' : (consumer.workspacePath ?? consumer.name)
-    if (importersMap !== undefined) {
-      const block = importersMap[path]
-      return isPlainObject(block) ? (block as Record<string, unknown>) : undefined
-    }
-    // Collapsed single-importer: root's deps live on `out` directly.
-    return consumer.id === rootNode?.id ? (out as Record<string, unknown>) : undefined
+  return {
+    ...input,
+    seenIds: new Set<string>(input.resolvedNodes.map(node => node.id)),
+    importerByPath,
+    importersMap: objectMap(input.out.importers),
+    snapshotsMap: objectMap(input.out.snapshots),
+    packagesMap: objectMap(input.out.packages),
   }
+}
 
-  // The emitted package adjacency, by package NodeId.
-  const snapshotsMap = isPlainObject(out.snapshots) ? (out.snapshots as Record<string, unknown>) : undefined
-  const packagesMap = isPlainObject(out.packages) ? (out.packages as Record<string, unknown>) : undefined
-  const packageBlockOf = (pkg: Node): Record<string, unknown> | undefined => {
-    if (shape.hasSnapshots) {
-      const entry = snapshotsMap?.[nodeIdToSnapshotKey(pkg, workspacePeerProjection)]
-      return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
-    }
-    const entry = packagesMap?.[packagesKeyForNode(pkg, shape, workspacePeerProjection)]
-    return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
+function objectMap(value: unknown): Record<string, unknown> | undefined {
+  return isPlainObject(value) ? (value as Record<string, unknown>) : undefined
+}
+
+function assertConsumerResolveValid(context: ResolveValidationContext, consumer: Node): void {
+  const importer = isResolveImporter(context, consumer)
+  if (!importer && !context.seenIds.has(consumer.id)) return
+  const block = importer
+    ? resolveConsumerBlock(context, consumer)
+    : resolvePackageBlock(context, consumer)
+  if (block === undefined) return
+  const blockNames = importer
+    ? ['dependencies', 'devDependencies', 'optionalDependencies'] as const
+    : ['dependencies', 'optionalDependencies'] as const
+  for (const edge of context.graph.out(consumer.id)) {
+    assertEmittedEdgeResolveValid(context, { consumer, importer, block, blockNames }, edge)
   }
+}
 
-  // Pull the slot value for `seg` out of a block, across the per-hop value
-  // shapes: importer entries are `{ specifier, version }` objects (read
-  // `version`); snapshot / inline-package entries are bare strings.
-  const slotValue = (block: Record<string, unknown>, blockNames: readonly string[], seg: string): string | undefined => {
-    for (const blockName of blockNames) {
-      const sub = block[blockName]
-      if (!isPlainObject(sub)) continue
-      const raw = (sub as Record<string, unknown>)[seg]
-      if (raw === undefined) continue
-      if (typeof raw === 'string') return raw
-      if (isPlainObject(raw) && typeof (raw as Record<string, unknown>).version === 'string') {
-        return (raw as Record<string, unknown>).version as string
-      }
-    }
-    return undefined
+function isResolveImporter(context: ResolveValidationContext, node: Node): boolean {
+  return node.id === context.rootNode?.id
+    || (node.workspacePath !== undefined && node.workspacePath !== '')
+}
+
+function resolveConsumerBlock(
+  context: ResolveValidationContext,
+  consumer: Node,
+): Record<string, unknown> | undefined {
+  const path = consumer.id === context.rootNode?.id
+    ? '.'
+    : (consumer.workspacePath ?? consumer.name)
+  if (context.importersMap !== undefined) return objectMap(context.importersMap[path])
+  return consumer.id === context.rootNode?.id
+    ? (context.out as Record<string, unknown>)
+    : undefined
+}
+
+function resolvePackageBlock(
+  context: ResolveValidationContext,
+  pkg: Node,
+): Record<string, unknown> | undefined {
+  const key = context.shape.hasSnapshots
+    ? nodeIdToSnapshotKey(pkg, context.workspacePeerProjection)
+    : packagesKeyForNode(pkg, context.shape, context.workspacePeerProjection)
+  const entry = context.shape.hasSnapshots
+    ? context.snapshotsMap?.[key]
+    : context.packagesMap?.[key]
+  return objectMap(entry)
+}
+
+function assertEmittedEdgeResolveValid(
+  context: ResolveValidationContext,
+  view: ResolveConsumerView,
+  edge: Edge,
+): void {
+  if (edge.kind !== 'dep' && edge.kind !== 'dev' && edge.kind !== 'optional') return
+  const dst = context.graph.getNode(edge.dst)
+  if (dst === undefined || (dst.workspacePath !== undefined && dst.workspacePath !== '')) return
+  if (!view.importer && (dst.id === view.consumer.id || dst.id === context.rootNode?.id)) return
+  const seg = edge.attrs?.alias ?? dst.name
+  const value = resolveEmittedSlotValue(view.block, view.blockNames, seg)
+  const resolved = resolveEmittedTarget(context, seg, value)
+  if (resolved === dst.id) return
+  context.onDiagnostic({
+    code: 'LAYOUT_RESOLVE_VIOLATION',
+    severity: 'error',
+    subject: { src: edge.src, dst: edge.dst, kind: edge.kind },
+    message:
+      `INV-RESOLVE violated: ${view.consumer.id} resolves ${JSON.stringify(seg)} to ` +
+      `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
+      `expected ${dst.id} (pnpm encoding defect — ADR-0028 INV-RESOLVE)`,
+  })
+}
+
+function resolveEmittedSlotValue(
+  block: Record<string, unknown>,
+  blockNames: readonly string[],
+  seg: string,
+): string | undefined {
+  for (const blockName of blockNames) {
+    const sub = objectMap(block[blockName])
+    if (sub === undefined) continue
+    const raw = sub[seg]
+    if (typeof raw === 'string') return raw
+    const entry = objectMap(raw)
+    if (typeof entry?.version === 'string') return entry.version
   }
+  return undefined
+}
 
-  const isImporter = (node: Node): boolean =>
-    node.id === rootNode?.id || (node.workspacePath !== undefined && node.workspacePath !== '')
-  const consumerBlockNames = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
-  const packageBlockNames = ['dependencies', 'optionalDependencies'] as const
-
-  for (const consumer of graph.nodes()) {
-    const consumerIsImporter = isImporter(consumer)
-    // Resolved-package consumers below the verified set were not emitted with
-    // adjacency (e.g. the synthesised root); skip — there is nothing to check.
-    if (!consumerIsImporter && !seenIds.has(consumer.id)) continue
-    const block = consumerIsImporter ? consumerBlockOf(consumer) : packageBlockOf(consumer)
-    if (block === undefined) continue
-    const blockNames = consumerIsImporter ? consumerBlockNames : packageBlockNames
-
-    for (const edge of graph.out(consumer.id)) {
-      if (edge.kind !== 'dep' && edge.kind !== 'dev' && edge.kind !== 'optional') continue
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      // Workspace-target edges emit `link:` references, not snapshot refs.
-      if (dst.workspacePath !== undefined && dst.workspacePath !== '') continue
-      // pnpm packages entries never carry a self / root dep slot.
-      if (!consumerIsImporter && (dst.id === consumer.id || dst.id === rootNode?.id)) continue
-
-      const seg = edge.attrs?.alias ?? dst.name
-      const value = slotValue(block, blockNames, seg)
-      const resolved = value === undefined
-        ? undefined
-        : (resolveSnapshotTarget(seenIds, seg, value, importerByPath) ?? resolveAliasedSnapshotTarget(seenIds, value, importerByPath))
-      if (resolved !== dst.id) {
-        onDiagnostic({
-          code: 'LAYOUT_RESOLVE_VIOLATION',
-          severity: 'error',
-          subject: { src: edge.src, dst: edge.dst, kind: edge.kind },
-          message:
-            `INV-RESOLVE violated: ${consumer.id} resolves ${JSON.stringify(seg)} to ` +
-            `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
-            `expected ${dst.id} (pnpm encoding defect — ADR-0028 INV-RESOLVE)`,
-        })
-      }
-    }
-  }
+function resolveEmittedTarget(
+  context: ResolveValidationContext,
+  seg: string,
+  value: string | undefined,
+): string | undefined {
+  if (value === undefined) return undefined
+  return resolveSnapshotTarget(context.seenIds, seg, value, context.importerByPath)
+    ?? resolveAliasedSnapshotTarget(context.seenIds, value, context.importerByPath)
 }
 
 interface PnpmEnrichContext {
@@ -1767,75 +1805,79 @@ function parsePackagesOrSnapshotKey(key: string): ParsedPackagesOrSnapshotKey | 
  * projection (ADR-0017), so a carried nested suffix is invisible to it, and an
  * opaque hash token is exempted (isHashedPeerSetToken).
  */
-function parsePeerSuffix(peerSuffix: string): { peers: Array<{ name: string; version: string; nested: string }>; opaquePeers: string[] } | undefined {
-  const peers: Array<{ name: string; version: string; nested: string }> = []
+interface ParsedPeerSuffix {
+  readonly peers: Array<{ name: string; version: string; nested: string }>
+  readonly opaquePeers: string[]
+}
+
+interface PeerSuffixSegment {
+  readonly value: string
+  readonly nextPos: number
+}
+
+type ClassifiedPeerSuffixSegment =
+  | { readonly kind: 'patch' }
+  | { readonly kind: 'opaque'; readonly value: string }
+  | { readonly kind: 'peer'; readonly value: { name: string; version: string; nested: string } }
+  | { readonly kind: 'invalid' }
+
+function parsePeerSuffix(peerSuffix: string): ParsedPeerSuffix | undefined {
+  const peers: ParsedPeerSuffix['peers'] = []
   const opaquePeers: string[] = []
   let pos = 0
   while (pos < peerSuffix.length) {
-    if (peerSuffix[pos] !== '(') return undefined
-    let close = -1
-    let d = 1
-    for (let i = pos + 1; i < peerSuffix.length; i++) {
-      const c = peerSuffix[i]
-      if (c === '(') d++
-      else if (c === ')') { d--; if (d === 0) { close = i; break } }
-    }
-    if (close < 0) return undefined
-    const segment = peerSuffix.slice(pos + 1, close)
-    pos = close + 1
-    // The segment may itself carry nested `(...)` peers (a transitive peer-
-    // of-a-peer, pnpm v9 — e.g. `@scope/pkg@0.15.1(dep-a@2.9.0)
-    // (dep-b@18.3.1)`). Split off the segment's OWN base at its first depth-0
-    // `(` before locating the name/version boundary; otherwise the last-`@`
-    // scan lands inside a nested peer (`dep-b@18.3.1`) and yields a garbage
-    // name/version.
-    let segBaseEnd = segment.length
-    let sd = 0
-    for (let i = 0; i < segment.length; i++) {
-      const c = segment[i]
-      if (c === '(' && sd === 0) { segBaseEnd = i; break }
-      if (c === '(') sd++
-      else if (c === ')') sd--
-    }
-    const segBase = segment.slice(0, segBaseEnd)
-    // A `(...)` suffix segment is one of THREE things — neither of the first
-    // two is a real `name@version` peer (ADR-0014 §F2 + ADR-0030):
-    //
-    //   1. LABELLED PATCH `(patch_hash=<sha256-hex>)` — pnpm injects it when a
-    //      `patchedDependencies:` patch applies (e.g. `@scope/pkg@…`).
-    //      Dropped: patch ATTRIBUTION flows through the `overrides:` block
-    //      (resolvePatchForNode), and the bare/patched NodeId duality is
-    //      accepted by graph.ts `acceptedNodeIds`. Dropping it (vs aborting via
-    //      the old `segAt <= 0` failure) keeps the key parseable so any peer
-    //      targeting the patched node still resolves.
-    //   2. HASHED PEER-SET TOKEN `(<bare-hex>)` — pnpm abbreviates a long
-    //      resolved peer-set into one bare-hex digest (ADR-0030; e.g.
-    //      `name@version(<bare-hex>)`). The real peers are hidden
-    //      in the hash, so it bears NO peer edge — but it MUST be KEPT as an
-    //      opaque identity discriminator, else two virtual-store instances of
-    //      the same `name@version` (forking on a transitive peer such as a
-    //      typings package) collapse to one NodeId and their divergent dep edges
-    //      collide. It rides through `serializeNodeId` verbatim → emit
-    //      reproduces it byte-for-byte; it stays OUT of `peers` so the peer-edge
-    //      loop never wires an edge for it, and the seal exempts it from the
-    //      peerContext↔edge coherence check (graph.ts, `isHashedPeerSetToken`).
-    //   3. a real `name@version` peer — handled below.
-    if (isPatchHashSegment(segBase)) continue
-    if (isHashedPeerSetToken(segBase)) {
-      opaquePeers.push(segBase)
-      continue
-    }
-    let segAt = -1
-    for (let i = 1; i < segBase.length; i++) {
-      if (segBase[i] === '@') segAt = i
-    }
-    if (segAt <= 0) return undefined
-    const pName = segBase.slice(0, segAt)
-    const pVer = segBase.slice(segAt + 1)
-    if (pName.length === 0 || pVer.length === 0) return undefined
-    peers.push({ name: pName, version: pVer, nested: segment.slice(segBaseEnd) })
+    const segment = readPeerSuffixSegment(peerSuffix, pos)
+    if (segment === undefined) return undefined
+    pos = segment.nextPos
+    const classified = classifyPeerSuffixSegment(segment.value)
+    if (classified.kind === 'invalid') return undefined
+    if (classified.kind === 'opaque') opaquePeers.push(classified.value)
+    if (classified.kind === 'peer') peers.push(classified.value)
   }
   return { peers, opaquePeers }
+}
+
+function readPeerSuffixSegment(peerSuffix: string, pos: number): PeerSuffixSegment | undefined {
+  if (peerSuffix[pos] !== '(') return undefined
+  let depth = 1
+  for (let i = pos + 1; i < peerSuffix.length; i++) {
+    if (peerSuffix[i] === '(') depth++
+    if (peerSuffix[i] !== ')') continue
+    depth--
+    if (depth === 0) return { value: peerSuffix.slice(pos + 1, i), nextPos: i + 1 }
+  }
+  return undefined
+}
+
+function classifyPeerSuffixSegment(segment: string): ClassifiedPeerSuffixSegment {
+  const baseEnd = firstNestedPeerIndex(segment)
+  const base = segment.slice(0, baseEnd)
+  if (isPatchHashSegment(base)) return { kind: 'patch' }
+  if (isHashedPeerSetToken(base)) return { kind: 'opaque', value: base }
+  const separator = lastPeerSeparator(base)
+  if (separator <= 0) return { kind: 'invalid' }
+  const name = base.slice(0, separator)
+  const version = base.slice(separator + 1)
+  if (name.length === 0 || version.length === 0) return { kind: 'invalid' }
+  return { kind: 'peer', value: { name, version, nested: segment.slice(baseEnd) } }
+}
+
+function firstNestedPeerIndex(segment: string): number {
+  let depth = 0
+  for (let i = 0; i < segment.length; i++) {
+    if (segment[i] === '(' && depth === 0) return i
+    if (segment[i] === '(') depth++
+    else if (segment[i] === ')') depth--
+  }
+  return segment.length
+}
+
+function lastPeerSeparator(base: string): number {
+  let separator = -1
+  for (let i = 1; i < base.length; i++) {
+    if (base[i] === '@') separator = i
+  }
+  return separator
 }
 
 function stripPackagesKeyPrefix(key: string, packagesKeyShape: PnpmLayoutShape['packagesKeyShape']): string {
@@ -1921,151 +1963,219 @@ function addPackageNode(
   }
 }
 
+interface ResolvedTreeEdgeInput {
+  readonly srcId: string
+  readonly entry: Record<string, unknown>
+  readonly peers: Array<{ name: string; version: string; nested: string }>
+}
+
+interface ResolvedDependencyTarget {
+  readonly targetId: string
+  readonly aliasSlot: string | undefined
+}
+
+interface ParsedDependencyEdgeInput {
+  readonly srcId: string
+  readonly kind: EdgeKind
+  readonly depName: string
+  readonly rawValue: string
+}
+
 function addResolvedTreeEdges(
-  builder: ReturnType<typeof newBuilder>,
-  diagnostics: Diagnostic[],
-  srcId: string,
-  entry: Record<string, unknown>,
-  peers: Array<{ name: string; version: string; nested: string }>,
-  seenIds: Set<string>,
-  sidecar: PnpmSidecar,
-  shape: PnpmLayoutShape,
+  context: PnpmParseContext,
   emittedEdges: Map<string, Set<string>>,
+  input: ResolvedTreeEdgeInput,
 ): void {
-  // #8b-C dedup — per-source set of already-wired seal tripleKeys
-  // (`kind\0dst\0alias`; `src` is constant here). Shared across every
-  // snapshot key that collapses to this `srcId`, so a resolved edge is wired
-  // at most once regardless of how many colliding keys reference it.
+  const wired = wiredEdgesFor(emittedEdges, input.srcId)
+  addResolvedDependencyEdges(context, wired, input)
+  addResolvedPeerEdges(context, wired, input)
+}
+
+function wiredEdgesFor(emittedEdges: Map<string, Set<string>>, srcId: string): Set<string> {
   let wired = emittedEdges.get(srcId)
   if (wired === undefined) {
     wired = new Set<string>()
     emittedEdges.set(srcId, wired)
   }
-  const tryWire = (kind: EdgeKind, dst: string, alias: string | undefined): boolean => {
-    const key = `${kind}\0${dst}\0${alias ?? ''}`
-    if (wired!.has(key)) return false
-    wired!.add(key)
-    return true
-  }
+  return wired
+}
 
+function addResolvedDependencyEdges(
+  context: PnpmParseContext,
+  wired: Set<string>,
+  input: ResolvedTreeEdgeInput,
+): void {
   for (const [kind, blockName] of [
     ['dep', 'dependencies'],
     ['optional', 'optionalDependencies'],
   ] as const) {
-    const block = entry[blockName]
+    const block = input.entry[blockName]
     if (!isPlainObject(block)) continue
-    const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
-    for (const [depName, rawValue] of entries) {
-      if (typeof rawValue !== 'string') continue
-      let targetId = resolveSnapshotTarget(seenIds, depName, rawValue, sidecar.importerByPath)
-      let aliasSlot: string | undefined
-      if (targetId === undefined) {
-        const aliasTarget = resolveAliasedSnapshotTarget(seenIds, rawValue, sidecar.importerByPath)
-        if (aliasTarget !== undefined) {
-          targetId = aliasTarget
-          aliasSlot = depName
-        }
-      }
-      if (targetId === undefined) {
-        diagnostics.push({
-          code: 'PNPM_UNRESOLVED_DEP',
-          severity: 'warning',
-          subject: srcId,
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: ${srcId} dep ${depName}@${rawValue} resolves to no snapshot`,
-        })
-        continue
-      }
-      if (!tryWire(kind, targetId, aliasSlot)) continue
-      try {
-        const attrs: { range: string; alias?: string } = { range: rawValue }
-        if (aliasSlot !== undefined) attrs.alias = aliasSlot
-        builder.addEdge(srcId, targetId, kind, attrs)
-      } catch (error) {
-        if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-        throw error
+    for (const [depName, rawValue] of Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))) {
+      if (typeof rawValue === 'string') {
+        addResolvedDependencyEdge(context, wired, { srcId: input.srcId, kind, depName, rawValue })
       }
     }
   }
+}
 
-  // Peer edges — derive from peerContext per ADR-0006.
-  for (const peer of peers) {
-    // The peer reference carries the nested peer-of-a-peer suffix (#70),
-    // selecting the precise virtual-store instance of the peer target (e.g.
-    // `pkg-a@8.0.8(dep@…)(pkg-b@1.0.0)…` vs the `pkg-b@2.0.0`
-    // sibling). Without it the edge would resolve to whichever instance
-    // `resolvePeerTargetById`'s prefix scan hit first, collapsing two distinct
-    // consumer instances onto one. The nested suffix is NORMALISED (workspace
-    // peers dropped, recursively) so it equals the target's own node id; the
-    // BASE version is still used for the workspace-peer probe below (a
-    // `+`-encoded importer dir).
-    const fullPeerVersion = peer.version + normalizeNestedSuffix(peer.nested, sidecar.importerByPath)
-    const peerId = peer.name + '@' + fullPeerVersion
-    // A workspace peer is satisfied by a workspace importer node: its canonical node id
-    // rides the peerContext and a real `peer` edge backs it; the native locator is
-    // recorded for emit only.
-    const wsPeerId = resolveWorkspacePeerId(peer.version, sidecar.importerByPath)
-    if (wsPeerId !== undefined) {
-      // Key attribution by (owner node id, workspace target), not by target alone.
-      // `resolveWorkspacePeerId` walks to an ancestor importer, so `packages+lib` and
-      // a sub-dir `packages+lib+build` collapse onto the same target node; keying by
-      // owner keeps each consumer's original locator distinct. A within-owner
-      // collision (two distinct published packages sharing the ancestor) is diagnosed
-      // (first wins), never silently last-write.
-      const attrKey = `${srcId}\0${wsPeerId}`
-      const prior = [...sidecar.workspacePeerNames]
-        .find(([key]) => key === attrKey)?.[1]
-      if (prior === undefined) {
-        sidecar.workspacePeerNames.set(attrKey, { name: peer.name, locator: peer.version })
-      } else if (prior.name !== peer.name || prior.locator !== peer.version) {
-        sidecar.workspacePeerCollisions.add(attrKey)
-        diagnostics.push({
-          code: 'PNPM_WORKSPACE_PEER_ATTR_COLLISION',
-          severity: 'warning',
-          subject: srcId,
-          message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: workspace-peer attribution collision on ${srcId} → ${wsPeerId}: ${prior.name}@${prior.locator} vs ${peer.name}@${peer.version} (emit keeps the first — distinct sub-dir publishes projected onto one ancestor node)`,
-        })
-      }
-      if (tryWire('peer', wsPeerId, undefined)) {
-        try {
-          const sc = sidecar.nodes.get(srcId)
-          const peerAttrs: EdgeAttrs = { range: sc?.peerDependencies?.[peer.name] ?? peer.version }
-          if (sc?.peerDependenciesMeta?.[peer.name]?.optional === true) peerAttrs.optional = true
-          builder.addEdge(srcId, wsPeerId, 'peer', peerAttrs)
-        } catch (error) {
-          if (!(error instanceof GraphError && error.code === 'INVARIANT_VIOLATION')) throw error
-        }
-      }
-      continue
-    }
-    const peerNodeId = resolvePeerTargetById(seenIds, peer.name, fullPeerVersion)
-    if (peerNodeId === undefined) {
-      diagnostics.push({
-        code: 'PNPM_UNRESOLVED_DEP',
-        severity: 'warning',
-        subject: srcId,
-        message: `pnpm-v${shape.lockfileVersion.split('.')[0]}: ${srcId} peer ${peerId} resolves to no snapshot`,
-      })
-      continue
-    }
-    if (!tryWire('peer', peerNodeId, undefined)) continue
-    try {
-      const sc = sidecar.nodes.get(srcId)
-      const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
-      // ADR-0006 / EdgeAttrs.optional — mirror the consumer's
-      // `peerDependenciesMeta[peer].optional` onto the BOUND peer edge so the
-      // model graph reflects optionality. `optional` is invisible to edge
-      // identity (graph.ts tripleKey keys on alias only) and to the seal's
-      // peerContext↔edge coherence (base-key projection), so this perturbs
-      // neither #69/#70 identity nor the peerContext. Optional peers pnpm never
-      // resolved have no edge here — those ride the verbatim sidecar carrier.
-      const peerAttrs: EdgeAttrs = { range: peerRange }
-      if (sc?.peerDependenciesMeta?.[peer.name]?.optional === true) peerAttrs.optional = true
-      builder.addEdge(srcId, peerNodeId, 'peer', peerAttrs)
-    } catch (error) {
-      if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-      throw error
-    }
+function addResolvedDependencyEdge(
+  context: PnpmParseContext,
+  wired: Set<string>,
+  input: ParsedDependencyEdgeInput,
+): void {
+  const target = resolveParsedDependencyTarget(context, input.depName, input.rawValue)
+  if (target === undefined) {
+    context.diagnostics.push({
+      code: 'PNPM_UNRESOLVED_DEP',
+      severity: 'warning',
+      subject: input.srcId,
+      message: `pnpm-v${context.shape.lockfileVersion.split('.')[0]}: ${input.srcId} dep ${input.depName}@${input.rawValue} resolves to no snapshot`,
+    })
+    return
   }
+  if (!reserveResolvedEdge(wired, input.kind, target.targetId, target.aliasSlot)) return
+  const attrs: { range: string; alias?: string } = { range: input.rawValue }
+  if (target.aliasSlot !== undefined) attrs.alias = target.aliasSlot
+  addParsedResolvedEdge(context.builder, input.srcId, target.targetId, input.kind, attrs)
+}
+
+function resolveParsedDependencyTarget(
+  context: PnpmParseContext,
+  depName: string,
+  rawValue: string,
+): ResolvedDependencyTarget | undefined {
+  const direct = resolveSnapshotTarget(
+    context.seenIds,
+    depName,
+    rawValue,
+    context.sidecar.importerByPath,
+  )
+  if (direct !== undefined) return { targetId: direct, aliasSlot: undefined }
+  const alias = resolveAliasedSnapshotTarget(
+    context.seenIds,
+    rawValue,
+    context.sidecar.importerByPath,
+  )
+  return alias === undefined ? undefined : { targetId: alias, aliasSlot: depName }
+}
+
+function reserveResolvedEdge(
+  wired: Set<string>,
+  kind: EdgeKind,
+  dst: string,
+  alias: string | undefined,
+): boolean {
+  const key = `${kind}\0${dst}\0${alias ?? ''}`
+  if (wired.has(key)) return false
+  wired.add(key)
+  return true
+}
+
+function addParsedResolvedEdge(
+  builder: ReturnType<typeof newBuilder>,
+  src: string,
+  dst: string,
+  kind: EdgeKind,
+  attrs: EdgeAttrs,
+): void {
+  try {
+    builder.addEdge(src, dst, kind, attrs)
+  } catch (error) {
+    if (!(error instanceof GraphError && error.code === 'INVARIANT_VIOLATION')) throw error
+  }
+}
+
+function addResolvedPeerEdges(
+  context: PnpmParseContext,
+  wired: Set<string>,
+  input: ResolvedTreeEdgeInput,
+): void {
+  for (const peer of input.peers) addResolvedPeerEdge(context, wired, input.srcId, peer)
+}
+
+function addResolvedPeerEdge(
+  context: PnpmParseContext,
+  wired: Set<string>,
+  srcId: string,
+  peer: { name: string; version: string; nested: string },
+): void {
+  const workspaceId = resolveWorkspacePeerId(peer.version, context.sidecar.importerByPath)
+  if (workspaceId !== undefined) {
+    addResolvedWorkspacePeerEdge(context, wired, srcId, workspaceId, peer)
+    return
+  }
+  const fullVersion = peer.version + normalizeNestedSuffix(peer.nested, context.sidecar.importerByPath)
+  const peerNodeId = resolvePeerTargetById(context.seenIds, peer.name, fullVersion)
+  if (peerNodeId === undefined) {
+    context.diagnostics.push({
+      code: 'PNPM_UNRESOLVED_DEP',
+      severity: 'warning',
+      subject: srcId,
+      message: `pnpm-v${context.shape.lockfileVersion.split('.')[0]}: ${srcId} peer ${peer.name}@${fullVersion} resolves to no snapshot`,
+    })
+    return
+  }
+  if (!reserveResolvedEdge(wired, 'peer', peerNodeId, undefined)) return
+  addParsedResolvedEdge(
+    context.builder,
+    srcId,
+    peerNodeId,
+    'peer',
+    parsedPeerAttrs(context.sidecar, srcId, peer),
+  )
+}
+
+function addResolvedWorkspacePeerEdge(
+  context: PnpmParseContext,
+  wired: Set<string>,
+  srcId: string,
+  workspaceId: string,
+  peer: { name: string; version: string; nested: string },
+): void {
+  recordWorkspacePeerAttribution(context, srcId, workspaceId, peer)
+  if (!reserveResolvedEdge(wired, 'peer', workspaceId, undefined)) return
+  addParsedResolvedEdge(
+    context.builder,
+    srcId,
+    workspaceId,
+    'peer',
+    parsedPeerAttrs(context.sidecar, srcId, peer),
+  )
+}
+
+function recordWorkspacePeerAttribution(
+  context: PnpmParseContext,
+  srcId: string,
+  workspaceId: string,
+  peer: { name: string; version: string },
+): void {
+  const key = `${srcId}\0${workspaceId}`
+  const prior = [...context.sidecar.workspacePeerNames]
+    .find(([candidate]) => candidate === key)?.[1]
+  if (prior === undefined) {
+    context.sidecar.workspacePeerNames.set(key, { name: peer.name, locator: peer.version })
+    return
+  }
+  if (prior.name === peer.name && prior.locator === peer.version) return
+  context.sidecar.workspacePeerCollisions.add(key)
+  context.diagnostics.push({
+    code: 'PNPM_WORKSPACE_PEER_ATTR_COLLISION',
+    severity: 'warning',
+    subject: srcId,
+    message: `pnpm-v${context.shape.lockfileVersion.split('.')[0]}: workspace-peer attribution collision on ${srcId} → ${workspaceId}: ${prior.name}@${prior.locator} vs ${peer.name}@${peer.version} (emit keeps the first — distinct sub-dir publishes projected onto one ancestor node)`,
+  })
+}
+
+function parsedPeerAttrs(
+  sidecar: PnpmSidecar,
+  srcId: string,
+  peer: { name: string; version: string },
+): EdgeAttrs {
+  const sc = sidecar.nodes.get(srcId)
+  const attrs: EdgeAttrs = { range: sc?.peerDependencies?.[peer.name] ?? peer.version }
+  if (sc?.peerDependenciesMeta?.[peer.name]?.optional === true) attrs.optional = true
+  return attrs
 }
 
 function isCollapsedRoot(yaml: Record<string, unknown>, shape: PnpmLayoutShape): boolean {
@@ -2617,23 +2727,51 @@ function buildPackageEntry(
   representative: Node,
   shape: PnpmLayoutShape,
 ): YamlMap {
-  const entry: YamlMap = {}
-  const tarball = graph.tarballOf(representative.id)
-  // ADR-0014 §4.F3 — pnpm emits `tarball:` only for non-registry shapes
-  // (git codeload, explicit external URL). Registry tarballs derive their
-  // URL by convention from name@version and emit `integrity:` alone.
-  // PM-native sidecar `tarball.nativeResolution` is honoured when URL-shaped
-  // (same-format round-trip preserves the cross-format-carried URL); for
-  // tarball canonical from a registry-derived URL we suppress the field.
+  const context = createPackageEntryContext(graph, sidecar, projection, representative, shape)
+  writePackageResolution(context)
+  writePackageMetadata(context)
+  writePackagePeerMetadata(context)
+  writePackageInlineDependencies(context)
+  writePackageDevFlag(context)
+  return context.entry
+}
+
+interface PackageEntryContext {
+  readonly graph: Graph
+  readonly sidecar: PnpmSidecar | undefined
+  readonly projection: PnpmWorkspacePeerProjection
+  readonly representative: Node
+  readonly shape: PnpmLayoutShape
+  readonly entry: YamlMap
+  readonly tarball: TarballPayload | undefined
+  readonly nodeSc: PnpmNodeSidecar | undefined
+}
+
+function createPackageEntryContext(
+  graph: Graph,
+  sidecar: PnpmSidecar | undefined,
+  projection: PnpmWorkspacePeerProjection,
+  representative: Node,
+  shape: PnpmLayoutShape,
+): PackageEntryContext {
+  return {
+    graph,
+    sidecar,
+    projection,
+    representative,
+    shape,
+    entry: {},
+    tarball: graph.tarballOf(representative.id),
+    nodeSc: sidecar?.nodes.get(representative.id),
+  }
+}
+
+function writePackageResolution(context: PackageEntryContext): void {
+  const { entry, representative, tarball } = context
   const nativeResolution = tarball?.nativeResolution
   const nativeIsPnpmUrl = nativeResolution !== undefined
-    && (nativeResolution.startsWith('http://')
-      || nativeResolution.startsWith('https://'))
+    && (nativeResolution.startsWith('http://') || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
-  // For tarball canonical: only emit the URL when the source explicitly
-  // supplied one (non-registry-default origin). The registry-default URL is
-  // the convention pnpm assumes; emitting it would diverge from pnpm-native
-  // output for round-trip-source-faithful tarball entries.
   const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
     && isNpmRegistryDefault(tarball.resolution.url, representative.name, representative.version)
   if (tarball !== undefined) {
@@ -2641,29 +2779,30 @@ function buildPackageEntry(
     const sri = emitSriForRegistry(tarball.integrity, nativeResolution)
     if (sri !== undefined) resolution.integrity = sri
     if (nativeIsPnpmUrl) resolution.tarball = stripRegistrySha1Fragment(nativeResolution!)
-    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
-    else if (derivedPnpm?.directory !== undefined) resolution.directory = derivedPnpm.directory
+    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+      resolution.tarball = derivedPnpm.tarball
+    } else if (derivedPnpm?.directory !== undefined) {
+      resolution.directory = derivedPnpm.directory
+    }
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)
-  } else if (nativeIsPnpmUrl) {
-    entry.resolution = flowMap({ tarball: nativeResolution! })
-  } else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+    return
+  }
+  if (nativeIsPnpmUrl) entry.resolution = flowMap({ tarball: nativeResolution! })
+  else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
     entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
   } else if (derivedPnpm?.directory !== undefined) {
     entry.resolution = flowMap({ directory: derivedPnpm.directory })
   }
+}
 
-  const nodeSc = sidecar?.nodes.get(representative.id)
+function writePackageMetadata(context: PackageEntryContext): void {
+  const { entry, nodeSc, tarball } = context
   if (nodeSc?.engines !== undefined && Object.keys(nodeSc.engines).length > 0) {
     entry.engines = flowMap({ ...nodeSc.engines })
   } else if (tarball?.engines !== undefined && Object.keys(tarball.engines).length > 0) {
     entry.engines = flowMap({ ...tarball.engines })
   }
-  // `deprecated` rides the shared TarballPayload (parsed by tarballPayloadOf);
-  // re-emit it onto the packages entry. pnpm carries the deprecation message as
-  // a plain scalar (e.g. `deprecated: Use @eslint/config-array instead`).
-  if (tarball?.deprecated !== undefined && tarball.deprecated !== '') {
-    entry.deprecated = tarball.deprecated
-  }
+  if (tarball?.deprecated !== undefined && tarball.deprecated !== '') entry.deprecated = tarball.deprecated
   if (nodeSc?.hasBin === true) entry.hasBin = true
   const os = nodeSc?.os ?? tarball?.os
   const cpu = nodeSc?.cpu ?? tarball?.cpu
@@ -2672,74 +2811,81 @@ function buildPackageEntry(
   if (cpu !== undefined && cpu.length > 0) entry.cpu = cpu.slice()
   if (libc !== undefined && libc.length > 0) entry.libc = libc.slice()
   const peerDependencies = nodeSc?.peerDependencies
-    ?? projection.ownerPeerDependencies.get(representative.id)
+    ?? context.projection.ownerPeerDependencies.get(context.representative.id)
     ?? tarball?.peerDependencies
   if (peerDependencies !== undefined && Object.keys(peerDependencies).length > 0) {
     entry.peerDependencies = sortRecord(peerDependencies) as YamlMap
   }
+}
 
-  // peerDependenciesMeta — the per-peer `{ optional: true }` markers. Re-derive
-  // from the optional-flagged BOUND peer edges (EdgeAttrs.optional, the model
-  // carrier per the task) UNIONED with the verbatim sidecar capture. The edge
-  // signal alone is incomplete: an optional peer pnpm never resolved has no
-  // peer-virt instance, hence no edge, so the sidecar carrier is what makes the
-  // round-trip whole. Emitted as a nested block map `<peer>: { optional: true }`
-  // (pnpm's shape), only when ≥ 1 optional peer exists.
+function writePackagePeerMetadata(context: PackageEntryContext): void {
   const optionalPeers = new Set<string>()
-  for (const edge of graph.out(representative.id)) {
+  collectBoundOptionalPeers(context, optionalPeers)
+  collectDeclaredOptionalPeers(context.nodeSc?.peerDependenciesMeta, optionalPeers)
+  collectDeclaredOptionalPeers(context.tarball?.peerDependenciesMeta, optionalPeers)
+  if (optionalPeers.size === 0) return
+  const meta: YamlMap = {}
+  for (const peerName of Array.from(optionalPeers).sort(cmpStr)) {
+    meta[peerName] = { optional: true } as YamlMap
+  }
+  context.entry.peerDependenciesMeta = meta
+}
+
+function collectBoundOptionalPeers(context: PackageEntryContext, optionalPeers: Set<string>): void {
+  for (const edge of context.graph.out(context.representative.id)) {
     if (edge.kind !== 'peer' || edge.attrs?.optional !== true) continue
-    const dst = graph.getNode(edge.dst)
+    const dst = context.graph.getNode(edge.dst)
     if (dst !== undefined) optionalPeers.add(dst.name)
   }
-  if (nodeSc?.peerDependenciesMeta !== undefined) {
-    for (const [peerName, m] of Object.entries(nodeSc.peerDependenciesMeta)) {
-      if (m.optional === true) optionalPeers.add(peerName)
-    }
-  }
-  if (tarball?.peerDependenciesMeta !== undefined) {
-    for (const [peerName, meta] of Object.entries(tarball.peerDependenciesMeta)) {
-      if (meta.optional === true) optionalPeers.add(peerName)
-    }
-  }
-  if (optionalPeers.size > 0) {
-    const meta: YamlMap = {}
-    for (const peerName of Array.from(optionalPeers).sort(cmpStr)) {
-      meta[peerName] = { optional: true } as YamlMap
-    }
-    entry.peerDependenciesMeta = meta
-  }
+}
 
-  // v6: inline transitive dependencies under each packages entry (since
-  // there's no separate snapshots block).
-  if (shape.inlineTransitives) {
-    const blocks: Record<'dep' | 'optional', Record<string, string>> = { dep: {}, optional: {} }
-    for (const edge of graph.out(representative.id)) {
-      if (edge.kind !== 'dep' && edge.kind !== 'optional') continue
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      if (dst.workspacePath !== undefined && dst.workspacePath !== '') continue
-      if (dst.id === sidecar?.rootId) continue
-      const block = blocks[edge.kind]!
-      // ADR-0028 INV-RESOLVE — alias slot keying + canonical value (see
-      // buildSnapshotEntry / aliasedSnapshotSlotValue).
-      const seg = aliasedSnapshotSlotValue(edge, dst, projection)
-      block[seg.key] = seg.value
-    }
-    for (const [kind, blockName] of [['dep', 'dependencies'], ['optional', 'optionalDependencies']] as const) {
-      const block = blocks[kind]
-      if (Object.keys(block).length > 0) {
-        entry[blockName] = sortRecord(block) as YamlMap
-      }
-    }
+function collectDeclaredOptionalPeers(
+  declared: Record<string, { optional?: boolean }> | undefined,
+  optionalPeers: Set<string>,
+): void {
+  if (declared === undefined) return
+  for (const [peerName, meta] of Object.entries(declared)) {
+    if (meta.optional === true) optionalPeers.add(peerName)
   }
+}
 
-  // v6 dev flag — emit per-entry.
-  if (shape.devFlag) {
-    const dev = nodeSc?.dev ?? false
-    entry.dev = dev
+function writePackageInlineDependencies(context: PackageEntryContext): void {
+  if (!context.shape.inlineTransitives) return
+  const blocks: Record<'dep' | 'optional', Record<string, string>> = { dep: {}, optional: {} }
+  for (const edge of context.graph.out(context.representative.id)) {
+    addPackageInlineDependency(context, blocks, edge)
   }
+  writePackageDependencyBlocks(context.entry, blocks)
+}
 
-  return entry
+function addPackageInlineDependency(
+  context: PackageEntryContext,
+  blocks: Record<'dep' | 'optional', Record<string, string>>,
+  edge: Edge,
+): void {
+  if (edge.kind !== 'dep' && edge.kind !== 'optional') return
+  const dst = context.graph.getNode(edge.dst)
+  if (dst === undefined || (dst.workspacePath !== undefined && dst.workspacePath !== '')) return
+  if (dst.id === context.sidecar?.rootId) return
+  const seg = aliasedSnapshotSlotValue(edge, dst, context.projection)
+  blocks[edge.kind]![seg.key] = seg.value
+}
+
+function writePackageDependencyBlocks(
+  entry: YamlMap,
+  blocks: Record<'dep' | 'optional', Record<string, string>>,
+): void {
+  for (const [kind, blockName] of [
+    ['dep', 'dependencies'],
+    ['optional', 'optionalDependencies'],
+  ] as const) {
+    const block = blocks[kind]
+    if (Object.keys(block).length > 0) entry[blockName] = sortRecord(block) as YamlMap
+  }
+}
+
+function writePackageDevFlag(context: PackageEntryContext): void {
+  if (context.shape.devFlag) context.entry.dev = context.nodeSc?.dev ?? false
 }
 
 function buildSnapshotEntry(
@@ -3007,77 +3153,116 @@ interface EnrichPlan {
   markWorkspaceEdges: Edge[]
 }
 
+interface ManifestEnrichContext {
+  readonly graph: Graph
+  readonly sidecar: PnpmSidecar | undefined
+  readonly manifests: Record<string, PnpmManifest>
+  readonly memberByName: Map<string, { path: string; manifest: PnpmManifest }>
+  readonly plan: EnrichPlan
+}
+
 function planManifestEnrich(
   graph: Graph,
   sidecar: PnpmSidecar | undefined,
   manifests: Record<string, PnpmManifest>,
 ): EnrichPlan {
-  const rootManifest = manifests['']
-  const rootNodeId = sidecar?.rootId
+  const context = createManifestEnrichContext(graph, sidecar, manifests)
+  planRootManifestEdges(context)
+  planResolvedWorkspaceEdges(context)
+  return context.plan
+}
 
-  const addRootEdges: Edge[] = []
-  const removeRootEdges: Edge[] = []
-  const markWorkspaceEdges: Edge[] = []
-
+function createManifestEnrichContext(
+  graph: Graph,
+  sidecar: PnpmSidecar | undefined,
+  manifests: Record<string, PnpmManifest>,
+): ManifestEnrichContext {
   const memberByName = new Map<string, { path: string; manifest: PnpmManifest }>()
   for (const [path, manifest] of Object.entries(manifests)) {
-    if (path === '' || manifest.name === undefined) continue
-    memberByName.set(manifest.name, { path, manifest })
-  }
-
-  if (rootManifest !== undefined && rootNodeId !== undefined) {
-    const desired: Edge[] = []
-    for (const [kind, deps] of [
-      ['dep', rootManifest.dependencies],
-      ['dev', rootManifest.devDependencies],
-      ['optional', rootManifest.optionalDependencies],
-      ['peer', rootManifest.peerDependencies],
-    ] as const) {
-      if (deps === undefined) continue
-      for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
-        const dstId = resolveManifestTarget(graph, name, range, memberByName)
-        if (dstId === undefined) continue
-        const attrs: { range: string; workspace?: boolean } = { range }
-        if (isWorkspaceProtocolRange(range) || memberByName.has(name)) {
-          attrs.workspace = true
-        }
-        desired.push({ src: rootNodeId, dst: dstId, kind, attrs })
-      }
-    }
-    const existing = graph.out(rootNodeId)
-    for (const want of desired) {
-      const match = existing.find(c => c.kind === want.kind && c.dst === want.dst)
-      if (match === undefined) {
-        addRootEdges.push(want)
-        continue
-      }
-      const wantRange = want.attrs?.range
-      const curRange = match.attrs?.range
-      const wantWs = want.attrs?.workspace ?? false
-      const curWs = match.attrs?.workspace ?? false
-      if (wantRange !== curRange || wantWs !== curWs) {
-        markWorkspaceEdges.push(want)
-      }
+    if (path !== '' && manifest.name !== undefined) {
+      memberByName.set(manifest.name, { path, manifest })
     }
   }
+  return {
+    graph,
+    sidecar,
+    manifests,
+    memberByName,
+    plan: { addRootEdges: [], removeRootEdges: [], markWorkspaceEdges: [] },
+  }
+}
 
-  for (const node of graph.nodes()) {
-    for (const edge of graph.out(node.id)) {
-      if (edge.kind === 'peer') continue
-      if (edge.attrs?.workspace === true) continue
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      if (dst.workspacePath === undefined || dst.workspacePath === '') continue
-      markWorkspaceEdges.push({
-        src: edge.src,
-        dst: edge.dst,
-        kind: edge.kind,
-        attrs: { ...edge.attrs, workspace: true },
-      })
+function planRootManifestEdges(context: ManifestEnrichContext): void {
+  const rootManifest = context.manifests['']
+  const rootNodeId = context.sidecar?.rootId
+  if (rootManifest === undefined || rootNodeId === undefined) return
+  const desired = desiredRootManifestEdges(context, rootNodeId, rootManifest)
+  const existing = context.graph.out(rootNodeId)
+  for (const want of desired) reconcileRootManifestEdge(context.plan, existing, want)
+}
+
+function desiredRootManifestEdges(
+  context: ManifestEnrichContext,
+  rootNodeId: string,
+  rootManifest: PnpmManifest,
+): Edge[] {
+  const desired: Edge[] = []
+  for (const [kind, deps] of [
+    ['dep', rootManifest.dependencies],
+    ['dev', rootManifest.devDependencies],
+    ['optional', rootManifest.optionalDependencies],
+    ['peer', rootManifest.peerDependencies],
+  ] as const) {
+    if (deps === undefined) continue
+    for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
+      const edge = desiredRootManifestEdge(context, rootNodeId, kind, name, range)
+      if (edge !== undefined) desired.push(edge)
     }
   }
+  return desired
+}
 
-  return { addRootEdges, removeRootEdges, markWorkspaceEdges }
+function desiredRootManifestEdge(
+  context: ManifestEnrichContext,
+  rootNodeId: string,
+  kind: EdgeKind,
+  name: string,
+  range: string,
+): Edge | undefined {
+  const dstId = resolveManifestTarget(context.graph, name, range, context.memberByName)
+  if (dstId === undefined) return undefined
+  const attrs: { range: string; workspace?: boolean } = { range }
+  if (isWorkspaceProtocolRange(range) || context.memberByName.has(name)) attrs.workspace = true
+  return { src: rootNodeId, dst: dstId, kind, attrs }
+}
+
+function reconcileRootManifestEdge(plan: EnrichPlan, existing: readonly Edge[], want: Edge): void {
+  const match = existing.find(edge => edge.kind === want.kind && edge.dst === want.dst)
+  if (match === undefined) {
+    plan.addRootEdges.push(want)
+    return
+  }
+  const rangeChanged = want.attrs?.range !== match.attrs?.range
+  const workspaceChanged = (want.attrs?.workspace ?? false) !== (match.attrs?.workspace ?? false)
+  if (rangeChanged || workspaceChanged) plan.markWorkspaceEdges.push(want)
+}
+
+function planResolvedWorkspaceEdges(context: ManifestEnrichContext): void {
+  for (const node of context.graph.nodes()) {
+    for (const edge of context.graph.out(node.id)) planResolvedWorkspaceEdge(context, edge)
+  }
+}
+
+function planResolvedWorkspaceEdge(context: ManifestEnrichContext, edge: Edge): void {
+  if (edge.kind === 'peer' || edge.attrs?.workspace === true) return
+  const dst = context.graph.getNode(edge.dst)
+  if (dst?.workspacePath === undefined || dst.workspacePath === '') return
+  context.plan.markWorkspaceEdges.push({
+    src: edge.src,
+    dst: edge.dst,
+    kind: edge.kind,
+    attrs: { ...edge.attrs, workspace: true },
+  })
 }
 
 function resolveManifestTarget(

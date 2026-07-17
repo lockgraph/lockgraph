@@ -252,329 +252,351 @@ function isClassicEntryKeyLine(key: string): boolean {
   return true
 }
 
+interface ClassicParseContext {
+  builder: ReturnType<typeof newBuilder>
+  diagnostics: Diagnostic[]
+  specIndex: Map<string, string>
+  sidecar: Map<string, string[]>
+  entryExtras: Map<string, string[]>
+  unresolvedDeps: Map<string, UnresolvedDepRef[]>
+  unknownFields: Set<string>
+  entryNodes: Array<{ node: Node; entry: YarnClassicEntry }>
+  seenEntries: Map<string, { resolved?: string; integrity?: string }>
+  semverCandidatesByName: Map<string, SemverCandidate[]>
+  options: YarnClassicParseOptions
+}
+
 export function parse(input: string, options: YarnClassicParseOptions = {}): Graph {
   const normalized = stripBom(normalizeLineEndings(input))
   ensureClassicHeader(normalized)
+  const context = createClassicParseContext(options)
+  addClassicEntryNodes(context, parseEntries(normalized))
+  reportClassicUnknownFields(context)
+  addClassicEntryEdges(context)
+  return sealClassicParse(context)
+}
 
-  const builder = newBuilder()
-  const diagnostics: Diagnostic[] = []
-  const entries = parseEntries(normalized)
-  const specIndex = new Map<string, string>()
-  const sidecar = new Map<string, string[]>()
-  const entryExtras = new Map<string, string[]>()
-  // F8 — verbatim Rung-4-dropped dep refs (target absent from the lock), keyed by
-  // source NodeId, collected during edge resolution and re-emitted into the
-  // matching inner-block for byte-faithful same-format round-trip.
-  const unresolvedDeps = new Map<string, UnresolvedDepRef[]>()
-  const unknownFields = new Set<string>()
-  const entryNodes: Array<{ node: Node; entry: YarnClassicEntry }> = []
-  const seenEntries = new Map<string, { resolved?: string; integrity?: string }>()
-  // Bug #99 Rung-3 — name → registry-class candidate index for source-gated
-  // max-satisfying semver, built alongside the node table (the resolver runs
-  // against the write-only builder). Source class comes from the F3 canonical
-  // resolution; only `tarball` candidates are eligible for an `npm:`/bare match.
-  const semverCandidatesByName = new Map<string, SemverCandidate[]>()
-
-  for (const entry of entries) {
-    const specs = splitEntryKey(entry.key)
-    if (specs.length === 0) {
-      throw parseFailed(`entry ${JSON.stringify(entry.key)} has empty spec list`)
-    }
-    if (entry.version === undefined) {
-      throw parseFailed(`entry ${JSON.stringify(entry.key)} missing version`)
-    }
-
-    // F6 (#93) — group entry-key descriptors by their RESOLVED package name
-    // (the `npm:`-alias target, else the descriptor's own name), collecting the
-    // verbatim descriptor keys. An npm-aliased descriptor
-    // (`<alias>@npm:<target>@<range>`) thus joins the SAME group as a plain
-    // `<target>@<range>` descriptor — one node, keyed by the target — instead of
-    // splitting off a duplicate `<alias>@<version>` node.
-    const specsByResolvedName = new Map<string, string[]>()
-    for (const spec of specs) {
-      const identity = specIdentity(parseSpec(spec))
-      const current = specsByResolvedName.get(identity.resolvedName)
-      if (current === undefined) specsByResolvedName.set(identity.resolvedName, [identity.descriptorKey])
-      else current.push(identity.descriptorKey)
-    }
-
-    for (const [name, rawDescriptors] of specsByResolvedName) {
-      const descriptors = Array.from(new Set(rawDescriptors)).sort(cmpUtf16)
-      // ADR-0014 §4.F3 — canonical resolution into TarballPayload. Computed
-      // ahead of the NodeId so the ADR-0032 `+src=` slot can be threaded in.
-      // Workspace canonical (yarn-classic sentinel-version entries) lives on
-      // Node.workspacePath via enrich; not on TarballPayload.
-      const canonicalResolution = entry.resolved !== undefined
-        ? canonicalResolutionOfResolved(entry.resolved)
-        : undefined
-      // ADR-0032 — the `+src=` discriminator for a NON-REGISTRY source, so a git
-      // (or non-registry-host tarball / unknown) `name@version` no longer
-      // collapses onto a same-`name@version` registry sibling (#2b). yarn-classic
-      // has no patch slot, so the gate is just "canonical resolution present".
-      // Bare for registry / directory / absent (zero registry blast radius).
-      const effectiveSource = canonicalResolution !== undefined
-        ? sourceDiscriminatorOf(canonicalResolution)
-        : undefined
-      const id = serializeNodeId(name, entry.version, [], undefined, effectiveSource)
-      const prior = seenEntries.get(id)
-      if (prior !== undefined) {
-        // Two separate entry blocks resolve to the same NodeId. Merge their
-        // descriptor keys onto the one node when the resolution + integrity
-        // agree (the comma-joined `a@^1, a@^2:` form already merges this way);
-        // only a genuine conflict — differing `resolved` or `integrity` — is an
-        // irreducible loss. ADR-0032: a registry vs git collision at the same
-        // `name@version` now mints DISTINCT `id`s (the git one carries `+src=`),
-        // so it never reaches this branch — the loud IRREDUCIBLE_LOSS is reserved
-        // for a true same-source conflict.
-        if (prior.resolved !== entry.resolved || prior.integrity !== entry.integrity) {
-          throw new LockfileError({
-            code: 'IRREDUCIBLE_LOSS',
-            message: `two entries collapse onto NodeId ${id} with differing resolution`,
-          })
-        }
-        const merged = sidecar.get(id) ?? []
-        for (const spec of descriptors) {
-          if (!merged.includes(spec)) merged.push(spec)
-          specIndex.set(spec, id)
-        }
-        sidecar.set(id, merged)
-        continue
-      }
-      seenEntries.set(id, { resolved: entry.resolved, integrity: entry.integrity })
-
-      const node: Node = {
-        id,
-        name,
-        version: entry.version,
-        peerContext: [],
-      }
-      // ADR-0013 — PM-native verbatim resolution sidecar. Validated +
-      // captured verbatim; lands on the per-tarball payload (below), NOT the
-      // Node. `entry.resolved !== undefined` ⟺ `canonicalResolution !== undefined`,
-      // so a resolved node always gets a tarball row via one of the branches.
-      const nativeResolution = entry.resolved !== undefined
-        ? parseResolution(entry.resolved)
-        : undefined
-      // ADR-0032 — carry the `+src=` slot on the Node so the seal re-derives the
-      // NodeId from the Node alone.
-      if (effectiveSource !== undefined) node.source = effectiveSource
-      builder.addNode(node)
-
-      if (canonicalResolution !== undefined && canonicalResolution.type === 'unknown') {
-        diagnostics.push(unknownResolutionDiagnostic(id, entry.resolved!))
-      }
-
-      // Bug #99 Rung-3 — register as a max-satisfying-semver candidate under its
-      // name. `'absent'` source (no `resolved:`) is non-registry → ineligible for
-      // an `npm:`/bare match inside `semverResolve`.
-      const candidate: SemverCandidate = {
-        id,
-        version: entry.version,
-        sourceType: canonicalResolution?.type ?? 'absent',
-      }
-      const candidateList = semverCandidatesByName.get(name)
-      if (candidateList === undefined) semverCandidatesByName.set(name, [candidate])
-      else candidateList.push(candidate)
-
-      if (entry.integrity !== undefined) {
-        const integrity = parseSri(entry.integrity, 'sri')
-        if (isEmptyIntegrity(integrity)) {
-          diagnostics.push(invalidIntegrityDiagnostic('YARN_CLASSIC', id, entry.integrity))
-        } else {
-          const payload: { integrity: Integrity; resolution?: typeof canonicalResolution; nativeResolution?: string } = { integrity }
-          if (canonicalResolution !== undefined) payload.resolution = canonicalResolution
-          if (nativeResolution !== undefined) payload.nativeResolution = nativeResolution
-          builder.setTarball({ name, version: entry.version, source: effectiveSource }, payload)
-        }
-      } else if (canonicalResolution !== undefined) {
-        builder.setTarball({ name, version: entry.version, source: effectiveSource }, { resolution: canonicalResolution, nativeResolution })
-      }
-
-      sidecar.set(id, descriptors.slice())
-      if (entry.extras !== undefined && entry.extras.length > 0) {
-        entryExtras.set(id, entry.extras)
-        for (const raw of entry.extras) unknownFields.add(raw.split(' ', 1)[0] ?? raw)
-      }
-      entryNodes.push({ node, entry })
-      for (const spec of descriptors) {
-        specIndex.set(spec, id)
-      }
-    }
+function createClassicParseContext(options: YarnClassicParseOptions): ClassicParseContext {
+  return {
+    builder: newBuilder(),
+    diagnostics: [],
+    specIndex: new Map(),
+    sidecar: new Map(),
+    entryExtras: new Map(),
+    // F8 — Rung-4-dropped refs are re-emitted from the matching inner block.
+    unresolvedDeps: new Map(),
+    unknownFields: new Set(),
+    entryNodes: [],
+    seenEntries: new Map(),
+    // Bug #99 Rung-3 — source-gated max-satisfying candidates by package name.
+    semverCandidatesByName: new Map(),
+    options,
   }
+}
 
-  if (unknownFields.size > 0) {
-    diagnostics.push({
-      code: 'YARN_CLASSIC_UNKNOWN_FIELD',
-      severity: 'info',
-      subject: 'yarn-classic',
-      message: `preserved unmodelled yarn-classic entry field(s) verbatim for round-trip: ${Array.from(unknownFields).sort(cmpUtf16).join(', ')}`,
+function addClassicEntryNodes(context: ClassicParseContext, entries: readonly YarnClassicEntry[]): void {
+  for (const entry of entries) addClassicEntryNodeGroups(context, entry)
+}
+
+function addClassicEntryNodeGroups(context: ClassicParseContext, entry: YarnClassicEntry): void {
+  const specs = splitEntryKey(entry.key)
+  if (specs.length === 0) throw parseFailed(`entry ${JSON.stringify(entry.key)} has empty spec list`)
+  const version = entry.version
+  if (version === undefined) throw parseFailed(`entry ${JSON.stringify(entry.key)} missing version`)
+  for (const [name, descriptors] of classicSpecsByResolvedName(specs)) {
+    addClassicResolvedEntry(context, entry, name, version, descriptors)
+  }
+}
+
+// F6 (#93) — aliases and plain descriptors for the same resolved package share
+// one node while retaining every verbatim entry-key descriptor.
+function classicSpecsByResolvedName(specs: readonly string[]): Map<string, string[]> {
+  const byName = new Map<string, string[]>()
+  for (const spec of specs) {
+    const identity = specIdentity(parseSpec(spec))
+    const descriptors = byName.get(identity.resolvedName)
+    if (descriptors === undefined) byName.set(identity.resolvedName, [identity.descriptorKey])
+    else descriptors.push(identity.descriptorKey)
+  }
+  return byName
+}
+
+function addClassicResolvedEntry(
+  context: ClassicParseContext,
+  entry: YarnClassicEntry,
+  name: string,
+  version: string,
+  rawDescriptors: readonly string[],
+): void {
+  const descriptors = Array.from(new Set(rawDescriptors)).sort(cmpUtf16)
+  const canonicalResolution = entry.resolved === undefined
+    ? undefined
+    : canonicalResolutionOfResolved(entry.resolved)
+  const effectiveSource = canonicalResolution === undefined
+    ? undefined
+    : sourceDiscriminatorOf(canonicalResolution)
+  const id = serializeNodeId(name, version, [], undefined, effectiveSource)
+  if (mergeClassicDuplicateEntry(context, entry, id, descriptors)) return
+
+  context.seenEntries.set(id, { resolved: entry.resolved, integrity: entry.integrity })
+  const node: Node = { id, name, version, peerContext: [] }
+  if (effectiveSource !== undefined) node.source = effectiveSource
+  context.builder.addNode(node)
+
+  if (canonicalResolution?.type === 'unknown') {
+    context.diagnostics.push(unknownResolutionDiagnostic(id, entry.resolved!))
+  }
+  registerClassicSemverCandidate(context, node, canonicalResolution?.type ?? 'absent')
+  recordClassicTarball(context, entry, node, canonicalResolution)
+  recordClassicEntrySidecars(context, entry, node, descriptors)
+}
+
+function mergeClassicDuplicateEntry(
+  context: ClassicParseContext,
+  entry: YarnClassicEntry,
+  id: string,
+  descriptors: readonly string[],
+): boolean {
+  const prior = context.seenEntries.get(id)
+  if (prior === undefined) return false
+  if (prior.resolved !== entry.resolved || prior.integrity !== entry.integrity) {
+    throw new LockfileError({
+      code: 'IRREDUCIBLE_LOSS',
+      message: `two entries collapse onto NodeId ${id} with differing resolution`,
     })
   }
+  const merged = context.sidecar.get(id) ?? []
+  for (const spec of descriptors) {
+    if (!merged.includes(spec)) merged.push(spec)
+    context.specIndex.set(spec, id)
+  }
+  context.sidecar.set(id, merged)
+  return true
+}
 
-  // Bug #99 — the descriptor→node ladder's Rung-2/3 inputs (shared shape with
-  // the berry resolver). Bundled once so the steady-state Rung-0 path is a
-  // single `specIndex.get`.
+function registerClassicSemverCandidate(
+  context: ClassicParseContext,
+  node: Node,
+  sourceType: SemverCandidate['sourceType'],
+): void {
+  const candidate: SemverCandidate = { id: node.id, version: node.version, sourceType }
+  const candidates = context.semverCandidatesByName.get(node.name)
+  if (candidates === undefined) context.semverCandidatesByName.set(node.name, [candidate])
+  else candidates.push(candidate)
+}
+
+function recordClassicTarball(
+  context: ClassicParseContext,
+  entry: YarnClassicEntry,
+  node: Node,
+  canonicalResolution: ReturnType<typeof canonicalResolutionOfResolved> | undefined,
+): void {
+  const nativeResolution = entry.resolved === undefined ? undefined : parseResolution(entry.resolved)
+  if (entry.integrity === undefined) {
+    if (canonicalResolution !== undefined) {
+      context.builder.setTarball(
+        { name: node.name, version: node.version, source: node.source },
+        { resolution: canonicalResolution, nativeResolution },
+      )
+    }
+    return
+  }
+  const integrity = parseSri(entry.integrity, 'sri')
+  if (isEmptyIntegrity(integrity)) {
+    context.diagnostics.push(invalidIntegrityDiagnostic('YARN_CLASSIC', node.id, entry.integrity))
+    return
+  }
+  const payload: { integrity: Integrity; resolution?: typeof canonicalResolution; nativeResolution?: string } = { integrity }
+  if (canonicalResolution !== undefined) payload.resolution = canonicalResolution
+  if (nativeResolution !== undefined) payload.nativeResolution = nativeResolution
+  context.builder.setTarball({ name: node.name, version: node.version, source: node.source }, payload)
+}
+
+function recordClassicEntrySidecars(
+  context: ClassicParseContext,
+  entry: YarnClassicEntry,
+  node: Node,
+  descriptors: readonly string[],
+): void {
+  context.sidecar.set(node.id, descriptors.slice())
+  if (entry.extras !== undefined && entry.extras.length > 0) {
+    context.entryExtras.set(node.id, entry.extras)
+    for (const raw of entry.extras) context.unknownFields.add(raw.split(' ', 1)[0] ?? raw)
+  }
+  context.entryNodes.push({ node, entry })
+  for (const spec of descriptors) context.specIndex.set(spec, node.id)
+}
+
+function reportClassicUnknownFields(context: ClassicParseContext): void {
+  if (context.unknownFields.size === 0) return
+  context.diagnostics.push({
+    code: 'YARN_CLASSIC_UNKNOWN_FIELD',
+    severity: 'info',
+    subject: 'yarn-classic',
+    message: `preserved unmodelled yarn-classic entry field(s) verbatim for round-trip: ${Array.from(context.unknownFields).sort(cmpUtf16).join(', ')}`,
+  })
+}
+
+function addClassicEntryEdges(context: ClassicParseContext): void {
   const ladder: ClassicEdgeLadderContext = {
-    candidatesByName:  semverCandidatesByName,
-    overrides:         options.overrides ?? [],
-    manifestsProvided: options.overrides !== undefined,
+    candidatesByName: context.semverCandidatesByName,
+    overrides: context.options.overrides ?? [],
+    manifestsProvided: context.options.overrides !== undefined,
   }
-  for (const { node, entry } of entryNodes) {
-    addEdgesFromMap(builder, diagnostics, node.id, entry.dependencies, 'dep', specIndex, ladder, unresolvedDeps)
-    addEdgesFromMap(builder, diagnostics, node.id, entry.optionalDependencies, 'optional', specIndex, ladder, unresolvedDeps)
+  for (const { node, entry } of context.entryNodes) {
+    addEdgesFromMap(context.builder, context.diagnostics, node.id, entry.dependencies, 'dep', context.specIndex, ladder, context.unresolvedDeps)
+    addEdgesFromMap(context.builder, context.diagnostics, node.id, entry.optionalDependencies, 'optional', context.specIndex, ladder, context.unresolvedDeps)
   }
+}
 
-  for (const diagnostic of diagnostics) {
-    builder.diagnostic(diagnostic)
-  }
-
+function sealClassicParse(context: ClassicParseContext): Graph {
+  for (const diagnostic of context.diagnostics) context.builder.diagnostic(diagnostic)
   try {
-    const graph = builder.seal()
-    const parsedSidecar = buildSidecar(sidecar, entryExtras, unresolvedDeps)
+    const graph = context.builder.seal()
+    const parsedSidecar = buildSidecar(context.sidecar, context.entryExtras, context.unresolvedDeps)
     rememberSidecar(graph, parsedSidecar)
-    // Wrap so any subsequent graph.mutate() (modify primitives, optimize,
-    // enrich) re-attaches the key-descriptor sidecar — membership-pruned — to
-    // the new graph instance, mirroring the berry adapter. Without this the
-    // C-KEYDROP orphan-descriptor preservation would not survive the audit-fix
-    // (parse→modify→stringify) path. Empty sidecar → return the bare graph.
     return isEmptySidecar(parsedSidecar) ? graph : withSidecarPropagation(graph, parsedSidecar)
   } catch (error) {
     if (error instanceof GraphError) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `seal failed: ${error.message}`,
-      })
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `seal failed: ${error.message}` })
     }
     throw error
   }
 }
 
-export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {}): string {
-  const warnedPeerEdges = new Set<string>()
-  const warnedPeerContexts = new Set<string>()
-  const warnedPatches = new Set<string>()
-  const emitDiagnostic = (diagnostic: Diagnostic): void => {
-    options.onDiagnostic?.(diagnostic)
-  }
+interface ClassicStringifyContext {
+  graph: Graph
+  options: YarnClassicStringifyOptions
+  emitDiagnostic: (diagnostic: Diagnostic) => void
+  emitSidecar: YarnClassicSidecar | undefined
+  warnedPeerEdges: Set<string>
+  warnedPeerContexts: Set<string>
+  warnedPatches: Set<string>
+  registryBaseFor: (name: string) => string
+}
 
-  // Dedup entries by `<name>@<version>+src=` (the `resolved` URL identity):
-  // source-forked siblings stay distinct, but `+patch=` / peer-virtual siblings —
-  // which yarn-classic cannot represent — collapse onto one entry, preferring the
-  // unpatched node (sort below) and attributing the discard via `warnPatchDrop` /
-  // `warnPeerContextFlatten`.
-  const sortedNodes = Array.from(graph.nodes()).sort((a, b) =>
+export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {}): string {
+  const context = createClassicStringifyContext(graph, options)
+  const entries = dedupeClassicNodes(context)
+    .map(node => buildClassicEntry(context, node))
+    .sort((a, b) => cmpUtf16(a.entrySortKey, b.entrySortKey))
+  const body = entries.length === 0 ? '' : `${entries.map(entry => entry.text).join('\n\n')}\n`
+  const output = HEADER + body
+  return options.lineEnding === 'crlf' ? output.replace(/\n/g, '\r\n') : output
+}
+
+function createClassicStringifyContext(
+  graph: Graph,
+  options: YarnClassicStringifyOptions,
+): ClassicStringifyContext {
+  const inferBase = inferRegistryBases(graph)
+  return {
+    graph,
+    options,
+    emitDiagnostic: diagnostic => options.onDiagnostic?.(diagnostic),
+    emitSidecar: sidecarByGraph.get(graph),
+    warnedPeerEdges: new Set(),
+    warnedPeerContexts: new Set(),
+    warnedPatches: new Set(),
+    registryBaseFor: name => options.registryFor?.(name) ?? inferBase(name),
+  }
+}
+
+// Collapse identities classic cannot represent while retaining source-forked
+// siblings and preferring the unpatched representative.
+function dedupeClassicNodes(context: ClassicStringifyContext): Node[] {
+  const sorted = Array.from(context.graph.nodes()).sort((a, b) =>
     cmpUtf16(a.id, b.id)
       || ((a.patch === undefined ? 0 : 1) - (b.patch === undefined ? 0 : 1)),
   )
-  const emittedIdentity = new Set<string>()
-  const dedupedNodes: Node[] = []
-  for (const node of sortedNodes) {
+  const identities = new Set<string>()
+  const nodes: Node[] = []
+  for (const node of sorted) {
     if (node.workspacePath !== undefined) {
-      dedupedNodes.push(node)
+      nodes.push(node)
       continue
     }
-    // `+patch=` and peerContext are deliberately excluded from this key.
     const identity = node.source === undefined
       ? `${node.name}@${node.version}`
       : `${node.name}@${node.version}+src=${node.source}`
-    if (emittedIdentity.has(identity)) {
-      warnPatchDrop(node, warnedPatches, emitDiagnostic)
+    if (identities.has(identity)) {
+      warnPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
       continue
     }
-    emittedIdentity.add(identity)
-    dedupedNodes.push(node)
+    identities.add(identity)
+    nodes.push(node)
   }
+  return nodes
+}
 
-  const emitSidecar = sidecarByGraph.get(graph)
-  // Scope-aware registry base to rehost MINTED tarballs onto: the caller's config
-  // (`options.registryFor`, authoritative — routes a brand-new private scope), else the
-  // lock's own base for the package's scope (`@scope:registry`-respecting inference), else
-  // yarn 1's default.
-  const inferBase = inferRegistryBases(graph)
-  const registryBaseFor = (name: string): string => options.registryFor?.(name) ?? inferBase(name)
-  const entries = dedupedNodes.map(node => {
-    warnPatchDrop(node, warnedPatches, emitDiagnostic)
-    warnPeerContextFlatten(node, warnedPeerContexts, emitDiagnostic)
-    warnDroppedPeerEdges(graph, node.id, warnedPeerEdges, emitDiagnostic)
+function buildClassicEntry(
+  context: ClassicStringifyContext,
+  node: Node,
+): { key: string; text: string; entrySortKey: string } {
+  warnPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
+  warnPeerContextFlatten(node, context.warnedPeerContexts, context.emitDiagnostic)
+  warnDroppedPeerEdges(context.graph, node.id, context.warnedPeerEdges, context.emitDiagnostic)
+  const specs = entrySpecsOfNode(context.graph, node)
+  const key = stringifyEntryKey(specs)
+  const lines = [`${key}:`, `  version "${escapeQuoted(node.version)}"`]
+  appendClassicResolutionFields(context, node, lines)
+  appendClassicEntryExtras(context, node, lines)
+  appendClassicDependencyBlocks(context, node, lines)
+  return { key, text: lines.join('\n'), entrySortKey: specs[0] ?? key }
+}
 
-    // F11 — yarn sorts entries by the FIRST descriptor's CONTENT (ASCII/code-point),
-    // not the serialized key line: a leading wrapping `"` (ASCII 34, below `@` and
-    // letters) would otherwise cluster all quoted keys ahead of bare ones instead of
-    // interleaving by descriptor. `entrySpecsOfNode` is already sortAlpha-ordered, so
-    // its first element is yarn's entry sort key (raw, unquoted).
-    const specs = entrySpecsOfNode(graph, node)
-    const key = stringifyEntryKey(specs)
-    const entrySortKey = specs[0] ?? key
-    const lines = [
-      `${key}:`,
-      `  version "${escapeQuoted(node.version)}"`,
-    ]
-
-    const payload = graph.tarballOf(node.id)
-    const resolved = formatResolution(payload?.nativeResolution)
-      ?? deriveResolvedFromCanonical(payload?.resolution, payload?.integrity, registryBaseFor(node.name))
-    if (resolved !== undefined) {
-      lines.push(`  resolved "${escapeQuoted(resolved)}"`)
-    }
-
-    const integrity = payload?.integrity && emitSri(payload.integrity)
-    if (integrity !== undefined && integrity !== '') {
-      // F5 (#92) — a single-hash SRI emits BARE; a space-joined multi-hash SRI
-      // (`sha1-… sha512-…`) emits QUOTED, matching yarn 1's "quote any value
-      // with a space" rule, so the round-trip is byte-faithful and reparse
-      // un-quotes it back into the full multiset.
-      lines.push(`  integrity ${integrity.includes(' ') ? `"${integrity}"` : integrity}`)
-    }
-
-    // Round-trip unknown scalar entry fields (e.g. yarn-1 `uid ""`) captured
-    // verbatim on parse — re-emitted after the modelled fields, before deps.
-    const extras = emitSidecar?.entryExtras?.get(node.id)
-    if (extras !== undefined) {
-      for (const raw of extras) lines.push(`  ${raw}`)
-    }
-
-    // F8 — fold any verbatim Rung-4-dropped refs (target absent from the lock)
-    // back into their original block so a same-format round-trip is byte-faithful.
-    // Re-sorted by name alongside the live edges to keep yarn's alphabetical block
-    // order; a live edge of the same name always wins (never overwritten).
-    const dependencies = withUnresolvedDepRefs(
-      collectDependencyBlockEntries(graph, node.id, emitDiagnostic),
-      unresolvedDepRefsOfNode(emitSidecar, node.id, 'dependencies'),
-    )
-    if (dependencies.length > 0) {
-      lines.push('  dependencies:')
-      for (const [name, range] of dependencies) {
-        lines.push(`    ${quoteDepName(name)} ${mustQuoteSpec(range) ? `"${escapeQuoted(range)}"` : range}`)
-      }
-    }
-
-    const optionalDependencies = withUnresolvedDepRefs(
-      collectBlockEntries(graph, graph.out(node.id, 'optional'), emitDiagnostic),
-      unresolvedDepRefsOfNode(emitSidecar, node.id, 'optionalDependencies'),
-    )
-    if (optionalDependencies.length > 0) {
-      lines.push('  optionalDependencies:')
-      for (const [name, range] of optionalDependencies) {
-        lines.push(`    ${quoteDepName(name)} ${mustQuoteSpec(range) ? `"${escapeQuoted(range)}"` : range}`)
-      }
-    }
-
-    return { key, text: lines.join('\n'), entrySortKey }
-  }).sort((a, b) => cmpUtf16(a.entrySortKey, b.entrySortKey))
-
-  // §A header strict shape: empty graph emits HEADER as-is (two blank lines
-  // after `# yarn lockfile v1`), so `check` / `ensureClassicHeader` treat the
-  // output as a valid classic file with zero entries (ADR-0020 §8.1).
-  const body = entries.length === 0
-    ? ''
-    : `${entries.map(entry => entry.text).join('\n\n')}\n`
-  const output = HEADER + body
-
-  if (options.lineEnding === 'crlf') {
-    return output.replace(/\n/g, '\r\n')
+function appendClassicResolutionFields(
+  context: ClassicStringifyContext,
+  node: Node,
+  lines: string[],
+): void {
+  const payload = context.graph.tarballOf(node.id)
+  const resolved = formatResolution(payload?.nativeResolution)
+    ?? deriveResolvedFromCanonical(payload?.resolution, payload?.integrity, context.registryBaseFor(node.name))
+  if (resolved !== undefined) lines.push(`  resolved "${escapeQuoted(resolved)}"`)
+  const integrity = payload?.integrity && emitSri(payload.integrity)
+  if (integrity !== undefined && integrity !== '') {
+    lines.push(`  integrity ${integrity.includes(' ') ? `"${integrity}"` : integrity}`)
   }
+}
 
-  return output
+function appendClassicEntryExtras(
+  context: ClassicStringifyContext,
+  node: Node,
+  lines: string[],
+): void {
+  const extras = context.emitSidecar?.entryExtras?.get(node.id)
+  if (extras === undefined) return
+  for (const raw of extras) lines.push(`  ${raw}`)
+}
+
+function appendClassicDependencyBlocks(
+  context: ClassicStringifyContext,
+  node: Node,
+  lines: string[],
+): void {
+  const dependencies = withUnresolvedDepRefs(
+    collectDependencyBlockEntries(context.graph, node.id, context.emitDiagnostic),
+    unresolvedDepRefsOfNode(context.emitSidecar, node.id, 'dependencies'),
+  )
+  appendClassicDependencyBlock(lines, 'dependencies', dependencies)
+  const optionalDependencies = withUnresolvedDepRefs(
+    collectBlockEntries(context.graph, context.graph.out(node.id, 'optional'), context.emitDiagnostic),
+    unresolvedDepRefsOfNode(context.emitSidecar, node.id, 'optionalDependencies'),
+  )
+  appendClassicDependencyBlock(lines, 'optionalDependencies', optionalDependencies)
+}
+
+function appendClassicDependencyBlock(
+  lines: string[],
+  label: 'dependencies' | 'optionalDependencies',
+  entries: readonly (readonly [string, string])[],
+): void {
+  if (entries.length === 0) return
+  lines.push(`  ${label}:`)
+  for (const [name, range] of entries) {
+    lines.push(`    ${quoteDepName(name)} ${mustQuoteSpec(range) ? `"${escapeQuoted(range)}"` : range}`)
+  }
 }
 
 export function enrich(
@@ -582,17 +604,7 @@ export function enrich(
   sidecar: YarnClassicSidecar | undefined = sidecarByGraph.get(graph),
   options: YarnClassicEnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  if (options.manifests === undefined) {
-    return {
-      graph,
-      diagnostics: [{
-        code: 'YARN_CLASSIC_NO_MANIFESTS',
-        severity: 'warning',
-        message: 'workspace concretisation requires manifests; leaving yarn-classic graph unclassified',
-      }],
-    }
-  }
-
+  if (options.manifests === undefined) return classicMissingManifestsResult(graph)
   const memberManifests = memberManifestsByName(options.manifests)
   const rootManifest = options.manifests['']
   const rootNodeId = rootManifest?.name !== undefined && rootManifest.version !== undefined
@@ -600,9 +612,27 @@ export function enrich(
     : undefined
   const specIndex = specIndexOfGraph(graph, sidecar)
   const plan = planClassicEnrich(graph, rootNodeId, rootManifest, memberManifests, specIndex, options.overrides ?? [])
+  if (isClassicEnrichPlanEmpty(plan)) return { graph, diagnostics: [] }
+  const enriched = applyClassicEnrichPlan(graph, plan)
+  rememberSidecar(enriched, sidecar ?? { entrySpecs: new Map() })
+  return { graph: enriched, diagnostics: [] }
+}
 
-  if (
-    plan.rootNode === undefined
+function classicMissingManifestsResult(graph: Graph): { graph: Graph; diagnostics: Diagnostic[] } {
+  return {
+    graph,
+    diagnostics: [{
+      code: 'YARN_CLASSIC_NO_MANIFESTS',
+      severity: 'warning',
+      message: 'workspace concretisation requires manifests; leaving yarn-classic graph unclassified',
+    }],
+  }
+}
+
+type ClassicEnrichPlan = ReturnType<typeof planClassicEnrich>
+
+function isClassicEnrichPlanEmpty(plan: ClassicEnrichPlan): boolean {
+  return plan.rootNode === undefined
     && plan.rootNodeReplacement === undefined
     && plan.addRootEdges.length === 0
     && plan.removeRootEdges.length === 0
@@ -610,11 +640,10 @@ export function enrich(
     && plan.memberNodeReplacements.length === 0
     && plan.addMemberNodes.length === 0
     && plan.addMemberEdges.length === 0
-  ) {
-    return { graph, diagnostics: [] }
-  }
+}
 
-  const result = graph.mutate(m => {
+function applyClassicEnrichPlan(graph: Graph, plan: ClassicEnrichPlan): Graph {
+  return graph.mutate(m => {
     if (plan.rootNode !== undefined) {
       m.addNode(plan.rootNode)
     }
@@ -651,10 +680,7 @@ export function enrich(
       m.removeEdge(edge.src, edge.dst, edge.kind)
       m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
     }
-  })
-
-  rememberSidecar(result.graph, sidecar ?? { entrySpecs: new Map() })
-  return { graph: result.graph, diagnostics: [] }
+  }).graph
 }
 
 export function optimize(
