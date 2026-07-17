@@ -12,6 +12,7 @@ import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.t
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
 import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
+import { isBareYarnBerryNpmAliasNode, rawConditionsScalarOfNode } from '../formats/_yarn-berry-core.ts'
 import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
 
 /** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3) — wired
@@ -296,6 +297,15 @@ export async function refurbish(
     if (node.workspacePath !== undefined) continue
     const payload: TarballPayload = graph.tarballOf(node.id) ?? {}
     if (emitBerryChecksum(payload.integrity ?? emptyIntegrity()) !== undefined) continue
+    // Yarn passes every conditional locator as an `unstablePackage` to its cache
+    // and deliberately returns a null checksum for it: another architecture may
+    // not fetch the same package, so persisting the local cache hash would be
+    // unreliable. Preserve a checksum already present (the guard above), but do
+    // not mint one into a structural gap. Alias-only npm entries are likewise
+    // bare by design; their resolved target locator carries the checksum.
+    // Neither rule evaluates the current platform.
+    if (rawConditionsScalarOfNode(graph, node.id) !== undefined
+      || isBareYarnBerryNpmAliasNode(graph, node.id)) continue
     // Fetch iff there is SOME way to a CORRECT digest — byte-reproduce it OR ask the
     // oracle for yarn's own. A patch, an indeterminable cacheKey, or neither → defer
     // (never a wrong value).

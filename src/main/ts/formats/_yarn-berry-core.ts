@@ -1268,6 +1268,24 @@ export function rawConditionsScalarOfNode(graph: Graph, nodeId: string): string 
   return sidecarByGraph.get(graph)?.conditions?.get(nodeId)
 }
 
+/** Whether a berry entry is keyed only by npm-alias descriptors and has no
+ * conditions. Yarn leaves these alias-only entries without their own checksum;
+ * the resolved target locator is the checksum-bearing identity. Same-format
+ * only: the verbatim entry-key sidecar is intentionally adapter-local. */
+export function isBareYarnBerryNpmAliasNode(graph: Graph, nodeId: string): boolean {
+  const sidecar = sidecarByGraph.get(graph)
+  if (sidecar?.conditions?.has(nodeId) === true) return false
+  const node = graph.getNode(nodeId)
+  const descriptors = sidecar?.entryKeyDescriptors?.get(nodeId)
+  if (node === undefined || descriptors === undefined || descriptors.length === 0) return false
+  return descriptors.every(descriptor => {
+    const spec = parseSpec(descriptor)
+    return spec.protocol === 'npm'
+      && spec.name !== node.name
+      && spec.spec.startsWith(`${node.name}@`)
+  })
+}
+
 export interface YarnBerryConditionsFeatureQuery {
   readonly available: boolean
   readonly present: boolean
