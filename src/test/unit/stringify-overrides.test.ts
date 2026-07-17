@@ -67,6 +67,21 @@ describe('StringifyOptions.overrides projection (ADR-0025 §4)', () => {
     expect(diags.map(d => d.code)).toContain('INTEROP_OVERRIDE_NOT_PROJECTED')
   })
 
+  it('yarn-classic overrides are ENRICH_REQUIRED under strict, not IRREDUCIBLE (recoverable via project API)', () => {
+    const g = parse('yarn-classic', fixture('simple/yarn-classic.lock'))
+    let err: { code?: string; losses?: readonly { class?: string; feature?: string }[] } | undefined
+    try {
+      stringify('yarn-classic', g, { overrides: OVERRIDES, strict: true })
+    } catch (e) {
+      err = e as typeof err
+    }
+    // A resolutions/overrides pin a yarn lock cannot carry stays in package.json;
+    // it must not fail-closed as IRREDUCIBLE. yaf's ENRICH_REQUIRED-only fallback tolerates this.
+    expect(err?.code).toBe('ENRICH_REQUIRED')
+    expect(err?.losses?.map(l => l.class)).toContain('enrichable')
+    expect(err?.losses?.map(l => l.feature)).toContain('interop-override-not-projected')
+  })
+
   it('yarn emits no INTEROP diagnostic when no overrides are supplied', () => {
     const g = parse('yarn-berry-v9', fixture('simple/yarn-berry-v9.lock'))
     const diags: Diagnostic[] = []
