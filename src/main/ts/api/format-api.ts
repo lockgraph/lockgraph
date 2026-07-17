@@ -458,6 +458,11 @@ export function canonicalProjectionGraphSnapshot(
   overrides?: readonly OverrideConstraint[],
   workspaceNames?: ReadonlyMap<string, string>,
 ): string {
+  // `registryFor` intentionally isn't threaded through this strict comparator:
+  // generic StringifyOptions cannot carry it, while the direct classic
+  // stringify API that can has no projection comparator. This is therefore
+  // safely over-strict today; exposing `registryFor` generically must also plumb
+  // it through this projection boundary.
   const projectedResolutions = target === 'yarn-classic'
     ? yarnClassic.projectedCanonicalResolutions(graph)
     : undefined

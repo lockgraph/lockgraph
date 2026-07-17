@@ -79,6 +79,57 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     expect(() => stringify('yarn-berry-v8', r.graph)).not.toThrow()
   })
 
+  it('does not over-fill conditional or alias-only berry checksum gaps', async () => {
+    const lock = `__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"@esbuild/darwin-arm64@npm:0.28.1":
+  version: 0.28.1
+  resolution: "@esbuild/darwin-arm64@npm:0.28.1"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"fsevents@npm:~2.3.3":
+  version: 2.3.3
+  resolution: "fsevents@npm:2.3.3"
+  checksum: 10c0/${'a1'.repeat(64)}
+  conditions: os=darwin
+  languageName: node
+  linkType: hard
+
+"string-width-cjs@npm:string-width@^4.2.0":
+  version: 4.2.3
+  resolution: "string-width@npm:4.2.3"
+  languageName: node
+  linkType: hard
+
+"ms@npm:2.1.3":
+  version: 2.1.3
+  resolution: "ms@npm:2.1.3"
+  languageName: node
+  linkType: hard
+`
+    const graph = parse('yarn-berry-v8', lock)
+    const beforeFsevents = emitBerryChecksum(graph.tarballOf('fsevents@2.3.3')!.integrity!)
+    const r = await refurbish(
+      graph,
+      'yarn-berry-v8',
+      sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }),
+    )
+
+    // Non-vacuous control: an ordinary gap still fills.
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBeDefined()
+    // Subject gaps remain bare without any host-platform evaluation.
+    expect(r.graph.tarballOf('@esbuild/darwin-arm64@0.28.1')?.integrity).toBeUndefined()
+    expect(r.graph.tarballOf('string-width@4.2.3')?.integrity).toBeUndefined()
+    // A pre-existing conditional checksum is monotone-preserved, never removed.
+    expect(emitBerryChecksum(r.graph.tarballOf('fsevents@2.3.3')!.integrity!)).toBe(beforeFsevents)
+    expect((stringify('yarn-berry-v8', r.graph, { strict: false }).match(/^  checksum:/gm) ?? [])).toHaveLength(2)
+  })
+
   it('still fails closed when a dropped checksum cannot be recomputed', async () => {
     const graph = parse('yarn-berry-v8', berryV8Lock())
     const payload = graph.tarballOf('ms@2.1.3')!
