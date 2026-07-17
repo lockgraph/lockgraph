@@ -1,14 +1,25 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   LockfileError,
+  parse,
   stringify,
   type FormatId,
 } from '../../main/ts/index.ts'
 import { stringifyProjected } from '../../main/ts/api/format-api.ts'
 import { isStructuralExpectedDrop } from '../../main/ts/completeness/projection.ts'
 import { newBuilder, type Graph, type TarballPayload } from '../../main/ts/graph.ts'
+import { rebindAdapterState as rebindPnpmFlatAdapterState } from '../../main/ts/formats/_pnpm-flat-core.ts'
+import * as bunText from '../../main/ts/formats/bun-text.ts'
+import * as pnpmV5 from '../../main/ts/formats/pnpm-v5.ts'
 import * as yarnBerryV9 from '../../main/ts/formats/yarn-berry-v9.ts'
 import type { Integrity } from '../../main/ts/recipe/integrity.ts'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const fixture = (file: string): string =>
+  readFileSync(resolve(here, '../resources/fixtures/lockfiles/simple', file), 'utf8')
 
 const sriIntegrity: Integrity = {
   hashes: [{ algorithm: 'sha512', digest: 'ab'.repeat(64), origin: 'sri' }],
@@ -102,6 +113,29 @@ function caught(format: FormatId, graph: Graph): LockfileError {
   throw new Error(`expected strict ${format} stringify to reject a projection loss`)
 }
 
+type MetadataRefusalTarget = 'bun-text' | 'pnpm-v5' | 'pnpm-v6' | 'pnpm-v9'
+
+function addMetadataToNativeControl(
+  format: MetadataRefusalTarget,
+  control: Graph,
+  metadata: Partial<TarballPayload>,
+): Graph {
+  const node = [...control.nodes()].find(candidate => candidate.name === 'lodash')
+  expect(node).toBeDefined()
+  const payload = control.tarballOf(node!.id)
+  expect(payload).toBeDefined()
+  const mutated = control.mutate(mutable => {
+    mutable.setTarball({ name: node!.name, version: node!.version }, {
+      ...payload,
+      ...metadata,
+    })
+  }).graph
+
+  if (format === 'bun-text') return bunText.rebindAdapterState(control, mutated).graph
+  if (format === 'pnpm-v5') return pnpmV5.rebindAdapterState(control, mutated).graph
+  return rebindPnpmFlatAdapterState(control, mutated).graph
+}
+
 describe('strict projection gate', () => {
   it.each([
     ['yarn-classic', sriIntegrity],
@@ -158,8 +192,11 @@ describe('strict projection gate', () => {
     ])
 
     const pnpm = caught('pnpm-v9', graph)
-    expect(pnpm.losses?.some(loss =>
-      loss.class === 'inherent-meaningful' && loss.feature === 'metadata:bin')).toBe(true)
+    expect(pnpm.losses).toContainEqual(expect.objectContaining({
+      class: 'inherent-meaningful',
+      feature: 'completeness-output-graph-mismatch',
+    }))
+    expect(isStructuralExpectedDrop('bin', 'pnpm-v9')).toBe(false)
 
     for (const field of [
       'cpu',
@@ -174,18 +211,45 @@ describe('strict projection gate', () => {
     }
   })
 
-  it('fails closed for minted bun platform metadata', () => {
-    const error = caught('bun-text', singleMetadataGraph({ os: ['linux'], cpu: ['x64'] }))
+  it('strict-passes the bun native control before refusing minted storage metadata', () => {
+    const control = parse('bun-text', fixture('bun-text.lock'))
+    expect(() => stringify('bun-text', control)).not.toThrow()
+
+    const withMetadata = addMetadataToNativeControl('bun-text', control, {
+      os: ['linux'],
+      cpu: ['x64'],
+      bin: { lodash: 'cli.js' },
+      peerDependencies: { peer: '^1.0.0' },
+    })
+    const error = caught('bun-text', withMetadata)
     expect(error.code).toBe('IRREDUCIBLE_LOSS')
-    expect(error.losses?.some(loss =>
-      loss.class === 'inherent-meaningful' && loss.feature === 'metadata:platform')).toBe(true)
+    expect(error.losses).toContainEqual(expect.objectContaining({
+      class: 'inherent-meaningful',
+      feature: 'completeness-output-graph-mismatch',
+      diagnostic: expect.objectContaining({ code: 'COMPLETENESS_OUTPUT_GRAPH_MISMATCH' }),
+    }))
+    expect(error.losses?.some(loss => loss.feature.startsWith('metadata:'))).toBe(false)
   })
 
-  it('fails closed for minted pnpm bin metadata', () => {
-    const error = caught('pnpm-v9', singleMetadataGraph({ bin: { dep: 'cli.js' } }))
+  it.each([
+    ['pnpm-v5', 'pnpm-v5.lock'],
+    ['pnpm-v6', 'pnpm-v6.lock'],
+    ['pnpm-v9', 'pnpm-v9.lock'],
+  ] as const)('strict-passes the %s native control before refusing minted bin metadata', (format, file) => {
+    const control = parse(format, fixture(file))
+    expect(() => stringify(format, control)).not.toThrow()
+
+    const withMetadata = addMetadataToNativeControl(format, control, {
+      bin: { lodash: 'cli.js' },
+    })
+    const error = caught(format, withMetadata)
     expect(error.code).toBe('IRREDUCIBLE_LOSS')
-    expect(error.losses?.some(loss =>
-      loss.class === 'inherent-meaningful' && loss.feature === 'metadata:bin')).toBe(true)
+    expect(error.losses).toContainEqual(expect.objectContaining({
+      class: 'inherent-meaningful',
+      feature: 'completeness-output-graph-mismatch',
+      diagnostic: expect.objectContaining({ code: 'COMPLETENESS_OUTPUT_GRAPH_MISMATCH' }),
+    }))
+    expect(error.losses?.some(loss => loss.feature === 'metadata:bin')).toBe(false)
   })
 
   it('still rejects a target-stored field when emission loses its canonical carrier', () => {

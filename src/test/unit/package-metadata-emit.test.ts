@@ -37,10 +37,10 @@ function expectMetadataFields(format: FormatId, fields: PackageMetadataField[]):
 }
 
 describe('package metadata emitters', () => {
-  it('does not claim canonical payload support for sidecar-blind targets', () => {
+  it('reports native storage separately from canonical sidecar projection', () => {
     expectMetadataFields('npm-1', [])
     expectMetadataFields('yarn-classic', [])
-    expectMetadataFields('bun-text', [])
+    expectMetadataFields('bun-text', ['bin', 'cpu', 'os', 'peerDependencies'])
   })
 
   it('emits every npm-2/3 supported field from canonical payload', () => {
@@ -84,7 +84,7 @@ describe('package metadata emitters', () => {
     expectMetadataFields('yarn-berry-v9', Object.keys(payload) as PackageMetadataField[])
   })
 
-  it('emits every pnpm-v9 supported field from canonical payload', () => {
+  it('emits canonical pnpm-v9 payload fields and reports hasBin storage', () => {
     const payload: TarballPayload = {
       engines: { node: '>=18' },
       deprecated: 'old',
@@ -100,10 +100,13 @@ describe('package metadata emitters', () => {
     expect(output).toContain('    deprecated: old')
     expect(output).toContain('    libc:')
     expect(output).toContain('    peerDependenciesMeta:')
-    expectMetadataFields('pnpm-v9', Object.keys(payload) as PackageMetadataField[])
+    expectMetadataFields('pnpm-v9', [
+      ...(Object.keys(payload) as PackageMetadataField[]),
+      'bin',
+    ])
   })
 
-  it('uses the same canonical payload fields in pnpm-v6', () => {
+  it('uses the same canonical payload fields and hasBin storage in pnpm-v6', () => {
     const payload: TarballPayload = {
       engines: { node: '>=18' },
       deprecated: 'old',
@@ -115,10 +118,13 @@ describe('package metadata emitters', () => {
     }
 
     expectStable('pnpm-v6', payload)
-    expectMetadataFields('pnpm-v6', Object.keys(payload) as PackageMetadataField[])
+    expectMetadataFields('pnpm-v6', [
+      ...(Object.keys(payload) as PackageMetadataField[]),
+      'bin',
+    ])
   })
 
-  it('emits every pnpm-v5 supported field from canonical payload', () => {
+  it('emits canonical pnpm-v5 payload fields and reports hasBin storage', () => {
     const payload: TarballPayload = {
       engines: { node: '>=18' },
       cpu: ['x64'],
@@ -129,7 +135,10 @@ describe('package metadata emitters', () => {
 
     expect(output).toContain("    engines: {node: '>=18'}")
     expect(output).toContain('    peerDependencies:')
-    expectMetadataFields('pnpm-v5', Object.keys(payload) as PackageMetadataField[])
+    expectMetadataFields('pnpm-v5', [
+      ...(Object.keys(payload) as PackageMetadataField[]),
+      'bin',
+    ])
   })
 
   it('emits the complete canonical metadata universe through lockgraph', () => {
