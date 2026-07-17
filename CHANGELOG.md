@@ -1,3 +1,15 @@
+## [0.1.1](https://github.com/lockgraph/lockgraph/compare/v0.1.0...v0.1.1) (2026-07-17)
+
+### Fixes & improvements
+* fix(yarn-classic): reparse governed bindings with declared override context ([386b865](https://github.com/lockgraph/lockgraph/commit/386b86538bf99b4bbdba03b15764e126f00c680b))
+* fix: omit empty-after-projection tarball payloads from strict snapshot ([17898c9](https://github.com/lockgraph/lockgraph/commit/17898c99a8c0c5da27e8c3dcf50b5e43dffb26ae))
+* refactor(yarn-berry): decompose parse/stringify/enrich into named phases ([4e96776](https://github.com/lockgraph/lockgraph/commit/4e96776c1f6947be73eb4deed04545da2455a3ef))
+* fix: reclassify unprojectable overrides as recoverable, not irreducible ([fcd62ba](https://github.com/lockgraph/lockgraph/commit/fcd62ba4aa79ce173fce2951f6b554302f4c2865))
+* fix: stamp berryChecksumCacheKey on prefix-era refurbish fill ([f64122c](https://github.com/lockgraph/lockgraph/commit/f64122cf31213dca90822ef230361ae4ffd76300))
+* fix: reclassify frozen-clean metadata drops via structural-expected allowlist ([9979d6a](https://github.com/lockgraph/lockgraph/commit/9979d6ab754b5399400cdcb8fcbbd726e03f0c3a))
+* fix: strict-clean registry-minted nodes through yarn-classic projection ([5279629](https://github.com/lockgraph/lockgraph/commit/52796292246e1afeb191bbf2ace9d6ac59b5bc42))
+* refactor(pnpm): decompose parse/stringify/enrich into named phases ([dad4349](https://github.com/lockgraph/lockgraph/commit/dad43498f772e30f9db908fe0bed59b62b616eeb))
+
 ## [0.1.0](https://github.com/lockgraph/lockgraph/compare/undefined...v0.1.0) (2026-07-15)
 
 ### Fixes & improvements
