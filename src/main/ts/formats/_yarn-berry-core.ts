@@ -274,6 +274,49 @@ interface PendingDiagnostic extends Omit<Diagnostic, 'subject'> {
 
 const sidecarByGraph = new WeakMap<Graph, YarnBerryFamilySidecar>()
 
+type YarnBerryGraphBuilder = ReturnType<typeof newBuilder>
+
+interface YarnBerryParseEntry {
+  readonly key: string
+  readonly value: SymlMap
+  readonly specs: SpecPart[]
+}
+
+interface YarnBerryParseContext {
+  readonly ast: SymlMap
+  readonly metadata: SymlMap | undefined
+  readonly options: YarnBerryFamilyParseOptions
+  readonly config: YarnBerryFamilyConfig
+  readonly builder: YarnBerryGraphBuilder
+  readonly diagnostics: Diagnostic[]
+  readonly rawPeerDependencies: Map<string, Record<string, string>>
+  readonly rawConditions: Map<string, string>
+  readonly rawDependenciesMeta: Map<string, SymlMap>
+  readonly rawPeerDependenciesMeta: Map<string, SymlMap>
+  readonly rawUnresolvedDeps: Map<string, UnresolvedDepRef[]>
+  readonly rawEntryKeyDescriptors: Map<string, string[]>
+  readonly entries: YarnBerryParseEntry[]
+  readonly specIndex: Map<string, string>
+  readonly patchDescriptorIndex: Map<string, PatchDescriptorCandidate[]>
+  readonly semverCandidatesByName: Map<string, SemverCandidate[]>
+  readonly patchSiblingsByBase: Map<string, PatchSibling[]>
+  readonly seenIds: Set<string>
+  readonly entryIds: Map<string, string>
+}
+
+interface YarnBerryParsedNodeIdentity {
+  readonly first: SpecPart
+  readonly version: string
+  readonly resolution: string | undefined
+  readonly authoritativeName: string
+  readonly workspaceSpec: string | undefined
+  readonly canonicalResolution: ResolutionCanonical | undefined
+  readonly effectivePatch: string | undefined
+  readonly effectiveSource: string | undefined
+  readonly id: string
+  readonly patchResult: ReturnType<typeof extractPatchFingerprint>
+}
+
 export function hasAdapterState(graph: Graph): boolean {
   return sidecarByGraph.has(graph)
 }
@@ -286,488 +329,473 @@ export function checkFamily(input: string, config: YarnBerryFamilyConfig): boole
   ).test(head)
 }
 
-export function parseFamily(
+function createYarnBerryParseContext(
   input: string,
   options: YarnBerryFamilyParseOptions,
   config: YarnBerryFamilyConfig,
-): { graph: Graph; sidecar: YarnBerryFamilySidecar } {
+): YarnBerryParseContext {
   const ast = parseSyml(input)
-  const metadata = validateMetadata(ast, config)
+  return {
+    ast,
+    metadata: validateMetadata(ast, config),
+    options,
+    config,
+    builder: newBuilder(),
+    diagnostics: [],
+    rawPeerDependencies: new Map<string, Record<string, string>>(),
+    rawConditions: new Map<string, string>(),
+    rawDependenciesMeta: new Map<string, SymlMap>(),
+    rawPeerDependenciesMeta: new Map<string, SymlMap>(),
+    rawUnresolvedDeps: new Map<string, UnresolvedDepRef[]>(),
+    rawEntryKeyDescriptors: new Map<string, string[]>(),
+    entries: [],
+    specIndex: new Map<string, string>(),
+    patchDescriptorIndex: new Map<string, PatchDescriptorCandidate[]>(),
+    semverCandidatesByName: new Map<string, SemverCandidate[]>(),
+    patchSiblingsByBase: new Map<string, PatchSibling[]>(),
+    seenIds: new Set<string>(),
+    entryIds: new Map<string, string>(),
+  }
+}
 
-  const builder = newBuilder()
-  const diagnostics: Diagnostic[] = []
-  const rawPeerDependencies = new Map<string, Record<string, string>>()
-  const rawConditions = new Map<string, string>()
-  const rawDependenciesMeta = new Map<string, SymlMap>()
-  const rawPeerDependenciesMeta = new Map<string, SymlMap>()
-  // F8/#103 — verbatim Rung-4-dropped dep refs (target absent from the lock),
-  // keyed by source NodeId, collected during edge resolution and re-emitted into
-  // the matching inner-block for byte-faithful same-format round-trip.
-  const rawUnresolvedDeps = new Map<string, UnresolvedDepRef[]>()
-  // B-EXACT — verbatim entry-key descriptor list per NodeId, captured below so
-  // emit re-keys each entry from the SOURCE descriptors (never a synthesized
-  // resolved-version). See `YarnBerryFamilySidecar.entryKeyDescriptors`.
-  const rawEntryKeyDescriptors = new Map<string, string[]>()
-
-  const entries: Array<{ key: string; value: SymlMap; specs: SpecPart[] }> = []
-  for (const [key, value] of Object.entries(ast)) {
+/** Validate top-level entry blocks and retain their parsed descriptors. */
+function collectYarnBerryParseEntries(context: YarnBerryParseContext): void {
+  for (const [key, value] of Object.entries(context.ast)) {
     if (key === '__metadata') continue
     const valueMap = asMap(value)
-    if (!valueMap) {
-      diagnostics.push({
+    if (valueMap === undefined) {
+      context.diagnostics.push({
         code: 'YARN_BERRY_BAD_ENTRY',
         severity: 'warning',
         message: `entry ${JSON.stringify(key)} is not a block; skipping`,
       })
       continue
     }
-    const specs = parseEntryKey(key)
-    entries.push({ key, value: valueMap, specs })
+    context.entries.push({ key, value: valueMap, specs: parseEntryKey(key) })
+  }
+}
+
+/** Derive canonical graph identity before materialising one berry entry. */
+function parseYarnBerryNodeIdentity(
+  context: YarnBerryParseContext,
+  entry: YarnBerryParseEntry,
+): YarnBerryParsedNodeIdentity {
+  const { key, value, specs } = entry
+  const first = specs[0]
+  if (first === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `entry ${JSON.stringify(key)} has empty spec` })
+  }
+  const version = asString(value['version'])
+  if (version === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `entry ${JSON.stringify(key)} missing 'version'` })
   }
 
-  const specIndex = new Map<string, string>()
-  // A `patch:` consumer descriptor (`patch:<inner>#<patchPath>`) is the patch
-  // ENTRY's locator with its trailing `::version=…&hash=…[&locator=…]` param
-  // block stripped — yarn appends those params only on the bound entry, never
-  // on the consumer's descriptor (Bug #88, form b). So the bare descriptor can
-  // never hit `specIndex` directly. Index every patch entry under its
-  // param-stripped descriptor so a `patch:`-descriptor dep resolves to the
-  // patch NODE (the `+patch=…` node), not the plain `npm:` node. Multiple patch
-  // entries can strip to the same descriptor (same patch applied from different
-  // workspaces → distinct `&locator=` qualifiers → distinct sentinel nodes), so
-  // each candidate carries its `locator=` for consumer disambiguation, mirroring
-  // the `link:`/`portal:` path.
-  const patchDescriptorIndex = new Map<string, PatchDescriptorCandidate[]>()
-  // Bug #99 Rung-3 — name → registry-class candidate index for source-gated
-  // max-satisfying semver. Built alongside the node table because the resolver
-  // runs against the WRITE-ONLY builder (no `graph.byName` / `graph.tarballOf`
-  // available yet). Each candidate carries the F3 source class so the resolver
-  // can keep an `npm:`/bare descriptor from ever binding a git/directory/unknown
-  // node (the #91 source-safety invariant).
-  const semverCandidatesByName = new Map<string, SemverCandidate[]>()
-  // Bug #104 patch-preference — `${name}@${version}` → sibling PATCH nodes whose
-  // canonical base is an `npm:` registry artefact (`node.patch !== undefined` and
-  // the patch locator's inner protocol is `npm:`). Built alongside the candidate
-  // index so the Rung-3 OVERLAY can, after a registry range binds the BASE node,
-  // redirect the consumer onto the patched copy (yarn's lock-borne
-  // `patchedDependencies` behaviour). Keyed by the patch node's own
-  // `name@version` (which equals the base's), so the bound base id maps straight
-  // to its patch siblings. `link:`/`portal:`/`file:` locator-disambiguated
-  // sentinels are EXCLUDED (their "patch" slot carries only a consumer
-  // discriminator, not a registry-base patch).
-  const patchSiblingsByBase = new Map<string, PatchSibling[]>()
-  const seenIds = new Set<string>()
-  const entryIds = new Map<string, string>()
+  const resolution = asString(value['resolution'])
+  const authoritativeName = resolution === undefined
+    ? first.name
+    : nameFromResolutionLocator(resolution) ?? first.name
+  const baseId = serializeNodeId(authoritativeName, version, [])
+  const rawPatchResult = resolution === undefined
+    ? undefined
+    : extractPatchFingerprint(baseId, resolution, context.options.workspaceRoot)
+  const localLocatorPatch = rawPatchResult === undefined
+    && resolution !== undefined
+    && isLocalLocatorDisambiguatedResolution(resolution, authoritativeName)
+    ? sentinelHashOfLocator(resolution)
+    : undefined
+  const effectivePatch = rawPatchResult?.patch ?? localLocatorPatch
+  const workspaceSpec = workspaceSpecOfEntry(resolution, specs, first)
+  const canonicalResolution = resolution !== undefined && workspaceSpec === undefined
+    ? parseResolutionRecipe(resolution, { sourceKind: 'yarn-berry-locator', name: authoritativeName })
+    : undefined
+  const effectiveSource = effectivePatch === undefined && canonicalResolution !== undefined
+    ? sourceDiscriminatorOf(canonicalResolution)
+    : undefined
+  const id = serializeNodeId(authoritativeName, version, [], effectivePatch, effectiveSource)
+  const patchResult = rawPatchResult?.diagnostic === undefined
+    ? rawPatchResult
+    : { ...rawPatchResult, diagnostic: { ...rawPatchResult.diagnostic, subject: id } }
+  return {
+    first,
+    version,
+    resolution,
+    authoritativeName,
+    workspaceSpec,
+    canonicalResolution,
+    effectivePatch,
+    effectiveSource,
+    id,
+    patchResult,
+  }
+}
 
-  for (const { key, value, specs } of entries) {
-    const first = specs[0]
-    if (!first) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `entry ${JSON.stringify(key)} has empty spec`,
-      })
-    }
-    const version = asString(value['version'])
-    if (version === undefined) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `entry ${JSON.stringify(key)} missing 'version'`,
-      })
-    }
-    const resolution = asString(value['resolution'])
-    // Authoritative name comes from the `resolution:` locator when present
-    // (ADR-0014 §4.F3 — single canonical identity). Compound entry-keys can
-    // sort an npm-alias spec ahead of the canonical spec lexically (e.g.
-    // `@scope/pkg--variant@npm:@scope/pkg@…,
-    //  @scope/pkg@npm:…`); keying off `first.name` mistakes the alias
-    // for the real package name. Falling back to `first.name` keeps legacy
-    // single-spec / sentinel-version entries intact.
-    const authoritativeName = resolution !== undefined
-      ? nameFromResolutionLocator(resolution) ?? first.name
-      : first.name
-    const baseId = serializeNodeId(authoritativeName, version, [])
-    const rawPatchResult = resolution !== undefined
-      ? extractPatchFingerprint(baseId, resolution, options.workspaceRoot)
-      : undefined
-    // Local-artefact locator-disambiguator (per ADR-0011 sentinel-as-
-    // discriminator pattern): `link:` / `portal:` directory references and a
-    // `::locator=`-qualified `file:` local-tarball alias. Only kicks in when no
-    // `@patch:` fingerprint already populates the slot — `@patch:` wins because
-    // it carries actual byte-identity semantics; these locators carry only a
-    // consumer-ownership discriminator. Keyed off authoritativeName (the
-    // resolution-derived canonical name) so it stays correct under the
-    // compound-entry-key alias-ordering case Bug #3 fixes.
-    const linkLocatorPatch = rawPatchResult === undefined && resolution !== undefined
-      && isLocalLocatorDisambiguatedResolution(resolution, authoritativeName)
-      ? sentinelHashOfLocator(resolution)
-      : undefined
-    const effectivePatch = rawPatchResult?.patch ?? linkLocatorPatch
-    // Workspace detection must precede both the NodeId and the F3 canonical:
-    // a workspace member carries NO F3 resolution (its identity lives on
-    // Node.workspacePath), so it is never source-discriminated. Computed here
-    // (moved ahead of `id`) so the ADR-0032 `+src=` slot can be threaded into
-    // the NodeId at construction. `node.workspacePath` is still assigned from
-    // this same value below.
-    const workspaceSpec = workspaceSpecOfEntry(resolution, specs, first)
-    // ADR-0014 §4.F3 — canonical resolution into TarballPayload. Workspace
-    // identity is NOT part of F3 canonical (it lives on Node.workspacePath);
-    // skip the primitive entirely for workspace-protocol locators.
-    const canonicalResolution = resolution !== undefined && workspaceSpec === undefined
-      ? parseResolutionRecipe(resolution, { sourceKind: 'yarn-berry-locator', name: authoritativeName })
-      : undefined
-    // ADR-0032 — the `+src=` discriminator for a NON-REGISTRY source. Gated on
-    // `effectivePatch === undefined`: a node already carrying a `+patch=` slot
-    // is identity-disambiguated by F2, and a `patch:` locator canonicalises to
-    // `unknown` for an orthogonal reason (patch identity is F2's, not F3's) —
-    // folding a second discriminator onto it would change every patched
-    // NodeId for no #2b benefit. Bare for registry/directory (zero blast
-    // radius); set for git / non-registry-host tarball / non-patch unknown.
-    const effectiveSource = effectivePatch === undefined && canonicalResolution !== undefined
-      ? sourceDiscriminatorOf(canonicalResolution)
-      : undefined
-    const id = serializeNodeId(authoritativeName, version, [], effectivePatch, effectiveSource)
-    const patchResult = rawPatchResult?.diagnostic !== undefined
-      ? {
-          ...rawPatchResult,
-          diagnostic: {
-            ...rawPatchResult.diagnostic,
-            subject: id,
-          },
-        }
-      : rawPatchResult
+/** Add the graph node and exact entry-key identity, rejecting collisions. */
+function addYarnBerryGraphNode(
+  context: YarnBerryParseContext,
+  entry: YarnBerryParseEntry,
+  identity: YarnBerryParsedNodeIdentity,
+): void {
+  const { id, authoritativeName, version, effectivePatch, effectiveSource, workspaceSpec } = identity
+  if (context.seenIds.has(id)) {
+    throw new LockfileError({
+      code: 'IRREDUCIBLE_LOSS',
+      message: irreducibleCollisionMessage(id, entry.key, context.entries),
+    })
+  }
+  context.seenIds.add(id)
+  context.entryIds.set(entry.key, id)
+  context.rawEntryKeyDescriptors.set(id, entry.key.split(', '))
 
-    if (seenIds.has(id)) {
-      throw new LockfileError({
-        code: 'IRREDUCIBLE_LOSS',
-        message: irreducibleCollisionMessage(id, key, entries),
-      })
-    }
-    seenIds.add(id)
-    entryIds.set(key, id)
-    // B-EXACT — remember the VERBATIM source key descriptors so emit re-keys this
-    // entry from exactly what yarn wrote (split on `, ` mirrors `parseEntryKey`),
-    // never synthesizing the resolved version into the key.
-    rawEntryKeyDescriptors.set(id, key.split(', '))
+  const node: Node = { id, name: authoritativeName, version, peerContext: [] }
+  if (effectivePatch !== undefined) node.patch = effectivePatch
+  if (effectiveSource !== undefined) node.source = effectiveSource
+  if (workspaceSpec !== undefined) node.workspacePath = workspacePathOf(workspaceSpec)
+  context.builder.addNode(node)
+}
 
-    const node: Node = {
-      id,
-      name: authoritativeName,
-      version,
-      peerContext: [],
-    }
-    if (effectivePatch !== undefined) node.patch = effectivePatch
-    // ADR-0032 — carry the `+src=` discriminator on the Node so the seal can
-    // re-derive the NodeId from the Node alone (parallels `node.patch`).
-    if (effectiveSource !== undefined) node.source = effectiveSource
-    // Workspace identification keys off `resolution` (the canonical, single
-    // identity per ADR-0014 §4.F3), not `specs[0].protocol` — see the
-    // `workspaceSpec` derivation moved ahead of `id` above.
-    if (workspaceSpec !== undefined) {
-      node.workspacePath = workspacePathOf(workspaceSpec)
-    }
-    builder.addNode(node)
-    if (patchResult?.diagnostic) diagnostics.push(patchResult.diagnostic)
-
-    if (canonicalResolution !== undefined && canonicalResolution.type === 'unknown' && !looksLikePatchLocator(resolution)) {
-      diagnostics.push(unknownResolutionDiagnostic(id, resolution!))
-    }
-
-    // Bug #99 Rung-3 — register this node as a max-satisfying-semver candidate
-    // under its authoritative name. The source class is the F3 canonical type
-    // (`'absent'` when no resolution canonicalised — a workspace node, or an
-    // entry with no `resolution:` field); only `tarball` candidates are ever
-    // eligible for an `npm:`/bare match, enforced inside `semverResolve`. A patch
-    // node carries `canonicalResolution.type === 'unknown'` (patch: → unknown per
-    // recipe/resolution.ts) so it is correctly invisible to a registry range —
-    // the bare `npm:` node remains the semver target; the patch is reached via
-    // the Rung-1 patch-descriptor path.
-    const semverCandidate: SemverCandidate = {
-      id,
-      version,
-      sourceType: canonicalResolution?.type ?? 'absent',
-    }
-    const candidateList = semverCandidatesByName.get(authoritativeName)
-    if (candidateList === undefined) semverCandidatesByName.set(authoritativeName, [semverCandidate])
-    else candidateList.push(semverCandidate)
-
-    // Bug #104 — register a registry-base PATCH node as a patch sibling of its
-    // base `name@version`. Gate on `effectivePatch !== undefined` (a patch slot
-    // is set) AND the resolution being a genuine `@patch:` of an `npm:` base
-    // (excludes the `link:`/`portal:`/`file:` locator-disambiguated sentinels,
-    // which set `effectivePatch` only as a consumer discriminator). The
-    // `::locator=` qualifier disambiguates ≥2 siblings of the same base.
-    if (effectivePatch !== undefined && resolution !== undefined && isNpmBasePatchResolution(resolution, authoritativeName)) {
-      const sibling: PatchSibling = { id, locatorQualifier: locatorQualifierOfPatchResolution(resolution) }
-      const baseKey = `${authoritativeName}@${version}`
-      const siblings = patchSiblingsByBase.get(baseKey)
-      if (siblings === undefined) patchSiblingsByBase.set(baseKey, [sibling])
-      else siblings.push(sibling)
-    }
-
-    const peerDependencies = stringRecordOfBlock(asMap(value['peerDependencies']))
-    if (peerDependencies !== undefined) {
-      rawPeerDependencies.set(id, peerDependencies)
-    }
-
-    // `conditions:` is a SCALAR (`os=darwin & cpu=arm64`), captured verbatim.
-    // The prior `coerceSymlMap` coercion silently dropped it (a scalar is not
-    // an object → undefined), losing the platform gate on @esbuild/@swc/sharp
-    // optional binaries (task #89 / closes #85).
-    const conditions = asString(value['conditions'])
-    if (conditions !== undefined) {
-      rawConditions.set(id, conditions)
-    }
-
-    // `dependenciesMeta:` ({ pkg: { optional|built|… } }) — verbatim per-node
-    // round-trip sidecar (task #89). No EdgeAttrs translation (out of scope).
-    const dependenciesMeta = coerceSymlMap(value['dependenciesMeta'])
-    if (dependenciesMeta !== undefined) {
-      rawDependenciesMeta.set(id, dependenciesMeta)
-    }
-
-    // `peerDependenciesMeta:` ({ peer: { optional: true } }) — captured verbatim
-    // and re-emitted through `peerDependenciesMetaOfNode` (the #86 machinery) as
-    // its rung-0 hint; `enrich` additionally folds `optional` onto the derived
-    // peer edge so berry→berry and pnpm→berry share one emit path.
-    const peerDependenciesMeta = coerceSymlMap(value['peerDependenciesMeta'])
-    if (peerDependenciesMeta !== undefined) {
-      rawPeerDependenciesMeta.set(id, peerDependenciesMeta)
-    }
-
-    const payload: TarballPayload = {}
-    const checksum = asString(value['checksum'])
-    if (checksum !== undefined) {
-      // Berry `checksum` is a digest of yarn's zip-cache — NOT the tarball:
-      // bare sha512 hex (pre-v8) or `<cacheKey>/<sha512-hex>` (v8/v9). It is
-      // parsed as a `berry-zip`-origin sha512 so it is never re-encoded into a
-      // tarball SRI on emit. sha1/sha256/malformed bodies yield no hash and are
-      // rejected with a diagnostic, leaving the integrity slot undefined.
-      const { integrity, cacheKey: checksumCacheKey } = parseBerryChecksum(checksum)
-      if (isEmptyIntegrity(integrity)) {
-        diagnostics.push({
-          code:     `${config.codePrefix}_INVALID_INTEGRITY`,
-          severity: 'warning',
-          subject:  id,
-          message:  `checksum ${JSON.stringify(checksum)} is not a sha512 berry checksum; dropping integrity`,
-        })
-      } else {
-        payload.integrity = integrity
-        // Round-trip the `<cacheKey>/` prefix verbatim (ADR-0031): preserve it
-        // IFF the source carried one, for EVERY berry generation (yarn-2.0 `2/`
-        // through v8/v9 `10c0/`). A bare source leaves this undefined → bare
-        // emit, so the bare-v4/v7 shape stays bare.
-        if (checksumCacheKey !== undefined) payload.berryChecksumCacheKey = checksumCacheKey
-      }
-    }
-    const binMap = asMap(value['bin'])
-    if (binMap) {
-      const bin: Record<string, string> = {}
-      for (const [name, target] of Object.entries(binMap)) {
-        if (typeof target === 'string') bin[name] = target
-      }
-      if (Object.keys(bin).length > 0) payload.bin = bin
-    }
-    // ADR-0014 §4.F3 — workspace canonical lives on Node.workspacePath
-    // (per-format), not on TarballPayload (which is for cross-format
-    // artefact metadata). Workspace inputs already bypass the primitive
-    // above, so `canonicalResolution` is guaranteed non-workspace here.
-    if (canonicalResolution !== undefined) {
-      payload.resolution = canonicalResolution
-    }
-    // ADR-0013 — PM-native verbatim resolution locator, per-tarball (siblings
-    // sharing this TarballKey carry the same base locator). Replayed at
-    // same-format stringify for byte-exact round-trip + patch/file/link-locator
-    // retrieval. Lands on the payload so a node whose ONLY fact is its resolution
-    // still gets a tarball row (the guard below fires). EXCLUDE workspace nodes:
-    // their `<name>@workspace:<path>` locator is recomposed from
-    // `Node.workspacePath` at stringify, and a workspace member is a local
-    // project, NOT a downloadable artifact — it carries no TarballPayload.
-    //
-    // CANONICAL-NATIVE OMISSION: the canonical npm-registry locator
-    // `<name>@npm:<version>` is FULLY DERIVABLE from the node's (name, version)
-    // — `resolutionOfNode` recomposes it at emit (registry resolution is ALWAYS
-    // `name@npm:version` in yarn-berry). Storing it would just repeat the node's
-    // identity, so SKIP it and store `nativeResolution` ONLY for non-canonical
-    // shapes (git/patch/file/portal/link/verbatim, or an npm ALIAS whose locator
-    // differs from `name@npm:version`). The key is `authoritativeName@npm:version`
-    // because emit recomposes from `node.name` (= authoritativeName) — an alias
-    // entry's locator `foo@npm:bar@1` then correctly stays stored.
-    if (
-      resolution !== undefined &&
-      workspaceSpec === undefined &&
-      resolution !== `${authoritativeName}@npm:${version}`
-    ) {
-      payload.nativeResolution = resolution
-    }
-    if (Object.keys(payload).length > 0) {
-      // Key MUST match the NodeId built above: authoritativeName (Bug #3
-      // canonical-name) + effectivePatch (Bug #2 link/portal locator slot) +
-      // effectiveSource (ADR-0032 `+src=` non-registry discriminator).
-      builder.setTarball({ name: authoritativeName, version, patch: effectivePatch, source: effectiveSource }, payload)
-    }
-
-    for (const spec of specs) {
-      // #119 NIT A — build the specIndex key through the SAME `entryKeyRangeOf`
-      // normalisation the edge `lookup` uses, so a GitHub-shorthand entry
-      // (`pem@dexus/pem`) indexes under its verbatim range — not a synthesised
-      // `pem@npm:dexus/pem` — and a consumer's `pem: dexus/pem` dep resolves at
-      // Rung-0. A protocol-bearing spec (`npm:^1`, `workspace:.`, `patch:…`) is
-      // returned verbatim by `entryKeyRangeOf`, so this is identity for them.
-      const lookup = `${spec.name}@${entryKeyRangeOf(spec.raw)}`
-      // Cross-family emit can intentionally advertise the same spec from
-      // multiple sibling entries to preserve source-graph edge targets when
-      // the input lacks yarn-native resolution sidecars. Keep the first
-      // claimant (entries are already in deterministic source order) so
-      // parse-side resolution stays stable instead of drifting on overwrite.
-      if (!specIndex.has(lookup)) {
-        specIndex.set(lookup, id)
-      }
-      // Bug #88 (form b): also index a `patch:` entry-spec under its
-      // param-stripped descriptor so a consumer that references the dep
-      // DIRECTLY via the `patch:` locator (no `::version/hash` block) links to
-      // this patch node. Source order is deterministic, so candidates within a
-      // descriptor stay stably ordered for disambiguation/ambiguity reporting.
-      if (spec.protocol === 'patch') {
-        const stripped = strippedPatchDescriptor(lookup)
-        if (stripped !== undefined) {
-          const candidates = patchDescriptorIndex.get(stripped) ?? []
-          candidates.push({ id, locatorQualifier: locatorQualifierOfPatchSpec(spec.spec) })
-          patchDescriptorIndex.set(stripped, candidates)
-        }
-      }
-    }
+/** Record resolution diagnostics and the descriptor fallback candidate index. */
+function indexYarnBerryResolutionCandidate(
+  context: YarnBerryParseContext,
+  identity: YarnBerryParsedNodeIdentity,
+): void {
+  const { id, version, authoritativeName, canonicalResolution, resolution, patchResult } = identity
+  if (patchResult?.diagnostic !== undefined) context.diagnostics.push(patchResult.diagnostic)
+  if (canonicalResolution?.type === 'unknown' && !looksLikePatchLocator(resolution)) {
+    context.diagnostics.push(unknownResolutionDiagnostic(id, resolution!))
   }
 
-  // Bug #99 — bundle the descriptor→node ladder's Rung-2/3 inputs once; passed
-  // to every edge-resolution call so the steady-state Rung-0 path is untouched.
-  const ladderCtx: EdgeLadderContext = {
-    candidatesByName: semverCandidatesByName,
-    patchSiblingsByBase,
-    overrides:        options.overrides ?? [],
-    codePrefix:       config.codePrefix,
-    manifestsProvided: options.overrides !== undefined,
+  const candidate: SemverCandidate = {
+    id,
+    version,
+    sourceType: canonicalResolution?.type ?? 'absent',
   }
+  const candidates = context.semverCandidatesByName.get(authoritativeName)
+  if (candidates === undefined) context.semverCandidatesByName.set(authoritativeName, [candidate])
+  else candidates.push(candidate)
+}
 
-  for (const { key, value, specs } of entries) {
-    const first = specs[0]
-    if (!first) continue
-    const srcId = entryIds.get(key)
+/** Index genuine npm-base patch siblings for the descriptor ladder overlay. */
+function indexYarnBerryPatchSibling(
+  context: YarnBerryParseContext,
+  identity: YarnBerryParsedNodeIdentity,
+): void {
+  const { id, version, authoritativeName, resolution, effectivePatch } = identity
+  if (effectivePatch === undefined || resolution === undefined) return
+  if (!isNpmBasePatchResolution(resolution, authoritativeName)) return
+  const sibling: PatchSibling = { id, locatorQualifier: locatorQualifierOfPatchResolution(resolution) }
+  const baseKey = `${authoritativeName}@${version}`
+  const siblings = context.patchSiblingsByBase.get(baseKey)
+  if (siblings === undefined) context.patchSiblingsByBase.set(baseKey, [sibling])
+  else siblings.push(sibling)
+}
+
+/** Capture berry-only fields that cannot live on the canonical graph. */
+function captureYarnBerryNodeSidecar(
+  context: YarnBerryParseContext,
+  value: SymlMap,
+  id: string,
+): void {
+  const peerDependencies = stringRecordOfBlock(asMap(value['peerDependencies']))
+  if (peerDependencies !== undefined) context.rawPeerDependencies.set(id, peerDependencies)
+  const conditions = asString(value['conditions'])
+  if (conditions !== undefined) context.rawConditions.set(id, conditions)
+  const dependenciesMeta = coerceSymlMap(value['dependenciesMeta'])
+  if (dependenciesMeta !== undefined) context.rawDependenciesMeta.set(id, dependenciesMeta)
+  const peerDependenciesMeta = coerceSymlMap(value['peerDependenciesMeta'])
+  if (peerDependenciesMeta !== undefined) context.rawPeerDependenciesMeta.set(id, peerDependenciesMeta)
+}
+
+/** Decode the cache-zip checksum without treating it as tarball integrity. */
+function captureYarnBerryChecksum(
+  context: YarnBerryParseContext,
+  value: SymlMap,
+  id: string,
+  payload: TarballPayload,
+): void {
+  const checksum = asString(value['checksum'])
+  if (checksum === undefined) return
+  const { integrity, cacheKey } = parseBerryChecksum(checksum)
+  if (isEmptyIntegrity(integrity)) {
+    context.diagnostics.push({
+      code: `${context.config.codePrefix}_INVALID_INTEGRITY`,
+      severity: 'warning',
+      subject: id,
+      message: `checksum ${JSON.stringify(checksum)} is not a sha512 berry checksum; dropping integrity`,
+    })
+    return
+  }
+  payload.integrity = integrity
+  if (cacheKey !== undefined) payload.berryChecksumCacheKey = cacheKey
+}
+
+/** Copy the string-valued executable map into the canonical tarball payload. */
+function captureYarnBerryBin(value: SymlMap, payload: TarballPayload): void {
+  const binMap = asMap(value['bin'])
+  if (binMap === undefined) return
+  const bin: Record<string, string> = {}
+  for (const [name, target] of Object.entries(binMap)) {
+    if (typeof target === 'string') bin[name] = target
+  }
+  if (Object.keys(bin).length > 0) payload.bin = bin
+}
+
+/** Materialise canonical artefact facts plus any non-derivable native locator. */
+function addYarnBerryTarball(
+  context: YarnBerryParseContext,
+  entry: YarnBerryParseEntry,
+  identity: YarnBerryParsedNodeIdentity,
+): void {
+  const payload: TarballPayload = {}
+  captureYarnBerryChecksum(context, entry.value, identity.id, payload)
+  captureYarnBerryBin(entry.value, payload)
+  if (identity.canonicalResolution !== undefined) payload.resolution = identity.canonicalResolution
+  if (
+    identity.resolution !== undefined
+    && identity.workspaceSpec === undefined
+    && identity.resolution !== `${identity.authoritativeName}@npm:${identity.version}`
+  ) {
+    payload.nativeResolution = identity.resolution
+  }
+  if (Object.keys(payload).length === 0) return
+  context.builder.setTarball({
+    name: identity.authoritativeName,
+    version: identity.version,
+    patch: identity.effectivePatch,
+    source: identity.effectiveSource,
+  }, payload)
+}
+
+/** Index exact entry descriptors, including parameter-stripped patch locators. */
+function indexYarnBerryEntrySpecs(
+  context: YarnBerryParseContext,
+  entry: YarnBerryParseEntry,
+  id: string,
+): void {
+  for (const spec of entry.specs) {
+    const lookup = `${spec.name}@${entryKeyRangeOf(spec.raw)}`
+    if (!context.specIndex.has(lookup)) context.specIndex.set(lookup, id)
+    if (spec.protocol !== 'patch') continue
+    const stripped = strippedPatchDescriptor(lookup)
+    if (stripped === undefined) continue
+    const candidates = context.patchDescriptorIndex.get(stripped) ?? []
+    candidates.push({ id, locatorQualifier: locatorQualifierOfPatchSpec(spec.spec) })
+    context.patchDescriptorIndex.set(stripped, candidates)
+  }
+}
+
+/** Materialise one berry entry across graph, sidecar, and resolution indexes. */
+function addYarnBerryPackageNode(
+  context: YarnBerryParseContext,
+  entry: YarnBerryParseEntry,
+): void {
+  const identity = parseYarnBerryNodeIdentity(context, entry)
+  addYarnBerryGraphNode(context, entry, identity)
+  indexYarnBerryResolutionCandidate(context, identity)
+  indexYarnBerryPatchSibling(context, identity)
+  captureYarnBerryNodeSidecar(context, entry.value, identity.id)
+  addYarnBerryTarball(context, entry, identity)
+  indexYarnBerryEntrySpecs(context, entry, identity.id)
+}
+
+function addYarnBerryPackageNodes(context: YarnBerryParseContext): void {
+  for (const entry of context.entries) addYarnBerryPackageNode(context, entry)
+}
+
+/** Resolve dependency blocks after all descriptor candidates are indexed. */
+function addYarnBerryDependencyEdges(context: YarnBerryParseContext): void {
+  const ladder: EdgeLadderContext = {
+    candidatesByName: context.semverCandidatesByName,
+    patchSiblingsByBase: context.patchSiblingsByBase,
+    overrides: context.options.overrides ?? [],
+    codePrefix: context.config.codePrefix,
+    manifestsProvided: context.options.overrides !== undefined,
+  }
+  for (const entry of context.entries) {
+    if (entry.specs[0] === undefined) continue
+    const srcId = context.entryIds.get(entry.key)
     if (srcId === undefined) continue
-
-    // The source entry's own resolution doubles as its locator for resolving
-    // any `link:` / `portal:` deps it declares (see addEdgesFromBlock).
-    const srcResolution = asString(value['resolution'])
-    // berry has no `optionalDependencies:` block — an optional dep lives in
-    // `dependencies` flagged by `dependenciesMeta.<name>.optional: true`. Split
-    // the block so a flagged dep becomes an `optional` EDGE (the model's
-    // canonical optional carrier, queryable + cross-PM portable). The verbatim
-    // dependenciesMeta sidecar is still captured (rawDependenciesMeta), so emit
-    // re-folds the optional edge into `dependencies` and re-emits the flag —
-    // a byte-faithful round-trip. (§1.4.)
-    const { regular, optional } = splitOptionalDeps(asMap(value['dependencies']), rawDependenciesMeta.get(srcId))
-    addEdgesFromBlock(builder, srcId, regular, 'dep', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
-    addEdgesFromBlock(builder, srcId, optional, 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
-    // Defensive: a hand-built / non-canonical berry lock may still carry an
-    // explicit optionalDependencies block — honour it as optional edges too.
-    addEdgesFromBlock(builder, srcId, asMap(value['optionalDependencies']), 'optional', specIndex, patchDescriptorIndex, diagnostics, ladderCtx, srcResolution, rawUnresolvedDeps)
+    addYarnBerryEntryEdges(context, entry, srcId, ladder)
   }
+}
 
-  // Sort diagnostics by subject + code to keep graph.diagnostics() order
-  // independent of source-file entry order (recipe-layer diagnostics fire
-  // per-entry on parse; round-trips that re-sort entries on emit would
-  // otherwise produce a re-ordered diagnostic list).
-  diagnostics.sort((a, b) => {
+function addYarnBerryEntryEdges(
+  context: YarnBerryParseContext,
+  entry: YarnBerryParseEntry,
+  srcId: string,
+  ladder: EdgeLadderContext,
+): void {
+  const srcResolution = asString(entry.value['resolution'])
+  const { regular, optional } = splitOptionalDeps(
+    asMap(entry.value['dependencies']),
+    context.rawDependenciesMeta.get(srcId),
+  )
+  const add = (block: SymlMap | undefined, kind: EdgeKind): void => addEdgesFromBlock(
+    context.builder,
+    srcId,
+    block,
+    kind,
+    context.specIndex,
+    context.patchDescriptorIndex,
+    context.diagnostics,
+    ladder,
+    srcResolution,
+    context.rawUnresolvedDeps,
+  )
+  add(regular, 'dep')
+  add(optional, 'optional')
+  add(asMap(entry.value['optionalDependencies']), 'optional')
+}
+
+/** Stabilise graph diagnostic order before sealing. */
+function addYarnBerryParseDiagnostics(context: YarnBerryParseContext): void {
+  context.diagnostics.sort((a, b) => {
     const sa = typeof a.subject === 'string' ? a.subject : ''
     const sb = typeof b.subject === 'string' ? b.subject : ''
     return cmpStr(sa, sb) || cmpStr(a.code, b.code)
   })
-  for (const diagnostic of diagnostics) builder.diagnostic(diagnostic)
+  for (const diagnostic of context.diagnostics) context.builder.diagnostic(diagnostic)
+}
 
+function createYarnBerrySidecar(context: YarnBerryParseContext): YarnBerryFamilySidecar {
+  const sidecar: YarnBerryFamilySidecar = {}
+  if (context.rawPeerDependencies.size > 0) sidecar.peerDependencies = context.rawPeerDependencies
+  if (context.rawConditions.size > 0) sidecar.conditions = context.rawConditions
+  if (context.rawDependenciesMeta.size > 0) sidecar.dependenciesMeta = context.rawDependenciesMeta
+  if (context.rawPeerDependenciesMeta.size > 0) sidecar.peerDependenciesMeta = context.rawPeerDependenciesMeta
+  if (context.rawUnresolvedDeps.size > 0) sidecar.unresolvedDeps = context.rawUnresolvedDeps
+  if (context.rawEntryKeyDescriptors.size > 0) sidecar.entryKeyDescriptors = context.rawEntryKeyDescriptors
+  if (context.metadata !== undefined) sidecar.metadata = context.metadata
+  return sidecar
+}
+
+/** Seal graph invariants, mark workspace edges, and bind adapter state. */
+function sealYarnBerryParseContext(
+  context: YarnBerryParseContext,
+): { graph: Graph; sidecar: YarnBerryFamilySidecar } {
   try {
-    const sealed = builder.seal()
-    // ADR-0014 §4.F4 — parse-side workspace marking. Edges whose source
-    // range carries the `workspace:` protocol AND whose target is a
-    // workspace member node get `attrs.workspace = true` plus the
-    // canonical workspaceRange sidecar. The same logic also runs in
-    // enrichFamily for downstream rebuilds; doing it here ensures the
-    // public `parse()` surface (and convert without explicit enrich)
-    // delivers F4-ready edges.
-    const graph = markWorkspaceEdgesAtParse(sealed)
-    const sidecar: YarnBerryFamilySidecar = {}
-    if (rawPeerDependencies.size > 0) sidecar.peerDependencies = rawPeerDependencies
-    if (rawConditions.size > 0) sidecar.conditions = rawConditions
-    if (rawDependenciesMeta.size > 0) sidecar.dependenciesMeta = rawDependenciesMeta
-    if (rawPeerDependenciesMeta.size > 0) sidecar.peerDependenciesMeta = rawPeerDependenciesMeta
-    if (rawUnresolvedDeps.size > 0) sidecar.unresolvedDeps = rawUnresolvedDeps
-    if (rawEntryKeyDescriptors.size > 0) sidecar.entryKeyDescriptors = rawEntryKeyDescriptors
-    if (metadata !== undefined) sidecar.metadata = metadata
+    const graph = markWorkspaceEdgesAtParse(context.builder.seal())
+    const sidecar = createYarnBerrySidecar(context)
     rememberSidecar(graph, sidecar)
-    // Wrap so that any subsequent graph.mutate() call propagates the sidecar
-    // (including __metadata.cacheKey) to the returned graph instance.
-    const wrappedGraph = withSidecarPropagation(graph, sidecar)
-    return { graph: wrappedGraph, sidecar }
+    return { graph: withSidecarPropagation(graph, sidecar), sidecar }
   } catch (error) {
     if (error instanceof GraphError) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `seal failed: ${error.message}`,
-      })
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `seal failed: ${error.message}` })
     }
     throw error
   }
 }
 
-export function stringifyFamily(
+export function parseFamily(
+  input: string,
+  options: YarnBerryFamilyParseOptions,
+  config: YarnBerryFamilyConfig,
+): { graph: Graph; sidecar: YarnBerryFamilySidecar } {
+  const context = createYarnBerryParseContext(input, options, config)
+  collectYarnBerryParseEntries(context)
+  addYarnBerryPackageNodes(context)
+  addYarnBerryDependencyEdges(context)
+  addYarnBerryParseDiagnostics(context)
+  return sealYarnBerryParseContext(context)
+}
+
+interface YarnBerryStringifyEntry {
+  readonly nodeId: string
+  readonly key: string
+  readonly value: SymlMap
+}
+
+interface YarnBerryStringifyContext {
+  readonly graph: Graph
+  readonly config: YarnBerryFamilyConfig
+  readonly options: YarnBerryFamilyStringifyOptions
+  readonly sidecar: YarnBerryFamilySidecar
+  readonly diagnostics: Diagnostic[]
+  readonly emitDiagnostic: (diagnostic: Diagnostic) => void
+  readonly cacheKey: string | undefined
+  readonly metadata: SymlMap
+  readonly root: SymlMap
+}
+
+/** Rebuild frozen-compared metadata while preserving unknown source fields. */
+function createYarnBerryStringifyMetadata(
+  config: YarnBerryFamilyConfig,
+  sidecar: YarnBerryFamilySidecar,
+  cacheKey: string | undefined,
+): SymlMap {
+  const metadata: SymlMap = { version: String(config.lockfileVersion) }
+  if (cacheKey !== undefined) metadata['cacheKey'] = cacheKey
+  if (sidecar.metadata === undefined) return metadata
+  for (const key of Object.keys(sidecar.metadata).sort(cmpStr)) {
+    if (key === 'version' || key === 'cacheKey') continue
+    const value = cloneSymlValue(sidecar.metadata[key])
+    if (value !== undefined) metadata[key] = value
+  }
+  return metadata
+}
+
+function createYarnBerryStringifyContext(
   graph: Graph,
   config: YarnBerryFamilyConfig,
-  options: YarnBerryFamilyStringifyOptions = {},
-): { lockfile: string; diagnostics: Diagnostic[] } {
+  options: YarnBerryFamilyStringifyOptions,
+): YarnBerryStringifyContext {
   const sidecar = sidecarByGraph.get(graph) ?? EMPTY_SIDECAR
   const diagnostics: Diagnostic[] = []
-  const emitDiagnostic = (diagnostic: Diagnostic): void => {
-    diagnostics.push(diagnostic)
-    options.onDiagnostic?.(diagnostic)
-  }
-
-  const metadata: SymlMap = { version: String(config.lockfileVersion) }
   const cacheKey = options.cacheKey ?? asString(sidecar.metadata?.cacheKey)
-  if (cacheKey !== undefined) {
-    metadata['cacheKey'] = cacheKey
+  const metadata = createYarnBerryStringifyMetadata(config, sidecar, cacheKey)
+  return {
+    graph,
+    config,
+    options,
+    sidecar,
+    diagnostics,
+    emitDiagnostic: diagnostic => {
+      diagnostics.push(diagnostic)
+      options.onDiagnostic?.(diagnostic)
+    },
+    cacheKey,
+    metadata,
+    root: { __metadata: metadata },
   }
-  if (sidecar.metadata !== undefined) {
-    for (const key of Object.keys(sidecar.metadata).sort(cmpStr)) {
-      if (key === 'version' || key === 'cacheKey') continue
-      const value = cloneSymlValue(sidecar.metadata[key])
-      if (value !== undefined) {
-        metadata[key] = value
-      }
-    }
-  }
+}
 
-  const root: SymlMap = { __metadata: metadata }
-  const entries = Array.from(graph.nodes(), node => ({
+/** Build and sort one native entry per graph node. */
+function collectYarnBerryStringifyEntries(
+  context: YarnBerryStringifyContext,
+): YarnBerryStringifyEntry[] {
+  const { graph, config, emitDiagnostic, cacheKey } = context
+  return Array.from(graph.nodes(), node => ({
     nodeId: node.id,
     key: entryKeyOfNode(graph, node),
     value: entryOfNode(graph, node, config, emitDiagnostic, cacheKey),
   })).sort((a, b) => cmpStr(a.key, b.key))
+}
 
+/** Enforce emit identity uniqueness while populating the syml root. */
+function writeYarnBerryStringifyEntries(
+  context: YarnBerryStringifyContext,
+  entries: readonly YarnBerryStringifyEntry[],
+): void {
   const seenIds = new Map<string, string>()
   for (const entry of entries) {
-    const node = graph.getNode(entry.nodeId)
+    const node = context.graph.getNode(entry.nodeId)
     const emitId = node === undefined
       ? entry.nodeId
       : toTarballKey({ name: node.name, version: node.version, patch: node.patch, source: node.source })
-    const prevNodeId = seenIds.get(emitId)
-    if (prevNodeId !== undefined) {
+    const previous = seenIds.get(emitId)
+    if (previous !== undefined) {
       throw new LockfileError({
         code: 'IRREDUCIBLE_LOSS',
-        message: `duplicate node id collides on emit: ${emitId} from ${prevNodeId}, ${entry.nodeId}`,
+        message: `duplicate node id collides on emit: ${emitId} from ${previous}, ${entry.nodeId}`,
       })
     }
     seenIds.set(emitId, entry.nodeId)
-    root[entry.key] = entry.value
+    context.root[entry.key] = entry.value
   }
+}
 
+/** Serialise syml, restore yarn's bare scalars, then apply line endings. */
+function emitYarnBerryStringifyResult(context: YarnBerryStringifyContext): string {
+  const { config, options, sidecar, cacheKey, root } = context
   let output = `${PREAMBLE}\n\n${stringifySyml(root)}`
   output = unquoteMetadataScalar(output, 'version', String(config.lockfileVersion))
   if (cacheKey !== undefined && /^-?(0|[1-9][0-9]*)$/.test(cacheKey)) {
@@ -777,22 +805,286 @@ export function stringifyFamily(
   if (typeof compressionLevel === 'string' && /^-?(0|[1-9][0-9]*)$/.test(compressionLevel)) {
     output = unquoteMetadataScalar(output, 'compressionLevel', compressionLevel)
   }
-  // `conditions:` is emitted bare by yarn even though its value carries spaces /
-  // `&` / `( | )` (which the syml writer would quote). Strip the quotes off every
-  // `conditions:` scalar so the round-trip matches yarn byte-for-byte. Safe: yarn
-  // condition tokens never contain `"`, `\`, or newlines, so an unquote only ever
-  // recovers the original literal (and we bail on any line that does).
   output = unquoteConditionsScalars(output)
-  // `dependenciesMeta:` / `peerDependenciesMeta:` boolean values emit BARE too
-  // (`optional: true`, `built: false`, `unplugged: true`) — same post-pass slot
-  // (before CRLF conversion) so the line anchors hold. `built: "false"` is a
-  // TRUTHY non-empty string, so the bare emit is correctness, not just fidelity.
   output = unquoteMetaBooleanScalars(output)
-  if (options.lineEnding === 'crlf') {
-    output = output.replace(/\n/g, '\r\n')
-  }
+  return options.lineEnding === 'crlf' ? output.replace(/\n/g, '\r\n') : output
+}
 
-  return { lockfile: output, diagnostics }
+export function stringifyFamily(
+  graph: Graph,
+  config: YarnBerryFamilyConfig,
+  options: YarnBerryFamilyStringifyOptions = {},
+): { lockfile: string; diagnostics: Diagnostic[] } {
+  const context = createYarnBerryStringifyContext(graph, config, options)
+  writeYarnBerryStringifyEntries(context, collectYarnBerryStringifyEntries(context))
+  return { lockfile: emitYarnBerryStringifyResult(context), diagnostics: context.diagnostics }
+}
+
+interface YarnBerryEnrichContext {
+  readonly graph: Graph
+  readonly config: YarnBerryFamilyConfig
+  readonly sidecar: YarnBerryFamilySidecar
+  readonly rawPeerDependencies: Map<string, Record<string, string>>
+  readonly derivedPeersByNodeId: Map<string, DerivedPeer[]>
+  readonly pendingDiagnostics: PendingDiagnostic[]
+  readonly peerMeta: PeerMetaContext
+  readonly peerOptionalOverrides: Map<string, boolean>
+  peerChanged: boolean
+  peerMetaChanged: boolean
+  derivedPeerOptionalChanged: boolean
+}
+
+function createYarnBerryEnrichContext(
+  graph: Graph,
+  config: YarnBerryFamilyConfig,
+  options: YarnBerryFamilyEnrichOptions,
+): YarnBerryEnrichContext {
+  const sidecar = sidecarByGraph.get(graph) ?? EMPTY_SIDECAR
+  return {
+    graph,
+    config,
+    sidecar,
+    rawPeerDependencies: sidecar.peerDependencies ?? new Map<string, Record<string, string>>(),
+    derivedPeersByNodeId: new Map<string, DerivedPeer[]>(),
+    pendingDiagnostics: [],
+    peerMeta: createPeerMetaContext(options),
+    peerOptionalOverrides: new Map<string, boolean>(),
+    peerChanged: false,
+    peerMetaChanged: false,
+    derivedPeerOptionalChanged: false,
+  }
+}
+
+function yarnBerryPeerCandidates(
+  graph: Graph,
+  peerName: string,
+  normalizedRange: string,
+): string[] {
+  return graph.byName(peerName)
+    .filter(candidateId => {
+      const candidate = graph.getNode(candidateId)
+      return candidate !== undefined
+        && semver.valid(candidate.version) !== null
+        && semver.satisfies(candidate.version, normalizedRange)
+    })
+    .slice()
+    .sort(cmpStr)
+}
+
+/** Resolve one raw peer declaration or retain a deterministic diagnostic. */
+function deriveYarnBerryPeer(
+  context: YarnBerryEnrichContext,
+  node: Node,
+  peerName: string,
+  range: string,
+  derivedPeers: DerivedPeer[],
+): void {
+  const normalizedRange = semver.validRange(range)
+  if (normalizedRange === null) {
+    throw new LockfileError({
+      code: 'INVALID_INPUT',
+      message: `invalid peer range for ${node.id}: ${peerName}@${range}`,
+    })
+  }
+  const candidates = yarnBerryPeerCandidates(context.graph, peerName, normalizedRange)
+  if (candidates.length === 1) {
+    derivedPeers.push({ name: peerName, range, dstOldId: candidates[0]! })
+    context.peerChanged = true
+    return
+  }
+  if (candidates.length === 0) {
+    context.pendingDiagnostics.push({
+      code: `${context.config.codePrefix}_PEER_UNSATISFIED`,
+      severity: 'warning',
+      subject: node.id,
+      message: `peer "${peerName}" range "${range}" matches no installed version`,
+    })
+    return
+  }
+  context.pendingDiagnostics.push({
+    code: `${context.config.codePrefix}_PEER_AMBIGUOUS`,
+    severity: 'warning',
+    subject: node.id,
+    peerName,
+    candidateIds: candidates,
+    message: ambiguousPeerMessage(peerName, candidates),
+  })
+}
+
+/** Derive missing peer edges from the raw berry declaration sidecar. */
+function collectYarnBerryDerivedPeers(context: YarnBerryEnrichContext): void {
+  for (const node of context.graph.nodes()) {
+    const rawPeers = context.rawPeerDependencies.get(node.id)
+    if (rawPeers === undefined) continue
+    if (node.peerContext.length > 0 || context.graph.out(node.id, 'peer').length > 0) continue
+    const derivedPeers: DerivedPeer[] = []
+    for (const [peerName, range] of Object.entries(rawPeers).sort((a, b) => cmpStr(a[0], b[0]))) {
+      deriveYarnBerryPeer(context, node, peerName, range, derivedPeers)
+    }
+    if (derivedPeers.length > 0) context.derivedPeersByNodeId.set(node.id, derivedPeers)
+  }
+}
+
+/** Reconstruct optional markers on peer edges that already exist. */
+function collectYarnBerryPeerOptionalOverrides(context: YarnBerryEnrichContext): void {
+  for (const node of context.graph.nodes()) {
+    for (const edge of context.graph.out(node.id, 'peer')) {
+      if (edge.attrs?.optional === true) continue
+      const dst = context.graph.getNode(edge.dst)
+      if (dst === undefined) continue
+      const optional = resolvePeerOptional(
+        context.graph,
+        context.peerMeta,
+        node,
+        dst.name,
+        context.pendingDiagnostics,
+      )
+      if (optional !== true) continue
+      context.peerOptionalOverrides.set(peerEdgeKey(edge.src, edge.dst), true)
+      context.peerMetaChanged = true
+    }
+  }
+}
+
+/** Reconstruct optional markers before adding newly derived peer edges. */
+function markYarnBerryDerivedPeersOptional(context: YarnBerryEnrichContext): void {
+  for (const [srcId, derivedPeers] of context.derivedPeersByNodeId) {
+    const node = context.graph.getNode(srcId)
+    if (node === undefined) continue
+    for (const peer of derivedPeers) markYarnBerryDerivedPeerOptional(context, node, peer)
+  }
+}
+
+function markYarnBerryDerivedPeerOptional(
+  context: YarnBerryEnrichContext,
+  node: Node,
+  peer: DerivedPeer,
+): void {
+  const dst = context.graph.getNode(peer.dstOldId)
+  const peerName = dst?.name ?? peer.name
+  const nativeOptional = berryMetaPeerOptional(context.graph, node.id, peerName)
+  const recoveredOptional = nativeOptional || resolvePeerOptional(
+    context.graph,
+    context.peerMeta,
+    node,
+    peerName,
+    context.pendingDiagnostics,
+  ) === true
+  if (!recoveredOptional) return
+  peer.optional = true
+  context.derivedPeerOptionalChanged = true
+}
+
+function yarnBerryEnrichChanged(context: YarnBerryEnrichContext): boolean {
+  return context.peerChanged
+    || graphNeedsWorkspaceAttribution(context.graph)
+    || context.peerMetaChanged
+    || context.derivedPeerOptionalChanged
+}
+
+/** Re-key nodes after derived peer contexts become part of their identity. */
+function createYarnBerryEnrichedNodes(context: YarnBerryEnrichContext): Map<string, Node> {
+  const finalNodeIds = deriveFinalNodeIds(context.graph, context.derivedPeersByNodeId)
+  const nextNodes = new Map<string, Node>()
+  for (const node of context.graph.nodes()) {
+    const derivedPeers = context.derivedPeersByNodeId.get(node.id)
+    if (derivedPeers === undefined) {
+      nextNodes.set(node.id, node)
+      continue
+    }
+    const peerContext = sortPeerContext(derivedPeers.map(
+      peer => finalNodeIds.get(peer.dstOldId) ?? peer.dstOldId,
+    ))
+    nextNodes.set(node.id, { ...node, id: finalNodeIds.get(node.id) ?? node.id, peerContext })
+  }
+  return nextNodes
+}
+
+function yarnBerryEnrichedEdgeAttrs(
+  context: YarnBerryEnrichContext,
+  edge: ReturnType<Graph['out']>[number],
+): EdgeAttrs | undefined {
+  let attrs = edge.attrs
+  if (edge.kind !== 'peer' && edge.attrs?.workspace !== true && isDerivedWorkspaceRange(edge.attrs?.range)) {
+    const dst = context.graph.getNode(edge.dst)
+    if (dst?.workspacePath !== undefined) attrs = deriveMarkedWorkspaceAttrs(edge.attrs, dst)
+  }
+  if (edge.kind === 'peer' && context.peerOptionalOverrides.has(peerEdgeKey(edge.src, edge.dst))) {
+    attrs = { ...(attrs ?? {}), optional: true }
+  }
+  return attrs
+}
+
+/** Copy existing adjacency through the re-key map and add canonical attrs. */
+function addYarnBerryEnrichedEdges(
+  context: YarnBerryEnrichContext,
+  builder: YarnBerryGraphBuilder,
+  nextNodes: Map<string, Node>,
+): void {
+  for (const node of context.graph.nodes()) {
+    for (const edge of context.graph.out(node.id)) {
+      builder.addEdge(
+        nextNodes.get(edge.src)?.id ?? edge.src,
+        nextNodes.get(edge.dst)?.id ?? edge.dst,
+        edge.kind,
+        yarnBerryEnrichedEdgeAttrs(context, edge),
+      )
+    }
+  }
+}
+
+/** Add peer edges that were represented only by berry's declaration sidecar. */
+function addYarnBerryDerivedPeerEdges(
+  context: YarnBerryEnrichContext,
+  builder: YarnBerryGraphBuilder,
+  nextNodes: Map<string, Node>,
+): void {
+  for (const [srcOldId, derivedPeers] of context.derivedPeersByNodeId) {
+    const srcNewId = nextNodes.get(srcOldId)?.id ?? srcOldId
+    for (const peer of derivedPeers) {
+      const dstNewId = nextNodes.get(peer.dstOldId)?.id ?? peer.dstOldId
+      const attrs: EdgeAttrs = { range: peer.range }
+      if (peer.optional === true) attrs.optional = true
+      builder.addEdge(srcNewId, dstNewId, 'peer', attrs)
+    }
+  }
+}
+
+/** Copy payloads, diagnostics, and layout hints into the rebuilt graph. */
+function copyYarnBerryEnrichMetadata(
+  context: YarnBerryEnrichContext,
+  builder: YarnBerryGraphBuilder,
+): void {
+  for (const node of context.graph.nodes()) {
+    const payload = context.graph.tarballOf(node.id)
+    if (payload === undefined) continue
+    builder.setTarball({ name: node.name, version: node.version, patch: node.patch, source: node.source }, payload)
+  }
+  for (const diagnostic of context.graph.diagnostics()) builder.diagnostic(diagnostic)
+  const layoutHints = context.graph.layoutHints()
+  if (layoutHints !== undefined) builder.layoutHints(layoutHints)
+}
+
+/** Rebuild graph identity and remap every berry-only sidecar subject. */
+function rebuildYarnBerryEnrichedGraph(
+  context: YarnBerryEnrichContext,
+): { graph: Graph; nextNodes: Map<string, Node> } {
+  const nextNodes = createYarnBerryEnrichedNodes(context)
+  const builder = newBuilder()
+  for (const node of context.graph.nodes()) builder.addNode(nextNodes.get(node.id) ?? node)
+  addYarnBerryEnrichedEdges(context, builder, nextNodes)
+  addYarnBerryDerivedPeerEdges(context, builder, nextNodes)
+  copyYarnBerryEnrichMetadata(context, builder)
+  const graph = builder.seal()
+  rememberSidecar(graph, remapSidecar(context.sidecar, nextNodes, graph))
+  return { graph, nextNodes }
+}
+
+function finalizeYarnBerryEnrichDiagnostics(
+  context: YarnBerryEnrichContext,
+  nextNodes: Map<string, Node>,
+): Diagnostic[] {
+  return context.pendingDiagnostics.map(diagnostic => finalizePendingDiagnostic(diagnostic, nextNodes))
 }
 
 export function enrichFamily(
@@ -800,203 +1092,17 @@ export function enrichFamily(
   config: YarnBerryFamilyConfig,
   options: YarnBerryFamilyEnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  const sidecar = sidecarByGraph.get(graph) ?? EMPTY_SIDECAR
-  const rawPeerDependencies = sidecar.peerDependencies ?? new Map<string, Record<string, string>>()
-  const derivedPeersByNodeId = new Map<string, DerivedPeer[]>()
-  const pendingDiagnostics: PendingDiagnostic[] = []
-  let peerChanged = false
-
-  for (const node of graph.nodes()) {
-    const rawPeers = rawPeerDependencies.get(node.id)
-    if (rawPeers === undefined || node.peerContext.length > 0 || graph.out(node.id, 'peer').length > 0) {
-      continue
-    }
-
-    const derivedPeers: DerivedPeer[] = []
-    for (const [peerName, range] of Object.entries(rawPeers).sort((a, b) => cmpStr(a[0], b[0]))) {
-      const normalizedRange = semver.validRange(range)
-      if (normalizedRange === null) {
-        throw new LockfileError({
-          code: 'INVALID_INPUT',
-          message: `invalid peer range for ${node.id}: ${peerName}@${range}`,
-        })
-      }
-
-      const candidates = graph.byName(peerName)
-        .filter(candidateId => {
-          const candidate = graph.getNode(candidateId)
-          return candidate !== undefined
-            && semver.valid(candidate.version) !== null
-            && semver.satisfies(candidate.version, normalizedRange)
-        })
-        .slice()
-        .sort(cmpStr)
-
-      if (candidates.length === 1) {
-        derivedPeers.push({ name: peerName, range, dstOldId: candidates[0]! })
-        peerChanged = true
-        continue
-      }
-
-      if (candidates.length === 0) {
-        pendingDiagnostics.push({
-          code: `${config.codePrefix}_PEER_UNSATISFIED`,
-          severity: 'warning',
-          subject: node.id,
-          message: `peer "${peerName}" range "${range}" matches no installed version`,
-        })
-        continue
-      }
-
-      pendingDiagnostics.push({
-        code: `${config.codePrefix}_PEER_AMBIGUOUS`,
-        severity: 'warning',
-        subject: node.id,
-        peerName,
-        candidateIds: candidates,
-        message: ambiguousPeerMessage(peerName, candidates),
-      })
-    }
-
-    if (derivedPeers.length > 0) {
-      derivedPeersByNodeId.set(node.id, derivedPeers)
-    }
+  const context = createYarnBerryEnrichContext(graph, config, options)
+  collectYarnBerryDerivedPeers(context)
+  collectYarnBerryPeerOptionalOverrides(context)
+  markYarnBerryDerivedPeersOptional(context)
+  if (!yarnBerryEnrichChanged(context)) {
+    return { graph, diagnostics: finalizeYarnBerryEnrichDiagnostics(context, new Map()) }
   }
-
-  // === peerDependenciesMeta reconstruction (task #86) =======================
-  // For every `peer` edge lacking an `optional` signal, run the fill ladder
-  // (rung-1 graph already on the edge → rung-2 local node_modules manifest →
-  // opt-in rung-3/4 resolver) against the PARENT package's
-  // peerDependenciesMeta[peer].optional. When optional → mark the edge; when
-  // unreconstructable → RECIPE_PEER_META_INCOMPLETE (warning, omit not guess).
-  // Monotone-additive (union, never clear) and idempotent: a second pass sees
-  // the flag already set on rung-1 and makes no change / no new diagnostic.
-  const peerMetaCtx = createPeerMetaContext(options)
-  const peerOptionalOverrides = new Map<string, boolean>()
-  let peerMetaChanged = false
-  for (const node of graph.nodes()) {
-    for (const edge of graph.out(node.id, 'peer')) {
-      if (edge.attrs?.optional === true) continue // rung-1: already optional.
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      const optional = resolvePeerOptional(graph, peerMetaCtx, node, dst.name, pendingDiagnostics)
-      if (optional === true) {
-        peerOptionalOverrides.set(peerEdgeKey(edge.src, edge.dst), true)
-        peerMetaChanged = true
-      }
-    }
-  }
-  // Derived peer edges (yarn-berry raw-sidecar source) do not exist on the
-  // graph yet — run the same ladder so they emit the flag on first pass too.
-  // Rung-0 first: a real berry lock already records `peerDependenciesMeta[peer]
-  // .optional` verbatim (task #89), which is authoritative — consult it before
-  // the external fill ladder so a berry→berry enrich stamps `optional` onto the
-  // derived edge without any node_modules/resolver lookup (and emits no
-  // RECIPE_PEER_META_INCOMPLETE for a peer the lock already answered).
-  let derivedPeerOptionalChanged = false
-  for (const [srcId, derivedPeers] of derivedPeersByNodeId) {
-    const node = graph.getNode(srcId)
-    if (node === undefined) continue
-    for (const peer of derivedPeers) {
-      const dst = graph.getNode(peer.dstOldId)
-      const peerName = dst?.name ?? peer.name
-      if (berryMetaPeerOptional(graph, srcId, peerName)) {
-        peer.optional = true
-        derivedPeerOptionalChanged = true
-        continue
-      }
-      if (resolvePeerOptional(graph, peerMetaCtx, node, peerName, pendingDiagnostics) === true) {
-        peer.optional = true
-        derivedPeerOptionalChanged = true
-      }
-    }
-  }
-
-  const workspaceChanged = graphNeedsWorkspaceAttribution(graph)
-  if (!peerChanged && !workspaceChanged && !peerMetaChanged && !derivedPeerOptionalChanged) {
-    return {
-      graph,
-      diagnostics: pendingDiagnostics.map(diagnostic => finalizePendingDiagnostic(diagnostic, new Map())),
-    }
-  }
-
-  const finalNodeIds = deriveFinalNodeIds(graph, derivedPeersByNodeId)
-  const nextNodes = new Map<string, Node>()
-  for (const node of graph.nodes()) {
-    const derivedPeers = derivedPeersByNodeId.get(node.id)
-    if (derivedPeers === undefined) {
-      nextNodes.set(node.id, node)
-      continue
-    }
-
-    const peerContext = sortPeerContext(derivedPeers.map(peer => finalNodeIds.get(peer.dstOldId) ?? peer.dstOldId))
-    const newId = finalNodeIds.get(node.id) ?? node.id
-    nextNodes.set(node.id, {
-      ...node,
-      id: newId,
-      peerContext,
-    })
-  }
-
-  const builder = newBuilder()
-  for (const node of graph.nodes()) {
-    builder.addNode(nextNodes.get(node.id) ?? node)
-  }
-
-  for (const node of graph.nodes()) {
-    for (const edge of graph.out(node.id)) {
-      const nextSrc = nextNodes.get(edge.src)?.id ?? edge.src
-      const nextDst = nextNodes.get(edge.dst)?.id ?? edge.dst
-      let nextAttrs = edge.attrs
-
-      if (edge.kind !== 'peer' && edge.attrs?.workspace !== true && isDerivedWorkspaceRange(edge.attrs?.range)) {
-        const dstNode = graph.getNode(edge.dst)
-        if (dstNode?.workspacePath !== undefined) {
-          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar
-          // via shared `deriveMarkedWorkspaceAttrs` (also driven by the
-          // parse-time `markWorkspaceEdgesAtParse` pass).
-          nextAttrs = deriveMarkedWorkspaceAttrs(edge.attrs, dstNode)
-        }
-      }
-
-      // task #86 — union the reconstructed peer-optional flag (never clear).
-      if (edge.kind === 'peer' && peerOptionalOverrides.has(peerEdgeKey(edge.src, edge.dst))) {
-        nextAttrs = { ...(nextAttrs ?? {}), optional: true }
-      }
-
-      builder.addEdge(nextSrc, nextDst, edge.kind, nextAttrs)
-    }
-  }
-
-  for (const [srcOldId, derivedPeers] of derivedPeersByNodeId) {
-    const srcNewId = nextNodes.get(srcOldId)?.id ?? srcOldId
-    for (const peer of derivedPeers) {
-      const dstNewId = nextNodes.get(peer.dstOldId)?.id ?? peer.dstOldId
-      const peerAttrs: EdgeAttrs = { range: peer.range }
-      if (peer.optional === true) peerAttrs.optional = true // task #86
-      builder.addEdge(srcNewId, dstNewId, 'peer', peerAttrs)
-    }
-  }
-
-  for (const node of graph.nodes()) {
-    const payload = graph.tarballOf(node.id)
-    if (payload === undefined) continue
-    builder.setTarball({ name: node.name, version: node.version, patch: node.patch, source: node.source }, payload)
-  }
-  for (const diagnostic of graph.diagnostics()) {
-    builder.diagnostic(diagnostic)
-  }
-  const layoutHints = graph.layoutHints()
-  if (layoutHints !== undefined) {
-    builder.layoutHints(layoutHints)
-  }
-
-  const nextGraph = builder.seal()
-  rememberSidecar(nextGraph, remapSidecar(sidecar, nextNodes, nextGraph))
-
+  const rebuilt = rebuildYarnBerryEnrichedGraph(context)
   return {
-    graph: nextGraph,
-    diagnostics: pendingDiagnostics.map(diagnostic => finalizePendingDiagnostic(diagnostic, nextNodes)),
+    graph: rebuilt.graph,
+    diagnostics: finalizeYarnBerryEnrichDiagnostics(context, rebuilt.nextNodes),
   }
 }
 
