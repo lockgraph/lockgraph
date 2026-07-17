@@ -238,6 +238,42 @@ describe('package metadata completeness', () => {
     }))
   })
 
+  it('aligns assessed metadata drops with the strict structural allowlist', () => {
+    const allowedGraph = graphWith({ engines: { node: '>=18' } })
+    const allowed = assessConversion(allowedGraph, {
+      contract: 'project',
+      target: { format: 'yarn-classic' },
+      evidence: packageEvidence(allowedGraph, {
+        name: 'pkg',
+        version: '1.0.0',
+        engines: { node: '>=18' },
+      }),
+    })
+    expect(allowed.requirements).toContainEqual(expect.objectContaining({
+      key: 'target-feature:metadata:engines',
+      status: 'satisfied',
+    }))
+
+    const nearMissGraph = graphWith({ license: 'MIT' })
+    const nearMiss = assessConversion(nearMissGraph, {
+      contract: 'project',
+      target: { format: 'yarn-classic' },
+      evidence: packageEvidence(nearMissGraph, {
+        name: 'pkg',
+        version: '1.0.0',
+        license: 'MIT',
+      }),
+    })
+    expect(nearMiss.requirements).toContainEqual(expect.objectContaining({
+      key: 'target-feature:metadata:license',
+      status: 'unsatisfied',
+      diagnostics: [expect.objectContaining({
+        code: 'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
+        data: expect.objectContaining({ fields: ['license'] }),
+      })],
+    }))
+  })
+
   it('makes a fully evidenced npm project conversion satisfiable', () => {
     const input = readFileSync(resolve(
       'src/test/resources/fixtures/lockfiles/simple/npm-3.lock',

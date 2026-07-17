@@ -9,6 +9,7 @@ import {
   type SidecarFeatureFact,
 } from './features.ts'
 import { completenessOf } from './profile.ts'
+import { isStructuralExpectedDrop } from './projection.ts'
 import { targetProfileOf } from './targets.ts'
 import type {
   ArtifactKnowledge,
@@ -188,7 +189,9 @@ function metadataEvaluator(feature: MetadataGraphFeature): FeatureEvaluator {
     const candidates = metadataFeatureFields[feature]
     const present = candidates.filter(field => [...graph.tarballs()]
       .some(([, payload]) => packageMetadataOfPayload(payload)[field] !== undefined))
-    const unsupported = present.filter(field => !target.capabilities.metadataFields.has(field))
+    const unsupported = present.filter(field =>
+      !target.capabilities.metadataFields.has(field)
+        && !isStructuralExpectedDrop(field, target.format))
     if (unsupported.length === 0) {
       return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
     }
