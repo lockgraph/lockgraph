@@ -470,6 +470,47 @@ in the format's native shape (bare for v4–v7, `<cacheKey>/<hex>` for v8+ — t
 `checksumPrefix` rule of [§3.3](#33-the-berry-zip--tarball-sri-boundary)), never
 forcing a foreign prefix into a bare lock.
 
+#### 1.7.2 Structural `checksum` gaps — entries yarn never hashes
+
+Not every missing `checksum:` is a gap to fill. Two classes are **structurally
+absent by yarn's own construction**, and minting a value for them is a defect:
+
+- **Conditional locators.** `Project` passes every locator carrying `conditions`
+  to `Cache` as an *unstable package*, and `Cache` deliberately returns
+  `hash: null` for those — another architecture would not fetch the same set
+  ([Cache.ts](https://github.com/yarnpkg/berry/blob/master/packages/yarnpkg-core/sources/Cache.ts#L1701-L1708)).
+  The absence is **platform-independent**: `@esbuild/*linux*` entries are bare in
+  locks generated on linux too. Measured across 20 real-world locks: 610 `@esbuild/*`
+  entries, 0 with a checksum.
+- **`npm:` alias entries.** The alias entry is bare by design; the checksum lives
+  on the aliased target.
+
+Filling either makes `yarn install --immutable` **strip the values back out** —
+exit 0, silently, leaving a dirty tree (measured: 290 → 386 → yarn → 290). That is
+a PM rewrite of a generated lock, which
+[§1.1.1](#111-fundamental-invariant--frozen--ci-acceptance) forbids. So enrich SKIPS a structural gap; it never evaluates the host platform.
+
+**The rule is `conditions`, not `preferUnplugged`** — recorded because the latter
+is a plausible and wrong hypothesis. `preferUnplugged` is read from the fetched
+manifest and used only by the PnP linker to decide whether to unplug a package;
+it never reaches the checksum path. The apparent counterexample — `fsevents`
+carries `conditions: os=darwin` **and** a checksum — is not one: the rule is *do
+not FILL a structural gap*, never *strip an existing value*. An already-present
+conditional checksum round-trips untouched.
+
+**Trust boundary (deliberate, not an oversight).** For these entries the lock pins
+**no integrity at all**, and yarn does not verify the fetched tarball against the
+registry's `dist.integrity`: the npm fetcher GETs the tarball and converts it to a
+zip without checking the response bytes
+([NpmSemverFetcher.ts](https://github.com/yarnpkg/berry/blob/master/packages/plugin-npm/sources/NpmSemverFetcher.ts#L509-L550)),
+and the resolver threads `dist.tarball` but not `dist.integrity` into the fetch path
+([NpmSemverResolver.ts](https://github.com/yarnpkg/berry/blob/master/packages/plugin-npm/sources/NpmSemverResolver.ts#L741-L755)).
+Yarn verifies an *expected cache checksum* only when one exists — and for these
+entries it deliberately hides the computed hash. A conditional package is therefore
+verified by nothing, on every platform. This cannot be closed from our side: the
+field is a zip digest for a package whose zip yarn intentionally refuses to hash, and
+writing one anyway is the rewrite above. We record the gap and do not work around it.
+
 ### 1.8 Non-goals (explicit)
 
 - **Byte-lossless roundtrip.** Comments, original whitespace, the
