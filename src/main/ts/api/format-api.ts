@@ -164,9 +164,12 @@ export function detect(input: string): FormatId | undefined {
 export function parse(format: FormatId, input: string, options: ParseOptions = {}): Graph {
   // Capture manifest override authority before parse because yarn edge binding
   // needs the canonical override map while resolving descriptors.
-  const overrides = options.manifests !== undefined
+  const manifestOverrides = options.manifests !== undefined
     ? captureManifestOverrides(format, options.manifests, options.onDiagnostic)
     : undefined
+  const overrides = manifestOverrides === undefined
+    ? options.overrides
+    : mergeOverrides(options.overrides ?? [], manifestOverrides)
   let graph = parseFormat(format, input, {
     workspaceRoot: options.workspaceRoot,
     overrides,
@@ -239,6 +242,41 @@ export function overridesOf(graph: Graph): OverrideConstraint[] {
       ?? bunText.getBunOverridesCanonical(graph)
       ?? []
   return mergeOverrides(mergeOverrides(lockBorne, manifest), pinnedOverrides(graph))
+}
+
+/** Recreate the declared policy context needed to reparse an emitted yarn lock.
+ *
+ * A yarn lock does not encode whether an otherwise-identical descriptor binding
+ * was selected normally, by `--force`, or by a project resolution. The source
+ * graph does: every governed edge carries `overrideRange`. Turn those stamps
+ * into exact, parent-scoped constraints and merge them over any caller/carrier
+ * authority so the output probe resolves and re-attributes exactly those edges
+ * without inventing governance for an ordinary out-of-range binding.
+ */
+export function reparseOverrideContext(
+  graph: Graph,
+  declared: readonly OverrideConstraint[] = [],
+): OverrideConstraint[] {
+  const governed: OverrideConstraint[] = []
+  for (const source of graph.nodes()) {
+    for (const edge of graph.out(source.id)) {
+      const range = edge.attrs?.range
+      const to = edge.attrs?.overrideRange
+      const target = graph.getNode(edge.dst)
+      if (range === undefined || to === undefined || target === undefined) continue
+      governed.push({
+        package: edge.attrs?.alias ?? target.name,
+        parentPath: [source.name],
+        versionCondition: range,
+        to,
+        origin: 'yarn',
+      })
+    }
+  }
+  return mergeOverrides(
+    mergeOverrides(getManifestOverrides(graph) ?? [], declared),
+    governed,
+  )
 }
 
 function pinnedOverrides(graph: Graph): OverrideConstraint[] {
@@ -456,7 +494,10 @@ function projectionOutputDiagnostics(
 
   let reparsed: Graph
   try {
-    reparsed = parse(target, output)
+    const reparseOverrides = reparseOverrideContext(graph, overrides)
+    reparsed = parse(target, output, {
+      ...(reparseOverrides.length === 0 ? {} : { overrides: reparseOverrides }),
+    })
   } catch (error) {
     return Object.freeze([assessedDiagnostic(
       'COMPLETENESS_OUTPUT_PARSE_FAILED',
