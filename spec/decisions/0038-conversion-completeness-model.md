@@ -340,3 +340,16 @@ compared, so any real drop still mismatches and fails closed.
 - *Fix the capability tables to be precise and keep using the complement* — deferred to a
   separate track; not required once the allowlist is the source of truth, and larger in
   blast radius.
+
+### §8.1 addendum (2026-07-17) — Overrides with no target carrier are recoverable, not irreducible
+
+The same frozen-clean reasoning extends to a supplied override that the target lock format
+structurally cannot carry. yarn-classic, yarn-berry, npm, and bun locks have no overrides
+block; the pin lives in the project manifest (`resolutions` / `overrides`), where it was read
+from, and an immutable install honours it there. `INTEROP_OVERRIDE_NOT_PROJECTED` is therefore
+classed `enrichable` (it surfaces as `ENRICH_REQUIRED`, remedy `use-project-api convertProject`),
+not `inherent-meaningful` — a lock that cannot hold an override must not fail-closed on it.
+Unlike the metadata `structural-expected` class, this remains a blocking-but-recoverable loss:
+the override needs an action (the project API, or the manifest carrier) to be persisted, so raw
+strict still reports it rather than passing silently. pnpm locks DO carry an overrides block, so
+they project the override and never reach this class.

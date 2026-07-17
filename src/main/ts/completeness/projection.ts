@@ -393,7 +393,13 @@ function diagnosticLossClass(
     || code === 'CONVERT_PATCH_BYTES_UNAVAILABLE'
     || code.endsWith('_NO_MANIFESTS')
     || code.endsWith('_UNRESOLVED_DEP')
-    || code === 'PNPM_WORKSPACE_PEER_ATTR_MISSING') {
+    || code === 'PNPM_WORKSPACE_PEER_ATTR_MISSING'
+    // A supplied override that a yarn/npm/bun lock structurally cannot carry (no
+    // overrides block) stays declared in the project manifest (resolutions /
+    // overrides) — where it was read from — so an immutable install still honours
+    // it. Recoverable via the project API (remedy: use-project-api convertProject),
+    // not an irreducible loss; keep raw strict at ENRICH_REQUIRED, not IRREDUCIBLE.
+    || code === 'INTEROP_OVERRIDE_NOT_PROJECTED') {
     return 'enrichable'
   }
   if (code === 'RECIPE_FEATURE_DROPPED'
@@ -402,7 +408,6 @@ function diagnosticLossClass(
     || code === 'RECIPE_WORKSPACE_COLLAPSED'
     || code === 'OVERRIDE_PARENT_REF_DROPPED'
     || code === 'BUN_OVERRIDE_NESTED_UNSUPPORTED'
-    || code === 'INTEROP_OVERRIDE_NOT_PROJECTED'
     || code === 'PNPM_WORKSPACE_PEER_ATTR_COLLISION'
     || code === 'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED'
     || code === 'COMPLETENESS_OUTPUT_GRAPH_MISMATCH'

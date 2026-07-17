@@ -78,7 +78,7 @@ describe('real-world overrides canary (ADR-0025 A1/A2)', () => {
     }
   })
 
-  it('overrides survive a canonical round-trip, or the re-emit is a known #10 IRREDUCIBLE_LOSS', () => {
+  it('overrides survive a canonical round-trip, or the re-emit fails only as a known collision or a recoverable override-omission', () => {
     for (const dir of OVERRIDE_RICH) {
       const fx = loadFixture(dir)!
       const g1 = parse(fx.format!, fx.text, fx.manifests ? { manifests: fx.manifests } : {})
@@ -88,12 +88,18 @@ describe('real-world overrides canary (ADR-0025 A1/A2)', () => {
       try {
         re = stringify(fx.format!, g1, { overrides: ov1 })
       } catch (err) {
-        // Bug #10 (deferred → ADR-0026): the install-path re-derive can throw
-        // IRREDUCIBLE_LOSS (install-path collision) on a deep-nested real npm
-        // lock. Pin as known-deferred, not an overrides regression.
         const e = err as { code?: string }
+        // Two accepted non-regression outcomes:
+        //   1. Bug #10 (deferred → ADR-0026): a deep-nested real npm lock can throw
+        //      IRREDUCIBLE_LOSS on an install-path collision during the re-derive.
+        //   2. A target lock with no overrides block (npm/yarn/bun) surfaces the
+        //      supplied override as a RECOVERABLE ENRICH_REQUIRED — the pin stays in
+        //      package.json; reclassified from IRREDUCIBLE, not an overrides regression.
         const isKnown10 = e.code === 'IRREDUCIBLE_LOSS' || String(err).includes('collides')
-        expect(isKnown10, `${dir}: unexpected non-#10 stringify error: ${String(err)}`).toBe(true)
+        const isRecoverableOverride = e.code === 'ENRICH_REQUIRED'
+          && String(err).includes('interop-override-not-projected')
+        expect(isKnown10 || isRecoverableOverride,
+          `${dir}: unexpected stringify error: ${String(err)}`).toBe(true)
         continue
       }
       const ov2 = overridesOf(parse(fx.format!, re, fx.manifests ? { manifests: fx.manifests } : {}))
