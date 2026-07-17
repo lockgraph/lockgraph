@@ -123,6 +123,27 @@ describe('strict projection gate', () => {
         && diagnostic.data?.class === 'structural-expected')).toBe(true)
   })
 
+  it('accepts a metadata-only node whose payload projects to empty (CASE-A)', () => {
+    // A completed transitive carrying ONLY engines (no integrity/resolution): its yarn-classic
+    // tarball payload projects to `{}`, and the reparse emits no entry for it. The output-graph
+    // snapshot must omit the empty-after-projection payload, not diff `{}` against absent.
+    const builder = newBuilder()
+    builder.addNode({ id: 'project@0.0.0', name: 'project', version: '0.0.0', peerContext: [] })
+    builder.addNode({ id: 'dep@1.0.0', name: 'dep', version: '1.0.0', peerContext: [] })
+    builder.addEdge('project@0.0.0', 'dep@1.0.0', 'dep', { range: '1.0.0' })
+    builder.setTarball({ name: 'dep', version: '1.0.0' }, { engines: { node: '>=20' } })
+    expect(() => stringify('yarn-classic', builder.seal())).not.toThrow()
+  })
+
+  it('still rejects a metadata-only node whose sole field is not allowlisted (empty-omit does not mask)', () => {
+    const builder = newBuilder()
+    builder.addNode({ id: 'project@0.0.0', name: 'project', version: '0.0.0', peerContext: [] })
+    builder.addNode({ id: 'dep@1.0.0', name: 'dep', version: '1.0.0', peerContext: [] })
+    builder.addEdge('project@0.0.0', 'dep@1.0.0', 'dep', { range: '1.0.0' })
+    builder.setTarball({ name: 'dep', version: '1.0.0' }, { license: 'MIT' })
+    expect(caught('yarn-classic', builder.seal()).code).toBe('IRREDUCIBLE_LOSS')
+  })
+
   it('keeps the structural allowlist pair-specific', () => {
     const graph = singleMetadataGraph({
       engines: { node: '>=18' },
