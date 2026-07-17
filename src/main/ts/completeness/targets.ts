@@ -174,9 +174,10 @@ function pnpm(
   })
 }
 
-const pnpmV5Metadata = metadata('engines', 'cpu', 'os', 'peerDependencies')
+const pnpmV5Metadata = metadata('engines', 'bin', 'cpu', 'os', 'peerDependencies')
 const pnpmModernMetadata = metadata(
   'engines',
+  'bin',
   'deprecated',
   'cpu',
   'os',
@@ -202,7 +203,7 @@ const bunText = capabilities({
   overridesConfigLocation: 'manifest',
   comparesOverridesInFrozen: true,
   overridesGrammar: 'bun-flat',
-  metadataFields: metadata(),
+  metadataFields: metadata('bin', 'cpu', 'os', 'peerDependencies'),
 })
 
 const lockgraph = capabilities({
