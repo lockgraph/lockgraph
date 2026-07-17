@@ -35,6 +35,13 @@ export interface ParseOptions {
    * declarations + workspace context the lockfile alone cannot carry.
    */
   manifests?: Record<string, Manifest>
+  /**
+   * Canonical declared-override context for descriptor binding. This is the
+   * direct counterpart to manifest capture and is also used by internal output
+   * probes, where the emitted lock must be reparsed under the same policy that
+   * governed the source graph.
+   */
+  overrides?: OverrideConstraint[]
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 

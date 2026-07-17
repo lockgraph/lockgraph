@@ -1328,6 +1328,13 @@ function addEdgesFromMap(
     const dstName = nameOf(dstId)
     const attrs: EdgeAttrs = { range }
     if (name !== dstName) attrs.alias = name
+    // The lock text alone cannot distinguish an override-governed binding from
+    // an ordinary `--force` bump: either may place a version outside `range`,
+    // while an in-range binding may still be governed. Reconstruct provenance
+    // only from the declared policy context used by Rung 2, regardless of
+    // semver satisfaction. No declared override means no invented `or=` stamp.
+    const overrideRange = overrideTargetFor(name, range, [nameOf(srcId)], ladder.overrides)
+    if (overrideRange !== undefined) attrs.overrideRange = overrideRange
     builder.addEdge(srcId, dstId, kind, attrs)
   }
 }
@@ -1636,6 +1643,10 @@ function isWorkspaceProtocolRange(range: string): boolean {
   return range.startsWith('workspace:')
 }
 
+function satisfiesSafe(version: string, range: string): boolean {
+  try { return semver.satisfies(version, range) } catch { return false }
+}
+
 function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   // F6 (#93) — an npm-aliased incoming edge keys its entry-key descriptor under
   // the ALIAS, not the node's actual name (`<alias>@npm:<target>@<range>`); the
@@ -1651,11 +1662,20 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
     .filter(edge => edge.attrs?.workspace !== true)
     .map(edge => {
       // A completed/mutated edge governed by an override carries the pin as
-      // `overrideRange`; key by it (yarn collapses `foo@^1` + `foo@1.0` → the pin),
-      // not the raw declared range (else `--immutable` YN0028). Non-aliased only.
-      const range = edge.attrs!.alias === undefined
-        ? (edge.attrs!.overrideRange ?? edge.attrs!.range!)
-        : edge.attrs!.range!
+      // `overrideRange`; key by it so yarn's collapse dedups (`foo@^1` + `foo@1.0` →
+      // the pin), not the raw declared range (else `--immutable` YN0028). But that
+      // collapse only round-trips when the resolved version SATISFIES the declared
+      // range — then the reparse semver-matches the declared descriptor to the pinned
+      // entry. When the override takes the node OUT of range (resolutions REPLACING,
+      // not narrowing), keep the declared descriptor as the key, else the consumer's
+      // `<name> "<declared>"` finds no matching entry and dangles (CASE-B). The entry
+      // version is the pin either way. Non-aliased only.
+      const declared = edge.attrs!.range!
+      const range = edge.attrs!.alias !== undefined
+        ? declared
+        : (edge.attrs!.overrideRange !== undefined && satisfiesSafe(node.version, declared)
+            ? edge.attrs!.overrideRange
+            : declared)
       return `${edge.attrs!.alias ?? node.name}@${range}`
     })
 

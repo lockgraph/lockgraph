@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { parse, stringify } from '../../main/ts/index.ts'
 import { completeTransitives } from '../../main/ts/complete/tree-complete.ts'
 import type { Packument, RegistryAdapter } from '../../main/ts/registry/types.ts'
-import { newBuilder } from '../../main/ts/graph.ts'
+import { newBuilder, type OverrideConstraint } from '../../main/ts/graph.ts'
 import { addPackage } from './_modify-test-utils.ts'
 
 // minimist has two consumers: `hba` via an exact 1.2.5 range, `hbb` via a raw ^1.2.5
@@ -34,6 +34,30 @@ const stampedGraph = (overrideStamp: boolean) => {
   return b.seal()
 }
 
+const NEW_DEP_OVERRIDE: OverrideConstraint[] = [{
+  package: 'new-dep',
+  to: '2.0.0',
+  origin: 'yarn',
+}]
+
+const mixedOverrideGraph = (withTarball: boolean) => {
+  const b = newBuilder()
+  const dep = addPackage(b, { name: 'new-dep', version: '2.0.0' })
+  const inRange = addPackage(b, { name: 'consumer-in', version: '1.0.0' })
+  const outOfRange = addPackage(b, { name: 'consumer-out', version: '1.0.0' })
+  b.addEdge(inRange, dep, 'dep', { range: '^2.0.0', overrideRange: '2.0.0' })
+  b.addEdge(outOfRange, dep, 'dep', { range: '^1.0.0', overrideRange: '2.0.0' })
+  if (withTarball) {
+    b.setTarball({ name: 'new-dep', version: '2.0.0' }, {
+      resolution: {
+        type: 'tarball',
+        url: 'https://registry.example/new-dep/-/new-dep-2.0.0.tgz',
+      },
+    })
+  }
+  return b.seal()
+}
+
 describe('overrides — bare yarn resolution collapses a completed descriptor (yaf freeze-oracle)', () => {
   it('yarn-berry (reconstruction): the two descriptors collapse to the single pinned key', () => {
     const out = stringify('yarn-berry-v8', stampedGraph(true), { strict: false })
@@ -45,6 +69,52 @@ describe('overrides — bare yarn resolution collapses a completed descriptor (y
     const out = stringify('yarn-classic', stampedGraph(true), { strict: false })
     expect(out).toMatch(/minimist@1\.2\.5/)
     expect(out).not.toContain('minimist@^1.2.5')
+  })
+
+  it('yarn-classic (out-of-range override): keys the entry by the consumer descriptor and round-trips strict', () => {
+    // vuln deps new-dep@^1.0.0; a `resolutions` pin overrides new-dep → 2.0.0 (OUT of range,
+    // governed edge `or=2.0.0`). yarn keys the entry by the consumer descriptor
+    // (`new-dep@^1.0.0`, version 2.0.0), not `new-dep@2.0.0` — else the consumer's
+    // `new-dep "^1.0.0"` finds no matching entry on reparse (dangling edge →
+    // COMPLETENESS_OUTPUT_GRAPH_MISMATCH). The out-of-range binding also reconstructs
+    // `overrideRange` on parse so the governed edge survives the strict self-check.
+    const dump = [
+      '@lockgraph 1', 'schema 1.0', 'generator lockgraph@0.0.0',
+      'R 1', 'npm\t-', 'N 2', 'new-dep\t2.0.0\tr0\t-', 'vuln\t2.0.0\tr0\t-',
+      'E 1', '1\t0\tdep\t^1.0.0\tor=2.0.0', 'F 0',
+    ].join('\n') + '\n'
+    const out = stringify('yarn-classic', parse('lockgraph', dump), { strict: true })
+    expect(out).toContain('new-dep@^1.0.0:')
+    expect(out).not.toMatch(/^"?new-dep@2\.0\.0"?:/m)
+  })
+
+  it.each([
+    ['without a tarball', false],
+    ['with a registry tarball', true],
+  ] as const)('yarn-classic (mixed global override, %s): preserves both governed edges', (_label, withTarball) => {
+    const out = stringify('yarn-classic', mixedOverrideGraph(withTarball), { strict: true })
+    expect(out).toContain('new-dep@2.0.0, new-dep@^1.0.0:')
+
+    const reparsed = parse('yarn-classic', out, { overrides: NEW_DEP_OVERRIDE })
+    expect(reparsed.out('consumer-in@1.0.0')[0]?.attrs).toEqual({
+      range: '^2.0.0',
+      overrideRange: '2.0.0',
+    })
+    expect(reparsed.out('consumer-out@1.0.0')[0]?.attrs).toEqual({
+      range: '^1.0.0',
+      overrideRange: '2.0.0',
+    })
+  })
+
+  it('yarn-classic (--force out-of-range bump): does not invent override provenance', () => {
+    const dump = [
+      '@lockgraph 1', 'schema 1.0', 'generator lockgraph@0.0.0',
+      'R 1', 'npm\t-', 'N 2', 'consumer\t1.0.0\tr0\t-', 'vuln\t2.0.0\tr0\t-',
+      'E 1', '0\t1\tdep\t^1.0.0', 'F 0',
+    ].join('\n') + '\n'
+    const out = stringify('yarn-classic', parse('lockgraph', dump), { strict: true })
+    const reparsed = parse('yarn-classic', out)
+    expect(reparsed.out('consumer@1.0.0')[0]?.attrs).toEqual({ range: '^1.0.0' })
   })
 
   it('WITHOUT the override stamp, both descriptors survive (collapse is override-gated, not blanket)', () => {

@@ -15,6 +15,7 @@ import {
   diagnosticKey,
   packageManagerFamilyOf,
   parse,
+  reparseOverrideContext,
   stableValue,
   stringifyProjected,
 } from '../api/format-api.ts'
@@ -407,9 +408,15 @@ function outputProbe(
     return { accepted: false, diagnostics }
   }
 
+  const sourceState = internalEvidenceOf(sourceEvidence ?? evidenceOf(graph))
+  const authority = contract === 'snapshot' ? undefined : authoritativePolicyOverridesOf(sourceState)
+  const reparseOverrides = reparseOverrideContext(graph, authority)
   let reparsed: Graph
   try {
-    reparsed = parse(target, output, { onDiagnostic: diagnostic => diagnostics.push(diagnostic) })
+    reparsed = parse(target, output, {
+      ...(reparseOverrides.length === 0 ? {} : { overrides: reparseOverrides }),
+      onDiagnostic: diagnostic => diagnostics.push(diagnostic),
+    })
   } catch (error) {
     diagnostics.push(assessedDiagnostic(
       'COMPLETENESS_OUTPUT_PARSE_FAILED',
@@ -419,8 +426,6 @@ function outputProbe(
     return { accepted: false, diagnostics }
   }
 
-  const sourceState = internalEvidenceOf(sourceEvidence ?? evidenceOf(graph))
-  const authority = contract === 'snapshot' ? undefined : authoritativePolicyOverridesOf(sourceState)
   const comparisonOverrides = target.startsWith('pnpm-') ? authority : undefined
   const sourceSnapshot = canonicalProjectionGraphSnapshot(
     graph,
