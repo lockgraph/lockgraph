@@ -353,3 +353,17 @@ Unlike the metadata `structural-expected` class, this remains a blocking-but-rec
 the override needs an action (the project API, or the manifest carrier) to be persisted, so raw
 strict still reports it rather than passing silently. pnpm locks DO carry an overrides block, so
 they project the override and never reach this class.
+
+### §8.2 addendum (2026-07-17) — Empty-after-projection tarball payloads are omitted from the snapshot
+
+A completed node can carry only a `structural-expected` metadata field and no integrity or
+resolution — e.g. a transitive hydrated with `engines` alone. On yarn-classic its tarball payload
+projects to `{}` once `engines` is dropped, but the target emits no tarball line for such a node,
+so its reparse produces no payload at all. The output-graph self-check must therefore omit a
+tarball payload that is empty after projection rather than compare `{}` against absent — otherwise
+it re-raises the already-allowlisted drop as a spurious `COMPLETENESS_OUTPUT_GRAPH_MISMATCH`. This
+is sound and non-masking: a payload becomes empty only when its sole content was an allowlisted
+(frozen-clean) metadata field; integrity, resolution, and the berry cache-key are never dropped,
+and any non-allowlisted field keeps the payload non-empty and still compared. (Reported by
+yarn-audit-fix as CASE-A; the paired CASE-B — override-out-of-range entry keying — is a genuine
+projection defect the self-check correctly rejects, fixed separately in the yarn-classic emitter.)

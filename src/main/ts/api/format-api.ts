@@ -361,13 +361,13 @@ export function canonicalGraphSnapshot(
         }),
       })
     }))
-  const tarballs = [...graph.tarballs()].map(([key, payload]) => {
+  const tarballs = [...graph.tarballs()].flatMap(([key, payload]) => {
     const resolution = projectedResolutions?.get(key) ?? payload.resolution
     const integrity = projectedIntegrities?.has(key)
       ? projectedIntegrities.get(key)
       : payload.integrity
     const metadataDrops = projectedMetadataDrops?.get(key)
-    return [key, stableValue({
+    const projected = {
       ...(integrity === undefined ? {} : { integrity }),
       ...(payload.berryChecksumCacheKey === undefined ? {} : {
         berryChecksumCacheKey: payload.berryChecksumCacheKey,
@@ -393,7 +393,12 @@ export function canonicalGraphSnapshot(
       ...(payload.peerDependenciesMeta === undefined || metadataDrops?.has('peerDependenciesMeta') ? {} : {
         peerDependenciesMeta: payload.peerDependenciesMeta,
       }),
-    })] as const
+    }
+    // A payload whose only content was a target-dropped structural-expected metadata
+    // field (a completed node carrying only `engines`) projects to `{}`; the target
+    // reparse emits no tarball entry for such a node, so omit it for a symmetric
+    // snapshot — an empty payload carries no canonical fact (ADR-0038 §8, CASE-A).
+    return Object.keys(projected).length === 0 ? [] : [[key, stableValue(projected)] as const]
   })
     .sort(([left], [right]) => left.localeCompare(right))
   return JSON.stringify({
