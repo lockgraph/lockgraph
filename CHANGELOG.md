@@ -1,3 +1,14 @@
+## [0.1.2](https://github.com/lockgraph/lockgraph/compare/v0.1.1...v0.1.2) (2026-07-18)
+
+### Fixes & improvements
+* docs(spec): record the version-split conditional-checksum policy in per-version berry specs ([a5ce382](https://github.com/lockgraph/lockgraph/commit/a5ce3823ee982634a773ea25c3cb86df782dde70))
+* fix: branch berry conditional-checksum policy on target yarn version (optionalBuilds gate at 4.4.0) ([5db601b](https://github.com/lockgraph/lockgraph/commit/5db601b9b82f8c4714917bf03bd192d024553ff0))
+* refactor(formats): decompose parse/stringify/enrich into named phases ([80877d2](https://github.com/lockgraph/lockgraph/commit/80877d2aeeaceb4c660a625af10b61a309f16b41))
+* docs(spec): record structural berry checksum gaps ([52ad553](https://github.com/lockgraph/lockgraph/commit/52ad553fa5bf2091d437cf808b9b95e2967c2467))
+* fix: skip structural berry checksum gaps for conditional and alias-only entries ([4a74b45](https://github.com/lockgraph/lockgraph/commit/4a74b45032b702de6974a83e8566109c49c90a45))
+* fix: correct bun/pnpm native metadata storage capabilities ([f08d0e0](https://github.com/lockgraph/lockgraph/commit/f08d0e01df8f90b233390af7d41a155c0469b354))
+* fix: align assessed metadata drops with the strict structural allowlist ([a2d4ab5](https://github.com/lockgraph/lockgraph/commit/a2d4ab59d3b21db68750ee6b89d84a33a888f2c4))
+
 ## [0.1.1](https://github.com/lockgraph/lockgraph/compare/v0.1.0...v0.1.1) (2026-07-17)
 
 ### Fixes & improvements
