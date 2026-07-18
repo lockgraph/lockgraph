@@ -102,11 +102,14 @@ deltas on top of that shared contract are:
   verbatim (emitted bare) in the adapter contract. (An earlier draft of
   this spec wrongly claimed a nested-block shape; the scalar form is the
   corrected contract.)
-- **Conditional-checksum policy — pure conditions (pre-4.4).** yarn through
-  this lock version writes `hash: null` for **every** `conditions:`-bearing
-  locator, regardless of optionality; the `optionalBuilds` gate governs only
-  mocked/disabled packages here. A conditioned entry is therefore structurally
-  bare, and enrich never mints a checksum into one. See
+- **Conditional-checksum policy — `conditions ∩ optionalBuilds`, version-independent.**
+  A `conditions:`-bearing locator is bare iff it stays in `optionalBuilds`: reachable
+  only through optional paths **and** not a resolver source. A conditioned locator on a
+  required path, or a patch source (`fsevents` is always builtin-patched, so its base
+  `npm:` locator is hashed even when every parent edge is optional), carries a checksum
+  and enrich fills a fresh one; `@esbuild/*` (exclusively-optional, no patch) stays bare.
+  Lock v5 applies yarn's 3.1.x **first-visit** `optionalBuilds` tie-break when a locator
+  is reached through both an optional and a required path. See
   [`_common.md` §1.7.2](./_common.md#172-structural-checksum-gaps--entries-yarn-never-hashes).
 
 ## Degradation rules
