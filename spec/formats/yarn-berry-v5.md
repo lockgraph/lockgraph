@@ -102,6 +102,12 @@ deltas on top of that shared contract are:
   verbatim (emitted bare) in the adapter contract. (An earlier draft of
   this spec wrongly claimed a nested-block shape; the scalar form is the
   corrected contract.)
+- **Conditional-checksum policy — pure conditions (pre-4.4).** yarn through
+  this lock version writes `hash: null` for **every** `conditions:`-bearing
+  locator, regardless of optionality; the `optionalBuilds` gate governs only
+  mocked/disabled packages here. A conditioned entry is therefore structurally
+  bare, and enrich never mints a checksum into one. See
+  [`_common.md` §1.7.2](./_common.md#172-structural-checksum-gaps--entries-yarn-never-hashes).
 
 ## Degradation rules
 

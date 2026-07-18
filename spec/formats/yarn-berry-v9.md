@@ -157,6 +157,15 @@ definitively, even when that answer is 'required'):
   into it, nor it into an SRI — they are digests of different byte streams (the
   berry-zip ≠ tarball-SRI boundary,
   [`_common.md` §3.3](./_common.md#33-the-berry-zip--tarball-sri-boundary)).
+- **Conditional-checksum policy — optional-builds (4.4+).** yarn 4.14 (v9's
+  writer) is past the 4.4.0 migration, so only an **exclusively-optional**
+  `conditions:` locator is structurally bare — one reachable *only* through
+  optional paths. A conditioned locator on a required path (e.g. `fsevents`
+  pulled by a normal dependency) **is** hashed, and enrich fills a fresh one
+  rather than leaving it bare (leaving it bare would let `install` re-add the
+  checksum — a rewrite). The `optionalBuilds` set is graph-derived, so the
+  absence is platform-independent. See
+  [`_common.md` §1.7.2](./_common.md#172-structural-checksum-gaps--entries-yarn-never-hashes).
 - A LOCAL node (`portal:` / `link:`, canonical resolution `type: 'directory'`)
   may depend on a workspace — e.g. a `portal:` package declaring
   `"<root>": "workspace:^"` in its own monorepo. The graph seal permits incoming

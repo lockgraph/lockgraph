@@ -126,6 +126,19 @@ this is only how yarn-berry v8 *carries* it.
   with `RECIPE_INTEGRITY_INCOMPLETE` rather than fabricated from a tarball
   sha512 ([`_common.md` §3.4](./_common.md#34-omit-never-fabricate)); yarn
   recomputes it on install.
+- **Conditional-checksum policy is *ambiguous* at v8 — the one lock version
+  that spans yarn's 4.4.0 set-migration.** yarn 4.0–4.3 writes `hash: null` for
+  **every** `conditions:`-bearing locator; yarn 4.4+ only for an
+  **exclusively-optional** one (a conditioned locator on a required, non-optional
+  path — e.g. `fsevents` pulled by a normal dependency — is **hashed**). Both
+  emit `version: 8` / `cacheKey: 10c0`, so the lock metadata **cannot reveal**
+  which client wrote it. Enrich selects the policy from the target
+  `managerVersion`; when it is **unpinned**, a conditioned v8 gap is left bare
+  with an `ENRICH_CHECKSUM_POLICY_AMBIGUOUS` warning rather than a value one
+  client generation would strip on `install --immutable`. Callers converting to
+  or completing a v8 lock should thread the project's yarn version. Full
+  mechanism and the boundary source: [`_common.md`
+  §1.7.2](./_common.md#172-structural-checksum-gaps--entries-yarn-never-hashes).
 
 ## Emit
 
