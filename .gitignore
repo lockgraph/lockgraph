@@ -149,3 +149,9 @@ spec/decisions/*
 # Internal interactions / per-project artel runtime
 .artel
 todo.md
+
+# qlty local cache (symlinks into ~/.qlty/cache) — config (qlty.toml/configs/sources) stays tracked
+.qlty/out
+.qlty/plugin_cachedir
+.qlty/results
+.qlty/logs
