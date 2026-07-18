@@ -1,6 +1,6 @@
 {
   "name": "lockgraph",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "description": "Universal lockfile model and converter for npm, yarn, pnpm, bun",
   "type": "module",

@@ -1,3 +1,11 @@
+## [0.1.3](https://github.com/lockgraph/lockgraph/compare/v0.1.2...v0.1.3) (2026-07-18)
+
+### Fixes & improvements
+* refactor(formats): decompose residual enrich/tree-build bodies into named phases ([a926ef0](https://github.com/lockgraph/lockgraph/commit/a926ef04eb4f54581cda3263819caf75e038fc57))
+* refactor(graph): decompose mutate/topoSort/validate/walk/diff into named phases ([1668c7e](https://github.com/lockgraph/lockgraph/commit/1668c7e840abb89dad697b85c037f5763b140ebe))
+* refactor(formats): decompose _yarn-berry-core and lockgraph into named phases ([a96b5c5](https://github.com/lockgraph/lockgraph/commit/a96b5c59802856f4802f38a180b376704801345c))
+* fix: correct berry conditional-checksum to conditions ∩ optionalBuilds − resolutionDependencies (drop false 4.4.0 split) ([c90f955](https://github.com/lockgraph/lockgraph/commit/c90f9558425d666b228e4911dcb25d2881cf66d3))
+
 ## [0.1.2](https://github.com/lockgraph/lockgraph/compare/v0.1.1...v0.1.2) (2026-07-18)
 
 ### Fixes & improvements
