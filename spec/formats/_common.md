@@ -475,28 +475,65 @@ forcing a foreign prefix into a bare lock.
 Not every missing `checksum:` is a gap to fill. Two classes are **structurally
 absent by yarn's own construction**, and minting a value for them is a defect:
 
-- **Conditional locators.** `Project` passes every locator carrying `conditions`
-  to `Cache` as an *unstable package*, and `Cache` deliberately returns
-  `hash: null` for those — another architecture would not fetch the same set
-  ([Cache.ts](https://github.com/yarnpkg/berry/blob/master/packages/yarnpkg-core/sources/Cache.ts#L1701-L1708)).
-  The absence is **platform-independent**: `@esbuild/*linux*` entries are bare in
-  locks generated on linux too. Measured across 20 real-world locks: 610 `@esbuild/*`
-  entries, 0 with a checksum.
+- **Conditional locators.** Yarn accumulates a set of locators whose cache hash is
+  suppressed, exposes it to `Cache` as `unstablePackages`, and `Cache` returns
+  `hash: null` for any member
+  ([Cache.ts](https://github.com/yarnpkg/berry/blob/master/packages/yarnpkg-core/sources/Cache.ts)) —
+  another architecture would not fetch the same set. **Which conditioned locators
+  join that set is version-dependent** (below).
 - **`npm:` alias entries.** The alias entry is bare by design; the checksum lives
   on the aliased target.
 
 Filling either makes `yarn install --immutable` **strip the values back out** —
-exit 0, silently, leaving a dirty tree (measured: 290 → 386 → yarn → 290). That is
-a PM rewrite of a generated lock, which
-[§1.1.1](#111-fundamental-invariant--frozen--ci-acceptance) forbids. So enrich SKIPS a structural gap; it never evaluates the host platform.
+exit 0, silently, leaving a dirty tree (measured: 290 → 386 → yarn → 290). The
+mirror-image defect is *under*-filling: leaving bare a conditioned locator yarn
+does hash, which the same install then **re-adds**. Either direction is a PM
+rewrite of a generated lock, which
+[§1.1.1](#111-fundamental-invariant--frozen--ci-acceptance) forbids.
 
-**The rule is `conditions`, not `preferUnplugged`** — recorded because the latter
-is a plausible and wrong hypothesis. `preferUnplugged` is read from the fetched
-manifest and used only by the PnP linker to decide whether to unplug a package;
-it never reaches the checksum path. The apparent counterexample — `fsevents`
-carries `conditions: os=darwin` **and** a checksum — is not one: the rule is *do
-not FILL a structural gap*, never *strip an existing value*. An already-present
-conditional checksum round-trips untouched.
+**The suppression set migrated between yarn versions, at exactly 4.4.0, with no
+lockfile-schema bump.** Yarn maintains two sets over the resolved graph:
+`conditionalLocators` (→ `unstablePackages`, hash-null) and `disabledLocators`
+(mocked, incompatible-architecture). It also computes `optionalBuilds` — the
+locators reachable *only* through optional paths (initialised to every package,
+then deleted for any locator reached by an all-non-optional path from a
+workspace).
+
+- **Yarn 3.1.1 … 4.3.1** (lockfile `version` 5/6/7, and 8 written by ≤ 4.3):
+  `conditionalLocators` = **every locator carrying `conditions`**. The
+  `optionalBuilds` gate governs `disabledLocators` only. So a conditioned locator
+  is hash-null regardless of optionality.
+- **Yarn 4.4.0+** (lockfile 8 written by ≥ 4.4, and 9/10):
+  `conditionalLocators` = **conditioned ∩ `optionalBuilds`** (conditioned *and*
+  exclusively-optional). A conditioned locator on a required (non-optional) path
+  is hashed.
+
+The boundary is 4.4.0 exactly: the official `@yarnpkg/cli-dist` 4.3.1 adds every
+conditioned locator to `conditionalLocators` unconditionally, while 4.4.0 gates
+that add on `optionalBuilds` membership; both emit `__metadata.version: 8`,
+`cacheKey: 10c0`. A lock-v8 file therefore **cannot reveal** which policy its
+client uses. Enrich resolves this from the **target manager version**: v5/v6/v7
+and v8-below-4.4 skip every conditioned gap; v8-at-or-above-4.4 and v9/v10 skip
+only conditioned exclusively-optional gaps; an **unpinned** v8 target fails closed
+(leaves the gap bare and emits `ENRICH_CHECKSUM_POLICY_AMBIGUOUS`) rather than
+mint a value one of the two client generations would strip. The optional-build
+status is recovered from the graph — a canonical `optional` edge or Berry's folded
+`dependenciesMeta.<dep>.optional: true` sidecar — so no host or config input is
+needed; the policy never evaluates the host platform.
+
+`preferUnplugged` is **not** the rule (a plausible and wrong hypothesis).
+It is read from the fetched manifest and used only by the PnP linker to decide
+whether to unplug a package; it never reaches the checksum path. `fsevents`
+(`conditions: os=darwin`, reached on a required path) is the reconciling case: it
+is hash-null under ≤ 4.3 (pure conditions) and **hashed** under ≥ 4.4 (required,
+so outside `optionalBuilds`) — the same entry, opposite correct answer, selected
+by target yarn, not by platform. An already-present checksum round-trips untouched
+in every generation.
+
+The absence remains **platform-independent** where it applies: an exclusively-
+optional conditioned locator such as `@esbuild/*` is bare in locks generated on
+any host (measured across 20 real-world locks: 610 `@esbuild/*` entries, 0 with a
+checksum), because `optionalBuilds` is graph-derived, not architecture-derived.
 
 **Trust boundary (deliberate, not an oversight).** For these entries the lock pins
 **no integrity at all**, and yarn does not verify the fetched tarball against the
