@@ -87,17 +87,20 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
   })
 
   it.each([
-    ['yarn-berry-v8', 8, '4.13.0'],
-    ['yarn-berry-v9', 9, undefined],
-    ['yarn-berry-v10', 10, undefined],
-  ] as const)('%s fills a fresh conditioned node on a required path but leaves an optional-only one bare', async (
+    ['yarn-berry-v5', 5, '8'],
+    ['yarn-berry-v6', 6, '8'],
+    ['yarn-berry-v7', 7, '10'],
+    ['yarn-berry-v8', 8, '10c0'],
+    ['yarn-berry-v9', 9, '10c0'],
+    ['yarn-berry-v10', 10, '10c0'],
+  ] as const)('%s applies conditioned ∩ optional-only − resolutionDependencies', async (
     format,
     version,
-    managerVersion,
+    cacheKey,
   ) => {
     const lock = `__metadata:
   version: ${version}
-  cacheKey: 10c0
+  cacheKey: ${cacheKey}
 
 "fixture@workspace:.":
   version: 0.0.0-use.local
@@ -106,8 +109,11 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
     "@esbuild/darwin-arm64": "npm:0.28.1"
     fsevents: "npm:2.3.3"
     ms: "npm:2.1.3"
+    required-native: "npm:1.0.0"
   dependenciesMeta:
     "@esbuild/darwin-arm64":
+      optional: true
+    fsevents:
       optional: true
   languageName: unknown
   linkType: soft
@@ -126,6 +132,13 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
   languageName: node
   linkType: hard
 
+"fsevents@patch:fsevents@npm%3A2.3.3#optional!builtin<compat/fsevents>":
+  version: 2.3.3
+  resolution: "fsevents@patch:fsevents@npm%3A2.3.3#optional!builtin<compat/fsevents>::version=2.3.3&hash=df0bf1"
+  conditions: os=darwin
+  languageName: node
+  linkType: hard
+
 "string-width-cjs@npm:string-width@^4.2.0":
   version: 4.2.3
   resolution: "string-width@npm:4.2.3"
@@ -137,57 +150,32 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
   resolution: "ms@npm:2.1.3"
   languageName: node
   linkType: hard
-`
-    const graph = parse(format, lock)
-    const r = await refurbish(
-      graph,
-      format,
-      sourceOf({
-        'fsevents@2.3.3': tgz('ms-2.1.3.tgz'),
-        'ms@2.1.3': tgz('ms-2.1.3.tgz'),
-      }),
-      managerVersion === undefined ? {} : { managerVersion },
-    )
 
-    expect(r.enriched).toEqual(['fsevents@2.3.3', 'ms@2.1.3'])
-    expect(emitBerryChecksum(r.graph.tarballOf('fsevents@2.3.3')!.integrity!)).toBeDefined()
-    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBeDefined()
-    // The optional-only conditioned package and alias-only entry remain bare.
-    expect(r.graph.tarballOf('@esbuild/darwin-arm64@0.28.1')?.integrity).toBeUndefined()
-    expect(r.graph.tarballOf('string-width@4.2.3')?.integrity).toBeUndefined()
-    expect((stringify(format, r.graph, { strict: false }).match(/^  checksum:/gm) ?? [])).toHaveLength(2)
-  })
-
-  it.each([
-    ['yarn-berry-v5', 5, '8'],
-    ['yarn-berry-v6', 6, '8'],
-    ['yarn-berry-v7', 7, '10'],
-  ] as const)('%s keeps every fresh conditioned checksum gap bare', async (format, version, cacheKey) => {
-    const graph = parse(format, `__metadata:
-  version: ${version}
-  cacheKey: ${cacheKey}
-
-"fsevents@npm:2.3.3":
-  version: 2.3.3
-  resolution: "fsevents@npm:2.3.3"
+"required-native@npm:1.0.0":
+  version: 1.0.0
+  resolution: "required-native@npm:1.0.0"
   conditions: os=darwin
   languageName: node
   linkType: hard
-
-"ms@npm:2.1.3":
-  version: 2.1.3
-  resolution: "ms@npm:2.1.3"
-  languageName: node
-  linkType: hard
-`)
+`
+    const graph = parse(format, lock)
+    const patchNode = [...graph.nodes()].find(node => node.name === 'fsevents' && node.patch !== undefined)
+    expect(patchNode).toBeDefined()
     const r = await refurbish(graph, format, checksumSource(), { cacheKey })
 
-    expect(r.enriched).toEqual(['ms@2.1.3'])
-    expect(r.graph.tarballOf('fsevents@2.3.3')?.integrity).toBeUndefined()
+    expect(r.enriched).toEqual(['fsevents@2.3.3', 'ms@2.1.3', 'required-native@1.0.0'])
+    expect(emitBerryChecksum(r.graph.tarballOf('fsevents@2.3.3')!.integrity!)).toBeDefined()
     expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBeDefined()
+    expect(emitBerryChecksum(r.graph.tarballOf('required-native@1.0.0')!.integrity!)).toBeDefined()
+    // The ordinary optional-only package, patched locator, and alias-only entry
+    // remain bare. Only fsevents' bare source is a resolution dependency.
+    expect(r.graph.tarballOf('@esbuild/darwin-arm64@0.28.1')?.integrity).toBeUndefined()
+    expect(r.graph.tarballOf(patchNode!.id)?.integrity).toBeUndefined()
+    expect(r.graph.tarballOf('string-width@4.2.3')?.integrity).toBeUndefined()
+    expect((stringify(format, r.graph, { strict: false }).match(/^  checksum:/gm) ?? [])).toHaveLength(3)
   })
 
-  it('pins the lock-v8 checksum policy at Yarn 4.4.0 and fails closed when unpinned', async () => {
+  it('subtracts the npm-backed JSR inner locator from optionalBuilds', async () => {
     const graph = parse('yarn-berry-v8', `__metadata:
   version: 8
   cacheKey: 10c0
@@ -196,34 +184,88 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
   version: 0.0.0-use.local
   resolution: "fixture@workspace:."
   dependencies:
-    fsevents: "npm:2.3.3"
+    jsr-pkg: "jsr:^1.0.0"
+  dependenciesMeta:
+    jsr-pkg:
+      optional: true
   languageName: unknown
   linkType: soft
 
-"fsevents@npm:2.3.3":
-  version: 2.3.3
-  resolution: "fsevents@npm:2.3.3"
+"@jsr/jsr-pkg@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "@jsr/jsr-pkg@npm:1.0.0"
+  conditions: os=darwin
+  languageName: node
+  linkType: hard
+
+"jsr-pkg@jsr:^1.0.0":
+  version: 1.0.0
+  resolution: "jsr-pkg@jsr:1.0.0"
   conditions: os=darwin
   languageName: node
   linkType: hard
 `)
+    const wrapper = [...graph.nodes()].find(node => node.name === 'jsr-pkg')
+    expect(wrapper).toBeDefined()
+    const r = await refurbish(graph, 'yarn-berry-v8', checksumSource())
 
-    const oldPolicy = await refurbish(graph, 'yarn-berry-v8', checksumSource(), {
-      managerVersion: '4.3.1',
-    })
-    const newPolicy = await refurbish(graph, 'yarn-berry-v8', checksumSource(), {
-      managerVersion: '4.4.0',
-    })
-    const ambiguous = await refurbish(graph, 'yarn-berry-v8', checksumSource())
+    expect(r.enriched).toEqual(['@jsr/jsr-pkg@1.0.0'])
+    expect(emitBerryChecksum(r.graph.tarballOf('@jsr/jsr-pkg@1.0.0')!.integrity!)).toBeDefined()
+    expect(r.graph.tarballOf(wrapper!.id)?.integrity).toBeUndefined()
+  })
 
-    expect(oldPolicy.enriched).toEqual([])
-    expect(oldPolicy.graph.tarballOf('fsevents@2.3.3')?.integrity).toBeUndefined()
-    expect(newPolicy.enriched).toEqual(['fsevents@2.3.3'])
-    expect(emitBerryChecksum(newPolicy.graph.tarballOf('fsevents@2.3.3')!.integrity!)).toBeDefined()
-    expect(ambiguous.enriched).toEqual([])
-    expect(ambiguous.unresolved.map(diagnostic => diagnostic.code)).toContain(
-      'ENRICH_CHECKSUM_POLICY_AMBIGUOUS',
-    )
+  it('preserves the lock-v5 first-visit optionalBuilds nuance', async () => {
+    const lock = (version: 5 | 6): string => `__metadata:
+  version: ${version}
+  cacheKey: 8
+
+"fixture@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "fixture@workspace:."
+  dependencies:
+    a-optional-parent: "npm:1.0.0"
+    z-required-parent: "npm:1.0.0"
+  dependenciesMeta:
+    a-optional-parent:
+      optional: true
+  languageName: unknown
+  linkType: soft
+
+"a-optional-parent@npm:1.0.0":
+  version: 1.0.0
+  resolution: "a-optional-parent@npm:1.0.0"
+  dependencies:
+    shared: "npm:1.0.0"
+  languageName: node
+  linkType: hard
+
+"shared@npm:1.0.0":
+  version: 1.0.0
+  resolution: "shared@npm:1.0.0"
+  conditions: os=darwin
+  languageName: node
+  linkType: hard
+
+"z-required-parent@npm:1.0.0":
+  version: 1.0.0
+  resolution: "z-required-parent@npm:1.0.0"
+  dependencies:
+    shared: "npm:1.0.0"
+  languageName: node
+  linkType: hard
+`
+    const seed = new Set(['shared@1.0.0'])
+    const v5 = await refurbish(parse('yarn-berry-v5', lock(5)), 'yarn-berry-v5', checksumSource(), {
+      cacheKey: '8', seed,
+    })
+    const v6 = await refurbish(parse('yarn-berry-v6', lock(6)), 'yarn-berry-v6', checksumSource(), {
+      cacheKey: '8', seed,
+    })
+
+    expect(v5.enriched).toEqual([])
+    expect(v5.graph.tarballOf('shared@1.0.0')?.integrity).toBeUndefined()
+    expect(v6.enriched).toEqual(['shared@1.0.0'])
+    expect(emitBerryChecksum(v6.graph.tarballOf('shared@1.0.0')!.integrity!)).toBeDefined()
   })
 
   it('still fails closed when a dropped checksum cannot be recomputed', async () => {

@@ -479,8 +479,8 @@ absent by yarn's own construction**, and minting a value for them is a defect:
   suppressed, exposes it to `Cache` as `unstablePackages`, and `Cache` returns
   `hash: null` for any member
   ([Cache.ts](https://github.com/yarnpkg/berry/blob/master/packages/yarnpkg-core/sources/Cache.ts)) —
-  another architecture would not fetch the same set. **Which conditioned locators
-  join that set is version-dependent** (below).
+  another architecture would not fetch the same set. Membership is one graph
+  computation, defined below.
 - **`npm:` alias entries.** The alias entry is bare by design; the checksum lives
   on the aliased target.
 
@@ -491,49 +491,70 @@ does hash, which the same install then **re-adds**. Either direction is a PM
 rewrite of a generated lock, which
 [§1.1.1](#111-fundamental-invariant--frozen--ci-acceptance) forbids.
 
-**The suppression set migrated between yarn versions, at exactly 4.4.0, with no
-lockfile-schema bump.** Yarn maintains two sets over the resolved graph:
-`conditionalLocators` (→ `unstablePackages`, hash-null) and `disabledLocators`
-(mocked, incompatible-architecture). It also computes `optionalBuilds` — the
-locators reachable *only* through optional paths (initialised to every package,
-then deleted for any locator reached by an all-non-optional path from a
-workspace).
+> **Measurement note.** `yarn install --immutable` **exits 0 even when it rewrites
+> the lock** — it normalizes checksums as a side effect. Exit code is not the
+> frozen oracle; byte / sha identity of the lock before and after is. Gate on the
+> bytes, never on the exit code.
 
-- **Yarn 3.1.1 … 4.3.1** (lockfile `version` 5/6/7, and 8 written by ≤ 4.3):
-  `conditionalLocators` = **every locator carrying `conditions`**. The
-  `optionalBuilds` gate governs `disabledLocators` only. So a conditioned locator
-  is hash-null regardless of optionality.
-- **Yarn 4.4.0+** (lockfile 8 written by ≥ 4.4, and 9/10):
-  `conditionalLocators` = **conditioned ∩ `optionalBuilds`** (conditioned *and*
-  exclusively-optional). A conditioned locator on a required (non-optional) path
-  is hashed.
+**The rule is one graph computation, identical across every yarn generation**
+(source-verified in unminified `@yarnpkg/core` 3.1.0, 4.3.1, 4.4.0, and current
+master). A locator's checksum is nulled iff it is **conditioned and a member of
+`optionalBuilds`**:
 
-The boundary is 4.4.0 exactly: the official `@yarnpkg/cli-dist` 4.3.1 adds every
-conditioned locator to `conditionalLocators` unconditionally, while 4.4.0 gates
-that add on `optionalBuilds` membership; both emit `__metadata.version: 8`,
-`cacheKey: 10c0`. A lock-v8 file therefore **cannot reveal** which policy its
-client uses. Enrich resolves this from the **target manager version**: v5/v6/v7
-and v8-below-4.4 skip every conditioned gap; v8-at-or-above-4.4 and v9/v10 skip
-only conditioned exclusively-optional gaps; an **unpinned** v8 target fails closed
-(leaves the gap bare and emits `ENRICH_CHECKSUM_POLICY_AMBIGUOUS`) rather than
-mint a value one of the two client generations would strip. The optional-build
-status is recovered from the graph — a canonical `optional` edge or Berry's folded
-`dependenciesMeta.<dep>.optional: true` sidecar — so no host or config input is
-needed; the policy never evaluates the host platform.
+```
+checksum-null  =  conditions != null   ∩   optionalBuilds
+```
+
+`optionalBuilds` starts as every package, with **two subtractions**:
+
+1. **Ordinary optionality.** A locator reachable from a workspace through an
+   all-non-optional dependency path is deleted (a path turns optional via the
+   parent's `dependenciesMeta.<dep>.optional: true`). What remains is
+   reachable-only-through-optional-paths.
+2. **Resolution dependencies.** Every resolver *source* locator is then deleted
+   unconditionally (`for (const h of resolutionDependencies) optionalBuilds.delete(h)`).
+   Across the bundled Berry generations exactly two concrete resolvers contribute:
+   **`PatchResolver`** returns its embedded source descriptor (every generation),
+   and **`JsrResolver`** returns the npm-backed `@jsr/*` inner descriptor (Yarn
+   4.13+); all other resolvers (git, tarball, exec, file, portal, link, npm,
+   workspace, virtual) contribute nothing, and alias/lockfile/multi wrappers only
+   delegate. The load-bearing case is yarn's built-in `plugin-compat`, which
+   rewrites every `fsevents` dependency to `fsevents@patch:…#optional!builtin`, so
+   the base `fsevents@npm:` locator is a patch source.
+
+There is **no 4.4.0 boundary and no version split** — an earlier revision of this
+section recorded one, published in 0.1.2. It was a misreading of minified
+short-circuit syntax and is **withdrawn**: `conditionalLocators` is built
+identically in every inspected generation. (One narrow 3.1.x nuance: when a
+locator is reached through both an optional and a required path, 3.1.x's
+`accessibleLocators` first-visit guard can decide its state before the
+required-path delete, whereas 3.8.7+ deletes first. This does not change the rule,
+only a dual-path tie-break, and matters only for exact lock-v4/v5 generation.)
+
+**`fsevents` is the canonical case, and it reconciles without `preferUnplugged`:**
+its base `npm:` locator is a patch source → subtracted from `optionalBuilds` →
+**hashed**, even when every ordinary parent edge is optional; its paired
+`fsevents@patch:…builtin` locator is conditioned and optional → **bare**.
+`@esbuild/*` has no patch source → an exclusively-optional conditioned locator
+stays in `optionalBuilds` → **bare**.
 
 `preferUnplugged` is **not** the rule (a plausible and wrong hypothesis).
-It is read from the fetched manifest and used only by the PnP linker to decide
-whether to unplug a package; it never reaches the checksum path. `fsevents`
-(`conditions: os=darwin`, reached on a required path) is the reconciling case: it
-is hash-null under ≤ 4.3 (pure conditions) and **hashed** under ≥ 4.4 (required,
-so outside `optionalBuilds`) — the same entry, opposite correct answer, selected
-by target yarn, not by platform. An already-present checksum round-trips untouched
-in every generation.
+`PnpLinker.shouldBeUnplugged` returns `true` for every conditioned package before
+it ever reads `preferUnplugged`, and unplugging is a link-time extraction of an
+already-fetched, already-hashed archive — it never feeds `Cache`'s
+`unstablePackages`. Its apparent correlation is a hidden variable: `fsevents` is
+always builtin-patched, so "not preferUnplugged" and "patch source" coincide on it.
 
-The absence remains **platform-independent** where it applies: an exclusively-
-optional conditioned locator such as `@esbuild/*` is bare in locks generated on
-any host (measured across 20 real-world locks: 610 `@esbuild/*` entries, 0 with a
-checksum), because `optionalBuilds` is graph-derived, not architecture-derived.
+The absence is **platform-independent**: `optionalBuilds` is graph-derived, not
+architecture-derived, so an exclusively-optional conditioned locator such as
+`@esbuild/*` is bare in locks generated on any host (measured across 20
+real-world locks: 610 `@esbuild/*` entries, 0 with a checksum).
+
+**Enrich policy.** A conditioned node is skipped (left bare) iff it stays in
+`optionalBuilds` — reachable only through optional paths **and** not a
+resolution-dependency source. A conditioned node that is a patch / JSR source, or
+on a required path, is **filled**. npm-alias entries are always skipped. No
+target-manager-version input is needed; the rule is version-independent.
 
 **Trust boundary (deliberate, not an oversight).** For these entries the lock pins
 **no integrity at all**, and yarn does not verify the fetched tarball against the
