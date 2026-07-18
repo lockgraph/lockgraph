@@ -632,13 +632,15 @@ function isPublishedSelfLink(edge: Edge): boolean {
 
 // === Validation ===
 
-function validate(s: State): void {
+function validateDiagnostics(s: State): void {
   for (const d of s.diagnostics) {
     if (d.severity === 'error') {
       throw new GraphError('INVARIANT_VIOLATION', `unresolved error diagnostic: ${d.code} — ${d.message}`)
     }
   }
+}
 
+function validateOutgoingEdges(s: State): void {
   const seen = new Set<string>()
   for (const [src, edges] of s.outgoing) {
     if (!s.nodes.has(src)) {
@@ -656,77 +658,98 @@ function validate(s: State): void {
       seen.add(k)
     }
   }
+}
 
-  for (const [id, node] of s.nodes) {
-    if (node.workspacePath !== undefined) {
-      const inc = s.incoming.get(id) ?? []
-      // Workspace-to-workspace edges are kind-agnostic by design here; the seal
-      // blocks incoming edges sourced from non-workspace nodes — EXCEPT a
-      // published self-link (ADR-0017 amendment, Bug #4): a registry-protocol
-      // descriptor that yarn resolved onto a co-located workspace. Partition the
-      // non-workspace incoming edges; permit published self-links (emitting an
-      // info diagnostic each), reject everything else with the verbatim message.
-      for (const edge of inc) {
-        if (s.nodes.get(edge.src)?.workspacePath !== undefined) continue // ws→ws: permitted
-        // A workspace can satisfy a peer dependency, so a `peer` edge into a workspace
-        // node is permitted (ADR-0022); other kinds still reject below.
-        if (edge.kind === 'peer') continue
-        // ADR-0017 amendment — a LOCAL node (canonical resolution type
-        // 'directory': yarn `portal:` / `link:`, npm/pnpm `file:` directory
-        // link) is part of the project graph, not a published package, so it
-        // may depend on a workspace — e.g. a berry `portal:` package that
-        // declares `"<root>": "workspace:^"` inside its own monorepo. The
-        // bus-factor concern is a *published* (registry/tarball/git) package
-        // depending on a workspace; those still reject below.
-        if (s.tarballs.get(stripPeerContextFromNodeId(edge.src))?.resolution?.type === 'directory') continue
-        if (isPublishedSelfLink(edge)) {
-          s.diagnostics.push({
-            code:     'SEAL_PUBLISHED_SELF_LINK',
-            subject:  id,
-            severity: 'info',
-            message:  `published self-link: ${edge.src} →${edge.kind} ${id} (range ${edge.attrs?.range}) — published dependency resolved to co-located workspace`,
-          })
-          continue
-        }
-        throw new GraphError('INVARIANT_VIOLATION', `workspace node has incoming edges: ${id}`)
-      }
+function validateWorkspaceIncomingEdges(s: State, id: NodeId, node: Node): void {
+  if (node.workspacePath === undefined) return
+  const inc = s.incoming.get(id) ?? []
+  // Workspace-to-workspace edges are kind-agnostic by design here; the seal
+  // blocks incoming edges sourced from non-workspace nodes — EXCEPT a
+  // published self-link (ADR-0017 amendment, Bug #4): a registry-protocol
+  // descriptor that yarn resolved onto a co-located workspace. Partition the
+  // non-workspace incoming edges; permit published self-links (emitting an
+  // info diagnostic each), reject everything else with the verbatim message.
+  for (const edge of inc) {
+    if (s.nodes.get(edge.src)?.workspacePath !== undefined) continue // ws→ws: permitted
+    // A workspace can satisfy a peer dependency, so a `peer` edge into a workspace
+    // node is permitted (ADR-0022); other kinds still reject below.
+    if (edge.kind === 'peer') continue
+    // ADR-0017 amendment — a LOCAL node (canonical resolution type
+    // 'directory': yarn `portal:` / `link:`, npm/pnpm `file:` directory
+    // link) is part of the project graph, not a published package, so it
+    // may depend on a workspace — e.g. a berry `portal:` package that
+    // declares `"<root>": "workspace:^"` inside its own monorepo. The
+    // bus-factor concern is a *published* (registry/tarball/git) package
+    // depending on a workspace; those still reject below.
+    if (s.tarballs.get(stripPeerContextFromNodeId(edge.src))?.resolution?.type === 'directory') continue
+    if (isPublishedSelfLink(edge)) {
+      s.diagnostics.push({
+        code:     'SEAL_PUBLISHED_SELF_LINK',
+        subject:  id,
+        severity: 'info',
+        message:  `published self-link: ${edge.src} →${edge.kind} ${id} (range ${edge.attrs?.range}) — published dependency resolved to co-located workspace`,
+      })
+      continue
     }
-
-    const expected = acceptedNodeIds(node)
-    if (!expected.includes(id)) {
-      throw new GraphError('INVARIANT_VIOLATION', `node id ${id} disagrees with derived id ${expected.join(' or ')}`)
-    }
-
-    // Peer-edge ↔ peerContext coherence is checked by BASE-KEY PROJECTION
-    // (NodeId stripped of its `(...)` peer-context suffix), not full-NodeId
-    // string equality. pnpm's suffix grammar (ADR-0006) is one-level: a
-    // node's peerContext records bare `name@version` base keys, but a peer
-    // edge must target a real node — and when that peer is itself a peer-
-    // variant (transitive peer-of-a-peer, e.g. pnpm v9
-    // `css-parser-algorithms@4.0.0(css-tokenizer@4.0.0)`), the edge target is
-    // the fully-qualified variant NodeId. Full-id bijection only holds for
-    // leaf peers; projecting both sides to base keys restores the invariant
-    // at the granularity the suffix actually encodes. The no-orphan /
-    // no-missing intent is preserved — just matched on base key. (ADR-0017.)
-    const peerEdgeTargets = (s.outgoing.get(id) ?? [])
-      .filter(e => e.kind === 'peer')
-      .map(e => stripPeerContextFromNodeId(e.dst))
-      .sort()
-    // ADR-0030 — a pnpm-v9 HASHED PEER-SET token in the peerContext is a bare-
-    // hex identity discriminator that bears NO peer edge (the real peers are
-    // hidden inside the hash). Exempt it from the edge↔context coherence
-    // compare so it does not look like a peerContext entry with a missing edge.
-    // The derived-id check above is UNCHANGED — the token still participates in
-    // `serializeNodeId`, so id re-derivation stays exact. Only EDGE-BEARING
-    // peerContext entries are matched against the peer edges here.
-    const peerCtx = node.peerContext
-      .filter(p => !isHashedPeerSetToken(stripPeerContextFromNodeId(p)))
-      .map(stripPeerContextFromNodeId)
-      .sort()
-    if (peerEdgeTargets.length !== peerCtx.length || peerEdgeTargets.some((t, i) => t !== peerCtx[i])) {
-      throw new GraphError('INVARIANT_VIOLATION', `peer edges of ${id} disagree with peerContext`)
-    }
+    throw new GraphError('INVARIANT_VIOLATION', `workspace node has incoming edges: ${id}`)
   }
+}
+
+function validateNodeId(id: NodeId, node: Node): void {
+  const expected = acceptedNodeIds(node)
+  if (!expected.includes(id)) {
+    throw new GraphError('INVARIANT_VIOLATION', `node id ${id} disagrees with derived id ${expected.join(' or ')}`)
+  }
+}
+
+function edgeBearingPeerContext(node: Node): NodeId[] {
+  return node.peerContext
+    .filter(p => !isHashedPeerSetToken(stripPeerContextFromNodeId(p)))
+    .map(stripPeerContextFromNodeId)
+    .sort()
+}
+
+function validatePeerContext(s: State, id: NodeId, node: Node): void {
+  // Peer-edge ↔ peerContext coherence is checked by BASE-KEY PROJECTION
+  // (NodeId stripped of its `(...)` peer-context suffix), not full-NodeId
+  // string equality. pnpm's suffix grammar (ADR-0006) is one-level: a
+  // node's peerContext records bare `name@version` base keys, but a peer
+  // edge must target a real node — and when that peer is itself a peer-
+  // variant (transitive peer-of-a-peer, e.g. pnpm v9
+  // `css-parser-algorithms@4.0.0(css-tokenizer@4.0.0)`), the edge target is
+  // the fully-qualified variant NodeId. Full-id bijection only holds for
+  // leaf peers; projecting both sides to base keys restores the invariant
+  // at the granularity the suffix actually encodes. The no-orphan /
+  // no-missing intent is preserved — just matched on base key. (ADR-0017.)
+  const peerEdgeTargets = (s.outgoing.get(id) ?? [])
+    .filter(e => e.kind === 'peer')
+    .map(e => stripPeerContextFromNodeId(e.dst))
+    .sort()
+  // ADR-0030 — a pnpm-v9 HASHED PEER-SET token in the peerContext is a bare-
+  // hex identity discriminator that bears NO peer edge (the real peers are
+  // hidden inside the hash). Exempt it from the edge↔context coherence
+  // compare so it does not look like a peerContext entry with a missing edge.
+  // The derived-id check above is UNCHANGED — the token still participates in
+  // `serializeNodeId`, so id re-derivation stays exact. Only EDGE-BEARING
+  // peerContext entries are matched against the peer edges here.
+  const peerCtx = edgeBearingPeerContext(node)
+  if (peerEdgeTargets.length !== peerCtx.length || peerEdgeTargets.some((t, i) => t !== peerCtx[i])) {
+    throw new GraphError('INVARIANT_VIOLATION', `peer edges of ${id} disagree with peerContext`)
+  }
+}
+
+function validateNodes(s: State): void {
+  for (const [id, node] of s.nodes) {
+    validateWorkspaceIncomingEdges(s, id, node)
+    validateNodeId(id, node)
+    validatePeerContext(s, id, node)
+  }
+}
+
+function validate(s: State): void {
+  validateDiagnostics(s)
+  validateOutgoingEdges(s)
+  validateNodes(s)
 }
 
 function reindex(s: State): void {
@@ -742,6 +765,416 @@ function reindex(s: State): void {
 
   for (const edges of s.outgoing.values()) edges.sort(cmpEdgeBy('dst'))
   for (const edges of s.incoming.values()) edges.sort(cmpEdgeBy('src'))
+}
+
+type WalkItem = { id: NodeId; depth: number }
+
+function walkStack(seeds: NodeId | NodeId[]): WalkItem[] {
+  const initial = Array.isArray(seeds) ? seeds : [seeds]
+  const stack: WalkItem[] = []
+  for (let i = initial.length - 1; i >= 0; i--) {
+    const seed = initial[i]
+    if (seed !== undefined) stack.push({ id: seed, depth: 0 })
+  }
+  return stack
+}
+
+function walkEdges(s: State, id: NodeId, direction: 'out' | 'in', kinds?: EdgeKind[]): readonly Edge[] {
+  const edges = (direction === 'out' ? s.outgoing : s.incoming).get(id) ?? []
+  return kinds ? edges.filter(e => kinds.includes(e.kind)) : edges
+}
+
+function pushWalkSuccessors(
+  stack: WalkItem[],
+  visited: ReadonlySet<NodeId>,
+  edges: readonly Edge[],
+  direction: 'out' | 'in',
+  depth: number,
+): void {
+  for (let i = edges.length - 1; i >= 0; i--) {
+    const e = edges[i]
+    if (!e) continue
+    const next = direction === 'out' ? e.dst : e.src
+    if (!visited.has(next)) stack.push({ id: next, depth: depth + 1 })
+  }
+}
+
+function *walkGraph(s: State, seeds: NodeId | NodeId[], opts?: WalkOpts): IterableIterator<NodeId> {
+  const direction = opts?.direction ?? 'out'
+  const kinds     = opts?.kinds
+  const maxDepth  = opts?.maxDepth ?? Infinity
+  const visited   = new Set<NodeId>()
+  const stack     = walkStack(seeds)
+
+  while (stack.length > 0) {
+    const top = stack.pop()
+    if (!top || visited.has(top.id)) continue
+    visited.add(top.id)
+    yield top.id
+    if (top.depth >= maxDepth) continue
+    pushWalkSuccessors(stack, visited, walkEdges(s, top.id, direction, kinds), direction, top.depth)
+  }
+}
+
+type TarjanFrame = { v: NodeId; iter: number; succ: NodeId[] }
+
+interface TarjanState {
+  indexOf: Map<NodeId, number>
+  lowlink: Map<NodeId, number>
+  onStack: Set<NodeId>
+  ssStack: NodeId[]
+  sccs:    NodeId[][]
+  next:    number
+}
+
+function tarjanState(): TarjanState {
+  return {
+    indexOf: new Map(),
+    lowlink: new Map(),
+    onStack: new Set(),
+    ssStack: [],
+    sccs:    [],
+    next:    0,
+  }
+}
+
+function visitTarjanNode(s: State, state: TarjanState, v: NodeId): TarjanFrame {
+  state.indexOf.set(v, state.next)
+  state.lowlink.set(v, state.next)
+  state.next++
+  state.ssStack.push(v)
+  state.onStack.add(v)
+  const succ = (s.outgoing.get(v) ?? []).map(e => e.dst)
+  return { v, iter: 0, succ }
+}
+
+function updateTarjanBackEdge(state: TarjanState, frame: TarjanFrame, w: NodeId): void {
+  if (!state.onStack.has(w)) return
+  const cur = state.lowlink.get(frame.v) ?? 0
+  const wIdx = state.indexOf.get(w) ?? 0
+  if (wIdx < cur) state.lowlink.set(frame.v, wIdx)
+}
+
+function advanceTarjanFrame(
+  s: State,
+  state: TarjanState,
+  callStack: TarjanFrame[],
+  frame: TarjanFrame,
+): boolean {
+  if (frame.iter >= frame.succ.length) return false
+  const w = frame.succ[frame.iter++]
+  if (w === undefined) return true
+  if (!state.indexOf.has(w)) callStack.push(visitTarjanNode(s, state, w))
+  else updateTarjanBackEdge(state, frame, w)
+  return true
+}
+
+function collectTarjanComponent(state: TarjanState, root: NodeId): void {
+  const scc: NodeId[] = []
+  let w: NodeId | undefined
+  do {
+    w = state.ssStack.pop()
+    if (w === undefined) break
+    state.onStack.delete(w)
+    scc.push(w)
+  } while (w !== root)
+  scc.sort(cmpStr)
+  state.sccs.push(scc)
+}
+
+function propagateTarjanLowlink(state: TarjanState, callStack: TarjanFrame[], frame: TarjanFrame): void {
+  const parent = callStack[callStack.length - 1]
+  if (!parent) return
+  const pl = state.lowlink.get(parent.v) ?? 0
+  const cl = state.lowlink.get(frame.v) ?? 0
+  if (cl < pl) state.lowlink.set(parent.v, cl)
+}
+
+function completeTarjanFrame(state: TarjanState, callStack: TarjanFrame[], frame: TarjanFrame): void {
+  callStack.pop()
+  if (state.lowlink.get(frame.v) === state.indexOf.get(frame.v)) {
+    collectTarjanComponent(state, frame.v)
+  }
+  propagateTarjanLowlink(state, callStack, frame)
+}
+
+function runTarjanRoot(s: State, state: TarjanState, root: NodeId): void {
+  const callStack: TarjanFrame[] = [visitTarjanNode(s, state, root)]
+  while (callStack.length > 0) {
+    const frame = callStack[callStack.length - 1]
+    if (!frame) break
+    if (advanceTarjanFrame(s, state, callStack, frame)) continue
+    completeTarjanFrame(state, callStack, frame)
+  }
+}
+
+function topologicalComponents(s: State): NodeId[][] {
+  const state = tarjanState()
+  const ids = Array.from(s.nodes.keys()).sort(cmpStr)
+  for (const root of ids) {
+    if (!state.indexOf.has(root)) runTarjanRoot(s, state, root)
+  }
+  return state.sccs.reverse()
+}
+
+function emptyGraphDiff(): GraphDiff {
+  return {
+    addedNodes:   [],
+    removedNodes: [],
+    changedNodes: [],
+    addedEdges:   [],
+    removedEdges: [],
+  }
+}
+
+function diffNodes(s: State, other: Graph, out: GraphDiff): void {
+  const otherIds = new Set<NodeId>()
+  for (const n of other.nodes()) otherIds.add(n.id)
+  for (const id of s.nodes.keys()) {
+    if (!otherIds.has(id)) out.removedNodes.push(id)
+  }
+  for (const n of other.nodes()) {
+    const cur = s.nodes.get(n.id)
+    if (!cur) out.addedNodes.push(n.id)
+    else if (!nodeEqual(cur, n)) out.changedNodes.push(n.id)
+  }
+}
+
+function graphEdges(s: State): Map<string, Edge> {
+  const edgesByKey = new Map<string, Edge>()
+  for (const edges of s.outgoing.values()) {
+    for (const e of edges) edgesByKey.set(tripleKey(e), e)
+  }
+  return edgesByKey
+}
+
+function publicGraphEdges(graph: Graph): Map<string, Edge> {
+  const edgesByKey = new Map<string, Edge>()
+  for (const n of graph.nodes()) {
+    for (const e of graph.out(n.id)) edgesByKey.set(tripleKey(e), e)
+  }
+  return edgesByKey
+}
+
+function diffEdges(s: State, other: Graph, out: GraphDiff): void {
+  const myEdges = graphEdges(s)
+  const otherEdges = publicGraphEdges(other)
+  for (const [k, e] of myEdges) {
+    if (!otherEdges.has(k)) out.removedEdges.push({ src: e.src, dst: e.dst, kind: e.kind })
+  }
+  for (const [k, e] of otherEdges) {
+    if (!myEdges.has(k)) out.addedEdges.push({ src: e.src, dst: e.dst, kind: e.kind })
+  }
+}
+
+const cmpEdgeTriple = (a: EdgeTriple, b: EdgeTriple): number => cmpStr(tripleKey(a), tripleKey(b))
+
+function sortGraphDiff(out: GraphDiff): void {
+  out.addedNodes.sort(cmpStr)
+  out.removedNodes.sort(cmpStr)
+  out.changedNodes.sort(cmpStr)
+  out.addedEdges.sort(cmpEdgeTriple)
+  out.removedEdges.sort(cmpEdgeTriple)
+}
+
+function mutatorAddNode(next: State, applied: ChangeRecord[], node: Node): void {
+  if (node.patch !== undefined) validatePatchToken(node.patch)
+  refuseSentinelMutation(node.patch, 'addNode', node.id)
+  if (next.nodes.has(node.id)) {
+    throw new GraphError('PATCH_REJECTED', `addNode: ${node.id} already exists`)
+  }
+  next.nodes.set(node.id, node)
+  applied.push({ kind: 'node-added', subject: node.id })
+}
+
+function mutatorRemoveNode(next: State, applied: ChangeRecord[], id: NodeId): void {
+  if (!next.nodes.has(id)) {
+    throw new GraphError('PATCH_REJECTED', `removeNode: ${id} missing`)
+  }
+  const inc = next.incoming.get(id) ?? []
+  if (inc.length > 0) {
+    throw new GraphError('PATCH_REJECTED', `removeNode: ${id} has incoming edges; remove them first`)
+  }
+  for (const e of next.outgoing.get(id) ?? []) {
+    const peerInc = next.incoming.get(e.dst)
+    if (peerInc) removeMatching(peerInc, x => x.src === id && x.kind === e.kind && x.dst === e.dst)
+  }
+  next.outgoing.delete(id)
+  next.incoming.delete(id)
+  next.nodes.delete(id)
+  applied.push({ kind: 'node-removed', subject: id })
+}
+
+function mutatorReplaceNode(next: State, applied: ChangeRecord[], id: NodeId, newNode: Node): void {
+  if (newNode.patch !== undefined) validatePatchToken(newNode.patch)
+  const existing = next.nodes.get(id)
+  if (existing) refuseSentinelMutation(existing.patch, 'replaceNode', id)
+  refuseSentinelMutation(newNode.patch, 'replaceNode', newNode.id)
+  if (!existing) {
+    throw new GraphError('PATCH_REJECTED', `replaceNode: ${id} missing`)
+  }
+  if (newNode.id === id) {
+    next.nodes.set(id, newNode)
+  } else {
+    if (next.nodes.has(newNode.id)) {
+      throw new GraphError('PATCH_REJECTED', `replaceNode: target id ${newNode.id} already exists`)
+    }
+    rebindNodeId(next, id, newNode.id, newNode)
+  }
+  applied.push(newNode.id === id
+    ? { kind: 'node-replaced', subject: newNode.id }
+    : { kind: 'node-replaced', subject: newNode.id, oldSubject: id })
+}
+
+function mutatorAddEdge(
+  next: State,
+  applied: ChangeRecord[],
+  src: NodeId,
+  dst: NodeId,
+  kind: EdgeKind,
+  attrs?: EdgeAttrs,
+): void {
+  if (!next.nodes.has(src)) throw new GraphError('PATCH_REJECTED', `addEdge: src ${src} missing`)
+  if (!next.nodes.has(dst)) throw new GraphError('PATCH_REJECTED', `addEdge: dst ${dst} missing`)
+  const existing = next.outgoing.get(src) ?? []
+  const newAlias = attrs?.alias
+  if (existing.some(e => e.dst === dst && e.kind === kind && e.attrs?.alias === newAlias)) {
+    const aliasSuffix = newAlias !== undefined ? ` (alias=${newAlias})` : ''
+    throw new GraphError('PATCH_REJECTED', `addEdge: duplicate ${src} →${kind} ${dst}${aliasSuffix}`)
+  }
+  const e: Edge = attrs ? { src, dst, kind, attrs } : { src, dst, kind }
+  pushTo(next.outgoing, src, e)
+  pushTo(next.incoming, dst, e)
+  applied.push({ kind: 'edge-added', subject: { src, dst, kind } })
+}
+
+function matchingEdgeIndex(edges: readonly Edge[], dst: NodeId, kind: EdgeKind): number {
+  return edges.findIndex(e => e.dst === dst && e.kind === kind)
+}
+
+function removeIncomingEdge(
+  next: State,
+  src: NodeId,
+  dst: NodeId,
+  kind: EdgeKind,
+  alias: string | undefined,
+): void {
+  const ins = next.incoming.get(dst)
+  if (ins) removeMatching(ins, e => e.src === src && e.kind === kind && e.attrs?.alias === alias)
+}
+
+function mutatorRemoveEdge(
+  next: State,
+  applied: ChangeRecord[],
+  src: NodeId,
+  dst: NodeId,
+  kind: EdgeKind,
+): void {
+  const outs = next.outgoing.get(src)
+  // Identify-and-extract: capture the alias slot of the dropped
+  // outgoing edge so we can purge the matching incoming-side entry
+  // (avoiding alias-sibling collisions when two edges share
+  // (src, dst, kind) but differ on alias). EdgeTriple change-records
+  // omit `alias` — this matches the public Mutator signature; for
+  // alias-precise removal callers can use the diff/replay path.
+  if (!outs) {
+    throw new GraphError('PATCH_REJECTED', `removeEdge: ${src} →${kind} ${dst} missing`)
+  }
+  const found = matchingEdgeIndex(outs, dst, kind)
+  if (found < 0) throw new GraphError('PATCH_REJECTED', `removeEdge: ${src} →${kind} ${dst} missing`)
+  const removedAlias = outs[found]?.attrs?.alias
+  outs.splice(found, 1)
+  removeIncomingEdge(next, src, dst, kind, removedAlias)
+  applied.push({ kind: 'edge-removed', subject: { src, dst, kind } })
+}
+
+function peerContextNodeId(node: Node, peers: NodeId[]): NodeId {
+  return carriesPatchInNodeId(node)
+    ? serializeNodeId(node.name, node.version, peers, node.patch, node.source)
+    : serializeNodeId(node.name, node.version, peers, undefined, node.source)
+}
+
+function removePeerEdges(next: State, id: NodeId): void {
+  const outs = next.outgoing.get(id) ?? []
+  for (const e of outs.filter(e => e.kind === 'peer')) {
+    const peerInc = next.incoming.get(e.dst)
+    if (peerInc) removeMatching(peerInc, x => x.src === id && x.dst === e.dst && x.kind === 'peer')
+  }
+  next.outgoing.set(id, outs.filter(e => e.kind !== 'peer'))
+}
+
+function addPeerEdges(next: State, id: NodeId, peers: NodeId[]): void {
+  for (const p of peers) {
+    const e: Edge = { src: id, dst: p, kind: 'peer' }
+    pushTo(next.outgoing, id, e)
+    pushTo(next.incoming, p, e)
+  }
+}
+
+function mutatorReplacePeerContext(
+  next: State,
+  applied: ChangeRecord[],
+  id: NodeId,
+  peers: NodeId[],
+): void {
+  const old = next.nodes.get(id)
+  if (!old) throw new GraphError('PATCH_REJECTED', `replacePeerContext: ${id} missing`)
+  refuseSentinelMutation(old.patch, 'replacePeerContext', id)
+  for (const p of peers) {
+    if (!next.nodes.has(p)) throw new GraphError('PATCH_REJECTED', `replacePeerContext: peer ${p} missing`)
+  }
+
+  const newId = peerContextNodeId(old, peers)
+  if (newId !== id && next.nodes.has(newId)) {
+    throw new GraphError('PATCH_REJECTED', `replacePeerContext: target id ${newId} already exists`)
+  }
+
+  removePeerEdges(next, id)
+  const newNode: Node = { ...old, id: newId, peerContext: peers.slice() }
+  if (newId === id) next.nodes.set(id, newNode)
+  else rebindNodeId(next, id, newId, newNode)
+  addPeerEdges(next, newId, peers)
+
+  applied.push(newId === id
+    ? { kind: 'peer-context-replaced', subject: newId }
+    : { kind: 'peer-context-replaced', subject: newId, oldSubject: id })
+}
+
+function mutatorSetTarball(
+  next: State,
+  applied: ChangeRecord[],
+  inputs: TarballKeyInputs,
+  payload: TarballPayload,
+): void {
+  const key = toTarballKey(inputs)
+  refuseSentinelMutation(inputs.patch, 'setTarball', `${inputs.name}@${inputs.version}`)
+  next.tarballs.set(key, payload)
+  applied.push({ kind: 'tarball-set', subject: key })
+}
+
+function mutatorRemoveTarball(next: State, applied: ChangeRecord[], inputs: TarballKeyInputs): void {
+  const key = toTarballKey(inputs)
+  if (!next.tarballs.delete(key)) {
+    throw new GraphError('PATCH_REJECTED', `removeTarball: ${key} missing`)
+  }
+  applied.push({ kind: 'tarball-removed', subject: key })
+}
+
+function createMutator(next: State, applied: ChangeRecord[]): Mutator {
+  return {
+    addNode:            node => mutatorAddNode(next, applied, node),
+    removeNode:         id => mutatorRemoveNode(next, applied, id),
+    replaceNode:        (id, node) => mutatorReplaceNode(next, applied, id, node),
+    addEdge:            (src, dst, kind, attrs) => mutatorAddEdge(next, applied, src, dst, kind, attrs),
+    removeEdge:         (src, dst, kind) => mutatorRemoveEdge(next, applied, src, dst, kind),
+    replacePeerContext: (id, peers) => mutatorReplacePeerContext(next, applied, id, peers),
+    setTarball:         (inputs, payload) => mutatorSetTarball(next, applied, inputs, payload),
+    removeTarball:      inputs => mutatorRemoveTarball(next, applied, inputs),
+    // ADR-0023 §8.6 — write-side diagnostic emit. Append to the staged
+    // diagnostics list; the resulting Graph.diagnostics() surfaces it
+    // once mutate() settles. Same append semantics as Builder.diagnostic.
+    diagnostic:         d => next.diagnostics.push(d),
+  }
 }
 
 // === Graph implementation ===
@@ -797,101 +1230,12 @@ class GraphImpl implements Graph {
   }
 
   *walk(seeds: NodeId | NodeId[], opts?: WalkOpts): IterableIterator<NodeId> {
-    const direction = opts?.direction ?? 'out'
-    const kinds     = opts?.kinds
-    const maxDepth  = opts?.maxDepth ?? Infinity
-    const visited   = new Set<NodeId>()
-    const initial   = Array.isArray(seeds) ? seeds : [seeds]
-    const stack: Array<{ id: NodeId; depth: number }> = []
-    for (let i = initial.length - 1; i >= 0; i--) {
-      const seed = initial[i]
-      if (seed !== undefined) stack.push({ id: seed, depth: 0 })
-    }
-
-    while (stack.length > 0) {
-      const top = stack.pop()
-      if (!top || visited.has(top.id)) continue
-      visited.add(top.id)
-      yield top.id
-      if (top.depth >= maxDepth) continue
-
-      const edges = (direction === 'out' ? this.s.outgoing : this.s.incoming).get(top.id) ?? []
-      const filtered = kinds ? edges.filter(e => kinds.includes(e.kind)) : edges
-      for (let i = filtered.length - 1; i >= 0; i--) {
-        const e = filtered[i]
-        if (!e) continue
-        const next = direction === 'out' ? e.dst : e.src
-        if (!visited.has(next)) stack.push({ id: next, depth: top.depth + 1 })
-      }
-    }
+    yield* walkGraph(this.s, seeds, opts)
   }
 
   topoSort(): readonly (readonly NodeId[])[] {
     // Tarjan's SCC, iterative to handle deep graphs without stack overflow.
-    const indexOf  = new Map<NodeId, number>()
-    const lowlink  = new Map<NodeId, number>()
-    const onStack  = new Set<NodeId>()
-    const ssStack: NodeId[] = []
-    const sccs:    NodeId[][] = []
-    let next = 0
-
-    const ids = Array.from(this.s.nodes.keys()).sort(cmpStr)
-
-    type Frame = { v: NodeId; iter: number; succ: NodeId[] }
-
-    const visit = (v: NodeId): Frame => {
-      indexOf.set(v, next)
-      lowlink.set(v, next)
-      next++
-      ssStack.push(v)
-      onStack.add(v)
-      const succ = (this.s.outgoing.get(v) ?? []).map(e => e.dst)
-      return { v, iter: 0, succ }
-    }
-
-    for (const root of ids) {
-      if (indexOf.has(root)) continue
-      const callStack: Frame[] = [visit(root)]
-      while (callStack.length > 0) {
-        const frame = callStack[callStack.length - 1]
-        if (!frame) break
-        if (frame.iter < frame.succ.length) {
-          const w = frame.succ[frame.iter++]
-          if (w === undefined) continue
-          if (!indexOf.has(w)) {
-            callStack.push(visit(w))
-          } else if (onStack.has(w)) {
-            const cur = lowlink.get(frame.v) ?? 0
-            const wIdx = indexOf.get(w) ?? 0
-            if (wIdx < cur) lowlink.set(frame.v, wIdx)
-          }
-        } else {
-          callStack.pop()
-          if (lowlink.get(frame.v) === indexOf.get(frame.v)) {
-            const scc: NodeId[] = []
-            let w: NodeId | undefined
-            do {
-              w = ssStack.pop()
-              if (w === undefined) break
-              onStack.delete(w)
-              scc.push(w)
-            } while (w !== frame.v)
-            scc.sort(cmpStr)
-            sccs.push(scc)
-          }
-          if (callStack.length > 0) {
-            const parent = callStack[callStack.length - 1]
-            if (parent) {
-              const pl = lowlink.get(parent.v) ?? 0
-              const cl = lowlink.get(frame.v) ?? 0
-              if (cl < pl) lowlink.set(parent.v, cl)
-            }
-          }
-        }
-      }
-    }
-
-    return sccs.reverse()
+    return topologicalComponents(this.s)
   }
 
   subgraph(seeds: NodeId | NodeId[], opts?: WalkOpts): Graph {
@@ -924,47 +1268,10 @@ class GraphImpl implements Graph {
   }
 
   diff(other: Graph): GraphDiff {
-    const out: GraphDiff = {
-      addedNodes:   [],
-      removedNodes: [],
-      changedNodes: [],
-      addedEdges:   [],
-      removedEdges: [],
-    }
-
-    const otherIds = new Set<NodeId>()
-    for (const n of other.nodes()) otherIds.add(n.id)
-
-    for (const id of this.s.nodes.keys()) {
-      if (!otherIds.has(id)) out.removedNodes.push(id)
-    }
-    for (const n of other.nodes()) {
-      const cur = this.s.nodes.get(n.id)
-      if (!cur) out.addedNodes.push(n.id)
-      else if (!nodeEqual(cur, n)) out.changedNodes.push(n.id)
-    }
-    out.addedNodes.sort(cmpStr)
-    out.removedNodes.sort(cmpStr)
-    out.changedNodes.sort(cmpStr)
-
-    const myEdges = new Map<string, Edge>()
-    for (const edges of this.s.outgoing.values()) {
-      for (const e of edges) myEdges.set(tripleKey(e), e)
-    }
-    const otherEdges = new Map<string, Edge>()
-    for (const n of other.nodes()) {
-      for (const e of other.out(n.id)) otherEdges.set(tripleKey(e), e)
-    }
-    for (const [k, e] of myEdges) {
-      if (!otherEdges.has(k)) out.removedEdges.push({ src: e.src, dst: e.dst, kind: e.kind })
-    }
-    for (const [k, e] of otherEdges) {
-      if (!myEdges.has(k)) out.addedEdges.push({ src: e.src, dst: e.dst, kind: e.kind })
-    }
-    const cmpTriple = (a: EdgeTriple, b: EdgeTriple): number =>
-      cmpStr(tripleKey(a), tripleKey(b))
-    out.addedEdges.sort(cmpTriple)
-    out.removedEdges.sort(cmpTriple)
+    const out = emptyGraphDiff()
+    diffNodes(this.s, other, out)
+    diffEdges(this.s, other, out)
+    sortGraphDiff(out)
     return out
   }
 
@@ -980,145 +1287,7 @@ class GraphImpl implements Graph {
     const next = shallowClone(this.s)
     const applied: ChangeRecord[] = []
 
-    const m: Mutator = {
-      addNode(node) {
-        if (node.patch !== undefined) validatePatchToken(node.patch)
-        refuseSentinelMutation(node.patch, 'addNode', node.id)
-        if (next.nodes.has(node.id)) {
-          throw new GraphError('PATCH_REJECTED', `addNode: ${node.id} already exists`)
-        }
-        next.nodes.set(node.id, node)
-        applied.push({ kind: 'node-added', subject: node.id })
-      },
-      removeNode(id) {
-        if (!next.nodes.has(id)) {
-          throw new GraphError('PATCH_REJECTED', `removeNode: ${id} missing`)
-        }
-        const inc = next.incoming.get(id) ?? []
-        if (inc.length > 0) {
-          throw new GraphError('PATCH_REJECTED', `removeNode: ${id} has incoming edges; remove them first`)
-        }
-        for (const e of next.outgoing.get(id) ?? []) {
-          const peerInc = next.incoming.get(e.dst)
-          if (peerInc) removeMatching(peerInc, x => x.src === id && x.kind === e.kind && x.dst === e.dst)
-        }
-        next.outgoing.delete(id)
-        next.incoming.delete(id)
-        next.nodes.delete(id)
-        applied.push({ kind: 'node-removed', subject: id })
-      },
-      replaceNode(id, newNode) {
-        if (newNode.patch !== undefined) validatePatchToken(newNode.patch)
-        const existing = next.nodes.get(id)
-        if (existing) refuseSentinelMutation(existing.patch, 'replaceNode', id)
-        refuseSentinelMutation(newNode.patch, 'replaceNode', newNode.id)
-        if (!existing) {
-          throw new GraphError('PATCH_REJECTED', `replaceNode: ${id} missing`)
-        }
-        if (newNode.id === id) {
-          next.nodes.set(id, newNode)
-        } else {
-          if (next.nodes.has(newNode.id)) {
-            throw new GraphError('PATCH_REJECTED', `replaceNode: target id ${newNode.id} already exists`)
-          }
-          rebindNodeId(next, id, newNode.id, newNode)
-        }
-        applied.push(newNode.id === id
-          ? { kind: 'node-replaced', subject: newNode.id }
-          : { kind: 'node-replaced', subject: newNode.id, oldSubject: id })
-      },
-      addEdge(src, dst, kind, attrs) {
-        if (!next.nodes.has(src)) throw new GraphError('PATCH_REJECTED', `addEdge: src ${src} missing`)
-        if (!next.nodes.has(dst)) throw new GraphError('PATCH_REJECTED', `addEdge: dst ${dst} missing`)
-        const existing = next.outgoing.get(src) ?? []
-        const newAlias = attrs?.alias
-        if (existing.some(e => e.dst === dst && e.kind === kind && e.attrs?.alias === newAlias)) {
-          const aliasSuffix = newAlias !== undefined ? ` (alias=${newAlias})` : ''
-          throw new GraphError('PATCH_REJECTED', `addEdge: duplicate ${src} →${kind} ${dst}${aliasSuffix}`)
-        }
-        const e: Edge = attrs ? { src, dst, kind, attrs } : { src, dst, kind }
-        pushTo(next.outgoing, src, e)
-        pushTo(next.incoming, dst, e)
-        applied.push({ kind: 'edge-added', subject: { src, dst, kind } })
-      },
-      removeEdge(src, dst, kind) {
-        const outs = next.outgoing.get(src)
-        // Identify-and-extract: capture the alias slot of the dropped
-        // outgoing edge so we can purge the matching incoming-side entry
-        // (avoiding alias-sibling collisions when two edges share
-        // (src, dst, kind) but differ on alias). EdgeTriple change-records
-        // omit `alias` — this matches the public Mutator signature; for
-        // alias-precise removal callers can use the diff/replay path.
-        let removedAlias: string | undefined
-        const found = outs?.findIndex(e => e.dst === dst && e.kind === kind) ?? -1
-        if (!outs || found < 0) {
-          throw new GraphError('PATCH_REJECTED', `removeEdge: ${src} →${kind} ${dst} missing`)
-        }
-        removedAlias = outs[found]?.attrs?.alias
-        outs.splice(found, 1)
-        const ins = next.incoming.get(dst)
-        if (ins) removeMatching(ins, e => e.src === src && e.kind === kind && e.attrs?.alias === removedAlias)
-        applied.push({ kind: 'edge-removed', subject: { src, dst, kind } })
-      },
-      replacePeerContext(id, peers) {
-        const old = next.nodes.get(id)
-        if (!old) throw new GraphError('PATCH_REJECTED', `replacePeerContext: ${id} missing`)
-        refuseSentinelMutation(old.patch, 'replacePeerContext', id)
-        for (const p of peers) {
-          if (!next.nodes.has(p)) throw new GraphError('PATCH_REJECTED', `replacePeerContext: peer ${p} missing`)
-        }
-
-        const newId = carriesPatchInNodeId(old)
-          ? serializeNodeId(old.name, old.version, peers, old.patch, old.source)
-          : serializeNodeId(old.name, old.version, peers, undefined, old.source)
-        if (newId !== id && next.nodes.has(newId)) {
-          throw new GraphError('PATCH_REJECTED', `replacePeerContext: target id ${newId} already exists`)
-        }
-
-        const outs = next.outgoing.get(id) ?? []
-        for (const e of outs.filter(e => e.kind === 'peer')) {
-          const peerInc = next.incoming.get(e.dst)
-          if (peerInc) removeMatching(peerInc, x => x.src === id && x.dst === e.dst && x.kind === 'peer')
-        }
-        next.outgoing.set(id, outs.filter(e => e.kind !== 'peer'))
-
-        const newNode: Node = { ...old, id: newId, peerContext: peers.slice() }
-        if (newId === id) {
-          next.nodes.set(id, newNode)
-        } else {
-          rebindNodeId(next, id, newId, newNode)
-        }
-
-        for (const p of peers) {
-          const e: Edge = { src: newId, dst: p, kind: 'peer' }
-          pushTo(next.outgoing, newId, e)
-          pushTo(next.incoming, p, e)
-        }
-
-        applied.push(newId === id
-          ? { kind: 'peer-context-replaced', subject: newId }
-          : { kind: 'peer-context-replaced', subject: newId, oldSubject: id })
-      },
-      setTarball(inputs, payload) {
-        const key = toTarballKey(inputs)
-        refuseSentinelMutation(inputs.patch, 'setTarball', `${inputs.name}@${inputs.version}`)
-        next.tarballs.set(key, payload)
-        applied.push({ kind: 'tarball-set', subject: key })
-      },
-      removeTarball(inputs) {
-        const key = toTarballKey(inputs)
-        if (!next.tarballs.delete(key)) {
-          throw new GraphError('PATCH_REJECTED', `removeTarball: ${key} missing`)
-        }
-        applied.push({ kind: 'tarball-removed', subject: key })
-      },
-      // ADR-0023 §8.6 — write-side diagnostic emit. Append to the staged
-      // diagnostics list; the resulting Graph.diagnostics() surfaces it
-      // once mutate() settles. Same append semantics as Builder.diagnostic.
-      diagnostic(d) {
-        next.diagnostics.push(d)
-      },
-    }
+    const m = createMutator(next, applied)
 
     transaction(m)
 
