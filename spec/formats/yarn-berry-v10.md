@@ -84,6 +84,13 @@ Inherits v9.
   ships.
 - Real-world canary first observed at: yarnpkg/berry repo self-host,
   prettier upstream.
+- **Conditional-checksum policy — optional-builds (4.4+).** yarn 5 inherits the
+  post-4.4.0 rule, so only an **exclusively-optional** `conditions:` locator is
+  structurally bare; a conditioned locator on a required path (e.g. `fsevents`)
+  **is** hashed, and enrich fills a fresh one. The `optionalBuilds` set is
+  graph-derived, so the absence is platform-independent. Verify against the yarn 5
+  GA `Project.ts` when it ships. See
+  [`_common.md` §1.7.2](./_common.md#172-structural-checksum-gaps--entries-yarn-never-hashes).
 
 ## Degradation rules
 

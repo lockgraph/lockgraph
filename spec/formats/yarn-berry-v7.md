@@ -120,6 +120,12 @@ true }`, yielding these deltas on top of that shared contract:
 - `__metadata.cacheKey` empirically tracks the RC tag where the
   lockfile was last written (`9` mid-RC, `10` later RC); both forms
   parse equally.
+- **Conditional-checksum policy — pure conditions (pre-4.4).** The Yarn 4
+  RC window predates the 4.4.0 `optionalBuilds` migration, so yarn writes
+  `hash: null` for **every** `conditions:`-bearing locator regardless of
+  optionality. A conditioned entry is structurally bare, and enrich never
+  mints a checksum into one. See
+  [`_common.md` §1.7.2](./_common.md#172-structural-checksum-gaps--entries-yarn-never-hashes).
 
 ## Degradation rules
 
