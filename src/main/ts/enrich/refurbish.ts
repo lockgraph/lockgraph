@@ -8,12 +8,21 @@
 // optional `@yarnpkg/libzip` for cacheKey 10, each vetted by `calibrate`), else
 // defer with a diagnostic. Never overwrites a present field; never fabricates.
 
-import type { Diagnostic, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
+import type { Diagnostic, Edge, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
 import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
-import { isBareYarnBerryNpmAliasNode, rawConditionsScalarOfNode } from '../formats/_yarn-berry-core.ts'
-import { enrichChecksumDeferred, enrichFieldFilled, enrichNoop } from './diagnostics.ts'
+import {
+  isBareYarnBerryNpmAliasNode,
+  rawConditionsScalarOfNode,
+  rawDependenciesMetaBlockOfNode,
+} from '../formats/_yarn-berry-core.ts'
+import {
+  enrichChecksumDeferred,
+  enrichChecksumPolicyAmbiguous,
+  enrichFieldFilled,
+  enrichNoop,
+} from './diagnostics.ts'
 
 /** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3) — wired
  *  by the orchestrator (a CacheAdapter, a registry-backed fetch, or both). */
@@ -53,6 +62,11 @@ export interface RefurbishOptions {
    *  historical v8+ `10c0` fallback. Target-aware enrichment uses
    *  `observed-only` so a project generation is never guessed. */
   cacheKeyInference?: 'format-default' | 'observed-only'
+  /** Target Yarn version. Lockfile v8 spans both checksum-null policies:
+   *  Yarn 4.0–4.3 omits every conditioned checksum, while 4.4+ omits only
+   *  conditioned packages whose build is exclusively optional. Without this
+   *  value, such a v8 gap is left untouched with an ambiguity diagnostic. */
+  managerVersion?: string
 }
 
 export interface RefurbishResult {
@@ -72,6 +86,70 @@ const PREFIX_ERA_MIN_LOCKFILE_VERSION = 8
 const isPrefixEraFormat = (format: string): boolean => {
   const m = /^yarn-berry-v(\d+)$/.exec(format)
   return m !== null && Number(m[1]) >= PREFIX_ERA_MIN_LOCKFILE_VERSION
+}
+
+type ConditionalChecksumPolicy = 'all-conditions' | 'optional-builds' | 'ambiguous'
+
+/** Yarn moved the optionalBuilds gate from disabledLocators to
+ * conditionalLocators in 4.4.0, without changing lockfile version (both 4.3.1
+ * and 4.4.0 emit `version: 8`, `cacheKey: 10c0`). */
+function conditionalChecksumPolicy(
+  format: string,
+  managerVersion: string | undefined,
+): ConditionalChecksumPolicy {
+  const match = /^yarn-berry-v(\d+)$/.exec(format)
+  if (match === null) return 'all-conditions'
+  const lockVersion = Number(match[1])
+  if (lockVersion <= 7) return 'all-conditions'
+  if (lockVersion >= 9) return 'optional-builds'
+
+  // Lockfile v8 is shared by Yarn 4.0.0 through 4.13.x. Its metadata cannot
+  // distinguish the pure-conditions (4.0–4.3) and optional-builds (4.4+)
+  // checksum policies, so an unpinned target must fail closed.
+  if (managerVersion === undefined) return 'ambiguous'
+  const version = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(managerVersion)
+  if (version === null) throw new TypeError(`invalid target manager version ${JSON.stringify(managerVersion)}`)
+  const major = Number(version[1])
+  const minor = version[2] === undefined ? undefined : Number(version[2])
+  if (major > 4) return 'optional-builds'
+  if (major < 4) return 'all-conditions'
+  if (minor === undefined) return 'ambiguous'
+  return minor >= 4 ? 'optional-builds' : 'all-conditions'
+}
+
+/** Whether Yarn propagates optional-build status across this dependency edge.
+ * Berry folds optionalDependencies into `dependencies` and records the bit in
+ * the parent's dependenciesMeta sidecar; completion/conversion may instead
+ * retain an explicit canonical `optional` edge. */
+function isOptionalBuildEdge(graph: Graph, edge: Edge): boolean {
+  if (edge.kind === 'optional') return true
+  const dst = graph.getNode(edge.dst)
+  if (dst === undefined) return false
+  const dependencyName = edge.attrs?.alias ?? dst.name
+  const rawMeta = rawDependenciesMetaBlockOfNode(graph, edge.src)?.[dependencyName]
+  return rawMeta !== null
+    && typeof rawMeta === 'object'
+    && rawMeta['optional'] === 'true'
+}
+
+/** Yarn's optionalBuilds set contains packages reachable only through a path
+ * that has become optional. Its delete-on-any-required-path behaviour is
+ * equivalent to finding every node reachable from a workspace through only
+ * non-optional edges. */
+function nonOptionalReachableNodes(graph: Graph): ReadonlySet<NodeId> {
+  const nodes = [...graph.nodes()]
+  const workspaceRoots = nodes.filter(node => node.workspacePath !== undefined).map(node => node.id)
+  const queue = workspaceRoots.length > 0 ? workspaceRoots : [...graph.roots()]
+  const reachable = new Set<NodeId>()
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const nodeId = queue[cursor]!
+    if (reachable.has(nodeId)) continue
+    reachable.add(nodeId)
+    for (const edge of graph.out(nodeId)) {
+      if (!isOptionalBuildEdge(graph, edge) && !reachable.has(edge.dst)) queue.push(edge.dst)
+    }
+  }
+  return reachable
 }
 
 /** The cacheKey to recompute against, or `undefined` when it can't be inferred
@@ -284,6 +362,7 @@ export async function refurbish(
   // patch's / bare-era / DEFLATE checksum on install.
   type Cand =
     | { kind: 'defer'; id: NodeId }
+    | { kind: 'ambiguous'; id: NodeId }
     | { kind: 'fetch'; node: Node; payload: TarballPayload; cacheKey: string }
   // A caller-supplied oracle (`source.berryChecksum`) can hand us yarn's OWN digest
   // for a cacheKey we CAN'T byte-reproduce — the security-preserving path for a
@@ -291,21 +370,33 @@ export async function refurbish(
   // it. So a non-reproducible node is still a `fetch` candidate when an oracle exists
   // (the resolved step asks it first, and DEFERS only if it can't supply).
   const canSupply = source.berryChecksum !== undefined
+  const checksumPolicy = conditionalChecksumPolicy(format, opts.managerVersion)
+  const nonOptionalReachable = checksumPolicy === 'optional-builds'
+    ? nonOptionalReachableNodes(graph)
+    : undefined
   const cands: Cand[] = []
   for (const node of graph.nodes()) {
     if (seed !== undefined && !seed.has(node.id)) continue
     if (node.workspacePath !== undefined) continue
     const payload: TarballPayload = graph.tarballOf(node.id) ?? {}
     if (emitBerryChecksum(payload.integrity ?? emptyIntegrity()) !== undefined) continue
-    // Yarn passes every conditional locator as an `unstablePackage` to its cache
-    // and deliberately returns a null checksum for it: another architecture may
-    // not fetch the same package, so persisting the local cache hash would be
-    // unreliable. Preserve a checksum already present (the guard above), but do
-    // not mint one into a structural gap. Alias-only npm entries are likewise
-    // bare by design; their resolved target locator carries the checksum.
-    // Neither rule evaluates the current platform.
-    if (rawConditionsScalarOfNode(graph, node.id) !== undefined
-      || isBareYarnBerryNpmAliasNode(graph, node.id)) continue
+    // Yarn's checksum-null set changed without a lockfile-schema bump. Yarn
+    // 3.x / 4.0-rc (lock v5–v7) and Yarn 4.0–4.3 (lock v8) mark every
+    // conditioned locator unstable. Yarn 4.4+ marks only conditioned locators
+    // whose build is exclusively optional. v8 metadata alone cannot select
+    // between those policies, so an unpinned target defers rather than mint a
+    // checksum one of the two client generations will strip.
+    const conditioned = rawConditionsScalarOfNode(graph, node.id) !== undefined
+    if (conditioned) {
+      if (checksumPolicy === 'all-conditions') continue
+      if (checksumPolicy === 'ambiguous') {
+        cands.push({ kind: 'ambiguous', id: node.id }); continue
+      }
+      if (nonOptionalReachable?.has(node.id) !== true) continue
+    }
+    // Alias-only npm entries are bare by design; their resolved target locator
+    // carries the checksum in every Berry generation.
+    if (isBareYarnBerryNpmAliasNode(graph, node.id)) continue
     // Fetch iff there is SOME way to a CORRECT digest — byte-reproduce it OR ask the
     // oracle for yarn's own. A patch, an indeterminable cacheKey, or neither → defer
     // (never a wrong value).
@@ -319,9 +410,10 @@ export async function refurbish(
   // not the CPU repack. Order-preserving bounded pool.
   type Resolved =
     | { kind: 'defer'; id: NodeId }
+    | { kind: 'ambiguous'; id: NodeId }
     | { kind: 'fill';  node: Node; merged: TarballPayload }
   const resolved = await mapPool(cands, concurrency, async (c): Promise<Resolved> => {
-    if (c.kind === 'defer') return c
+    if (c.kind !== 'fetch') return c
     // Fast path: a caller-supplied cached digest (e.g. from `.yarn/cache`, where
     // the hash is in the filename) skips the fetch + recompute entirely.
     let hex = source.berryChecksum !== undefined
@@ -362,6 +454,7 @@ export async function refurbish(
   // ordering keeps `enriched` / diagnostics deterministic regardless of fetch race.
   for (const r of resolved) {
     if (r.kind === 'defer') { record(enrichChecksumDeferred(r.id)); continue }
+    if (r.kind === 'ambiguous') { record(enrichChecksumPolicyAmbiguous(r.id)); continue }
     const diag = enrichFieldFilled(r.node.id, 'berryChecksum', 'recompute')
     next = next.mutate(m => {
       m.setTarball({ name: r.node.name, version: r.node.version, patch: r.node.patch }, r.merged)

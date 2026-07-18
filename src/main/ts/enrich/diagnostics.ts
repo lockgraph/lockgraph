@@ -12,6 +12,7 @@ import type { Diagnostic, NodeId } from '../graph.ts'
 export type EnrichDiagnosticCode =
   | 'ENRICH_FIELD_FILLED'
   | 'ENRICH_CHECKSUM_DEFERRED'
+  | 'ENRICH_CHECKSUM_POLICY_AMBIGUOUS'
   | 'ENRICH_NOOP'
   | 'ENRICH_OVERRIDE_AUTHORITY_UNKNOWN'
   | 'ENRICH_OVERRIDE_AUTHORITY_CONFLICT'
@@ -36,6 +37,15 @@ export function enrichChecksumDeferred(nodeId: NodeId): EnrichDiagnostic {
     severity: 'warning',
     subject:  nodeId,
     message:  `enrich: berry checksum for ${nodeId} not recomputable (DEFLATE cacheKey or tarball bytes unavailable) — line omitted; plain \`yarn install\` recovers it, \`yarn install --immutable\` will reject this node`,
+  }
+}
+
+export function enrichChecksumPolicyAmbiguous(nodeId: NodeId): EnrichDiagnostic {
+  return {
+    code:     'ENRICH_CHECKSUM_POLICY_AMBIGUOUS',
+    severity: 'warning',
+    subject:  nodeId,
+    message:  `enrich: berry checksum policy for ${nodeId} is ambiguous without the target Yarn version (4.0–4.3 omit every conditioned checksum; 4.4+ omit only optional-only conditioned checksums) — line omitted`,
   }
 }
 

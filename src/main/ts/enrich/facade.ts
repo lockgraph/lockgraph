@@ -532,6 +532,7 @@ export async function enrich(
     )
     const refurbished = await refurbish(before, options.target.format, sources.artifacts, {
       ...(artifactCacheKey === undefined ? {} : { cacheKey: artifactCacheKey }),
+      ...(target.managerVersion === undefined ? {} : { managerVersion: target.managerVersion }),
       cacheKeyInference: 'observed-only',
     })
     diagnostics.push(...refurbished.unresolved)

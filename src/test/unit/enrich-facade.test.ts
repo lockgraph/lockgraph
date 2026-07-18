@@ -412,6 +412,47 @@ describe('target-aware enrich facade', () => {
       .toContainEqual(expect.objectContaining({ origin: 'berry-zip', digest: 'a'.repeat(128) }))
   })
 
+  it('threads the target Yarn version into lock-v8 conditioned checksum completion', async () => {
+    const input = parse('yarn-berry-v8', `__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"fixture@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "fixture@workspace:."
+  dependencies:
+    fsevents: "npm:2.3.3"
+  languageName: unknown
+  linkType: soft
+
+"fsevents@npm:2.3.3":
+  version: 2.3.3
+  resolution: "fsevents@npm:2.3.3"
+  conditions: os=darwin
+  languageName: node
+  linkType: hard
+`)
+    const artifacts: TarballSource = {
+      async tarball() { return undefined },
+      async berryChecksum() { return 'c'.repeat(128) },
+    }
+
+    const oldPolicy = await enrich(input, { artifacts }, {
+      target: { format: 'yarn-berry-v8', managerVersion: '4.3.1' },
+      contract: 'snapshot',
+      cacheKey: '10c0',
+    })
+    const newPolicy = await enrich(input, { artifacts }, {
+      target: { format: 'yarn-berry-v8', managerVersion: '4.4.0' },
+      contract: 'snapshot',
+      cacheKey: '10c0',
+    })
+
+    expect(oldPolicy.graph.tarballOf('fsevents@2.3.3')?.integrity).toBeUndefined()
+    expect(newPolicy.graph.tarballOf('fsevents@2.3.3')?.integrity?.hashes)
+      .toContainEqual(expect.objectContaining({ origin: 'berry-zip', digest: 'c'.repeat(128) }))
+  })
+
   it('uses one observed Berry cache key and rejects ambiguous observations', async () => {
     const artifacts: TarballSource = {
       async tarball() { return undefined },
