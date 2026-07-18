@@ -10,6 +10,7 @@ import {
   type Node,
   type NodeId,
   type ChangeRecord,
+  type Edge,
   type EdgeAttrs,
   type EdgeKind,
   nameOf,
@@ -1193,70 +1194,54 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnBerryFamilySidecar): 
     tarballs:     ()        => graph.tarballs(),
     diagnostics:  ()        => graph.diagnostics(),
     layoutHints:  ()        => graph.layoutHints(),
-    mutate(transaction: (m: Mutator) => void): MutateResult {
-      const result = graph.mutate(transaction)
-      if (!isEmptySidecar(sidecar)) {
-        // #114 — build the old→new NodeId map from the applied ChangeRecords so a
-        // RENAMED node's per-NodeId sidecar (conditions / dependenciesMeta /
-        // peerDependenciesMeta / peerDependencies / unresolvedDeps / verbatim
-        // entry-key descriptors) follows it onto the new id, instead of being
-        // dropped by `remapSidecar`'s membership prune (its old id is gone).
-        //
-        // CRITICAL NUANCE — carry the sidecar ONLY for an IDENTITY-PRESERVING
-        // rename: one where the `name@version[+patch=][+src=]` base key is
-        // unchanged (a peerContext shift — replacePeerContext, or a replaceNode
-        // that only re-keys the peer suffix). A genuine VERSION/identity bump
-        // (replaceNode to a new name@version) must NOT carry the old node's
-        // sidecar: the old version's conditions / meta / key-descriptors do not
-        // describe the new version, so that node legitimately RESETS to a fresh
-        // key/sidecar reconstructed from live data (the C-KEYDROP-confirmed
-        // behaviour). The base-key guard below leaves version bumps unmapped so
-        // `remapSidecar`'s membership check prunes them.
-        const nextNodes = new Map<string, Node>()
-        for (const rec of result.applied) {
-          if (rec.kind !== 'node-replaced' && rec.kind !== 'peer-context-replaced') continue
-          const oldId = rec.oldSubject
-          if (oldId === undefined) continue // id unchanged — no remap needed
-          if (stripPeerContextFromNodeId(oldId) !== stripPeerContextFromNodeId(rec.subject)) {
-            continue // identity/version change — reset, do not carry the old sidecar
-          }
-          const newNode = result.graph.getNode(rec.subject)
-          if (newNode !== undefined) nextNodes.set(oldId, newNode)
-        }
-        // `remapSidecar` rewrites each per-node key through `nextNodes.get(oldId)?.id`
-        // and keeps it iff the new id is a live node; metadata (cacheKey etc.) is
-        // global and carries unconditionally. An old id absent from `nextNodes` (a
-        // version bump, or any non-rename) still falls back to its own id and is
-        // pruned by the membership check when that id is gone — unchanged behaviour.
-        const nextSidecar = remapSidecar(sidecar, nextNodes, result.graph)
-        // If remapSidecar pruned everything (replaced nodes), fall back to at least
-        // preserving the format-level metadata (cacheKey, compressionLevel, etc.)
-        // which is not node-keyed and should always survive any mutation.
-        const effectiveSidecar: YarnBerryFamilySidecar = isEmptySidecar(nextSidecar) && sidecar.metadata !== undefined
-          ? { metadata: sidecar.metadata }
-          : nextSidecar
-        // Keep the verbatim entry-key descriptor sidecar in sync with the edge
-        // mutations this transaction applied: a bumped consumer's dropped edge
-        // retires its descriptor from the dst entry's key; a completion-added
-        // edge contributes its descriptor. Acts ONLY on the edges that actually
-        // changed, so untouched entries (incl. un-edge-backed descriptors the
-        // edges never carried — `^3`, `*`) re-emit byte-faithfully, while a
-        // mutated entry no longer drifts into a key `yarn install --immutable`
-        // rewrites (§1.1.1).
-        const maintainedSidecar = maintainEntryKeyDescriptors(effectiveSidecar, result.applied, graph, result.graph)
-        rememberSidecar(result.graph, maintainedSidecar)
-        return {
-          ...result,
-          graph: withSidecarPropagation(result.graph, maintainedSidecar),
-        }
-      }
-      return result
-    },
+    mutate: transaction => mutateWithSidecar(graph, sidecar, transaction),
   }
   // Register the sidecar on the proxy instance too so that stringify works
   // when called with the proxy directly (not just with the underlying graph).
   sidecarByGraph.set(proxy, sidecar)
   return proxy
+}
+
+/** Execute one graph transaction, then carry only identity-preserving sidecar
+ * state and repair the entry-key descriptors touched by the transaction. */
+function mutateWithSidecar(
+  graph: Graph,
+  sidecar: YarnBerryFamilySidecar,
+  transaction: (m: Mutator) => void,
+): MutateResult {
+  const result = graph.mutate(transaction)
+  if (isEmptySidecar(sidecar)) return result
+
+  const nextNodes = identityPreservingRenames(result)
+  const remapped = remapSidecar(sidecar, nextNodes, result.graph)
+  const effective = effectiveMutationSidecar(sidecar, remapped)
+  const maintained = maintainEntryKeyDescriptors(effective, result.applied, graph, result.graph)
+  rememberSidecar(result.graph, maintained)
+  return { ...result, graph: withSidecarPropagation(result.graph, maintained) }
+}
+
+/** Map old ids only when a mutation changed the peer suffix, not package
+ * identity. Version/name/source/patch changes deliberately reset sidecar data. */
+function identityPreservingRenames(result: MutateResult): Map<string, Node> {
+  const nextNodes = new Map<string, Node>()
+  for (const record of result.applied) {
+    if (record.kind !== 'node-replaced' && record.kind !== 'peer-context-replaced') continue
+    const oldId = record.oldSubject
+    if (oldId === undefined) continue
+    if (stripPeerContextFromNodeId(oldId) !== stripPeerContextFromNodeId(record.subject)) continue
+    const node = result.graph.getNode(record.subject)
+    if (node !== undefined) nextNodes.set(oldId, node)
+  }
+  return nextNodes
+}
+
+function effectiveMutationSidecar(
+  source: YarnBerryFamilySidecar,
+  remapped: YarnBerryFamilySidecar,
+): YarnBerryFamilySidecar {
+  return isEmptySidecar(remapped) && source.metadata !== undefined
+    ? { metadata: source.metadata }
+    : remapped
 }
 
 export function rawPeerDependenciesBlockOfNode(graph: Graph, nodeId: string): SymlMap | undefined {
@@ -1524,44 +1509,7 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // anchor when the node has no incoming-edge descriptor (keeping reparse bindable),
   // never prepended alongside real ranges (the B-EXACT synthesis bug).
   const payload = graph.tarballOf(node.id)
-  const native = payload?.nativeResolution
-  const self = selfDescriptorOfNode(node, native)
-  const specs = new Set<string>()
-  if (self !== undefined) specs.add(self)
-  const patchBase = baseSpecOfPatchedNode(node, native)
-  if (patchBase !== undefined) specs.add(patchBase)
-
-  for (const edge of graph.in(node.id)) {
-    if (edge.kind === 'peer') continue
-    if (edge.attrs?.range !== undefined) {
-      // Aliased incoming edge — its descriptor key in the parent's
-      // dependencies block is the alias, not `node.name`. The entry-key
-      // half must reflect that so reparse `specIndex.set` registers the
-      // alias lookup correctly. Canonical (non-aliased) edges keep the
-      // node's actual name.
-      const specName = edge.attrs.alias ?? node.name
-      // A completed/mutated edge governed by an override carries the pin as
-      // `overrideRange`; yarn keys the entry by the pin (collapsing the descriptor),
-      // not the raw declared range (else `--immutable` YN0028). Non-aliased only.
-      const keyRange = edge.attrs.alias === undefined ? (edge.attrs.overrideRange ?? edge.attrs.range) : edge.attrs.range
-      const secondary = `${specName}@${entryKeyRangeOf(keyRange)}`
-      // Bug #90 — a `link:`/`portal:`/`file:` consumer records the dep BARE
-      // (`link:packages/x`) in its dependencies block while yarn keys the
-      // resolved entry with a `::locator=<consumer>` qualifier
-      // (`link:packages/x::locator=…`). Reparse re-qualifies the bare consumer
-      // edge from the consumer's own resolution (addEdgesFromBlock), so the
-      // bare incoming-edge range survives on `attrs.range`. Re-emitting it as a
-      // secondary descriptor would APPEND a spurious bare
-      // `<name>@link:packages/x` to the entry key (descriptor count 2→3) — a
-      // shape yarn never writes (the entry key is the single qualified spec).
-      // Suppress the bare secondary IFF it is exactly the unqualified prefix of
-      // the node's `::locator=`-qualified self-descriptor; that descriptor already
-      // covers this consumer (and reparse re-derives the qualifier).
-      if (self === undefined || !isLocatorQualifiedPrefix(self, secondary)) {
-        specs.add(secondary)
-      }
-    }
-  }
+  const specs = reconstructedEntryKeyDescriptors(graph, node, payload)
 
   // NAME-ANCHOR fallback. On reparse the entry's canonical name is recovered as
   // `nameFromResolutionLocator(resolution) ?? first.name` — so a node whose
@@ -1586,9 +1534,7 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // key and the second silently overwrites the first on emit. A default-registry
   // synth node (and the non-tarball cases) keep the plain `<name>@npm:<version>`
   // anchor.
-  if (!Array.from(specs).some(spec => spec.startsWith(`${node.name}@`))) {
-    specs.add(synthesisedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
-  }
+  ensureEntryNameAnchor(specs, node, payload)
 
   // B-EXACT round-trip: re-emit the VERBATIM source key (parse-captured) to keep
   // byte-identical source order and a genuine resolutions-pin's exact descriptor.
@@ -1602,6 +1548,46 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // Stable, content-sorted key (matches yarn's lexical multi-descriptor order;
   // verbatim source order is preserved by the sidecar path above).
   return Array.from(specs).sort(cmpStr).join(', ')
+}
+
+/** Rebuild the live descriptor set for nodes without a parse-time verbatim key. */
+function reconstructedEntryKeyDescriptors(
+  graph: Graph,
+  node: Node,
+  payload: TarballPayload | undefined,
+): Set<string> {
+  const native = payload?.nativeResolution
+  const self = selfDescriptorOfNode(node, native)
+  const specs = new Set<string>()
+  if (self !== undefined) specs.add(self)
+  const patchBase = baseSpecOfPatchedNode(node, native)
+  if (patchBase !== undefined) specs.add(patchBase)
+
+  for (const edge of graph.in(node.id)) {
+    const descriptor = incomingEntryKeyDescriptor(edge, node.name)
+    if (descriptor === undefined) continue
+    if (self !== undefined && isLocatorQualifiedPrefix(self, descriptor)) continue
+    specs.add(descriptor)
+  }
+  return specs
+}
+
+function incomingEntryKeyDescriptor(edge: Edge, nodeName: string): string | undefined {
+  if (edge.kind === 'peer' || edge.attrs?.range === undefined) return undefined
+  const specName = edge.attrs.alias ?? nodeName
+  const range = edge.attrs.alias === undefined
+    ? (edge.attrs.overrideRange ?? edge.attrs.range)
+    : edge.attrs.range
+  return `${specName}@${entryKeyRangeOf(range)}`
+}
+
+function ensureEntryNameAnchor(
+  specs: Set<string>,
+  node: Node,
+  payload: TarballPayload | undefined,
+): void {
+  if ([...specs].some(spec => spec.startsWith(`${node.name}@`))) return
+  specs.add(synthesisedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
 }
 
 // Bug #90 — is `secondary` exactly the unqualified prefix of a
@@ -1950,39 +1936,10 @@ function edgeBlockOfKinds(
   const seen = new Map<string, string>()   // depName -> dst NodeId (string)
 
   for (const edge of edges) {
-    const dst = graph.getNode(edge.dst)
-    if (dst === undefined) {
-      throw new LockfileError({
-        code: 'INVARIANT_VIOLATION',
-        message: `edge from ${node.id} points to missing node ${edge.dst}`,
-      })
-    }
-    if (edge.attrs?.range === undefined) {
-      if (options.skipMissingRange) {
-        continue
-      }
-      throw new LockfileError({
-        code: 'MISSING_REQUIRED_FIELD',
-        message: `edge ${node.id} -> ${edge.dst} (${edge.kind}) requires attrs.range for emit`,
-      })
-    }
-
-    // Aliased descriptors emit under the alias key (the original parent-
-    // manifest key); the value stays a full `npm:<dst>@<range>` locator
-    // so reparse can resolve back to the same target via specIndex.
-    // Canonical descriptors emit under the dst's actual name.
-    const aliased = edge.attrs.alias !== undefined
-    const depName = aliased ? edge.attrs.alias! : dst.name
-    const prior = seen.get(depName)
-    if (prior !== undefined) {
-      if (prior === edge.dst) continue   // same target via another kind (dep+optional) → one entry
-      throw new LockfileError({
-        code: 'INVARIANT_VIOLATION',
-        message: `cannot emit duplicate dependency key ${depName} from ${node.id} (targets ${prior} and ${edge.dst})`,
-      })
-    }
-    seen.set(depName, edge.dst)
-    blockEntries.push([depName, emittedRangeOfEdge(edge.kind, edge.attrs.range, config, aliased)])
+    const entry = dependencyBlockEntry(graph, node, edge, config, options.skipMissingRange === true)
+    if (entry === undefined) continue
+    if (!recordDependencyTarget(seen, entry.name, entry.dst, node.id)) continue
+    blockEntries.push([entry.name, entry.range])
   }
 
   if (blockEntries.length === 0) return undefined
@@ -1993,6 +1950,51 @@ function edgeBlockOfKinds(
     block[name] = range
   }
   return block
+}
+
+function dependencyBlockEntry(
+  graph: Graph,
+  source: Node,
+  edge: Edge,
+  config: YarnBerryFamilyConfig,
+  skipMissingRange: boolean,
+): { name: string; range: string; dst: NodeId } | undefined {
+  const dst = graph.getNode(edge.dst)
+  if (dst === undefined) {
+    throw new LockfileError({
+      code: 'INVARIANT_VIOLATION',
+      message: `edge from ${source.id} points to missing node ${edge.dst}`,
+    })
+  }
+  const range = edge.attrs?.range
+  if (range === undefined) {
+    if (skipMissingRange) return undefined
+    throw new LockfileError({
+      code: 'MISSING_REQUIRED_FIELD',
+      message: `edge ${source.id} -> ${edge.dst} (${edge.kind}) requires attrs.range for emit`,
+    })
+  }
+  const aliased = edge.attrs?.alias !== undefined
+  const name = edge.attrs?.alias ?? dst.name
+  return { name, range: emittedRangeOfEdge(edge.kind, range, config, aliased), dst: edge.dst }
+}
+
+function recordDependencyTarget(
+  seen: Map<string, string>,
+  name: string,
+  dst: NodeId,
+  sourceId: NodeId,
+): boolean {
+  const prior = seen.get(name)
+  if (prior === dst) return false
+  if (prior !== undefined) {
+    throw new LockfileError({
+      code: 'INVARIANT_VIOLATION',
+      message: `cannot emit duplicate dependency key ${name} from ${sourceId} (targets ${prior} and ${dst})`,
+    })
+  }
+  seen.set(name, dst)
+  return true
 }
 
 // F8/#103 — fold the verbatim Rung-4-dropped refs into a (possibly undefined)
@@ -2358,42 +2360,55 @@ export function irreducibleCollisionMessage(
   currentKey: string,
   priorEntries: ReadonlyArray<{ key: string; value: SymlMap; specs: SpecPart[] }>,
 ): string {
-  const currentEntry = priorEntries.find(e => e.key === currentKey)
-  const currentResolution = currentEntry !== undefined ? asString(currentEntry.value['resolution']) : undefined
-
-  // The prior entry that landed on `id`: scan the list from the start; the
-  // collision is by definition between the current entry and the FIRST
-  // prior entry that derived the same NodeId. Without re-deriving NodeIds
-  // here we approximate by name+version match.
-  const currentFirst = currentEntry?.specs[0]
-  const priorEntry = currentEntry === undefined ? undefined : priorEntries.find(e => {
-    if (e.key === currentKey) return false
-    const otherFirst = e.specs[0]
-    if (otherFirst === undefined || currentFirst === undefined) return false
-    if (otherFirst.name !== currentFirst.name) return false
-    return asString(e.value['version']) === asString(currentEntry.value['version'])
-  })
-  const priorResolution = priorEntry !== undefined ? asString(priorEntry.value['resolution']) : undefined
-
-  const isLink = (r: string | undefined): boolean =>
-    r !== undefined && (r.includes('@link:') || r.includes('@portal:'))
-  const isPatch = (r: string | undefined): boolean =>
-    r !== undefined && r.includes('@patch:')
-  const isBind = (r: string | undefined): boolean =>
-    r !== undefined && r.includes('::')
-
-  let hint = 'likely npm: alias, patch: collision, workspace link: locator collision, or a `::` bind modifier (`::__archiveUrl=` / `::version=` / `::hash=`)'
-  if (isLink(currentResolution) || isLink(priorResolution)) {
-    hint = 'likely workspace link: / portal: locator collision (yarn `::locator=` qualifier was lost)'
-  } else if (isPatch(currentResolution) || isPatch(priorResolution)) {
-    hint = 'likely patch: collision'
-  } else if (isBind(currentResolution) || isBind(priorResolution)) {
-    hint = 'likely a `::` bind modifier collision (`::__archiveUrl=` private-registry mirror, `::version=`, or `::hash=` — the bind was lost from the NodeId)'
-  }
-
+  const { priorResolution, currentResolution } = collisionResolutions(currentKey, priorEntries)
+  const hint = collisionHint(priorResolution, currentResolution)
   const resolutions = [priorResolution, currentResolution].filter((r): r is string => typeof r === 'string')
   const tail = resolutions.length > 0 ? ` — resolutions: [${resolutions.map(r => JSON.stringify(r)).join(', ')}]` : ''
   return `two entries collapse onto NodeId ${id} — ${hint}${tail}`
+}
+
+function collisionResolutions(
+  currentKey: string,
+  entries: ReadonlyArray<{ key: string; value: SymlMap; specs: SpecPart[] }>,
+): { priorResolution?: string; currentResolution?: string } {
+  const current = entries.find(entry => entry.key === currentKey)
+  if (current === undefined) return {}
+  const first = current.specs[0]
+  const prior = entries.find(entry => isPriorCollisionEntry(entry, current, first))
+  return {
+    priorResolution: prior === undefined ? undefined : asString(prior.value['resolution']),
+    currentResolution: asString(current.value['resolution']),
+  }
+}
+
+function isPriorCollisionEntry(
+  candidate: { key: string; value: SymlMap; specs: SpecPart[] },
+  current: { key: string; value: SymlMap },
+  first: SpecPart | undefined,
+): boolean {
+  if (candidate.key === current.key || first === undefined) return false
+  const other = candidate.specs[0]
+  return other !== undefined
+    && other.name === first.name
+    && asString(candidate.value['version']) === asString(current.value['version'])
+}
+
+function collisionHint(prior: string | undefined, current: string | undefined): string {
+  const resolutions = [prior, current]
+  if (resolutions.some(isLinkCollisionResolution)) {
+    return 'likely workspace link: / portal: locator collision (yarn `::locator=` qualifier was lost)'
+  }
+  if (resolutions.some(resolution => resolution?.includes('@patch:') === true)) {
+    return 'likely patch: collision'
+  }
+  if (resolutions.some(resolution => resolution?.includes('::') === true)) {
+    return 'likely a `::` bind modifier collision (`::__archiveUrl=` private-registry mirror, `::version=`, or `::hash=` — the bind was lost from the NodeId)'
+  }
+  return 'likely npm: alias, patch: collision, workspace link: locator collision, or a `::` bind modifier (`::__archiveUrl=` / `::version=` / `::hash=`)'
+}
+
+function isLinkCollisionResolution(resolution: string | undefined): boolean {
+  return resolution?.includes('@link:') === true || resolution?.includes('@portal:') === true
 }
 
 function stringRecordOfBlock(block: SymlMap | undefined): Record<string, string> | undefined {
@@ -2473,29 +2488,43 @@ function deriveMarkedWorkspaceAttrs(attrs: EdgeAttrs | undefined, dst: Node): Ed
  * delivers F4-ready edges without requiring an explicit enrich step.
  */
 function markWorkspaceEdgesAtParse(graph: Graph): Graph {
+  const edgesToMark = workspaceEdgesToMark(graph)
+  if (edgesToMark.length === 0) return graph
+  return graph.mutate(m => replaceWorkspaceEdges(m, edgesToMark)).graph
+}
+
+function workspaceEdgesToMark(
+  graph: Graph,
+): Array<{ src: string; dst: string; kind: EdgeKind; attrs: EdgeAttrs }> {
   const edgesToMark: Array<{ src: string; dst: string; kind: EdgeKind; attrs: EdgeAttrs }> = []
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
-      if (edge.kind === 'peer') continue
-      if (edge.attrs?.workspace === true) continue
-      if (!isDerivedWorkspaceRange(edge.attrs?.range)) continue
-      const dst = graph.getNode(edge.dst)
-      if (dst?.workspacePath === undefined) continue
-      edgesToMark.push({
-        src: edge.src,
-        dst: edge.dst,
-        kind: edge.kind,
-        attrs: deriveMarkedWorkspaceAttrs(edge.attrs, dst),
-      })
+      const marked = markedWorkspaceEdge(graph, edge)
+      if (marked !== undefined) edgesToMark.push(marked)
     }
   }
-  if (edgesToMark.length === 0) return graph
-  return graph.mutate(m => {
-    for (const e of edgesToMark) {
-      m.removeEdge(e.src, e.dst, e.kind)
-      m.addEdge(e.src, e.dst, e.kind, e.attrs)
-    }
-  }).graph
+  return edgesToMark
+}
+
+function markedWorkspaceEdge(
+  graph: Graph,
+  edge: Edge,
+): { src: string; dst: string; kind: EdgeKind; attrs: EdgeAttrs } | undefined {
+  if (edge.kind === 'peer' || edge.attrs?.workspace === true) return undefined
+  if (!isDerivedWorkspaceRange(edge.attrs?.range)) return undefined
+  const dst = graph.getNode(edge.dst)
+  if (dst?.workspacePath === undefined) return undefined
+  return { src: edge.src, dst: edge.dst, kind: edge.kind, attrs: deriveMarkedWorkspaceAttrs(edge.attrs, dst) }
+}
+
+function replaceWorkspaceEdges(
+  mutator: Mutator,
+  edges: readonly { src: string; dst: string; kind: EdgeKind; attrs: EdgeAttrs }[],
+): void {
+  for (const edge of edges) {
+    mutator.removeEdge(edge.src, edge.dst, edge.kind)
+    mutator.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+  }
 }
 
 function ambiguousPeerMessage(peerName: string, candidates: readonly string[]): string {
@@ -3097,48 +3126,58 @@ function maintainEntryKeyDescriptors(
   const ekd = sidecar.entryKeyDescriptors
   if (ekd === undefined) return sidecar
 
-  // The dst entries whose incoming edges this transaction touched (an edge-add or
-  // -remove). Only these can have drifted; everything else re-emits verbatim.
-  const touchedDst = new Set<NodeId>()
-  for (const rec of applied) {
-    if ((rec.kind === 'edge-added' || rec.kind === 'edge-removed') && rec.subject.kind !== 'peer') {
-      touchedDst.add(rec.subject.dst)
-    } else if (rec.kind === 'node-removed') {
-      // `removeNode` silently drops the node's OUT-edges (it emits only
-      // `node-removed`, never per-edge `edge-removed`). Collect their dsts from
-      // the OLD graph so the diff retires the removed consumer's descriptor from
-      // each surviving dst's key — else a PRUNED pin-holder leaves a stale
-      // exact-version descriptor the manager rejects (react-navigation
-      // `@types/estree@npm:1.0.8`, mantine).
-      for (const e of oldGraph.out(rec.subject)) {
-        if (e.kind !== 'peer') touchedDst.add(e.dst)
-      }
-    }
-  }
+  const touchedDst = touchedEntryKeyDestinations(applied, oldGraph)
   if (touchedDst.size === 0) return sidecar
 
   let next: Map<string, string[]> | undefined
   for (const dst of touchedDst) {
     const current = ekd.get(dst)
-    if (current === undefined) continue            // minted node — emit reconstructs from edges
+    if (current === undefined) continue
     const dstNode = newGraph.getNode(dst)
-    if (dstNode === undefined) continue            // dst gone — remapSidecar prunes its entry
-    // Diff the dst's incoming-edge descriptor SET old→new. The range comes from
-    // the edges themselves (robust to the rename's id churn), so a CHANGED edge
-    // adds/drops exactly its `<alias|name>@<range>` on the key — while a verbatim
-    // descriptor the edges never carried (`*`, a resolved-version pin) is never in
-    // either set, so it is left untouched.
-    const before = incomingKeyDescriptors(oldGraph, dst, dstNode.name)
-    const after  = incomingKeyDescriptors(newGraph, dst, dstNode.name)
-    let updated = current
-    for (const d of before) if (!after.has(d)) updated = updated.filter(x => x !== d)
-    for (const d of after) if (!before.has(d) && !updated.includes(d)) updated = [...updated, d]
-    if (updated !== current) {
-      next ??= new Map(ekd)
-      next.set(dst, updated.slice().sort(cmpStr))
-    }
+    if (dstNode === undefined) continue
+    const updated = updatedEntryKeyDescriptors(current, oldGraph, newGraph, dst, dstNode.name)
+    if (updated === current) continue
+    next ??= new Map(ekd)
+    next.set(dst, updated.slice().sort(cmpStr))
   }
   return next === undefined ? sidecar : { ...sidecar, entryKeyDescriptors: next }
+}
+
+function touchedEntryKeyDestinations(
+  applied: readonly ChangeRecord[],
+  oldGraph: Graph,
+): Set<NodeId> {
+  const touched = new Set<NodeId>()
+  for (const record of applied) {
+    if ((record.kind === 'edge-added' || record.kind === 'edge-removed') && record.subject.kind !== 'peer') {
+      touched.add(record.subject.dst)
+      continue
+    }
+    if (record.kind !== 'node-removed') continue
+    for (const edge of oldGraph.out(record.subject)) {
+      if (edge.kind !== 'peer') touched.add(edge.dst)
+    }
+  }
+  return touched
+}
+
+function updatedEntryKeyDescriptors(
+  current: string[],
+  oldGraph: Graph,
+  newGraph: Graph,
+  dst: NodeId,
+  dstName: string,
+): string[] {
+  const before = incomingKeyDescriptors(oldGraph, dst, dstName)
+  const after = incomingKeyDescriptors(newGraph, dst, dstName)
+  let updated = current
+  for (const descriptor of before) {
+    if (!after.has(descriptor)) updated = updated.filter(value => value !== descriptor)
+  }
+  for (const descriptor of after) {
+    if (!before.has(descriptor) && !updated.includes(descriptor)) updated = [...updated, descriptor]
+  }
+  return updated
 }
 
 /** The set of entry-key descriptors a node's non-peer INCOMING edges contribute
@@ -3163,71 +3202,19 @@ function remapSidecar(
 ): YarnBerryFamilySidecar {
   const remapped: YarnBerryFamilySidecar = {}
 
-  if (sidecar.peerDependencies !== undefined) {
-    const nextPeerDependencies = new Map<string, Record<string, string>>()
-    for (const [oldId, block] of sidecar.peerDependencies) {
-      nextPeerDependencies.set(nextNodes.get(oldId)?.id ?? oldId, block)
-    }
-    if (nextPeerDependencies.size > 0) remapped.peerDependencies = nextPeerDependencies
-  }
-
-  if (sidecar.conditions !== undefined) {
-    const nextConditions = new Map<string, string>()
-    for (const [oldId, scalar] of sidecar.conditions) {
-      const nextId = nextNodes.get(oldId)?.id ?? oldId
-      if (nextGraph.getNode(nextId) !== undefined) {
-        nextConditions.set(nextId, scalar)
-      }
-    }
-    if (nextConditions.size > 0) remapped.conditions = nextConditions
-  }
-
-  if (sidecar.dependenciesMeta !== undefined) {
-    const next = new Map<string, SymlMap>()
-    for (const [oldId, block] of sidecar.dependenciesMeta) {
-      const nextId = nextNodes.get(oldId)?.id ?? oldId
-      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, block)
-    }
-    if (next.size > 0) remapped.dependenciesMeta = next
-  }
-
-  if (sidecar.peerDependenciesMeta !== undefined) {
-    const next = new Map<string, SymlMap>()
-    for (const [oldId, block] of sidecar.peerDependenciesMeta) {
-      const nextId = nextNodes.get(oldId)?.id ?? oldId
-      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, block)
-    }
-    if (next.size > 0) remapped.peerDependenciesMeta = next
-  }
-
-  // F8/#103 — the unresolved-dep sidecar is per source NodeId; remap it through
-  // a node-id rewrite (peer enrichment) exactly as the other per-node sidecars.
-  if (sidecar.unresolvedDeps !== undefined) {
-    const next = new Map<string, UnresolvedDepRef[]>()
-    for (const [oldId, refs] of sidecar.unresolvedDeps) {
-      const nextId = nextNodes.get(oldId)?.id ?? oldId
-      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, refs)
-    }
-    if (next.size > 0) remapped.unresolvedDeps = next
-  }
-
-  // B-EXACT — the verbatim entry-key descriptor sidecar is per NodeId; remap it
-  // through a peer-enrichment id rewrite (a peerContext change keeps the same
-  // package/version, so the source key stays valid). A node whose id was REPLACED
-  // by something other than a tracked remap (a version bump) drops out here, so
-  // emit reconstructs a fresh key for the new node.
-  if (sidecar.entryKeyDescriptors !== undefined) {
-    const next = new Map<string, string[]>()
-    for (const [oldId, descriptors] of sidecar.entryKeyDescriptors) {
-      const nextId = nextNodes.get(oldId)?.id ?? oldId
-      if (nextGraph.getNode(nextId) !== undefined) next.set(nextId, descriptors)
-    }
-    if (next.size > 0) remapped.entryKeyDescriptors = next
-  }
-
-  if (sidecar.metadata !== undefined) {
-    remapped.metadata = sidecar.metadata
-  }
+  const peerDependencies = rekeyNodeMap(sidecar.peerDependencies, nextNodes)
+  const conditions = rekeyLiveNodeMap(sidecar.conditions, nextNodes, nextGraph)
+  const dependenciesMeta = rekeyLiveNodeMap(sidecar.dependenciesMeta, nextNodes, nextGraph)
+  const peerDependenciesMeta = rekeyLiveNodeMap(sidecar.peerDependenciesMeta, nextNodes, nextGraph)
+  const unresolvedDeps = rekeyLiveNodeMap(sidecar.unresolvedDeps, nextNodes, nextGraph)
+  const entryKeyDescriptors = rekeyLiveNodeMap(sidecar.entryKeyDescriptors, nextNodes, nextGraph)
+  if (peerDependencies !== undefined) remapped.peerDependencies = peerDependencies
+  if (conditions !== undefined) remapped.conditions = conditions
+  if (dependenciesMeta !== undefined) remapped.dependenciesMeta = dependenciesMeta
+  if (peerDependenciesMeta !== undefined) remapped.peerDependenciesMeta = peerDependenciesMeta
+  if (unresolvedDeps !== undefined) remapped.unresolvedDeps = unresolvedDeps
+  if (entryKeyDescriptors !== undefined) remapped.entryKeyDescriptors = entryKeyDescriptors
+  if (sidecar.metadata !== undefined) remapped.metadata = sidecar.metadata
 
   return remapped
 }
@@ -3235,67 +3222,52 @@ function remapSidecar(
 function pruneSidecar(sidecar: YarnBerryFamilySidecar, nextGraph: Graph): YarnBerryFamilySidecar {
   const pruned: YarnBerryFamilySidecar = {}
 
-  if (sidecar.peerDependencies !== undefined) {
-    const nextPeerDependencies = new Map<string, Record<string, string>>()
-    for (const [nodeId, block] of sidecar.peerDependencies) {
-      if (nextGraph.getNode(nodeId) !== undefined) {
-        nextPeerDependencies.set(nodeId, block)
-      }
-    }
-    if (nextPeerDependencies.size > 0) pruned.peerDependencies = nextPeerDependencies
-  }
-
-  if (sidecar.conditions !== undefined) {
-    const nextConditions = new Map<string, string>()
-    for (const [nodeId, scalar] of sidecar.conditions) {
-      if (nextGraph.getNode(nodeId) !== undefined) {
-        nextConditions.set(nodeId, scalar)
-      }
-    }
-    if (nextConditions.size > 0) pruned.conditions = nextConditions
-  }
-
-  if (sidecar.dependenciesMeta !== undefined) {
-    const next = new Map<string, SymlMap>()
-    for (const [nodeId, block] of sidecar.dependenciesMeta) {
-      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, block)
-    }
-    if (next.size > 0) pruned.dependenciesMeta = next
-  }
-
-  if (sidecar.peerDependenciesMeta !== undefined) {
-    const next = new Map<string, SymlMap>()
-    for (const [nodeId, block] of sidecar.peerDependenciesMeta) {
-      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, block)
-    }
-    if (next.size > 0) pruned.peerDependenciesMeta = next
-  }
-
-  // F8/#103 — drop the unresolved-dep sidecar for a node `optimize()` GC'd; keep
-  // it for every surviving source node so its dropped refs still round-trip.
-  if (sidecar.unresolvedDeps !== undefined) {
-    const next = new Map<string, UnresolvedDepRef[]>()
-    for (const [nodeId, refs] of sidecar.unresolvedDeps) {
-      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, refs)
-    }
-    if (next.size > 0) pruned.unresolvedDeps = next
-  }
-
-  // B-EXACT — drop the verbatim key descriptors for a GC'd node; keep them for
-  // every surviving node so its source key still re-emits byte-faithfully.
-  if (sidecar.entryKeyDescriptors !== undefined) {
-    const next = new Map<string, string[]>()
-    for (const [nodeId, descriptors] of sidecar.entryKeyDescriptors) {
-      if (nextGraph.getNode(nodeId) !== undefined) next.set(nodeId, descriptors)
-    }
-    if (next.size > 0) pruned.entryKeyDescriptors = next
-  }
-
-  if (sidecar.metadata !== undefined) {
-    pruned.metadata = sidecar.metadata
-  }
+  const peerDependencies = retainLiveNodeMap(sidecar.peerDependencies, nextGraph)
+  const conditions = retainLiveNodeMap(sidecar.conditions, nextGraph)
+  const dependenciesMeta = retainLiveNodeMap(sidecar.dependenciesMeta, nextGraph)
+  const peerDependenciesMeta = retainLiveNodeMap(sidecar.peerDependenciesMeta, nextGraph)
+  const unresolvedDeps = retainLiveNodeMap(sidecar.unresolvedDeps, nextGraph)
+  const entryKeyDescriptors = retainLiveNodeMap(sidecar.entryKeyDescriptors, nextGraph)
+  if (peerDependencies !== undefined) pruned.peerDependencies = peerDependencies
+  if (conditions !== undefined) pruned.conditions = conditions
+  if (dependenciesMeta !== undefined) pruned.dependenciesMeta = dependenciesMeta
+  if (peerDependenciesMeta !== undefined) pruned.peerDependenciesMeta = peerDependenciesMeta
+  if (unresolvedDeps !== undefined) pruned.unresolvedDeps = unresolvedDeps
+  if (entryKeyDescriptors !== undefined) pruned.entryKeyDescriptors = entryKeyDescriptors
+  if (sidecar.metadata !== undefined) pruned.metadata = sidecar.metadata
 
   return pruned
+}
+
+function rekeyNodeMap<V>(
+  source: Map<string, V> | undefined,
+  nextNodes: Map<string, Node>,
+): Map<string, V> | undefined {
+  if (source === undefined) return undefined
+  const next = new Map<string, V>()
+  for (const [oldId, value] of source) next.set(nextNodes.get(oldId)?.id ?? oldId, value)
+  return next.size === 0 ? undefined : next
+}
+
+function rekeyLiveNodeMap<V>(
+  source: Map<string, V> | undefined,
+  nextNodes: Map<string, Node>,
+  graph: Graph,
+): Map<string, V> | undefined {
+  const rekeyed = rekeyNodeMap(source, nextNodes)
+  return retainLiveNodeMap(rekeyed, graph)
+}
+
+function retainLiveNodeMap<V>(
+  source: Map<string, V> | undefined,
+  graph: Graph,
+): Map<string, V> | undefined {
+  if (source === undefined) return undefined
+  const next = new Map<string, V>()
+  for (const [nodeId, value] of source) {
+    if (graph.getNode(nodeId) !== undefined) next.set(nodeId, value)
+  }
+  return next.size === 0 ? undefined : next
 }
 
 function isEmptySidecar(sidecar: YarnBerryFamilySidecar): boolean {

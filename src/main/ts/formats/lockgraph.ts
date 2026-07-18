@@ -260,18 +260,21 @@ export function unescapeTsv(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; i++) {
     const ch = s[i]
-    if (ch === '\\' && i + 1 < s.length) {
-      const n = s[i + 1]
-      if (n === '\\') { out += '\\'; i++ }
-      else if (n === 'n') { out += '\n'; i++ }
-      else if (n === 'r') { out += '\r'; i++ }
-      else if (n === 't') { out += '\t'; i++ }
-      else { out += ch }
-    } else {
-      out += ch
-    }
+    if (ch !== '\\' || i + 1 >= s.length) { out += ch; continue }
+    const decoded = decodedTsvEscape(s[i + 1]!)
+    if (decoded === undefined) { out += ch; continue }
+    out += decoded
+    i++
   }
   return out
+}
+
+function decodedTsvEscape(next: string): string | undefined {
+  if (next === '\\') return '\\'
+  if (next === 'n') return '\n'
+  if (next === 'r') return '\r'
+  if (next === 't') return '\t'
+  return undefined
 }
 
 // === Hardened parse primitives ==============================================
@@ -322,199 +325,135 @@ export interface LockgraphStringifyOptions {
 
 export function stringify(graph: Graph, options: LockgraphStringifyOptions = {}): string {
   const eol = options.lineEnding === 'crlf' ? '\r\n' : '\n'
-
-  // ---- Collect the canonical model in deterministic order ------------------
-  // graph.nodes() iterates ascending by the fully-reconstructed NodeId under
-  // cmpStr (spec § N — nodes); we then pin the root (the empty-path workspace)
-  // at index 0 and keep the rest in that order. Edges address nodes by this
-  // positional index.
-  const rawNodes = Array.from(graph.nodes())
-  const nodes = pinRootFirst(rawNodes)
-  const nodeIndex = new Map<NodeId, number>()
-  for (let i = 0; i < nodes.length; i++) nodeIndex.set(nodes[i]!.id, i)
-
-  // ---- R table — registries/sources, content-sorted, indexed r0, r1, … -----
-  // Each node maps to a {type, url} source descriptor derived from its workspace
-  // status + canonical TarballPayload.resolution. The set is content-sorted by
-  // (type, url); the index is a pure function of that set. R is NORMATIVE:
-  // parse reads a node's R row back to recompose its canonical npm tarball URL
-  // (Node.resolution fragment form + payload.resolution), so the descriptor is
-  // part of round-trip identity, not just readability.
-  const payloads = nodes.map(node => graph.tarball(tarballKeyInputsOf(node)))
-  const regs = nodes.map((node, i) => registrySourceOf(node, payloads[i]))
-  const regKeyOf = (r: { type: string; url: string }): string =>
-    `${escapeTsv(r.type)}\t${escapeTsv(r.url)}`
-  const regKeys = Array.from(new Set(regs.map(regKeyOf))).sort(cmpStr)
-  const regIndexByKey = new Map<string, number>()
-  for (let i = 0; i < regKeys.length; i++) regIndexByKey.set(regKeys[i]!, i)
-
-  // ---- N table — one row per node instance ---------------------------------
   const body: string[] = []
+  const model = collectStringifyModel(graph)
+  writeRegistryAndNodeRegions(body, model)
+  writeEdgeRegion(body, graph, model)
+  writeLayoutRegion(body, graph)
+  writeFidelityRegion(body, graph, model.nodes)
+  return [...stringifyMetadata(options), ...body].join(eol) + eol
+}
 
-  body.push(`R ${regKeys.length}`)
-  for (const k of regKeys) body.push(k) // already `<type>\t<url>`, TSV-escaped at regKeyOf
+interface LockgraphStringifyModel {
+  nodes: Node[]
+  nodeIndex: Map<NodeId, number>
+  payloads: Array<TarballPayload | undefined>
+  registries: Array<{ type: string; url: string }>
+  registryKeys: string[]
+  registryIndex: Map<string, number>
+}
 
-  body.push(`N ${nodes.length}`)
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i]!
-    const payload = payloads[i]
-    const reg = regs[i]!
-    // The node's npm-registry base, when its R row is a HOSTED npm row. A hosted
-    // row only ever arises from a canonical-shape tarball resolution, so its
-    // presence is the parse-side signal that payload.resolution existed.
-    const hostedBase = reg.type === 'npm' && reg.url !== NONE ? reg.url : undefined
+function registryKey(registry: { type: string; url: string }): string {
+  return `${escapeTsv(registry.type)}\t${escapeTsv(registry.url)}`
+}
 
-    // --- nativeResolution u-member optimization ----------------------------
-    // The PM-native verbatim resolution sidecar now lives per-tarball in the F
-    // section (`nativeResolution`), NOT on the N row. The ONLY fragment of it
-    // that still rides the N row is the `#<sha1hex>` of a canonical-URL native
-    // (yarn-classic `resolved`): it is split into the integrity column's
-    // trailing `u`-member so the URL itself recomposes from R, and the F-row
-    // omits the verbatim string entirely (case decided in flattenToSlots). When
-    // the native is the canonical URL + `#<sha1>` shape, peel the fragment here;
-    // EVERYTHING ELSE (a verbatim native → F verbatim) is handled in the F
-    // section. (Canonical berry npm locators are never stored — the berry adapter
-    // recomposes them at emit.) A node with NO native emits no fragment.
-    let fragment: string | undefined
-    const native = payload?.nativeResolution
-    if (native !== undefined && hostedBase !== undefined) {
-      const candidate = recomposeNpmTarballUrl(hostedBase, node.name, node.version)
-      if (native.startsWith(candidate + '#') && SHA1_HEX_RE.test(native.slice(candidate.length + 1))) {
-        fragment = native.slice(candidate.length + 1) // → u-member; F row omits the verbatim
-      }
-    }
+function collectStringifyModel(graph: Graph): LockgraphStringifyModel {
+  const nodes = pinRootFirst([...graph.nodes()])
+  const nodeIndex = new Map<NodeId, number>()
+  for (let index = 0; index < nodes.length; index++) nodeIndex.set(nodes[index]!.id, index)
+  const payloads = nodes.map(node => graph.tarball(tarballKeyInputsOf(node)))
+  const registries = nodes.map((node, index) => registrySourceOf(node, payloads[index]))
+  const registryKeys = [...new Set(registries.map(registryKey))].sort(cmpStr)
+  const registryIndex = new Map<string, number>()
+  for (let index = 0; index < registryKeys.length; index++) registryIndex.set(registryKeys[index]!, index)
+  return { nodes, nodeIndex, payloads, registries, registryKeys, registryIndex }
+}
 
-    const cols: string[] = [
-      escapeTsv(node.name),
-      escapeTsv(node.version),
-      `r${regIndexByKey.get(regKeyOf(reg))!}`,
-      encodeIntegrityColumn(payload?.integrity, fragment, payload?.berryChecksumCacheKey),
-    ]
-    // trailing optional slots, fixed order: ws= patch= src= peer=
-    // (the residual TarballPayload artifact metadata — incl. a verbatim
-    // nativeResolution — lives in the severable F section, keyed by TarballKey;
-    // the N row carries only identity columns + the integrity column, whose
-    // u-member is the sole per-node native fragment and whose berry-zip z-member
-    // carries the folded berryChecksumCacheKey).
-    if (node.workspacePath !== undefined) cols.push(`ws=${escapeTsv(node.workspacePath)}`)
-    if (node.patch !== undefined) cols.push(`patch=${escapeTsv(node.patch)}`)
-    if (node.source !== undefined) cols.push(`src=${escapeTsv(node.source)}`)
-    if (node.peerContext.length > 0) cols.push(`peer=${escapeTsv(node.peerContext.map(p => `(${p})`).join(''))}`)
-    body.push(cols.join('\t'))
+function writeRegistryAndNodeRegions(body: string[], model: LockgraphStringifyModel): void {
+  body.push(`R ${model.registryKeys.length}`, ...model.registryKeys)
+  body.push(`N ${model.nodes.length}`)
+  for (let index = 0; index < model.nodes.length; index++) {
+    body.push(stringifyNodeRow(model, index))
   }
+}
 
-  // ---- E table — one edge per row, sorted (src, dst, kind, alias) ----------
-  // 4 positional fields + omittable key=value/flag slots (mirroring the N-row
-  // slot design — NO positional `-` padding):
-  //
-  //   <src>\t<dst>\t<kind>\t<descriptor>[\t<slot>…]
-  //
-  // descriptor = `EdgeAttrs.range` verbatim through encodeOpt — tri-state
-  // (undefined / '' / any string incl. '-'), so a literal '-' never aliases the
-  // absent sentinel (B2). The npm protocol is implicit (bare ^1.2.3) and every
-  // other protocol stays inline (workspace:*, github:…, file:…, npm:…).
-  //
-  // slots, FIXED order for determinism (each omitted when absent/false):
-  //   1. flag-cluster — `o` (optional) / `w` (workspace), packed as `o`/`w`/`ow`,
-  //      present only when ≥1 holds (NO `-` placeholder);
-  //   2. `alias=<EdgeAttrs.alias>` — present iff alias is set (alias is part of
-  //      edge identity);
-  //   2b. `or=<EdgeAttrs.overrideRange>` — the override/`resolutions` pin the yarn
-  //      adapters key the entry by; present iff a completed edge is override-governed
-  //      (NOT edge identity, but must round-trip or `--immutable` re-breaks);
-  //   3. `rv=<workspaceRange.resolvedVersion>` — the concrete target version;
-  //   4. `sp=<workspaceRange.specifier>` — ONLY when specifier ≠ descriptor (a
-  //      fallback for adapters — e.g. bun-text — that canonicalise the specifier
-  //      to `workspace:*` while keeping a verbatim descriptor like `workspace:`).
-  //      The common case (specifier === descriptor) stores nothing: parse
-  //      reconstructs the specifier FROM the descriptor.
-  //
-  // KILL the old `workspaceRange` JSON: its `specifier` was byte-identical to the
-  // descriptor on every edge but the rare canonicalised one, and the whole JSON
-  // existed for one extra value (resolvedVersion) now in `rv=`.
-  const edges = collectEdges(graph, nodes, nodeIndex)
+function stringifyNodeRow(model: LockgraphStringifyModel, index: number): string {
+  const node = model.nodes[index]!
+  const payload = model.payloads[index]
+  const registry = model.registries[index]!
+  const hostedBase = registry.type === 'npm' && registry.url !== NONE ? registry.url : undefined
+  const fragment = nativeResolutionFragment(payload?.nativeResolution, hostedBase, node)
+  const columns = [
+    escapeTsv(node.name),
+    escapeTsv(node.version),
+    `r${model.registryIndex.get(registryKey(registry))!}`,
+    encodeIntegrityColumn(payload?.integrity, fragment, payload?.berryChecksumCacheKey),
+  ]
+  if (node.workspacePath !== undefined) columns.push(`ws=${escapeTsv(node.workspacePath)}`)
+  if (node.patch !== undefined) columns.push(`patch=${escapeTsv(node.patch)}`)
+  if (node.source !== undefined) columns.push(`src=${escapeTsv(node.source)}`)
+  if (node.peerContext.length > 0) columns.push(`peer=${escapeTsv(node.peerContext.map(peer => `(${peer})`).join(''))}`)
+  return columns.join('\t')
+}
+
+function nativeResolutionFragment(
+  native: string | undefined,
+  hostedBase: string | undefined,
+  node: Node,
+): string | undefined {
+  if (native === undefined || hostedBase === undefined) return undefined
+  const candidate = recomposeNpmTarballUrl(hostedBase, node.name, node.version)
+  if (!native.startsWith(candidate + '#')) return undefined
+  const fragment = native.slice(candidate.length + 1)
+  return SHA1_HEX_RE.test(fragment) ? fragment : undefined
+}
+
+function writeEdgeRegion(body: string[], graph: Graph, model: LockgraphStringifyModel): void {
+  const edges = collectEdges(graph, model.nodes, model.nodeIndex)
   body.push(`E ${edges.length}`)
-  for (const e of edges) {
-    const descriptor = encodeOpt(e.attrs?.range)
-    const cols: string[] = [String(e.src), String(e.dst), KIND_TO_WORD[e.kind], descriptor]
-    // 1 — flag cluster (omitted entirely when no flag is set)
-    let flags = ''
-    if (e.attrs?.optional === true) flags += FLAG_OPTIONAL
-    if (e.attrs?.workspace === true) flags += FLAG_WORKSPACE
-    if (flags !== '') cols.push(flags)
-    // 2 — alias= (alias participates in edge identity)
-    if (e.attrs?.alias !== undefined) cols.push(`alias=${escapeTsv(e.attrs.alias)}`)
-    // 2b — or= (overrideRange; the override/`resolutions` pin the yarn adapters key
-    // the entry by). NOT part of edge identity, but it MUST round-trip: a governed
-    // edge that loses it re-emits its raw declared range as a second descriptor and
-    // re-breaks yarn `--immutable` (YN0028) — the very loss the stamp prevents. See
-    // `EdgeAttrs.overrideRange` in graph.ts.
-    if (e.attrs?.overrideRange !== undefined) cols.push(`or=${escapeTsv(e.attrs.overrideRange)}`)
-    // 3/4 — workspaceRange decomposed onto rv= / sp=. specifier IS the
-    // descriptor (the round-trip oracle proves this on the corpus); store sp=
-    // only when an adapter canonicalised them apart, so the common w-edge carries
-    // just `w` (+ rv= when resolved).
-    const wr = e.attrs?.workspaceRange
-    if (wr !== undefined) {
-      if (wr.resolvedVersion !== undefined) cols.push(`rv=${escapeTsv(wr.resolvedVersion)}`)
-      if (wr.specifier !== (e.attrs?.range ?? '')) cols.push(`sp=${escapeTsv(wr.specifier)}`)
-    }
-    body.push(cols.join('\t'))
-  }
+  for (const edge of edges) body.push(stringifyEdgeRow(edge))
+}
 
-  // ---- L line — optional graph-level layout hints --------------------------
+function stringifyEdgeRow(edge: IndexedEdge): string {
+  const columns = [String(edge.src), String(edge.dst), KIND_TO_WORD[edge.kind], encodeOpt(edge.attrs?.range)]
+  const flags = `${edge.attrs?.optional === true ? FLAG_OPTIONAL : ''}${edge.attrs?.workspace === true ? FLAG_WORKSPACE : ''}`
+  if (flags !== '') columns.push(flags)
+  if (edge.attrs?.alias !== undefined) columns.push(`alias=${escapeTsv(edge.attrs.alias)}`)
+  if (edge.attrs?.overrideRange !== undefined) columns.push(`or=${escapeTsv(edge.attrs.overrideRange)}`)
+  const workspaceRange = edge.attrs?.workspaceRange
+  if (workspaceRange?.resolvedVersion !== undefined) columns.push(`rv=${escapeTsv(workspaceRange.resolvedVersion)}`)
+  if (workspaceRange !== undefined && workspaceRange.specifier !== (edge.attrs?.range ?? '')) {
+    columns.push(`sp=${escapeTsv(workspaceRange.specifier)}`)
+  }
+  return columns.join('\t')
+}
+
+function writeLayoutRegion(body: string[], graph: Graph): void {
   const hints = graph.layoutHints()
   if (hints !== undefined) body.push(`L ${escapeTsv(canonicalJson(hints))}`)
+}
 
-  // ---- F section — the SEVERABLE per-tarball fidelity region ----------------
-  // One row per DISTINCT TarballKey that carries ≥1 residual artifact-metadata
-  // facet. The residual is the TarballPayload MINUS the fields that live on the
-  // N row (integrity, and berryChecksumCacheKey — folded into the integrity
-  // column's z-member) and minus the canonical resolution when it is the bare
-  // recomposable 2-key {type:'tarball', url} shape (omitted and recomposed from
-  // R), and minus a canonical berry npm locator nativeResolution (recomposed by
-  // the berry adapter). Everything else is flattened to dot-path key=value
-  // slots — NO nested JSON. graph.tarballs() already yields keys cmpStr-sorted.
-  //
-  // The row is keyed by the REPRESENTATIVE NODE INDEX, not the TarballKey string
-  // (mirrors how edges reference nodes by index): a numeric ref that the N row's
-  // name/version/patch/src already pin, with no redundant key restatement. The
-  // representative of a tarball = the MINIMUM node index among the nodes sharing
-  // its TarballKey (node order is deterministic, so this is byte-stable). Rows are
-  // sorted by that index ascending. NB: a tarball with NO node (a setTarball with
-  // no addNode — only reachable in hand-built graphs, never adapter parsing) has
-  // no representative index and is therefore dropped; the F section stores per-
-  // node fidelity, so a node-less tarball is unrepresentable by design.
-  const minNodeIndexByKey = new Map<TarballKey, number>()
-  for (let i = 0; i < nodes.length; i++) {
-    const key = toTarballKey(tarballKeyInputsOf(nodes[i]!))
-    if (!minNodeIndexByKey.has(key)) minNodeIndexByKey.set(key, i) // nodes already ascending → first = min
-  }
-  const fRows: Array<{ repr: number; row: string }> = []
+function writeFidelityRegion(body: string[], graph: Graph, nodes: Node[]): void {
+  const representatives = minimumNodeIndexByTarballKey(nodes)
+  const rows: Array<{ repr: number; row: string }> = []
   for (const [tarballKey, payload] of graph.tarballs()) {
-    const repr = minNodeIndexByKey.get(tarballKey)
-    if (repr === undefined) continue // node-less tarball: no representative index → unrepresentable, dropped
-    // name/version come from the representative node — its inputs DEFINE the key
-    // (toTarballKey of its name/version/patch/src), so they match by construction.
-    const reprNode = nodes[repr]!
-    const slots = flattenToSlots(payload, reprNode.name, reprNode.version)
-    if (slots.length === 0) continue // empty residual → no row, not counted
-    fRows.push({ repr, row: [String(repr), ...slots].join('\t') })
+    const repr = representatives.get(tarballKey)
+    if (repr === undefined) continue
+    const node = nodes[repr]!
+    const slots = flattenToSlots(payload, node.name, node.version)
+    if (slots.length > 0) rows.push({ repr, row: [String(repr), ...slots].join('\t') })
   }
-  fRows.sort((a, b) => a.repr - b.repr)
-  body.push(`F ${fRows.length}`)
-  for (const r of fRows) body.push(r.row)
+  rows.sort((left, right) => left.repr - right.repr)
+  body.push(`F ${rows.length}`, ...rows.map(({ row }) => row))
+}
 
-  // ---- META (volatile provenance, NOT hashed) ------------------------------
+function minimumNodeIndexByTarballKey(nodes: Node[]): Map<TarballKey, number> {
+  const representatives = new Map<TarballKey, number>()
+  for (let index = 0; index < nodes.length; index++) {
+    const key = toTarballKey(tarballKeyInputsOf(nodes[index]!))
+    if (!representatives.has(key)) representatives.set(key, index)
+  }
+  return representatives
+}
+
+function stringifyMetadata(options: LockgraphStringifyOptions): string[] {
   const generatedAt = options.generatedAt ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  const meta: string[] = [
+  return [
     `${MAGIC} ${GENERATION}`,
     `schema ${SCHEMA_MAJOR}.${SCHEMA_MINOR}`,
     `generatedAt ${generatedAt}`,
     `generator ${GENERATOR}`,
   ]
-
-  return [...meta, ...body].join(eol) + eol
 }
 
 // =====================================================================================
@@ -526,26 +465,64 @@ export interface LockgraphParseOptions {
 }
 
 export function parse(input: string, options: LockgraphParseOptions = {}): Graph {
-  const onDiagnostic = options.onDiagnostic
-  // Normalise CRLF → LF so a CRLF-round-tripped file parses identically — the
-  // three tables are a function of the LF-normalized model.
+  const cursor = createParseCursor(input)
+  parseMetadata(cursor)
+  const registries = parseRegistryRegion(cursor)
+  const nodes = parseNodeRegion(cursor, registries)
+  const edges = parseEdgeRegion(cursor, nodes.length)
+  const hints = parseLayoutRegion(cursor)
+  const residuals = parseFidelityRegion(cursor, nodes)
+  return assembleGraph(nodes, edges, residuals, hints, options.onDiagnostic)
+}
+
+interface LockgraphParseCursor {
+  peek(): string | undefined
+  next(): string
+  expectHeader(letter: string): number
+}
+
+interface ParsedNode {
+  node: Node
+  inputs: TarballKeyInputs
+  name: string
+  version: string
+  integrity?: Integrity
+  fragment?: string
+  cacheKey?: string
+  hostedBase?: string
+}
+
+interface ParsedEdgeRow { src: number; dst: number; kind: EdgeKind; attrs?: EdgeAttrs }
+
+function createParseCursor(input: string): LockgraphParseCursor {
   const head = input.charCodeAt(0) === 0xFEFF ? input.slice(1) : input
   const lines = head.replace(/\r\n/g, '\n').split('\n')
-
-  let i = 0
-  const peek = (): string | undefined => lines[i]
+  let index = 0
+  const peek = (): string | undefined => lines[index]
   const next = (): string => {
-    const l = lines[i]
-    if (l === undefined) {
+    const line = lines[index]
+    if (line === undefined) {
       throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: unexpected end of input' })
     }
-    i++
-    return l
+    index++
+    return line
   }
+  return { peek, next, expectHeader: letter => parseRegionHeader(next(), letter) }
+}
 
-  // ---- META ----------------------------------------------------------------
-  const magicLine = next()
-  const magicParts = magicLine.split(' ')
+function parseRegionHeader(line: string, letter: string): number {
+  const space = line.indexOf(' ')
+  const key = space === -1 ? line : line.slice(0, space)
+  const count = space === -1 ? NaN : Number(line.slice(space + 1))
+  if (key === letter && Number.isInteger(count) && count >= 0) return count
+  throw new LockfileError({
+    code: 'PARSE_FAILED',
+    message: `lockgraph: expected '${letter} <count>' region header, got: ${line}`,
+  })
+}
+
+function parseMetadata(cursor: LockgraphParseCursor): void {
+  const magicParts = cursor.next().split(' ')
   if (magicParts[0] !== MAGIC) {
     throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: missing ${MAGIC} magic` })
   }
@@ -556,281 +533,243 @@ export function parse(input: string, options: LockgraphParseOptions = {}): Graph
       message: `lockgraph: format generation ${magicParts[1]} newer than supported ${GENERATION}`,
     })
   }
-  // Walk the remaining META lines until the first region header (`R <n>`).
-  // META lines are pure provenance — `schema` / `generatedAt` / `generator` and
-  // any unknown line — and are ignored (they are not graph facts). The META
-  // block ends at the first line whose first token is a region letter.
-  while (peek() !== undefined && !isRegionHeader(peek()!, 'R')) {
-    const line = next()
-    const key = line.split(' ')[0]
-    if (key === 'schema') {
-      const major = Number(line.split(' ')[1]?.split('.')[0])
-      if (Number.isFinite(major) && major > SCHEMA_MAJOR) {
-        throw new LockfileError({
-          code: 'CAPABILITY_LACK',
-          message: `lockgraph: schema major ${line.split(' ')[1]} newer than supported ${SCHEMA_MAJOR}`,
-        })
-      }
-    }
-    // generatedAt / generator / unknown: provenance only, ignored. Any unknown or
-    // absent META line is tolerated — META holds no graph facts, so parse never
-    // reads it to drive parsing.
+  while (cursor.peek() !== undefined && !isRegionHeader(cursor.peek()!, 'R')) {
+    validateSchemaMetadata(cursor.next())
   }
+}
 
-  const expectHeader = (letter: string): number => {
-    const line = next()
-    const sp = line.indexOf(' ')
-    const key = sp === -1 ? line : line.slice(0, sp)
-    const count = sp === -1 ? NaN : Number(line.slice(sp + 1))
-    if (key !== letter || !Number.isInteger(count) || count < 0) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `lockgraph: expected '${letter} <count>' region header, got: ${line}`,
-      })
-    }
-    return count
-  }
+function validateSchemaMetadata(line: string): void {
+  const parts = line.split(' ')
+  if (parts[0] !== 'schema') return
+  const major = Number(parts[1]?.split('.')[0])
+  if (!Number.isFinite(major) || major <= SCHEMA_MAJOR) return
+  throw new LockfileError({
+    code: 'CAPABILITY_LACK',
+    message: `lockgraph: schema major ${parts[1]} newer than supported ${SCHEMA_MAJOR}`,
+  })
+}
 
-  // ---- R — registries (NORMATIVE — retained for recomposition) -------------
-  // A node's R row is read back to recompose its canonical npm tarball URL:
-  // the omitted payload.resolution union and the fragment-form Node.resolution
-  // are pure functions of (R base, name, version). Node IDENTITY is still
-  // re-derived from name/version/peer/patch/src, never from the R index.
-  const rCount = expectHeader('R')
-  const regs: Array<{ type: string; url: string }> = []
-  for (let k = 0; k < rCount; k++) {
-    const fields = next().split('\t')
+function parseRegistryRegion(cursor: LockgraphParseCursor): Array<{ type: string; url: string }> {
+  const registries: Array<{ type: string; url: string }> = []
+  const count = cursor.expectHeader('R')
+  for (let index = 0; index < count; index++) {
+    const fields = cursor.next().split('\t')
     const [typeRaw, urlRaw] = fields
     if (typeRaw === undefined || urlRaw === undefined) {
       throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed registry row: ${fields.join('\t')}` })
     }
-    regs.push({ type: unescapeTsv(typeRaw), url: unescapeTsv(urlRaw) })
+    registries.push({ type: unescapeTsv(typeRaw), url: unescapeTsv(urlRaw) })
   }
+  return registries
+}
 
-  // ---- N — nodes -----------------------------------------------------------
-  const nCount = expectHeader('N')
-  // The N-row-derived part of a node's TarballPayload. The F-section residual is
-  // merged onto this during reattach (after F is parsed), keyed by TarballKey.
-  interface ParsedNode {
-    node: Node
-    inputs: TarballKeyInputs
-    name: string
-    version: string
-    integrity?: Integrity
-    // the `#<sha1hex>` integrity u-member — the per-node native-resolution
-    // fragment (canonical-URL native), recomposed into nativeResolution at reattach.
-    fragment?: string
-    // the berry checksum-cache-key folded into the integrity column's z-member
-    // (`z<cacheKey>/…`, ADR-0031), reattached as `berryChecksumCacheKey`.
-    cacheKey?: string
-    hostedBase?: string
+function parseNodeRegion(
+  cursor: LockgraphParseCursor,
+  registries: Array<{ type: string; url: string }>,
+): ParsedNode[] {
+  const nodes: ParsedNode[] = []
+  const count = cursor.expectHeader('N')
+  for (let index = 0; index < count; index++) nodes.push(parseNodeRow(cursor.next(), registries))
+  return nodes
+}
+
+function parseNodeRow(line: string, registries: Array<{ type: string; url: string }>): ParsedNode {
+  const fields = line.split('\t')
+  const [nameRaw, versionRaw, registryRef, integrityRaw] = fields
+  if (nameRaw === undefined || versionRaw === undefined || registryRef === undefined || integrityRaw === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node row: ${fields.join('\t')}` })
   }
-  const parsedNodes: ParsedNode[] = []
-  const nodeIdByIndex: NodeId[] = []
-  for (let k = 0; k < nCount; k++) {
-    const fields = next().split('\t')
-    const [nameRaw, versionRaw, regRef, integrityRaw] = fields
-    if (nameRaw === undefined || versionRaw === undefined || regRef === undefined || integrityRaw === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node row: ${fields.join('\t')}` })
-    }
-    const name = unescapeTsv(nameRaw)
-    const nodeVersion = unescapeTsv(versionRaw)
-    const { integrity, fragment, cacheKey } = decodeIntegrityColumn(integrityRaw)
-
-    // the node's R row — normative input to the recomposition below
-    const regMatch = /^r(\d+)$/.exec(regRef)
-    const reg = regMatch === null ? undefined : regs[Number(regMatch[1])]
-    if (reg === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: bad registry reference '${regRef}'` })
-    }
-    const hostedBase = reg.type === 'npm' && reg.url !== NONE ? reg.url : undefined
-
-    // trailing optional slots (self-describing `key=value`). The residual
-    // artifact metadata — including `ck` and `nativeResolution` — is NO LONGER on
-    // the N row; it lives in the F section and is merged in by TarballKey during
-    // reattach below. The integrity column's `u`-member (`fragment`, decoded
-    // above) is the SOLE per-node native fragment that still rides the N row.
-    let workspacePath: string | undefined
-    let patch: string | undefined
-    let source: string | undefined
-    let peerContext: NodeId[] = []
-    for (let f = 4; f < fields.length; f++) {
-      const slot = fields[f]!
-      const eq = slot.indexOf('=')
-      if (eq === -1) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node slot (no '='): ${slot}` })
-      }
-      const skey = slot.slice(0, eq)
-      const sval = unescapeTsv(slot.slice(eq + 1))
-      if (skey === 'ws') workspacePath = sval
-      else if (skey === 'patch') patch = sval
-      else if (skey === 'src') source = sval
-      else if (skey === 'peer') peerContext = parsePeerContext(sval)
-      // unknown slots are ignored (forward-compat)
-    }
-
-    // The TarballPayload is assembled in the REATTACH phase (after the F section
-    // is parsed): the F-residual (artifact metadata + verbatim nativeResolution,
-    // keyed by TarballKey) is merged with this node's N-row-derived part —
-    // integrity, the integrity u-member `fragment`, and the integrity z-member
-    // `cacheKey` (→ berryChecksumCacheKey). The canonical {type:'tarball'}
-    // resolution is recomposed iff the node references a HOSTED npm row AND the
-    // merged residual carries no verbatim `resolution`; the PM-native
-    // `nativeResolution` is recomposed from the N-row `fragment` / the F verbatim
-    // slot (see assemblePayload).
-
-    // Re-derive the NodeId from the STORED (name, version, peerContext, patch,
-    // src) slots exactly as the model does — so seal() re-validates the
-    // id↔peerContext coherence and we never trust a stored id blindly. `src` is
-    // read VERBATIM from the `src=` slot (not re-derived from the canonical
-    // resolution): an adapter may leave `node.source` undefined even when the
-    // resolution would discriminate (pnpm-v9 jsr / codeload-github), so deriving
-    // it would mint a phantom `+src=` and break round-trip identity. Stored
-    // verbatim, `undefined` stays absent.
-    const id = serializeNodeId(name, nodeVersion, peerContext, patch, source)
-    const node = assembleNode(id, name, nodeVersion, peerContext, patch, source, workspacePath)
-
-    const inputs: TarballKeyInputs = { name, version: nodeVersion }
-    if (patch !== undefined) inputs.patch = patch
-    if (source !== undefined) inputs.source = source
-
-    parsedNodes.push({ node, inputs, name, version: nodeVersion, integrity, fragment, cacheKey, hostedBase })
-    nodeIdByIndex.push(id)
+  const name = unescapeTsv(nameRaw)
+  const version = unescapeTsv(versionRaw)
+  const integrityParts = decodeIntegrityColumn(integrityRaw)
+  const registry = registryOfReference(registryRef, registries)
+  const slots = parseNodeSlots(fields.slice(4))
+  const id = serializeNodeId(name, version, slots.peerContext, slots.patch, slots.source)
+  const node = assembleNode(id, name, version, slots.peerContext, slots.patch, slots.source, slots.workspacePath)
+  const inputs: TarballKeyInputs = { name, version }
+  if (slots.patch !== undefined) inputs.patch = slots.patch
+  if (slots.source !== undefined) inputs.source = slots.source
+  return {
+    node,
+    inputs,
+    name,
+    version,
+    ...integrityParts,
+    ...(registry.type === 'npm' && registry.url !== NONE ? { hostedBase: registry.url } : {}),
   }
+}
 
-  // ---- E — edges -----------------------------------------------------------
-  const eCount = expectHeader('E')
-  interface EdgeRow { src: number; dst: number; kind: EdgeKind; attrs?: EdgeAttrs }
-  const edgeRows: EdgeRow[] = []
-  for (let k = 0; k < eCount; k++) {
-    const fields = next().split('\t')
-    const [srcRaw, dstRaw, kindRaw, descriptorRaw] = fields
-    if (srcRaw === undefined || dstRaw === undefined || kindRaw === undefined ||
-        descriptorRaw === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed edge row: ${fields.join('\t')}` })
+function registryOfReference(
+  reference: string,
+  registries: Array<{ type: string; url: string }>,
+): { type: string; url: string } {
+  const match = /^r(\d+)$/.exec(reference)
+  const registry = match === null ? undefined : registries[Number(match[1])]
+  if (registry !== undefined) return registry
+  throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: bad registry reference '${reference}'` })
+}
+
+interface ParsedNodeSlots {
+  workspacePath?: string
+  patch?: string
+  source?: string
+  peerContext: NodeId[]
+}
+
+function parseNodeSlots(slots: string[]): ParsedNodeSlots {
+  const parsed: ParsedNodeSlots = { peerContext: [] }
+  for (const slot of slots) {
+    const equal = slot.indexOf('=')
+    if (equal === -1) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed node slot (no '='): ${slot}` })
     }
-    const kind = WORD_TO_KIND[kindRaw]
-    if (kind === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown edge kind '${kindRaw}'` })
-    }
-    const attrs: EdgeAttrs = {}
-    // Field 4 is the positional descriptor (EdgeAttrs.range). decodeOpt inverts
-    // encodeOpt: `-` → undefined (absent), `\-` → the literal one-char '-',
-    // anything else → the value verbatim (B2). A descriptor containing '=' (a URL
-    // query) is unambiguous: it is positional field 4, BEFORE any slot.
-    const range = decodeOpt(descriptorRaw)
-    if (range !== undefined) attrs.range = range
-    // Trailing slots (fields ≥ 5), each self-describing: a field containing '='
-    // is a key=value slot (alias= / rv= / sp=); a field of only flag letters is
-    // the flag cluster (o / w / ow). FIXED emit order, but parse is
-    // order-independent (keyed), so a forward-compatible reorder still reads.
-    let rv: string | undefined
-    let sp: string | undefined
-    let isWorkspaceEdge = false
-    for (let f = 4; f < fields.length; f++) {
-      const slot = fields[f]!
-      const eq = slot.indexOf('=')
-      if (eq === -1) {
-        // flag cluster — only `o` / `w` letters are defined; unknown letters are
-        // ignored (forward-compat) but a present cluster is the only valueless slot.
-        if (slot.includes(FLAG_OPTIONAL)) attrs.optional = true
-        if (slot.includes(FLAG_WORKSPACE)) { attrs.workspace = true; isWorkspaceEdge = true }
-        continue
-      }
-      const skey = slot.slice(0, eq)
-      const sval = unescapeTsv(slot.slice(eq + 1))
-      if (skey === 'alias') attrs.alias = sval
-      else if (skey === 'or') attrs.overrideRange = sval
-      else if (skey === 'rv') rv = sval
-      else if (skey === 'sp') sp = sval
-      // unknown slots are ignored (forward-compat)
-    }
-    // Reconstruct workspaceRange for a w-edge (or any edge carrying rv=/sp=):
-    // specifier IS the descriptor unless sp= overrode it; resolvedVersion rides
-    // rv=. A bare w-edge with no rv=/sp= reconstructs { specifier: <descriptor> }.
-    if (isWorkspaceEdge || rv !== undefined || sp !== undefined) {
-      const specifier = sp !== undefined ? sp : (range ?? '')
-      attrs.workspaceRange = rv !== undefined ? { specifier, resolvedVersion: rv } : { specifier }
-    }
-    // src / dst index a node row each; a bare `Number('')` is 0 and would
-    // silently graft a corrupt empty-field edge onto the root node (B8). Require
-    // a non-negative integer in range; reject empty / non-integer / out-of-range.
-    const src = parseNodeIndex(srcRaw, nCount, 'edge src')
-    const dst = parseNodeIndex(dstRaw, nCount, 'edge dst')
-    const row: EdgeRow = { src, dst, kind }
-    if (Object.keys(attrs).length > 0) row.attrs = attrs
-    edgeRows.push(row)
+    assignNodeSlot(parsed, slot.slice(0, equal), unescapeTsv(slot.slice(equal + 1)))
   }
+  return parsed
+}
 
-  // ---- L — optional layout-hints line --------------------------------------
-  let hints: LayoutHints | undefined
-  if (peek() !== undefined && peek() !== '' && peek()!.startsWith('L ')) {
-    hints = parseJson(unescapeTsv(next().slice(2)), 'L layout-hints line') as LayoutHints
+function assignNodeSlot(parsed: ParsedNodeSlots, key: string, value: string): void {
+  if (key === 'ws') parsed.workspacePath = value
+  else if (key === 'patch') parsed.patch = value
+  else if (key === 'src') parsed.source = value
+  else if (key === 'peer') parsed.peerContext = parsePeerContext(value)
+}
+
+function parseEdgeRegion(cursor: LockgraphParseCursor, nodeCount: number): ParsedEdgeRow[] {
+  const edges: ParsedEdgeRow[] = []
+  const count = cursor.expectHeader('E')
+  for (let index = 0; index < count; index++) edges.push(parseEdgeRow(cursor.next(), nodeCount))
+  return edges
+}
+
+function parseEdgeRow(line: string, nodeCount: number): ParsedEdgeRow {
+  const fields = line.split('\t')
+  const [srcRaw, dstRaw, kindRaw, descriptorRaw] = fields
+  if (srcRaw === undefined || dstRaw === undefined || kindRaw === undefined || descriptorRaw === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed edge row: ${fields.join('\t')}` })
   }
+  const kind = WORD_TO_KIND[kindRaw]
+  if (kind === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown edge kind '${kindRaw}'` })
+  }
+  const attrs = parseEdgeAttrs(descriptorRaw, fields.slice(4))
+  const row: ParsedEdgeRow = {
+    src: parseNodeIndex(srcRaw, nodeCount, 'edge src'),
+    dst: parseNodeIndex(dstRaw, nodeCount, 'edge dst'),
+    kind,
+  }
+  if (Object.keys(attrs).length > 0) row.attrs = attrs
+  return row
+}
 
-  // ---- F — the SEVERABLE per-tarball fidelity section ----------------------
-  // `F <n>` then n rows; each row's field 1 is the REPRESENTATIVE NODE INDEX (a
-  // non-negative integer, parsed POSITIONALLY — not `=`-split), the rest are
-  // dot-path slots reconstructed SCHEMA-DRIVEN. The index resolves to a real node
-  // whose computed TarballKey (name/version/patch/source) is the key under which
-  // this row's residual attaches; non-representative peer-virtual siblings find it
-  // via their OWN computed key in the reattach loop below. No F section at all →
-  // every residual is empty (severability: identity still round-trips). With an
-  // index ref the row ALWAYS points to a real node, so orphan F rows cannot exist.
-  const fResiduals = new Map<TarballKey, TarballPayload>()
-  if (peek() !== undefined && isRegionHeader(peek()!, 'F')) {
-    const fCount = expectHeader('F')
-    for (let k = 0; k < fCount; k++) {
-      const fields = next().split('\t')
-      const idxRaw = fields[0]
-      if (idxRaw === undefined) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed F row: ${fields.join('\t')}` })
-      }
-      const reprIdx = parseNodeIndex(idxRaw, nCount, 'F row representative')
-      // Resolve the index → that node's COMPUTED TarballKey (the reattach loop
-      // keys residuals by each node's own computed key, so this is the join key).
-      const tarballKey = toTarballKey(parsedNodes[reprIdx]!.inputs)
-      const residual = parseSlots(fields.slice(1), tarballKey)
-      fResiduals.set(tarballKey, residual)
+function parseEdgeAttrs(descriptorRaw: string, slots: string[]): EdgeAttrs {
+  const attrs: EdgeAttrs = {}
+  const range = decodeOpt(descriptorRaw)
+  if (range !== undefined) attrs.range = range
+  let resolvedVersion: string | undefined
+  let specifier: string | undefined
+  let workspace = false
+  for (const slot of slots) {
+    const parsed = parseEdgeSlot(slot, attrs)
+    if (parsed.workspace) workspace = true
+    if (parsed.resolvedVersion !== undefined) resolvedVersion = parsed.resolvedVersion
+    if (parsed.specifier !== undefined) specifier = parsed.specifier
+  }
+  if (workspace || resolvedVersion !== undefined || specifier !== undefined) {
+    const value = specifier ?? range ?? ''
+    attrs.workspaceRange = resolvedVersion === undefined ? { specifier: value } : { specifier: value, resolvedVersion }
+  }
+  return attrs
+}
+
+function parseEdgeSlot(
+  slot: string,
+  attrs: EdgeAttrs,
+): { workspace: boolean; resolvedVersion?: string; specifier?: string } {
+  const equal = slot.indexOf('=')
+  if (equal === -1) {
+    if (slot.includes(FLAG_OPTIONAL)) attrs.optional = true
+    const workspace = slot.includes(FLAG_WORKSPACE)
+    if (workspace) attrs.workspace = true
+    return { workspace }
+  }
+  const key = slot.slice(0, equal)
+  const value = unescapeTsv(slot.slice(equal + 1))
+  if (key === 'alias') attrs.alias = value
+  else if (key === 'or') attrs.overrideRange = value
+  return {
+    workspace: false,
+    ...(key === 'rv' ? { resolvedVersion: value } : {}),
+    ...(key === 'sp' ? { specifier: value } : {}),
+  }
+}
+
+function parseLayoutRegion(cursor: LockgraphParseCursor): LayoutHints | undefined {
+  const line = cursor.peek()
+  if (line === undefined || line === '' || !line.startsWith('L ')) return undefined
+  return parseJson(unescapeTsv(cursor.next().slice(2)), 'L layout-hints line') as LayoutHints
+}
+
+function parseFidelityRegion(
+  cursor: LockgraphParseCursor,
+  nodes: ParsedNode[],
+): Map<TarballKey, TarballPayload> {
+  const residuals = new Map<TarballKey, TarballPayload>()
+  const line = cursor.peek()
+  if (line === undefined || !isRegionHeader(line, 'F')) return residuals
+  const count = cursor.expectHeader('F')
+  for (let index = 0; index < count; index++) {
+    const fields = cursor.next().split('\t')
+    const representative = fields[0]
+    if (representative === undefined) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed F row: ${fields.join('\t')}` })
     }
+    const nodeIndex = parseNodeIndex(representative, nodes.length, 'F row representative')
+    const tarballKey = toTarballKey(nodes[nodeIndex]!.inputs)
+    residuals.set(tarballKey, parseSlots(fields.slice(1), tarballKey))
   }
+  return residuals
+}
 
-  // ---- Rebuild the Graph via the Builder -----------------------------------
+function assembleGraph(
+  nodes: ParsedNode[],
+  edges: ParsedEdgeRow[],
+  residuals: Map<TarballKey, TarballPayload>,
+  hints: LayoutHints | undefined,
+  onDiagnostic: ((diagnostic: Diagnostic) => void) | undefined,
+): Graph {
   const builder = newBuilder()
-
-  // For each node, merge its F-residual (artifact metadata) with the N-row part
-  // (integrity, berryChecksumCacheKey, recomposed canonical resolution). The
-  // canonical {type:'tarball'} resolution is recomposed iff the node references a
-  // HOSTED npm row AND the merged residual carries no verbatim `resolution`. Each
-  // F residual is keyed by the COMPUTED TarballKey of a real node (the F row
-  // carries a node INDEX, resolved above), so every residual is consumed here —
-  // there are no orphan F rows to load independently.
-  for (const pn of parsedNodes) {
-    const tarballKey = toTarballKey(pn.inputs)
-    const residual = fResiduals.get(tarballKey)
-    const payload = assemblePayload(residual, pn)
-    if (payload !== undefined) builder.setTarball(pn.inputs, payload)
-  }
-
-  for (const { node } of parsedNodes) builder.addNode(node)
-
-  for (const er of edgeRows) {
-    const srcId = nodeIdByIndex[er.src]
-    const dstId = nodeIdByIndex[er.dst]
-    if (srcId === undefined || dstId === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: edge index out of range (${er.src}→${er.dst})` })
-    }
-    builder.addEdge(srcId, dstId, er.kind, er.attrs)
-  }
-
+  for (const parsed of nodes) attachParsedTarball(builder, parsed, residuals)
+  for (const { node } of nodes) builder.addNode(node)
+  for (const edge of edges) addParsedEdge(builder, edge, nodes)
   if (hints !== undefined) builder.layoutHints(hints)
-
-  // Diagnostics are NOT read — they are re-derived by the seal and adapters.
   const graph = builder.seal()
   if (onDiagnostic !== undefined) {
-    for (const d of graph.diagnostics()) onDiagnostic(d)
+    for (const diagnostic of graph.diagnostics()) onDiagnostic(diagnostic)
   }
   return graph
+}
+
+function attachParsedTarball(
+  builder: ReturnType<typeof newBuilder>,
+  parsed: ParsedNode,
+  residuals: Map<TarballKey, TarballPayload>,
+): void {
+  const payload = assemblePayload(residuals.get(toTarballKey(parsed.inputs)), parsed)
+  if (payload !== undefined) builder.setTarball(parsed.inputs, payload)
+}
+
+function addParsedEdge(
+  builder: ReturnType<typeof newBuilder>,
+  edge: ParsedEdgeRow,
+  nodes: ParsedNode[],
+): void {
+  const src = nodes[edge.src]?.node.id
+  const dst = nodes[edge.dst]?.node.id
+  if (src === undefined || dst === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: edge index out of range (${edge.src}→${edge.dst})` })
+  }
+  builder.addEdge(src, dst, edge.kind, edge.attrs)
 }
 
 // Merge a node's F-residual (artifact metadata, including a verbatim
@@ -1152,53 +1091,69 @@ export function encodeIntegrityColumn(integrity: Integrity | undefined, fragment
   return members.length > 0 ? members.join(';') : NONE
 }
 
+interface DecodedIntegrityState {
+  hashes: Hash[]
+  fragment?: string
+  cacheKey?: string
+}
+
 export function decodeIntegrityColumn(raw: string): { integrity?: Integrity; fragment?: string; cacheKey?: string } {
   if (raw === NONE) return {}
-  const hashes: Hash[] = []
-  let fragment: string | undefined
-  let cacheKey: string | undefined
-  for (const member of raw.split(';')) {
-    const marker = member[0]!
-    let rest = member.slice(1)
-    // berry-zip member may carry the folded checksum-cache-key prefix
-    // `z<cacheKey>/<algo>-<digest>` (ADR-0031). The cacheKey precedes the FIRST
-    // `/`, and neither a cacheKey nor an `<algo>-<digest>` contains a `/`, so
-    // splitting on the first `/` recovers it unambiguously. A bare
-    // `z<algo>-<digest>` (no `/`) leaves cacheKey undefined.
-    if (marker === 'z') {
-      const slash = rest.indexOf('/')
-      if (slash !== -1) {
-        if (cacheKey !== undefined) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: duplicate berry checksum-cache-key in integrity column' })
-        }
-        cacheKey = rest.slice(0, slash)
-        rest = rest.slice(slash + 1)
-      }
-    }
-    const dash = rest.indexOf('-')
-    if (dash === -1) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed integrity member: ${member}` })
-    }
-    const algorithm = rest.slice(0, dash)
-    const digest = rest.slice(dash + 1)
-    if (marker === 'u') {
-      // transport member — restored into the recomposed URL, never the multiset
-      if (fragment !== undefined) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: duplicate u (url-fragment) integrity member' })
-      }
-      if (algorithm !== 'sha1') {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: u (url-fragment) member must be sha1, got '${algorithm}'` })
-      }
-      fragment = digest
-      continue
-    }
-    const origin = MARKER_TO_ORIGIN[marker]
-    if (origin === undefined) {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown integrity origin marker '${marker}'` })
-    }
-    hashes.push({ algorithm, digest, origin })
+  const state: DecodedIntegrityState = { hashes: [] }
+  for (const member of raw.split(';')) decodeIntegrityMember(member, state)
+  return {
+    integrity: state.hashes.length > 0 ? { hashes: state.hashes } : undefined,
+    fragment: state.fragment,
+    cacheKey: state.cacheKey,
   }
-  return { integrity: hashes.length > 0 ? { hashes } : undefined, fragment, cacheKey }
+}
+
+function decodeIntegrityMember(member: string, state: DecodedIntegrityState): void {
+  const marker = member[0]!
+  const rest = decodeBerryCacheKey(marker, member.slice(1), state)
+  const { algorithm, digest } = splitIntegrityMember(member, rest)
+  if (decodeUrlFragment(marker, algorithm, digest, state)) return
+  const origin = MARKER_TO_ORIGIN[marker]
+  if (origin === undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown integrity origin marker '${marker}'` })
+  }
+  state.hashes.push({ algorithm, digest, origin })
+}
+
+function decodeBerryCacheKey(marker: string, rest: string, state: DecodedIntegrityState): string {
+  if (marker !== 'z') return rest
+  const slash = rest.indexOf('/')
+  if (slash === -1) return rest
+  if (state.cacheKey !== undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: duplicate berry checksum-cache-key in integrity column' })
+  }
+  state.cacheKey = rest.slice(0, slash)
+  return rest.slice(slash + 1)
+}
+
+function splitIntegrityMember(member: string, rest: string): { algorithm: string; digest: string } {
+  const dash = rest.indexOf('-')
+  if (dash === -1) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed integrity member: ${member}` })
+  }
+  return { algorithm: rest.slice(0, dash), digest: rest.slice(dash + 1) }
+}
+
+function decodeUrlFragment(
+  marker: string,
+  algorithm: string,
+  digest: string,
+  state: DecodedIntegrityState,
+): boolean {
+  if (marker !== 'u') return false
+  if (state.fragment !== undefined) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: 'lockgraph: duplicate u (url-fragment) integrity member' })
+  }
+  if (algorithm !== 'sha1') {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: u (url-fragment) member must be sha1, got '${algorithm}'` })
+  }
+  state.fragment = digest
+  return true
 }
 
 
@@ -1299,64 +1254,92 @@ function rebuildStringArray(entries: Array<{ index: number; value: string }>, ro
 // off the FIRST sub-segment after `funding`; the same test applies recursively.
 // A bare `funding=<v>` (no sub-segment) is the scalar string form.
 type FundingNode = string | FundingNode[] | { [k: string]: FundingNode }
+interface FundingRoot { container?: FundingNode }
+const FUNDING_INDEX_RE = /^\d+$/
+
 function rebuildFunding(slots: DecodedSlot[], tarballKey: TarballKey): unknown {
   // bare scalar: a single slot whose path is exactly ['funding'].
   if (slots.length === 1 && slots[0]!.path.length === 1) return slots[0]!.value
 
-  const NUMERIC = /^\d+$/
-  // Determine container kind at a given sub-path depth by the segment that
-  // follows. We build by inserting each leaf along its sub-path (after stripping
-  // the `funding` root segment).
-  const root: { container?: FundingNode } = {}
-  const isIndex = (seg: string): boolean => NUMERIC.test(seg)
-
-  const insert = (sub: string[], value: string): void => {
-    if (sub.length === 0) {
-      // a bare funding with extra structure is contradictory; treat as scalar
-      root.container = value
-      return
-    }
-    // ensure root container kind
-    if (root.container === undefined) root.container = isIndex(sub[0]!) ? [] : {}
-    let cur: FundingNode = root.container
-    for (let d = 0; d < sub.length; d++) {
-      const seg = sub[d]!
-      const last = d === sub.length - 1
-      if (Array.isArray(cur)) {
-        const idx = Number(seg)
-        if (!isIndex(seg)) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: funding array/object shape conflict at '${seg}' (${tarballKey})` })
-        }
-        if (last) { cur[idx] = value; return }
-        if (cur[idx] === undefined) cur[idx] = isIndex(sub[d + 1]!) ? [] : {}
-        cur = cur[idx]!
-      } else if (cur !== null && typeof cur === 'object') {
-        const obj = cur as { [k: string]: FundingNode }
-        if (last) { obj[seg] = value; return }
-        if (obj[seg] === undefined) obj[seg] = isIndex(sub[d + 1]!) ? [] : {}
-        cur = obj[seg]!
-      } else {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: funding scalar/container conflict at '${seg}' (${tarballKey})` })
-      }
-    }
-  }
-
-  for (const slot of slots) insert(slot.path.slice(1), slot.value)
-  // A funding ARRAY with gaps would leave holes; reject (parser never hole-fills).
-  const checkContiguous = (node: FundingNode): void => {
-    if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) {
-        if (node[i] === undefined) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: funding array indices must be contiguous from 0 (${tarballKey})` })
-        }
-        checkContiguous(node[i]!)
-      }
-    } else if (node !== null && typeof node === 'object') {
-      for (const v of Object.values(node)) checkContiguous(v)
-    }
-  }
-  if (root.container !== undefined) checkContiguous(root.container)
+  const root: FundingRoot = {}
+  for (const slot of slots) insertFundingSlot(root, slot.path.slice(1), slot.value, tarballKey)
+  if (root.container !== undefined) assertContiguousFundingArrays(root.container, tarballKey)
   return root.container
+}
+
+function insertFundingSlot(root: FundingRoot, path: string[], value: string, tarballKey: TarballKey): void {
+  if (path.length === 0) { root.container = value; return }
+  root.container ??= fundingContainerFor(path[0]!)
+  let current: FundingNode = root.container
+  for (let depth = 0; depth < path.length; depth++) {
+    const next = setFundingChild(current, path, depth, value, tarballKey)
+    if (next === undefined) return
+    current = next
+  }
+}
+
+function setFundingChild(
+  current: FundingNode,
+  path: string[],
+  depth: number,
+  value: string,
+  tarballKey: TarballKey,
+): FundingNode | undefined {
+  const segment = path[depth]!
+  const last = depth === path.length - 1
+  if (Array.isArray(current)) return setFundingArrayChild(current, segment, path[depth + 1], value, last, tarballKey)
+  if (current !== null && typeof current === 'object') {
+    return setFundingObjectChild(current as { [k: string]: FundingNode }, segment, path[depth + 1], value, last)
+  }
+  throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: funding scalar/container conflict at '${segment}' (${tarballKey})` })
+}
+
+function setFundingArrayChild(
+  current: FundingNode[],
+  segment: string,
+  nextSegment: string | undefined,
+  value: string,
+  last: boolean,
+  tarballKey: TarballKey,
+): FundingNode | undefined {
+  if (!FUNDING_INDEX_RE.test(segment)) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: funding array/object shape conflict at '${segment}' (${tarballKey})` })
+  }
+  const index = Number(segment)
+  if (last) { current[index] = value; return undefined }
+  current[index] ??= fundingContainerFor(nextSegment!)
+  return current[index]
+}
+
+function setFundingObjectChild(
+  current: { [k: string]: FundingNode },
+  segment: string,
+  nextSegment: string | undefined,
+  value: string,
+  last: boolean,
+): FundingNode | undefined {
+  if (last) { current[segment] = value; return undefined }
+  current[segment] ??= fundingContainerFor(nextSegment!)
+  return current[segment]
+}
+
+function fundingContainerFor(nextSegment: string): FundingNode[] | { [k: string]: FundingNode } {
+  return FUNDING_INDEX_RE.test(nextSegment) ? [] : {}
+}
+
+function assertContiguousFundingArrays(node: FundingNode, tarballKey: TarballKey): void {
+  if (Array.isArray(node)) {
+    for (let index = 0; index < node.length; index++) {
+      if (node[index] === undefined) {
+        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: funding array indices must be contiguous from 0 (${tarballKey})` })
+      }
+      assertContiguousFundingArrays(node[index]!, tarballKey)
+    }
+    return
+  }
+  if (node !== null && typeof node === 'object') {
+    for (const value of Object.values(node)) assertContiguousFundingArrays(value, tarballKey)
+  }
 }
 
 // Reconstruct the residual TarballPayload from an F row's dot-path slots
@@ -1364,7 +1347,13 @@ function rebuildFunding(slots: DecodedSlot[], tarballKey: TarballKey): unknown {
 // by its MODEL TYPE (graph.ts:50-80). An unknown slot root, an array-index gap,
 // or both bin forms present are all PARSE_FAILED.
 export function parseSlots(fields: string[], tarballKey: TarballKey): TarballPayload {
-  // group decoded slots by root segment (= field name)
+  const groups = groupDecodedSlots(fields, tarballKey)
+  const out: Record<string, unknown> = {}
+  for (const [root, slots] of groups) applyDecodedSlotGroup(out, root, slots, tarballKey)
+  return out as TarballPayload
+}
+
+function groupDecodedSlots(fields: string[], tarballKey: TarballKey): Map<string, DecodedSlot[]> {
   const groups = new Map<string, DecodedSlot[]>()
   for (const field of fields) {
     const slot = decodeSlot(field, tarballKey)
@@ -1376,113 +1365,112 @@ export function parseSlots(fields: string[], tarballKey: TarballKey): TarballPay
     if (g === undefined) groups.set(root, [slot])
     else g.push(slot)
   }
+  return groups
+}
 
-  const out: Record<string, unknown> = {}
-  const NUMERIC = /^\d+$/
+const ARRAY_SLOT_ROOTS: Record<string, keyof TarballPayload> = {
+  cpu: 'cpu', os: 'os', libc: 'libc', bundled: 'bundledDependencies',
+}
 
-  // string[] roots (the `bundled` token maps back to `bundledDependencies`).
-  const arrayRoots: Record<string, keyof TarballPayload> = {
-    cpu: 'cpu', os: 'os', libc: 'libc', bundled: 'bundledDependencies',
+function applyDecodedSlotGroup(
+  out: Record<string, unknown>,
+  root: string,
+  slots: DecodedSlot[],
+  tarballKey: TarballKey,
+): void {
+  const arrayField = ARRAY_SLOT_ROOTS[root]
+  if (arrayField !== undefined) {
+    out[arrayField] = parseStringArraySlots(root, slots, tarballKey)
+    return
   }
+  switch (root) {
+    case 'license':
+    case 'deprecated': out[root] = parseScalarSlot(root, slots, tarballKey); return
+    case 'engines': out.engines = parseStringRecordSlots('engines', slots, tarballKey); return
+    case 'bin': out.bin = parseBinSlots(slots, tarballKey); return
+    case 'hasInstallScript': out.hasInstallScript = parseBooleanSlot(root, slots, tarballKey); return
+    case 'peerDependencies': out.peerDependencies = parseStringRecordSlots(root, slots, tarballKey); return
+    case 'peerDependenciesMeta': out.peerDependenciesMeta = parsePeerDependencyMetaSlots(slots, tarballKey); return
+    case 'funding': out.funding = rebuildFunding(slots, tarballKey); return
+    case 'resolution': out.resolution = rebuildResolution(slots, tarballKey); return
+    case 'nativeResolution': out.nativeResolution = parseNativeResolutionSlot(slots, tarballKey); return
+    default: throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown F slot root '${root}' (${tarballKey})` })
+  }
+}
 
-  for (const [root, slots] of groups) {
-    if (root === 'license' || root === 'deprecated') {
-      // scalar — exactly one slot, path = [root]
-      const s = slots[0]!
-      if (slots.length !== 1 || s.path.length !== 1) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed scalar '${root}' slot(s) (${tarballKey})` })
-      }
-      out[root] = s.value
-    } else if (root in arrayRoots) {
-      const entries = slots.map(s => {
-        if (s.path.length !== 2 || !NUMERIC.test(s.path[1]!)) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed array '${root}' slot (${tarballKey})` })
-        }
-        return { index: Number(s.path[1]), value: s.value }
-      })
-      out[arrayRoots[root]!] = rebuildStringArray(entries, root, tarballKey)
-    } else if (root === 'engines') {
-      const rec: Record<string, string> = {}
-      for (const s of slots) {
-        if (s.path.length !== 2) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed engines slot (${tarballKey})` })
-        }
-        rec[s.path[1]!] = s.value
-      }
-      out.engines = rec
-    } else if (root === 'bin') {
-      // string form: a single bare `bin` slot (path = ['bin']). map form: one
-      // slot per entry (path = ['bin', <key>]). Both present → PARSE_FAILED.
-      const bareForm = slots.some(s => s.path.length === 1)
-      const mapForm = slots.some(s => s.path.length > 1)
-      if (bareForm && mapForm) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: bin carries both string and map forms (${tarballKey})` })
-      }
-      if (bareForm) {
-        if (slots.length !== 1) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: duplicate bare bin slot (${tarballKey})` })
-        }
-        out.bin = slots[0]!.value
-      } else {
-        const rec: Record<string, string> = {}
-        for (const s of slots) {
-          if (s.path.length !== 2) {
-            throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed bin map slot (${tarballKey})` })
-          }
-          rec[s.path[1]!] = s.value
-        }
-        out.bin = rec
-      }
-    } else if (root === 'hasInstallScript') {
-      const s = slots[0]!
-      if (slots.length !== 1 || s.path.length !== 1) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed hasInstallScript slot (${tarballKey})` })
-      }
-      out.hasInstallScript = s.value === 'true'
-    } else if (root === 'peerDependencies') {
-      const rec: Record<string, string> = {}
-      for (const s of slots) {
-        if (s.path.length !== 2) {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed peerDependencies slot (${tarballKey})` })
-        }
-        rec[s.path[1]!] = s.value
-      }
-      out.peerDependencies = rec
-    } else if (root === 'peerDependenciesMeta') {
-      const rec: Record<string, { optional?: boolean }> = {}
-      for (const s of slots) {
-        if (s.path.length !== 3 || s.path[2] !== 'optional') {
-          throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed peerDependenciesMeta slot (${tarballKey})` })
-        }
-        ;(rec[s.path[1]!] ??= {}).optional = s.value === 'true'
-      }
-      out.peerDependenciesMeta = rec
-    } else if (root === 'funding') {
-      out.funding = rebuildFunding(slots, tarballKey)
-    } else if (root === 'resolution') {
-      out.resolution = rebuildResolution(slots, tarballKey)
-    } else if (root === 'nativeResolution') {
-      // EXACT-MATCH-OR-VERBATIM, mirror of flattenToSlots:
-      //   `nativeResolution=<v>` → verbatim string, stored as-is.
-      // (The canonical-URL + `#<sha1>` shape has NO F slot — the fragment rides
-      // the N-row integrity u-member, recomposed at reattach. The canonical berry
-      // npm locator `<name>@npm:<version>` is NOT stored at all — the berry
-      // adapter recomposes it at emit.)
-      if (slots.length !== 1) {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: duplicate nativeResolution slot(s) (${tarballKey})` })
-      }
-      const s = slots[0]!
-      if (s.path.length === 1) {
-        out.nativeResolution = s.value
-      } else {
-        throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed nativeResolution slot (${tarballKey})` })
-      }
-    } else {
-      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: unknown F slot root '${root}' (${tarballKey})` })
+function parseScalarSlot(root: string, slots: DecodedSlot[], tarballKey: TarballKey): string {
+  const slot = slots[0]!
+  if (slots.length !== 1 || slot.path.length !== 1) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed scalar '${root}' slot(s) (${tarballKey})` })
+  }
+  return slot.value
+}
+
+function parseStringArraySlots(root: string, slots: DecodedSlot[], tarballKey: TarballKey): string[] {
+  const entries = slots.map(slot => {
+    if (slot.path.length !== 2 || !FUNDING_INDEX_RE.test(slot.path[1]!)) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed array '${root}' slot (${tarballKey})` })
     }
-  }
+    return { index: Number(slot.path[1]), value: slot.value }
+  })
+  return rebuildStringArray(entries, root, tarballKey)
+}
 
-  return out as TarballPayload
+function parseStringRecordSlots(root: string, slots: DecodedSlot[], tarballKey: TarballKey): Record<string, string> {
+  const record: Record<string, string> = {}
+  for (const slot of slots) {
+    if (slot.path.length !== 2) {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed ${root} slot (${tarballKey})` })
+    }
+    record[slot.path[1]!] = slot.value
+  }
+  return record
+}
+
+function parseBinSlots(slots: DecodedSlot[], tarballKey: TarballKey): string | Record<string, string> {
+  const bareForm = slots.some(slot => slot.path.length === 1)
+  const mapForm = slots.some(slot => slot.path.length > 1)
+  if (bareForm && mapForm) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: bin carries both string and map forms (${tarballKey})` })
+  }
+  if (!bareForm) return parseStringRecordSlots('bin map', slots, tarballKey)
+  if (slots.length !== 1) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: duplicate bare bin slot (${tarballKey})` })
+  }
+  return slots[0]!.value
+}
+
+function parseBooleanSlot(root: string, slots: DecodedSlot[], tarballKey: TarballKey): boolean {
+  const slot = slots[0]!
+  if (slots.length !== 1 || slot.path.length !== 1) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed ${root} slot (${tarballKey})` })
+  }
+  return slot.value === 'true'
+}
+
+function parsePeerDependencyMetaSlots(
+  slots: DecodedSlot[],
+  tarballKey: TarballKey,
+): Record<string, { optional?: boolean }> {
+  const record: Record<string, { optional?: boolean }> = {}
+  for (const slot of slots) {
+    if (slot.path.length !== 3 || slot.path[2] !== 'optional') {
+      throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed peerDependenciesMeta slot (${tarballKey})` })
+    }
+    ;(record[slot.path[1]!] ??= {}).optional = slot.value === 'true'
+  }
+  return record
+}
+
+function parseNativeResolutionSlot(slots: DecodedSlot[], tarballKey: TarballKey): string {
+  if (slots.length !== 1) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: duplicate nativeResolution slot(s) (${tarballKey})` })
+  }
+  const slot = slots[0]!
+  if (slot.path.length !== 1) {
+    throw new LockfileError({ code: 'PARSE_FAILED', message: `lockgraph: malformed nativeResolution slot (${tarballKey})` })
+  }
+  return slot.value
 }
 
 // Reconstruct the canonical resolution union (4-case) from its `resolution.*`
@@ -1572,104 +1560,86 @@ function flattenFunding(value: unknown, path: string[], out: string[]): void {
 // engines, bin, funding, resolution. An empty container ([] / {}) emits no slot.
 export function flattenToSlots(payload: TarballPayload, name: string, version: string): string[] {
   const out: string[] = []
+  appendScalarSlots(payload, out)
+  appendStringArraySlots(payload, out)
+  appendStringRecordSlots('engines', payload.engines, out)
+  appendInstallScriptSlot(payload.hasInstallScript, out)
+  appendStringRecordSlots('peerDependencies', payload.peerDependencies, out)
+  appendPeerDependencyMetaSlots(payload.peerDependenciesMeta, out)
+  appendBinSlots(payload.bin, out)
+  if (payload.funding !== undefined) flattenFunding(payload.funding, ['funding'], out)
+  appendResolutionSlots(payload.resolution, name, version, out)
+  appendNativeResolutionSlot(payload.nativeResolution, payload.resolution, name, version, out)
+  return out
+}
 
+function appendScalarSlots(payload: TarballPayload, out: string[]): void {
   if (payload.license !== undefined) out.push(emitSlot(['license'], payload.license))
   if (payload.deprecated !== undefined) out.push(emitSlot(['deprecated'], payload.deprecated))
+}
 
-  // string[] fields → `<root>.<i>=` contiguous ascending. `bundledDependencies`
-  // uses the SHORT root token `bundled`.
-  const stringArrayFields: Array<[keyof TarballPayload, string]> = [
-    ['cpu', 'cpu'],
-    ['os', 'os'],
-    ['libc', 'libc'],
-    ['bundledDependencies', 'bundled'],
-  ]
-  for (const [field, root] of stringArrayFields) {
-    const arr = payload[field] as string[] | undefined
-    if (arr !== undefined) {
-      for (let i = 0; i < arr.length; i++) out.push(emitSlot([root, String(i)], arr[i]!))
-    }
+const STRING_ARRAY_SLOT_FIELDS: Array<[keyof TarballPayload, string]> = [
+  ['cpu', 'cpu'],
+  ['os', 'os'],
+  ['libc', 'libc'],
+  ['bundledDependencies', 'bundled'],
+]
+
+function appendStringArraySlots(payload: TarballPayload, out: string[]): void {
+  for (const [field, root] of STRING_ARRAY_SLOT_FIELDS) {
+    const values = payload[field] as string[] | undefined
+    if (values === undefined) continue
+    for (let index = 0; index < values.length; index++) out.push(emitSlot([root, String(index)], values[index]!))
   }
+}
 
-  // engines: Record<string,string> → `engines.<key>=`, keys cmpStr.
-  if (payload.engines !== undefined) {
-    for (const k of Object.keys(payload.engines).sort(cmpStr)) {
-      out.push(emitSlot(['engines', k], payload.engines[k]!))
-    }
+function appendStringRecordSlots(root: string, record: Record<string, string> | undefined, out: string[]): void {
+  if (record === undefined) return
+  for (const key of Object.keys(record).sort(cmpStr)) out.push(emitSlot([root, key], record[key]!))
+}
+
+function appendInstallScriptSlot(value: boolean | undefined, out: string[]): void {
+  if (value !== undefined) out.push(emitSlot(['hasInstallScript'], String(value)))
+}
+
+function appendPeerDependencyMetaSlots(
+  metadata: Record<string, { optional?: boolean }> | undefined,
+  out: string[],
+): void {
+  if (metadata === undefined) return
+  for (const peer of Object.keys(metadata).sort(cmpStr)) {
+    const optional = metadata[peer]!.optional
+    if (optional !== undefined) out.push(emitSlot(['peerDependenciesMeta', peer, 'optional'], String(optional)))
   }
+}
 
-  // hasInstallScript: boolean → bare `hasInstallScript=<bool>` (npm only ever
-  // emits `true`, but the round-trip is value-faithful either way).
-  if (payload.hasInstallScript !== undefined) {
-    out.push(emitSlot(['hasInstallScript'], String(payload.hasInstallScript)))
+function appendBinSlots(bin: TarballPayload['bin'], out: string[]): void {
+  if (bin === undefined) return
+  if (typeof bin === 'string') { out.push(emitSlot(['bin'], bin)); return }
+  for (const key of Object.keys(bin).sort(cmpStr)) out.push(emitSlot(['bin', key], bin[key]!))
+}
+
+function appendResolutionSlots(
+  resolution: ResolutionCanonical | undefined,
+  name: string,
+  version: string,
+  out: string[],
+): void {
+  if (resolution === undefined || isRecomposableTarballResolution(resolution, name, version)) return
+  for (const key of Object.keys(resolution).sort(cmpStr)) {
+    out.push(emitSlot(['resolution', key], String((resolution as Record<string, unknown>)[key])))
   }
+}
 
-  if (payload.peerDependencies !== undefined) {
-    for (const peer of Object.keys(payload.peerDependencies).sort(cmpStr)) {
-      out.push(emitSlot(['peerDependencies', peer], payload.peerDependencies[peer]!))
-    }
-  }
-
-  // peerDependenciesMeta: Record<peer, {optional?}> → `peerDependenciesMeta.<peer>.optional=<bool>`,
-  // peers cmpStr-sorted. npm's only sub-key is `optional`; a peer without it emits nothing.
-  if (payload.peerDependenciesMeta !== undefined) {
-    for (const peer of Object.keys(payload.peerDependenciesMeta).sort(cmpStr)) {
-      const optional = payload.peerDependenciesMeta[peer]!.optional
-      if (optional !== undefined) {
-        out.push(emitSlot(['peerDependenciesMeta', peer, 'optional'], String(optional)))
-      }
-    }
-  }
-
-  // bin: string → `bin=<v>`; Record → `bin.<key>=<v>` per entry, keys cmpStr.
-  // NEVER normalize a 1-entry map to the string form (the emitter keys on
-  // `typeof bin === 'string'`).
-  if (payload.bin !== undefined) {
-    if (typeof payload.bin === 'string') {
-      out.push(emitSlot(['bin'], payload.bin))
-    } else {
-      for (const k of Object.keys(payload.bin).sort(cmpStr)) {
-        out.push(emitSlot(['bin', k], payload.bin[k]!))
-      }
-    }
-  }
-
-  // funding: unknown → recurse (object/array/scalar), every leaf a string.
-  if (payload.funding !== undefined) flattenFunding(payload.funding, ['funding'], out)
-
-  // resolution: omitted iff the bare recomposable 2-key tarball; else the WHOLE
-  // union flattens under `resolution.*` (one slot per union field, all leaves
-  // string). The TarballKey's name@version drive the recomposable check.
-  const res = payload.resolution
-  if (res !== undefined && !isRecomposableTarballResolution(res, name, version)) {
-    for (const k of Object.keys(res).sort(cmpStr)) {
-      out.push(emitSlot(['resolution', k], String((res as Record<string, unknown>)[k])))
-    }
-  }
-
-  // nativeResolution: the PM-native verbatim resolution sidecar (ADR-0013),
-  // EXACT-MATCH-OR-VERBATIM, exactly as the N row used to encode it:
-  //   - the canonical-URL + `#<sha1hex>` shape → OMITTED here, the `#<sha1>`
-  //     fragment rides the N-row integrity column's `u`-member and the URL
-  //     recomposes from R (same EXACT-MATCH the N row decided);
-  //   - anything else → `nativeResolution=<verbatim>`.
-  // The canonical berry npm locator `<name>@npm:<version>` is NEVER stored here:
-  // the berry ADAPTER omits it at parse (it is fully derivable from the node's
-  // (name, version) at emit), so the lockgraph layer stores `nativeResolution`
-  // verbatim when present and nothing when absent.
-  if (payload.nativeResolution !== undefined) {
-    const native = payload.nativeResolution
-    if (!nativeRidesIntegrityUMember(native, res, name, version)) {
-      out.push(emitSlot(['nativeResolution'], native))
-    }
-    // else: the `#<sha1>` fragment is on the N row's integrity u-member; omit.
-  }
-
-  // berryChecksumCacheKey (ADR-0031): NOT a separate F slot — it is folded into
-  // the N-row integrity column's `berry-zip` z-member (`z<cacheKey>/<algo>-<digest>`),
-  // since the cacheKey is literally that checksum's prefix.
-
-  return out
+function appendNativeResolutionSlot(
+  native: string | undefined,
+  resolution: ResolutionCanonical | undefined,
+  name: string,
+  version: string,
+  out: string[],
+): void {
+  if (native === undefined || nativeRidesIntegrityUMember(native, resolution, name, version)) return
+  out.push(emitSlot(['nativeResolution'], native))
 }
 
 // Decide whether a PM-native resolution string is the canonical-URL + `#<sha1>`
