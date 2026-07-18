@@ -793,6 +793,156 @@ function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | u
 // the `parse → stringify → parse` invariant for fixture inputs). Mutator-
 // added nodes have no install path; they get hoisted to the root level
 // unless that introduces a conflict.
+type PlacementQueueItem = { id: string; parentPath: string }
+
+function replayNpm1InstallPaths(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  emittableIds: ReadonlySet<string>,
+  placements: Map<string, Set<string>>,
+  hoistedByName: Map<string, string>,
+): void {
+  if (sidecar === undefined) return
+  for (const [nodeId, sc] of sidecar.nodes) {
+    if (!emittableIds.has(nodeId)) continue
+    for (const installPath of sc.installPaths) {
+      const parentPath = parentPathFromInstall(installPath)
+      if (parentPath === undefined) continue
+      ensureSet(placements, nodeId).add(parentPath)
+      if (parentPath === '') {
+        const node = graph.getNode(nodeId)
+        if (node !== undefined) hoistedByName.set(node.name, nodeId)
+      }
+    }
+  }
+}
+
+function seedNpm1PlacementQueue(
+  graph: Graph,
+  rootId: string,
+  emittableIds: ReadonlySet<string>,
+): PlacementQueueItem[] {
+  const queue: PlacementQueueItem[] = []
+  const seenRoot = new Set<string>()
+  for (const edge of graph.out(rootId)) {
+    if (edge.kind === 'peer') continue
+    const dst = graph.getNode(edge.dst)
+    if (dst === undefined) continue
+    if (!emittableIds.has(edge.dst)) continue
+    if (seenRoot.has(edge.dst)) continue
+    seenRoot.add(edge.dst)
+    queue.push({ id: edge.dst, parentPath: '' })
+  }
+  return queue
+}
+
+function chooseNpm1Placement(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  emittableIds: ReadonlySet<string>,
+  placements: Map<string, Set<string>>,
+  hoistedByName: Map<string, string>,
+  node: Node,
+  parentPath: string,
+): string {
+  let chosen = parentPath
+  const existingAt = hoistedAtPath(hoistedByName, placements, graph, chosen, node.name)
+  if (existingAt !== undefined && existingAt !== node.id) {
+    // Conflict at chosen level; place during parent (de-hoist).
+    chosen = parentPath
+    if (chosen === '') {
+      // Root-level conflict: must de-hoist to consumer install path.
+      // We approximate by placing under the first incoming edge's
+      // install path.
+      const consumerPath = firstConsumerInstallPath(graph, sidecar, node.id, emittableIds)
+      if (consumerPath !== undefined) chosen = consumerPath
+    }
+  } else if (chosen === '') {
+    hoistedByName.set(node.name, node.id)
+  }
+  return chosen
+}
+
+function placeNpm1Node(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  emittableIds: ReadonlySet<string>,
+  placements: Map<string, Set<string>>,
+  hoistedByName: Map<string, string>,
+  node: Node,
+  parentPath: string,
+): void {
+  if (placements.has(node.id) && placements.get(node.id)!.size > 0) return
+  const chosen = chooseNpm1Placement(
+    graph, sidecar, emittableIds, placements, hoistedByName, node, parentPath,
+  )
+  ensureSet(placements, node.id).add(chosen)
+}
+
+function enqueueNpm1Children(
+  graph: Graph,
+  emittableIds: ReadonlySet<string>,
+  placements: Map<string, Set<string>>,
+  rootId: string,
+  node: Node,
+  queue: PlacementQueueItem[],
+): void {
+  const chosenSet = placements.get(node.id)!
+  const childParent = chooseDeepest(chosenSet)
+  const childInstallPath = childParent === ''
+    ? `node_modules/${node.name}`
+    : `${childParent}/node_modules/${node.name}`
+  for (const edge of graph.out(node.id)) {
+    if (edge.kind === 'peer') continue
+    const dst = graph.getNode(edge.dst)
+    if (dst === undefined) continue
+    if (!emittableIds.has(edge.dst)) continue
+    if (edge.dst === rootId) continue
+    queue.push({ id: edge.dst, parentPath: childInstallPath })
+  }
+}
+
+function placeReachableNpm1Nodes(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  rootId: string,
+  emittableIds: ReadonlySet<string>,
+  placements: Map<string, Set<string>>,
+  hoistedByName: Map<string, string>,
+): void {
+  const queue = seedNpm1PlacementQueue(graph, rootId, emittableIds)
+  const visited = new Set<string>()
+  while (queue.length > 0) {
+    const { id, parentPath } = queue.shift()!
+    if (visited.has(`${id}|${parentPath}`)) continue
+    visited.add(`${id}|${parentPath}`)
+    const node = graph.getNode(id)
+    if (node === undefined) continue
+    placeNpm1Node(graph, sidecar, emittableIds, placements, hoistedByName, node, parentPath)
+    enqueueNpm1Children(graph, emittableIds, placements, rootId, node, queue)
+  }
+}
+
+function placeOrphanNpm1Nodes(emittableIds: ReadonlySet<string>, placements: Map<string, Set<string>>): void {
+  for (const id of emittableIds) {
+    if (placements.has(id) && placements.get(id)!.size > 0) continue
+    ensureSet(placements, id).add('')
+  }
+}
+
+function npm1TreeByParent(graph: Graph, placements: Map<string, Set<string>>): Map<string, Map<string, string>> {
+  const treeByParent = new Map<string, Map<string, string>>()
+  for (const [id, parentSet] of placements) {
+    for (const parentPath of parentSet) {
+      const layer = ensureMap(treeByParent, parentPath)
+      const node = graph.getNode(id)
+      if (node === undefined) continue
+      layer.set(node.name, id)
+    }
+  }
+  return treeByParent
+}
+
 export function buildDependenciesTree(
   graph: Graph,
   sidecar: NpmSidecar | undefined,
@@ -806,102 +956,10 @@ export function buildDependenciesTree(
   const placements = new Map<string, Set<string>>()
   const hoistedByName = new Map<string, string>() // top-level name -> NodeId
 
-  // Pass 1: replay sidecar install paths verbatim. The sidecar stores
-  // `node_modules/<name>` or `<parent_path>/node_modules/<name>` strings.
-  if (sidecar !== undefined) {
-    for (const [nodeId, sc] of sidecar.nodes) {
-      if (!emittableIds.has(nodeId)) continue
-      for (const installPath of sc.installPaths) {
-        const parentPath = parentPathFromInstall(installPath)
-        if (parentPath === undefined) continue
-        ensureSet(placements, nodeId).add(parentPath)
-        if (parentPath === '') {
-          const node = graph.getNode(nodeId)
-          if (node !== undefined) hoistedByName.set(node.name, nodeId)
-        }
-      }
-    }
-  }
-
-  // Pass 2: any emittable node without a sidecar placement hoists to the
-  // shallowest non-conflicting level. Walking BFS keeps the placement order
-  // deterministic; conflicting nodes fall to the parent's nested deps.
-  const queue: Array<{ id: string; parentPath: string }> = []
-  const visited = new Set<string>()
-  const seenRoot = new Set<string>()
-  for (const edge of graph.out(rootId)) {
-    if (edge.kind === 'peer') continue
-    const dst = graph.getNode(edge.dst)
-    if (dst === undefined) continue
-    if (!emittableIds.has(edge.dst)) continue
-    if (seenRoot.has(edge.dst)) continue
-    seenRoot.add(edge.dst)
-    queue.push({ id: edge.dst, parentPath: '' })
-  }
-
-  while (queue.length > 0) {
-    const { id, parentPath } = queue.shift()!
-    if (visited.has(`${id}|${parentPath}`)) continue
-    visited.add(`${id}|${parentPath}`)
-    const node = graph.getNode(id)
-    if (node === undefined) continue
-
-    if (!placements.has(id) || placements.get(id)!.size === 0) {
-      // Need to choose a placement. Try parentPath; if its containing
-      // `node_modules` already holds a different version of `node.name`,
-      // fall to a deeper level.
-      let chosen = parentPath
-      const existingAt = hoistedAtPath(hoistedByName, placements, graph, chosen, node.name)
-      if (existingAt !== undefined && existingAt !== id) {
-        // Conflict at chosen level; place during parent (de-hoist).
-        chosen = parentPath
-        if (chosen === '') {
-          // Root-level conflict: must de-hoist to consumer install path.
-          // We approximate by placing under the first incoming edge's
-          // install path.
-          const consumerPath = firstConsumerInstallPath(graph, sidecar, id, emittableIds)
-          if (consumerPath !== undefined) chosen = consumerPath
-        }
-      } else if (chosen === '') {
-        hoistedByName.set(node.name, id)
-      }
-      ensureSet(placements, id).add(chosen)
-    }
-
-    // Enqueue children. Each child inherits its parent's deepest placement
-    // for transitive walks.
-    const chosenSet = placements.get(id)!
-    const childParent = chooseDeepest(chosenSet)
-    const childInstallPath = childParent === '' ? `node_modules/${node.name}` : `${childParent}/node_modules/${node.name}`
-    for (const edge of graph.out(id)) {
-      if (edge.kind === 'peer') continue
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      if (!emittableIds.has(edge.dst)) continue
-      if (edge.dst === rootId) continue
-      queue.push({ id: edge.dst, parentPath: childInstallPath })
-    }
-  }
-
-  // Any nodes still unplaced (orphans not reachable from root but in
-  // emittableIds, e.g. mutator stash) — hoist to root.
-  for (const id of emittableIds) {
-    if (placements.has(id) && placements.get(id)!.size > 0) continue
-    ensureSet(placements, id).add('')
-  }
-
-  // Build the nested-tree from placements. We materialise a tree shape
-  // keyed by parent install path. Each parentPath ∈ { '' } ∪ { node_modules/X,
-  // X/node_modules/Y, ... } stores its direct children name → NodeId.
-  const treeByParent = new Map<string, Map<string, string>>()
-  for (const [id, parentSet] of placements) {
-    for (const parentPath of parentSet) {
-      const layer = ensureMap(treeByParent, parentPath)
-      const node = graph.getNode(id)
-      if (node === undefined) continue
-      layer.set(node.name, id)
-    }
-  }
+  replayNpm1InstallPaths(graph, sidecar, emittableIds, placements, hoistedByName)
+  placeReachableNpm1Nodes(graph, sidecar, rootId, emittableIds, placements, hoistedByName)
+  placeOrphanNpm1Nodes(emittableIds, placements)
+  const treeByParent = npm1TreeByParent(graph, placements)
 
   const top = treeByParent.get('')
   if (top === undefined || top.size === 0) {
@@ -1130,6 +1188,155 @@ interface EnrichPlan {
   markWorkspaceEdges: Edge[]
 }
 
+type Npm1MemberManifest = { path: string; manifest: Npm1Manifest }
+
+function emptyNpm1EnrichPlan(): EnrichPlan {
+  return {
+    rootNodeReplacement: undefined,
+    addMemberNodes: [],
+    memberNodeReplacements: [],
+    addRootEdges: [],
+    removeRootEdges: [],
+    markWorkspaceEdges: [],
+  }
+}
+
+function npm1MemberManifests(manifests: Record<string, Npm1Manifest>): Map<string, Npm1MemberManifest> {
+  const memberByName = new Map<string, Npm1MemberManifest>()
+  for (const [path, manifest] of Object.entries(manifests)) {
+    if (path === '' || manifest.name === undefined) continue
+    memberByName.set(manifest.name, { path, manifest })
+  }
+  return memberByName
+}
+
+function planExistingNpm1Members(
+  graph: Graph,
+  memberByName: ReadonlyMap<string, Npm1MemberManifest>,
+  plan: EnrichPlan,
+): void {
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined) continue
+    const member = memberByName.get(node.name)
+    if (member === undefined) continue
+    if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
+    if (graph.tarballOf(node.id) !== undefined) continue
+    plan.memberNodeReplacements.push({ ...node, workspacePath: member.path })
+  }
+}
+
+function planMissingNpm1Members(
+  graph: Graph,
+  memberByName: ReadonlyMap<string, Npm1MemberManifest>,
+  plan: EnrichPlan,
+): void {
+  for (const [name, { path, manifest }] of memberByName) {
+    const memberVersion = manifest.version ?? '0.0.0'
+    const memberId = `${name}@${memberVersion}`
+    const existing = graph.getNode(memberId)
+    if (existing !== undefined) {
+      if (existing.workspacePath === path) continue
+      plan.memberNodeReplacements.push({ ...existing, workspacePath: path })
+      continue
+    }
+    if (plan.memberNodeReplacements.some(n => n.id === memberId)) continue
+    plan.addMemberNodes.push({
+      id: memberId,
+      name,
+      version: memberVersion,
+      peerContext: [],
+      workspacePath: path,
+    })
+  }
+}
+
+function prospectiveNpm1MemberIds(plan: EnrichPlan): Set<string> {
+  const prospectiveIds = new Set<string>()
+  for (const node of plan.addMemberNodes) prospectiveIds.add(node.id)
+  for (const node of plan.memberNodeReplacements) prospectiveIds.add(node.id)
+  return prospectiveIds
+}
+
+function desiredNpm1RootEdges(
+  graph: Graph,
+  rootNodeId: string,
+  rootManifest: Npm1Manifest,
+  memberByName: Map<string, Npm1MemberManifest>,
+  prospectiveIds: ReadonlySet<string>,
+): Edge[] {
+  const desired: Edge[] = []
+  for (const [kind, deps] of [
+    ['dep', rootManifest.dependencies],
+    ['dev', rootManifest.devDependencies],
+    ['optional', rootManifest.optionalDependencies],
+    ['peer', rootManifest.peerDependencies],
+  ] as const) {
+    if (deps === undefined) continue
+    for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
+      const dstId = resolveManifestTarget(graph, name, range, memberByName, prospectiveIds)
+      if (dstId === undefined) continue
+      const attrs: { range: string; workspace?: boolean } = { range }
+      if (isWorkspaceProtocolRange(range) || memberByName.has(name)) attrs.workspace = true
+      desired.push({ src: rootNodeId, dst: dstId, kind, attrs })
+    }
+  }
+  return desired
+}
+
+function planNpm1RootEdges(
+  graph: Graph,
+  rootNodeId: string | undefined,
+  rootManifest: Npm1Manifest | undefined,
+  memberByName: Map<string, Npm1MemberManifest>,
+  prospectiveIds: ReadonlySet<string>,
+  plan: EnrichPlan,
+): void {
+  if (rootNodeId === undefined || rootManifest === undefined) return
+  const desired = desiredNpm1RootEdges(graph, rootNodeId, rootManifest, memberByName, prospectiveIds)
+  const existingByDst = new Map<string, Edge[]>()
+  for (const edge of graph.out(rootNodeId)) {
+    const arr = existingByDst.get(edge.dst) ?? []
+    arr.push(edge)
+    existingByDst.set(edge.dst, arr)
+  }
+  for (const edge of desired) {
+    const list = existingByDst.get(edge.dst) ?? []
+    const match = list.some(c =>
+      c.kind === edge.kind
+      && c.dst === edge.dst
+      && (c.attrs?.range ?? undefined) === edge.attrs?.range
+      && (c.attrs?.workspace ?? undefined) === edge.attrs?.workspace,
+    )
+    if (!match) plan.addRootEdges.push(edge)
+  }
+}
+
+function planNpm1WorkspaceEdges(
+  graph: Graph,
+  memberByName: ReadonlyMap<string, Npm1MemberManifest>,
+  plan: EnrichPlan,
+): void {
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (edge.kind === 'peer') continue
+      if (edge.attrs?.workspace === true) continue
+      const dst = graph.getNode(edge.dst)
+      if (dst === undefined) continue
+      if (!memberByName.has(dst.name)) continue
+      const willBeMember = plan.memberNodeReplacements.some(n => n.id === edge.dst)
+        || plan.addMemberNodes.some(n => n.id === edge.dst)
+        || dst.workspacePath !== undefined
+      if (!willBeMember) continue
+      plan.markWorkspaceEdges.push({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        attrs: { ...edge.attrs, workspace: true },
+      })
+    }
+  }
+}
+
 function planManifestEnrich(
   graph: Graph,
   sidecar: NpmSidecar | undefined,
@@ -1138,141 +1345,22 @@ function planManifestEnrich(
   const rootManifest = manifests['']
   const rootNodeId = sidecar?.rootId
   const existingRoot = rootNodeId !== undefined ? graph.getNode(rootNodeId) : undefined
-
-  const addMemberNodes: Node[] = []
-  const memberNodeReplacements: Node[] = []
-  const addRootEdges: Edge[] = []
-  const removeRootEdges: Edge[] = []
-  const markWorkspaceEdges: Edge[] = []
-
-  const memberByName = new Map<string, { path: string; manifest: Npm1Manifest }>()
-  for (const [path, manifest] of Object.entries(manifests)) {
-    if (path === '' || manifest.name === undefined) continue
-    memberByName.set(manifest.name, { path, manifest })
-  }
-
-  // (a) Tag existing nodes that match manifest member name+version (or
-  // a workspace-protocol sentinel) with workspacePath. None likely on npm-1
-  // (workspace members rarely appear in the on-disk dep tree), but
-  // bookkeeping is cheap.
-  for (const node of graph.nodes()) {
-    if (node.workspacePath !== undefined) continue
-    const member = memberByName.get(node.name)
-    if (member === undefined) continue
-    if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
-    if (graph.tarballOf(node.id) !== undefined) continue
-    memberNodeReplacements.push({ ...node, workspacePath: member.path })
-  }
-
-  // (b) Synthesise workspace member nodes from manifests if they're not
-  // already in the graph. NodeId = `<name>@<manifest.version ?? '0.0.0'>`.
-  for (const [name, { path, manifest }] of memberByName) {
-    const memberVersion = manifest.version ?? '0.0.0'
-    const memberId = `${name}@${memberVersion}`
-    const existing = graph.getNode(memberId)
-    if (existing !== undefined) {
-      if (existing.workspacePath === path) continue
-      memberNodeReplacements.push({ ...existing, workspacePath: path })
-      continue
-    }
-    if (memberNodeReplacements.some(n => n.id === memberId)) continue
-    addMemberNodes.push({
-      id: memberId,
-      name,
-      version: memberVersion,
-      peerContext: [],
-      workspacePath: path,
-    })
-  }
-
-  // Prospective NodeIds: workspace members we plan to synthesise. The edge
-  // resolver consults this so the desired-root-edge pass binds to them even
-  // before the mutator runs.
-  const prospectiveIds = new Set<string>()
-  for (const node of addMemberNodes) prospectiveIds.add(node.id)
-  for (const node of memberNodeReplacements) prospectiveIds.add(node.id)
-
-  // (c) Root edges per the root manifest. Mirrors yarn-classic precedent.
+  const plan = emptyNpm1EnrichPlan()
+  const memberByName = npm1MemberManifests(manifests)
+  planExistingNpm1Members(graph, memberByName, plan)
+  planMissingNpm1Members(graph, memberByName, plan)
+  const prospectiveIds = prospectiveNpm1MemberIds(plan)
   const rootForEdges = existingRoot !== undefined
     && rootNodeId !== undefined
     && rootManifest !== undefined
     ? rootNodeId
     : undefined
-
-  if (rootForEdges !== undefined && rootManifest !== undefined) {
-    const desired: Edge[] = []
-    for (const [kind, deps] of [
-      ['dep', rootManifest.dependencies],
-      ['dev', rootManifest.devDependencies],
-      ['optional', rootManifest.optionalDependencies],
-      ['peer', rootManifest.peerDependencies],
-    ] as const) {
-      if (deps === undefined) continue
-      for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
-        const dstId = resolveManifestTarget(graph, name, range, memberByName, prospectiveIds)
-        if (dstId === undefined) continue
-        const attrs: { range: string; workspace?: boolean } = { range }
-        if (isWorkspaceProtocolRange(range) || memberByName.has(name)) {
-          attrs.workspace = true
-        }
-        desired.push({ src: rootForEdges, dst: dstId, kind, attrs })
-      }
-    }
-    const existingByDst = new Map<string, Edge[]>()
-    for (const edge of graph.out(rootForEdges)) {
-      const arr = existingByDst.get(edge.dst) ?? []
-      arr.push(edge)
-      existingByDst.set(edge.dst, arr)
-    }
-    for (const edge of desired) {
-      const list = existingByDst.get(edge.dst) ?? []
-      const match = list.some(c =>
-        c.kind === edge.kind
-        && c.dst === edge.dst
-        && (c.attrs?.range ?? undefined) === edge.attrs?.range
-        && (c.attrs?.workspace ?? undefined) === edge.attrs?.workspace,
-      )
-      if (!match) addRootEdges.push(edge)
-    }
-    // We don't actively remove root edges on npm-1 enrich — preserves the
-    // parse-time edge set. Mutations are additive.
-  }
-
-  // (d) Mark edges hitting a workspace member with `workspace: true`.
-  for (const node of graph.nodes()) {
-    for (const edge of graph.out(node.id)) {
-      if (edge.kind === 'peer') continue
-      if (edge.attrs?.workspace === true) continue
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      if (!memberByName.has(dst.name)) continue
-      // Only mark if the dst node was tagged with workspacePath (or will be).
-      const willBeMember = memberNodeReplacements.some(n => n.id === edge.dst)
-        || addMemberNodes.some(n => n.id === edge.dst)
-        || dst.workspacePath !== undefined
-      if (!willBeMember) continue
-      markWorkspaceEdges.push({
-        src: edge.src,
-        dst: edge.dst,
-        kind: edge.kind,
-        attrs: { ...edge.attrs, workspace: true },
-      })
-    }
-  }
-
-  let rootNodeReplacement: Node | undefined
+  planNpm1RootEdges(graph, rootForEdges, rootManifest, memberByName, prospectiveIds, plan)
+  planNpm1WorkspaceEdges(graph, memberByName, plan)
   if (existingRoot !== undefined && existingRoot.workspacePath === undefined) {
-    rootNodeReplacement = { ...existingRoot, workspacePath: '' }
+    plan.rootNodeReplacement = { ...existingRoot, workspacePath: '' }
   }
-
-  return {
-    rootNodeReplacement,
-    addMemberNodes,
-    memberNodeReplacements,
-    addRootEdges,
-    removeRootEdges,
-    markWorkspaceEdges,
-  }
+  return plan
 }
 
 function resolveManifestTarget(

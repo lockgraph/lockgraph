@@ -1048,44 +1048,72 @@ export function resolvePnpmWorkspacePeerProjection(
   evidence?: PnpmWorkspacePeerProjectionEvidence,
 ): PnpmWorkspacePeerProjection {
   const sidecar = sidecarByGraph.get(graph)
-  const attribution = new Map<string, Readonly<PnpmWorkspacePeerAttribution>>()
-  const ownerPeerDependencies = new Map<string, Readonly<Record<string, string>>>()
-  const gaps: Readonly<PnpmWorkspacePeerGap>[] = []
-  const conflicts: Readonly<PnpmWorkspacePeerConflict>[] = []
+  const state = emptyWorkspacePeerProjectionState()
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
-      if (edge.kind !== 'peer') continue
-      const workspace = graph.getNode(edge.dst)
-      if (workspace?.workspacePath === undefined) continue
-      const declarations = peerDeclarationsForOwner(graph, node, evidence)
-      if (declarations !== undefined) {
-        ownerPeerDependencies.set(node.id, Object.freeze({ ...declarations }))
-      }
-      const key = `${node.id}\0${edge.dst}`
-      if (sidecar?.workspacePeerCollisions.has(key) === true) {
-        conflicts.push(Object.freeze({
-          owner: node.id,
-          workspace: edge.dst,
-          reason: 'native-collision',
-        }))
-        continue
-      }
-      const native = sidecar?.workspacePeerNames.get(key)
-      if (native !== undefined) {
-        attribution.set(key, Object.freeze({ ...native }))
-        continue
-      }
-      const restored = restoredWorkspacePeerAttribution(graph, node, workspace, evidence)
-      if (restored.attribution !== undefined) attribution.set(key, restored.attribution)
-      if (restored.gap !== undefined) gaps.push(restored.gap)
-      if (restored.conflict !== undefined) conflicts.push(restored.conflict)
+      projectPnpmWorkspacePeerEdge(graph, sidecar, evidence, state, node, edge)
     }
   }
+  return freezeWorkspacePeerProjection(state)
+}
+
+interface WorkspacePeerProjectionState {
+  attribution: Map<string, Readonly<PnpmWorkspacePeerAttribution>>
+  ownerPeerDependencies: Map<string, Readonly<Record<string, string>>>
+  gaps: Readonly<PnpmWorkspacePeerGap>[]
+  conflicts: Readonly<PnpmWorkspacePeerConflict>[]
+}
+
+function emptyWorkspacePeerProjectionState(): WorkspacePeerProjectionState {
+  return {
+    attribution: new Map(),
+    ownerPeerDependencies: new Map(),
+    gaps: [],
+    conflicts: [],
+  }
+}
+
+function projectPnpmWorkspacePeerEdge(
+  graph: Graph,
+  sidecar: PnpmSidecar | undefined,
+  evidence: PnpmWorkspacePeerProjectionEvidence | undefined,
+  state: WorkspacePeerProjectionState,
+  owner: Node,
+  edge: Edge,
+): void {
+  if (edge.kind !== 'peer') return
+  const workspace = graph.getNode(edge.dst)
+  if (workspace?.workspacePath === undefined) return
+  const declarations = peerDeclarationsForOwner(graph, owner, evidence)
+  if (declarations !== undefined) {
+    state.ownerPeerDependencies.set(owner.id, Object.freeze({ ...declarations }))
+  }
+  const key = `${owner.id}\0${edge.dst}`
+  if (sidecar?.workspacePeerCollisions.has(key) === true) {
+    state.conflicts.push(Object.freeze({
+      owner: owner.id,
+      workspace: edge.dst,
+      reason: 'native-collision',
+    }))
+    return
+  }
+  const native = sidecar?.workspacePeerNames.get(key)
+  if (native !== undefined) {
+    state.attribution.set(key, Object.freeze({ ...native }))
+    return
+  }
+  const restored = restoredWorkspacePeerAttribution(graph, owner, workspace, evidence)
+  if (restored.attribution !== undefined) state.attribution.set(key, restored.attribution)
+  if (restored.gap !== undefined) state.gaps.push(restored.gap)
+  if (restored.conflict !== undefined) state.conflicts.push(restored.conflict)
+}
+
+function freezeWorkspacePeerProjection(state: WorkspacePeerProjectionState): PnpmWorkspacePeerProjection {
   return Object.freeze({
-    attribution: readonlyAttributionMap(attribution),
-    ownerPeerDependencies: readonlyPeerDependenciesMap(ownerPeerDependencies),
-    gaps: Object.freeze(gaps),
-    conflicts: Object.freeze(conflicts),
+    attribution: readonlyAttributionMap(state.attribution),
+    ownerPeerDependencies: readonlyPeerDependenciesMap(state.ownerPeerDependencies),
+    gaps: Object.freeze(state.gaps),
+    conflicts: Object.freeze(state.conflicts),
   })
 }
 
@@ -1905,6 +1933,64 @@ function packagesKeyForNode(
   return applyPackagesKeyPrefix(bare + suffix, shape.packagesKeyShape)
 }
 
+function pnpmPackageNode(
+  name: string,
+  version: string,
+  peerContext: string[],
+  nodeId: string,
+  patch: string | undefined,
+): Node {
+  const node: Node = { id: nodeId, name, version, peerContext }
+  if (patch !== undefined) node.patch = patch
+  return node
+}
+
+function pnpmPeerDependenciesMeta(value: unknown): Record<string, { optional?: boolean }> | undefined {
+  if (!isPlainObject(value)) return undefined
+  const meta: Record<string, { optional?: boolean }> = {}
+  for (const [peerName, entry] of Object.entries(value)) {
+    if (isPlainObject(entry) && typeof entry.optional === 'boolean') {
+      meta[peerName] = { optional: entry.optional }
+    }
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined
+}
+
+function pnpmNodeSidecar(pkgEntry: unknown): PnpmNodeSidecar {
+  const nodeSc: PnpmNodeSidecar = {}
+  if (!isPlainObject(pkgEntry)) return nodeSc
+  if (isPlainObject(pkgEntry.peerDependencies)) {
+    nodeSc.peerDependencies = { ...(pkgEntry.peerDependencies as Record<string, string>) }
+  }
+  const peerDependenciesMeta = pnpmPeerDependenciesMeta(pkgEntry.peerDependenciesMeta)
+  if (peerDependenciesMeta !== undefined) nodeSc.peerDependenciesMeta = peerDependenciesMeta
+  if (isPlainObject(pkgEntry.engines)) {
+    nodeSc.engines = { ...(pkgEntry.engines as Record<string, string>) }
+  }
+  if (pkgEntry.hasBin === true) nodeSc.hasBin = true
+  if (Array.isArray(pkgEntry.os)) nodeSc.os = (pkgEntry.os as string[]).slice()
+  if (Array.isArray(pkgEntry.cpu)) nodeSc.cpu = (pkgEntry.cpu as string[]).slice()
+  if (Array.isArray(pkgEntry.libc)) nodeSc.libc = (pkgEntry.libc as string[]).slice()
+  return nodeSc
+}
+
+function pnpmPackagePayload(
+  pkgEntry: unknown,
+  nodeId: string,
+  diagnostics: Diagnostic[],
+  nodeSc: PnpmNodeSidecar,
+): TarballPayload {
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  if (nodeSc.peerDependencies !== undefined) {
+    payload.peerDependencies = { ...nodeSc.peerDependencies }
+  }
+  if (nodeSc.peerDependenciesMeta !== undefined) {
+    payload.peerDependenciesMeta = Object.fromEntries(Object.entries(nodeSc.peerDependenciesMeta)
+      .map(([peerName, meta]) => [peerName, { ...meta }]))
+  }
+  return payload
+}
+
 function addPackageNode(
   builder: ReturnType<typeof newBuilder>,
   sidecar: PnpmSidecar,
@@ -1916,48 +2002,10 @@ function addPackageNode(
   diagnostics: Diagnostic[],
   patch?: string,
 ): void {
-  const node: Node = {
-    id: nodeId,
-    name,
-    version,
-    peerContext,
-  }
-  if (patch !== undefined) node.patch = patch
-  builder.addNode(node)
-
-  const nodeSc: PnpmNodeSidecar = {}
-  if (isPlainObject(pkgEntry)) {
-    if (isPlainObject(pkgEntry.peerDependencies)) {
-      nodeSc.peerDependencies = { ...(pkgEntry.peerDependencies as Record<string, string>) }
-    }
-    if (isPlainObject(pkgEntry.peerDependenciesMeta)) {
-      // Verbatim capture — the per-peer `{ optional: true }` markers. Normalise
-      // to `{ optional: boolean }` records; unknown sub-keys are pnpm-foreign
-      // and not preserved (none observed in the corpus).
-      const meta: Record<string, { optional?: boolean }> = {}
-      for (const [peerName, m] of Object.entries(pkgEntry.peerDependenciesMeta as Record<string, unknown>)) {
-        if (isPlainObject(m) && typeof m.optional === 'boolean') meta[peerName] = { optional: m.optional }
-      }
-      if (Object.keys(meta).length > 0) nodeSc.peerDependenciesMeta = meta
-    }
-    if (isPlainObject(pkgEntry.engines)) {
-      nodeSc.engines = { ...(pkgEntry.engines as Record<string, string>) }
-    }
-    if (pkgEntry.hasBin === true) nodeSc.hasBin = true
-    if (Array.isArray(pkgEntry.os)) nodeSc.os = (pkgEntry.os as string[]).slice()
-    if (Array.isArray(pkgEntry.cpu)) nodeSc.cpu = (pkgEntry.cpu as string[]).slice()
-    if (Array.isArray(pkgEntry.libc)) nodeSc.libc = (pkgEntry.libc as string[]).slice()
-  }
+  builder.addNode(pnpmPackageNode(name, version, peerContext, nodeId, patch))
+  const nodeSc = pnpmNodeSidecar(pkgEntry)
   sidecar.nodes.set(nodeId, nodeSc)
-
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
-  if (nodeSc.peerDependencies !== undefined) {
-    payload.peerDependencies = { ...nodeSc.peerDependencies }
-  }
-  if (nodeSc.peerDependenciesMeta !== undefined) {
-    payload.peerDependenciesMeta = Object.fromEntries(Object.entries(nodeSc.peerDependenciesMeta)
-      .map(([peerName, meta]) => [peerName, { ...meta }]))
-  }
+  const payload = pnpmPackagePayload(pkgEntry, nodeId, diagnostics, nodeSc)
   if (Object.keys(payload).length > 0) {
     builder.setTarball({ name, version, patch }, payload)
   }

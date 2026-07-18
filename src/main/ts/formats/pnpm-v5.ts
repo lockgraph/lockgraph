@@ -750,6 +750,107 @@ function writePnpmV5Packages(
 // `resolveAliasedDependencyTarget`) over the emitted packages-key NodeId set.
 // Workspace-target (`link:`) edges are skipped. A miss is a soft
 // `LAYOUT_RESOLVE_VIOLATION` (error) — no throw.
+const PNPM_V5_CONSUMER_BLOCKS = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
+const PNPM_V5_PACKAGE_BLOCKS = ['dependencies', 'optionalDependencies'] as const
+
+function pnpmV5ConsumerBlock(
+  out: YamlMap,
+  importersMap: Record<string, unknown> | undefined,
+  rootNode: Node | undefined,
+  consumer: Node,
+): Record<string, unknown> | undefined {
+  const path = consumer.id === rootNode?.id ? '.' : (consumer.workspacePath ?? consumer.name)
+  if (importersMap !== undefined) {
+    const block = importersMap[path]
+    return isPlainObject(block) ? (block as Record<string, unknown>) : undefined
+  }
+  return consumer.id === rootNode?.id ? (out as Record<string, unknown>) : undefined
+}
+
+function pnpmV5PackageBlock(
+  packagesMap: Record<string, unknown> | undefined,
+  pkg: Node,
+): Record<string, unknown> | undefined {
+  const entry = packagesMap?.[packagesKeyForNode(pkg)]
+  return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
+}
+
+function pnpmV5SlotValue(
+  block: Record<string, unknown>,
+  blockNames: readonly string[],
+  seg: string,
+): string | undefined {
+  for (const blockName of blockNames) {
+    const sub = block[blockName]
+    if (!isPlainObject(sub)) continue
+    const raw = (sub as Record<string, unknown>)[seg]
+    if (typeof raw === 'string') return raw
+  }
+  return undefined
+}
+
+function isPnpmV5Importer(node: Node, rootNode: Node | undefined): boolean {
+  return node.id === rootNode?.id || (node.workspacePath !== undefined && node.workspacePath !== '')
+}
+
+interface PnpmV5ResolveValidationContext {
+  graph:       Graph
+  rootNode:    Node | undefined
+  seenIds:     Set<string>
+  onDiagnostic: (d: Diagnostic) => void
+}
+
+function validatePnpmV5ResolvedEdge(
+  context: PnpmV5ResolveValidationContext,
+  consumer: Node,
+  consumerIsImporter: boolean,
+  block: Record<string, unknown>,
+  blockNames: readonly string[],
+  edge: Edge,
+): void {
+  if (edge.kind !== 'dep' && edge.kind !== 'dev' && edge.kind !== 'optional') return
+  const dst = context.graph.getNode(edge.dst)
+  if (dst === undefined) return
+  if (dst.workspacePath !== undefined && dst.workspacePath !== '') return
+  if (!consumerIsImporter && (dst.id === consumer.id || dst.id === context.rootNode?.id)) return
+
+  const seg = edge.attrs?.alias ?? dst.name
+  const value = pnpmV5SlotValue(block, blockNames, seg)
+  const resolved = value === undefined
+    ? undefined
+    : (resolveDependencyTarget(context.seenIds, seg, value)
+      ?? resolveAliasedDependencyTarget(context.seenIds, value))
+  if (resolved === dst.id) return
+  context.onDiagnostic({
+    code: 'LAYOUT_RESOLVE_VIOLATION',
+    severity: 'error',
+    subject: { src: edge.src, dst: edge.dst, kind: edge.kind },
+    message:
+      `INV-RESOLVE violated: ${consumer.id} resolves ${JSON.stringify(seg)} to ` +
+      `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
+      `expected ${dst.id} (pnpm-v5 encoding defect — ADR-0028 INV-RESOLVE)`,
+  })
+}
+
+function validatePnpmV5Consumer(
+  context: PnpmV5ResolveValidationContext,
+  out: YamlMap,
+  importersMap: Record<string, unknown> | undefined,
+  packagesMap: Record<string, unknown> | undefined,
+  consumer: Node,
+): void {
+  const consumerIsImporter = isPnpmV5Importer(consumer, context.rootNode)
+  if (!consumerIsImporter && !context.seenIds.has(consumer.id)) return
+  const block = consumerIsImporter
+    ? pnpmV5ConsumerBlock(out, importersMap, context.rootNode, consumer)
+    : pnpmV5PackageBlock(packagesMap, consumer)
+  if (block === undefined) return
+  const blockNames = consumerIsImporter ? PNPM_V5_CONSUMER_BLOCKS : PNPM_V5_PACKAGE_BLOCKS
+  for (const edge of context.graph.out(consumer.id)) {
+    validatePnpmV5ResolvedEdge(context, consumer, consumerIsImporter, block, blockNames, edge)
+  }
+}
+
 function assertResolveValid(
   graph: Graph,
   out: YamlMap,
@@ -758,69 +859,11 @@ function assertResolveValid(
   onDiagnostic: (d: Diagnostic) => void,
 ): void {
   const seenIds = new Set<string>(resolvedNodes.map(n => n.id))
-
   const importersMap = isPlainObject(out.importers) ? (out.importers as Record<string, unknown>) : undefined
-  const consumerBlockOf = (consumer: Node): Record<string, unknown> | undefined => {
-    const path = consumer.id === rootNode?.id ? '.' : (consumer.workspacePath ?? consumer.name)
-    if (importersMap !== undefined) {
-      const block = importersMap[path]
-      return isPlainObject(block) ? (block as Record<string, unknown>) : undefined
-    }
-    return consumer.id === rootNode?.id ? (out as Record<string, unknown>) : undefined
-  }
-
   const packagesMap = isPlainObject(out.packages) ? (out.packages as Record<string, unknown>) : undefined
-  const packageBlockOf = (pkg: Node): Record<string, unknown> | undefined => {
-    const entry = packagesMap?.[packagesKeyForNode(pkg)]
-    return isPlainObject(entry) ? (entry as Record<string, unknown>) : undefined
-  }
-
-  const slotValue = (block: Record<string, unknown>, blockNames: readonly string[], seg: string): string | undefined => {
-    for (const blockName of blockNames) {
-      const sub = block[blockName]
-      if (!isPlainObject(sub)) continue
-      const raw = (sub as Record<string, unknown>)[seg]
-      if (typeof raw === 'string') return raw
-    }
-    return undefined
-  }
-
-  const isImporter = (node: Node): boolean =>
-    node.id === rootNode?.id || (node.workspacePath !== undefined && node.workspacePath !== '')
-  const consumerBlockNames = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
-  const packageBlockNames = ['dependencies', 'optionalDependencies'] as const
-
+  const context: PnpmV5ResolveValidationContext = { graph, rootNode, seenIds, onDiagnostic }
   for (const consumer of graph.nodes()) {
-    const consumerIsImporter = isImporter(consumer)
-    if (!consumerIsImporter && !seenIds.has(consumer.id)) continue
-    const block = consumerIsImporter ? consumerBlockOf(consumer) : packageBlockOf(consumer)
-    if (block === undefined) continue
-    const blockNames = consumerIsImporter ? consumerBlockNames : packageBlockNames
-
-    for (const edge of graph.out(consumer.id)) {
-      if (edge.kind !== 'dep' && edge.kind !== 'dev' && edge.kind !== 'optional') continue
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      if (dst.workspacePath !== undefined && dst.workspacePath !== '') continue
-      if (!consumerIsImporter && (dst.id === consumer.id || dst.id === rootNode?.id)) continue
-
-      const seg = edge.attrs?.alias ?? dst.name
-      const value = slotValue(block, blockNames, seg)
-      const resolved = value === undefined
-        ? undefined
-        : (resolveDependencyTarget(seenIds, seg, value) ?? resolveAliasedDependencyTarget(seenIds, value))
-      if (resolved !== dst.id) {
-        onDiagnostic({
-          code: 'LAYOUT_RESOLVE_VIOLATION',
-          severity: 'error',
-          subject: { src: edge.src, dst: edge.dst, kind: edge.kind },
-          message:
-            `INV-RESOLVE violated: ${consumer.id} resolves ${JSON.stringify(seg)} to ` +
-            `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
-            `expected ${dst.id} (pnpm-v5 encoding defect — ADR-0028 INV-RESOLVE)`,
-        })
-      }
-    }
+    validatePnpmV5Consumer(context, out, importersMap, packagesMap, consumer)
   }
 }
 
@@ -1353,65 +1396,73 @@ interface EnrichPlan {
   markWorkspaceEdges: Edge[]
 }
 
-function planManifestEnrich(
-  graph: Graph,
-  sidecar: PnpmV5Sidecar | undefined,
-  manifests: Record<string, PnpmV5Manifest>,
-): EnrichPlan {
-  const rootManifest = manifests['']
-  const rootNodeId = sidecar?.rootId
+type PnpmV5MemberManifest = { path: string; manifest: PnpmV5Manifest }
 
-  const addRootEdges: Edge[] = []
-  const markWorkspaceEdges: Edge[] = []
-
-  const memberByName = new Map<string, { path: string; manifest: PnpmV5Manifest }>()
+function pnpmV5MemberManifests(manifests: Record<string, PnpmV5Manifest>): Map<string, PnpmV5MemberManifest> {
+  const memberByName = new Map<string, PnpmV5MemberManifest>()
   for (const [path, manifest] of Object.entries(manifests)) {
     if (path === '' || manifest.name === undefined) continue
     memberByName.set(manifest.name, { path, manifest })
   }
+  return memberByName
+}
 
-  if (rootManifest !== undefined && rootNodeId !== undefined) {
-    const desired: Edge[] = []
-    for (const [kind, deps] of [
-      ['dep', rootManifest.dependencies],
-      ['dev', rootManifest.devDependencies],
-      ['optional', rootManifest.optionalDependencies],
-      ['peer', rootManifest.peerDependencies],
-    ] as const) {
-      if (deps === undefined) continue
-      for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
-        const dstId = resolveManifestTarget(graph, name, range, memberByName)
-        if (dstId === undefined) continue
-        const attrs: { range: string; workspace?: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = { range }
-        if (isWorkspaceProtocolRange(range) || memberByName.has(name)) {
-          attrs.workspace = true
-          // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
-          const rawSpecifier = isWorkspaceProtocolRange(range) ? range : ''
-          const dst = graph.getNode(dstId)
-          attrs.workspaceRange = dst?.version !== undefined && dst.version !== ''
-            ? { specifier: rawSpecifier, resolvedVersion: dst.version }
-            : { specifier: rawSpecifier }
-        }
-        desired.push({ src: rootNodeId, dst: dstId, kind, attrs })
+function pnpmV5WorkspaceRange(range: string, dst: Node | undefined): { specifier: string; resolvedVersion?: string } {
+  const rawSpecifier = isWorkspaceProtocolRange(range) ? range : ''
+  return dst?.version !== undefined && dst.version !== ''
+    ? { specifier: rawSpecifier, resolvedVersion: dst.version }
+    : { specifier: rawSpecifier }
+}
+
+function desiredPnpmV5RootEdges(
+  graph: Graph,
+  rootNodeId: string,
+  rootManifest: PnpmV5Manifest,
+  memberByName: Map<string, PnpmV5MemberManifest>,
+): Edge[] {
+  const desired: Edge[] = []
+  for (const [kind, deps] of [
+    ['dep', rootManifest.dependencies],
+    ['dev', rootManifest.devDependencies],
+    ['optional', rootManifest.optionalDependencies],
+    ['peer', rootManifest.peerDependencies],
+  ] as const) {
+    if (deps === undefined) continue
+    for (const [name, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
+      const dstId = resolveManifestTarget(graph, name, range, memberByName)
+      if (dstId === undefined) continue
+      const attrs: {
+        range: string
+        workspace?: boolean
+        workspaceRange?: { specifier: string; resolvedVersion?: string }
+      } = { range }
+      if (isWorkspaceProtocolRange(range) || memberByName.has(name)) {
+        attrs.workspace = true
+        attrs.workspaceRange = pnpmV5WorkspaceRange(range, graph.getNode(dstId))
       }
-    }
-    const existing = graph.out(rootNodeId)
-    for (const want of desired) {
-      const match = existing.find(c => c.kind === want.kind && c.dst === want.dst)
-      if (match === undefined) {
-        addRootEdges.push(want)
-        continue
-      }
-      const wantRange = want.attrs?.range
-      const curRange = match.attrs?.range
-      const wantWs = want.attrs?.workspace ?? false
-      const curWs = match.attrs?.workspace ?? false
-      if (wantRange !== curRange || wantWs !== curWs) {
-        markWorkspaceEdges.push(want)
-      }
+      desired.push({ src: rootNodeId, dst: dstId, kind, attrs })
     }
   }
+  return desired
+}
 
+function reconcilePnpmV5RootEdges(graph: Graph, rootNodeId: string, desired: readonly Edge[], plan: EnrichPlan): void {
+  const existing = graph.out(rootNodeId)
+  for (const want of desired) {
+    const match = existing.find(c => c.kind === want.kind && c.dst === want.dst)
+    if (match === undefined) {
+      plan.addRootEdges.push(want)
+      continue
+    }
+    const wantRange = want.attrs?.range
+    const curRange = match.attrs?.range
+    const wantWs = want.attrs?.workspace ?? false
+    const curWs = match.attrs?.workspace ?? false
+    if (wantRange !== curRange || wantWs !== curWs) plan.markWorkspaceEdges.push(want)
+  }
+}
+
+function markPnpmV5WorkspaceEdges(graph: Graph, plan: EnrichPlan): void {
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
       if (edge.kind === 'peer') continue
@@ -1419,14 +1470,11 @@ function planManifestEnrich(
       const dst = graph.getNode(edge.dst)
       if (dst === undefined) continue
       if (dst.workspacePath === undefined || dst.workspacePath === '') continue
-      // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar.
-      const rawSpecifier = edge.attrs?.range !== undefined && edge.attrs.range.startsWith('workspace:')
+      const range = edge.attrs?.range !== undefined && edge.attrs.range.startsWith('workspace:')
         ? edge.attrs.range
         : ''
-      const workspaceRange = dst.version !== undefined && dst.version !== ''
-        ? { specifier: rawSpecifier, resolvedVersion: dst.version }
-        : { specifier: rawSpecifier }
-      markWorkspaceEdges.push({
+      const workspaceRange = pnpmV5WorkspaceRange(range, dst)
+      plan.markWorkspaceEdges.push({
         src: edge.src,
         dst: edge.dst,
         kind: edge.kind,
@@ -1434,8 +1482,23 @@ function planManifestEnrich(
       })
     }
   }
+}
 
-  return { addRootEdges, markWorkspaceEdges }
+function planManifestEnrich(
+  graph: Graph,
+  sidecar: PnpmV5Sidecar | undefined,
+  manifests: Record<string, PnpmV5Manifest>,
+): EnrichPlan {
+  const rootManifest = manifests['']
+  const rootNodeId = sidecar?.rootId
+  const plan: EnrichPlan = { addRootEdges: [], markWorkspaceEdges: [] }
+  const memberByName = pnpmV5MemberManifests(manifests)
+  if (rootManifest !== undefined && rootNodeId !== undefined) {
+    const desired = desiredPnpmV5RootEdges(graph, rootNodeId, rootManifest, memberByName)
+    reconcilePnpmV5RootEdges(graph, rootNodeId, desired, plan)
+  }
+  markPnpmV5WorkspaceEdges(graph, plan)
+  return plan
 }
 
 function resolveManifestTarget(

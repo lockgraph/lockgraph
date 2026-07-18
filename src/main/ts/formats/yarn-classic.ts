@@ -629,7 +629,16 @@ function classicMissingManifestsResult(graph: Graph): { graph: Graph; diagnostic
   }
 }
 
-type ClassicEnrichPlan = ReturnType<typeof planClassicEnrich>
+interface ClassicEnrichPlan {
+  rootNode: Node | undefined
+  rootNodeReplacement: Node | undefined
+  memberNodeReplacements: Node[]
+  addMemberNodes: Node[]
+  addMemberEdges: Edge[]
+  addRootEdges: Edge[]
+  removeRootEdges: Edge[]
+  markWorkspaceEdges: Edge[]
+}
 
 function isClassicEnrichPlanEmpty(plan: ClassicEnrichPlan): boolean {
   return plan.rootNode === undefined
@@ -1259,6 +1268,123 @@ export function isClassicRegistryRange(range: string): boolean {
   return !/^[a-z][a-z0-9+.-]*$/i.test(range.slice(0, colonIdx))
 }
 
+type ClassicEdgeResolution =
+  | { status: 'bound'; dstId: string }
+  | { status: 'ambiguous' }
+  | { status: 'missing' }
+
+function resolveClassicEdgeTarget(
+  diagnostics: Diagnostic[],
+  srcId: string,
+  name: string,
+  range: string,
+  specIndex: ReadonlyMap<string, string>,
+  ladder: ClassicEdgeLadderContext,
+): ClassicEdgeResolution {
+  // Rung 0 — exact specIndex match (UNCHANGED, O(1)).
+  let dstId = specIndex.get(`${name}@${range}`)
+  // Rung 2 — OVERRIDE-MAP forced link. Authoritative pin (`resolutions`) beats
+  // semver inference; handles a NON-satisfying pin. The `to` target is fed back
+  // through Rung 0 (`specIndex.get`); a target classic can't key (a `patch:`
+  // descriptor) falls through to Rung 3 on the ORIGINAL range — never throws.
+  if (dstId === undefined && ladder.overrides.length > 0) {
+    const to = overrideTargetFor(name, range, [nameOf(srcId)], ladder.overrides)
+    if (to !== undefined) {
+      const viaOverride = specIndex.get(`${name}@${to}`)
+      if (viaOverride !== undefined) dstId = viaOverride
+    }
+  }
+  if (dstId !== undefined) return { status: 'bound', dstId }
+  return resolveClassicSemverTarget(diagnostics, srcId, name, range, ladder)
+}
+
+function resolveClassicSemverTarget(
+  diagnostics: Diagnostic[],
+  srcId: string,
+  name: string,
+  range: string,
+  ladder: ClassicEdgeLadderContext,
+): ClassicEdgeResolution {
+  // Rung 3 — SOURCE-GATED max-satisfying semver (tarball candidates only).
+  const semverResult = semverResolve(range, ladder.candidatesByName.get(name) ?? [])
+  if (semverResult.kind === 'bound') return { status: 'bound', dstId: semverResult.id }
+  if (semverResult.kind === 'ambiguous') {
+    diagnostics.push(ambiguousResolutionDiagnostic(
+      'YARN_CLASSIC', srcId, name, range, semverResult.candidateIds,
+    ))
+    return { status: 'ambiguous' }
+  }
+  return resolveClassicDistTagTarget(diagnostics, srcId, name, range, ladder)
+}
+
+function resolveClassicDistTagTarget(
+  diagnostics: Diagnostic[],
+  srcId: string,
+  name: string,
+  range: string,
+  ladder: ClassicEdgeLadderContext,
+): ClassicEdgeResolution {
+  // Rung 3.5 — DIST-TAG bind (#107). A registry range that is a published
+  // dist-TAG (`latest` / `next`), not a semver range, binds the UNIQUE registry
+  // sibling. A multi-version tag diagnoses and drops; channel pointers are
+  // never guessed.
+  const result = distTagResolve(range, ladder.candidatesByName.get(name) ?? [])
+  if (result.kind === 'bound') return { status: 'bound', dstId: result.id }
+  if (result.kind !== 'ambiguous') return { status: 'missing' }
+  diagnostics.push(ambiguousResolutionDiagnostic('YARN_CLASSIC', srcId, name, range, result.candidateIds))
+  if (!ladder.manifestsProvided) {
+    diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
+  }
+  return { status: 'ambiguous' }
+}
+
+function preserveClassicMissingDependency(
+  diagnostics: Diagnostic[],
+  srcId: string,
+  name: string,
+  range: string,
+  kind: 'dep' | 'optional',
+  ladder: ClassicEdgeLadderContext,
+  unresolvedDeps: Map<string, UnresolvedDepRef[]> | undefined,
+): void {
+  // Rung 4 — drop. Add the resolutions-pin INFO hint when a registry range
+  // missed everything and no manifests were supplied.
+  diagnostics.push({
+    code: 'YARN_CLASSIC_MISSING_ENTRY',
+    severity: 'warning',
+    subject: srcId,
+    message: `missing lockfile entry for ${name}@${range}`,
+  })
+  if (!ladder.manifestsProvided
+    && isClassicRegistryRange(range)
+    && (ladder.candidatesByName.get(name)?.length ?? 0) > 0) {
+    diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
+  }
+  if (unresolvedDeps === undefined) return
+  const refs = unresolvedDeps.get(srcId) ?? []
+  refs.push({
+    block: kind === 'optional' ? 'optionalDependencies' : 'dependencies',
+    name,
+    range,
+  })
+  unresolvedDeps.set(srcId, refs)
+}
+
+function classicResolvedEdgeAttrs(
+  srcId: string,
+  dstId: string,
+  name: string,
+  range: string,
+  ladder: ClassicEdgeLadderContext,
+): EdgeAttrs {
+  const dstName = nameOf(dstId)
+  const attrs: EdgeAttrs = { range }
+  if (name !== dstName) attrs.alias = name
+  const overrideRange = overrideTargetFor(name, range, [nameOf(srcId)], ladder.overrides)
+  if (overrideRange !== undefined) attrs.overrideRange = overrideRange
+  return attrs
+}
+
 function addEdgesFromMap(
   builder: ReturnType<typeof newBuilder>,
   diagnostics: Diagnostic[],
@@ -1273,95 +1399,14 @@ function addEdgesFromMap(
   unresolvedDeps?: Map<string, UnresolvedDepRef[]>,
 ): void {
   for (const [name, range] of Array.from(deps.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))) {
-    // Rung 0 — exact specIndex match (UNCHANGED, O(1)).
-    let dstId = specIndex.get(`${name}@${range}`)
-    // Rung 2 — OVERRIDE-MAP forced link. Authoritative pin (`resolutions`) beats
-    // semver inference; handles a NON-satisfying pin. The `to` target is fed back
-    // through Rung 0 (`specIndex.get`); a target classic can't key (a `patch:`
-    // descriptor) falls through to Rung 3 on the ORIGINAL range — never throws.
-    if (dstId === undefined && ladder.overrides.length > 0) {
-      const to = overrideTargetFor(name, range, [nameOf(srcId)], ladder.overrides)
-      if (to !== undefined) {
-        const viaOverride = specIndex.get(`${name}@${to}`)
-        if (viaOverride !== undefined) dstId = viaOverride
-      }
-    }
-    // Rung 3 — SOURCE-GATED max-satisfying semver (tarball candidates only).
-    if (dstId === undefined) {
-      const result = semverResolve(range, ladder.candidatesByName.get(name) ?? [])
-      if (result.kind === 'bound') {
-        dstId = result.id
-      } else if (result.kind === 'ambiguous') {
-        diagnostics.push(ambiguousResolutionDiagnostic('YARN_CLASSIC', srcId, name, range, result.candidateIds))
-        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
-      }
-    }
-    // Rung 3.5 — DIST-TAG bind (#107). A registry range that is a published
-    // dist-TAG (`latest` / `next`, e.g. `node-gyp "latest"`), not a semver range,
-    // binds the UNIQUE registry sibling of that name (source-gated like Rung 3).
-    // A multi-version tag → diagnose + drop (channel pointers are never guessed).
-    if (dstId === undefined) {
-      const result = distTagResolve(range, ladder.candidatesByName.get(name) ?? [])
-      if (result.kind === 'bound') {
-        dstId = result.id
-      } else if (result.kind === 'ambiguous') {
-        diagnostics.push(ambiguousResolutionDiagnostic('YARN_CLASSIC', srcId, name, range, result.candidateIds))
-        if (!ladder.manifestsProvided) {
-          diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
-        }
-        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
-      }
-    }
-    if (dstId === undefined) {
-      // Rung 4 — drop (UNCHANGED). Add the resolutions-pin INFO hint when a
-      // registry range missed everything and no manifests were supplied.
-      diagnostics.push({
-        code: 'YARN_CLASSIC_MISSING_ENTRY',
-        severity: 'warning',
-        subject: srcId,
-        message: `missing lockfile entry for ${name}@${range}`,
-      })
-      if (!ladder.manifestsProvided && isClassicRegistryRange(range) && (ladder.candidatesByName.get(name)?.length ?? 0) > 0) {
-        diagnostics.push(resolutionPinUnresolvedDiagnostic('YARN_CLASSIC', srcId, name, range))
-      }
-      // F8 — the dep target is ABSENT from the lock (no entry, no candidate to
-      // bind), so no graph edge can carry it AND we do NOT mint a phantom node
-      // (identity stays clean). Preserve the descriptor VERBATIM (on-disk block
-      // kind, dep-name, exact range string) in the per-node sidecar so a
-      // SAME-FORMAT round-trip re-emits this line byte-for-byte. This is the
-      // GENUINELY-absent case only — the two ambiguous-miss rungs above `continue`
-      // before reaching here, so an ambiguous descriptor is NOT captured (it must
-      // stay dropped + diagnosed, never silently re-emitted). The MISSING-ENTRY
-      // warning above still fires — preservation keeps BOTH the bytes and the
-      // signal; it does not silence the diagnostic. Mirrors yarn-berry F8 (#103).
-      if (unresolvedDeps !== undefined) {
-        const refs = unresolvedDeps.get(srcId) ?? []
-        refs.push({
-          block: kind === 'optional' ? 'optionalDependencies' : 'dependencies',
-          name,
-          range,
-        })
-        unresolvedDeps.set(srcId, refs)
-      }
+    const resolution = resolveClassicEdgeTarget(diagnostics, srcId, name, range, specIndex, ladder)
+    if (resolution.status === 'ambiguous') continue
+    if (resolution.status === 'missing') {
+      preserveClassicMissingDependency(diagnostics, srcId, name, range, kind, ladder, unresolvedDeps)
       continue
     }
-    // F6 (#93) — npm-alias edge attr. When the consumer's dependency-block key
-    // (`name`) differs from the resolved target's actual name, the dep is an
-    // npm-alias (`<alias> "npm:<target>@<range>"`); record `<alias>` on the edge
-    // so emit re-keys the dependency line + entry-key descriptor under the alias
-    // (mirrors the shared `EdgeAttrs.alias` model the berry adapter populates).
-    // Identity-aware, so the canonical + aliased edges to one target coexist.
-    const dstName = nameOf(dstId)
-    const attrs: EdgeAttrs = { range }
-    if (name !== dstName) attrs.alias = name
-    // The lock text alone cannot distinguish an override-governed binding from
-    // an ordinary `--force` bump: either may place a version outside `range`,
-    // while an in-range binding may still be governed. Reconstruct provenance
-    // only from the declared policy context used by Rung 2, regardless of
-    // semver satisfaction. No declared override means no invented `or=` stamp.
-    const overrideRange = overrideTargetFor(name, range, [nameOf(srcId)], ladder.overrides)
-    if (overrideRange !== undefined) attrs.overrideRange = overrideRange
-    builder.addEdge(srcId, dstId, kind, attrs)
+    const attrs = classicResolvedEdgeAttrs(srcId, resolution.dstId, name, range, ladder)
+    builder.addEdge(srcId, resolution.dstId, kind, attrs)
   }
 }
 
@@ -1397,31 +1442,14 @@ function memberManifestsByName(manifests: Record<string, YarnClassicManifest>): 
   return byName
 }
 
-function planClassicEnrich(
+type ClassicMemberManifest = { path: string; manifest: YarnClassicManifest }
+
+function createClassicEnrichPlan(
   graph: Graph,
   rootNodeId: string | undefined,
   rootManifest: YarnClassicManifest | undefined,
-  memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
-  specIndex: Map<string, string>,
-  overrides: readonly OverrideConstraint[],
-): {
-  rootNode: Node | undefined
-  rootNodeReplacement: Node | undefined
-  memberNodeReplacements: Node[]
-  addMemberNodes: Node[]
-  addMemberEdges: Edge[]
-  addRootEdges: Edge[]
-  removeRootEdges: Edge[]
-  markWorkspaceEdges: Edge[]
-} {
-  const addRootEdges: Edge[] = []
-  const removeRootEdges: Edge[] = []
-  const markWorkspaceEdges: Edge[] = []
-  const memberNodeReplacements: Node[] = []
-  const addMemberNodes: Node[] = []
-  const addMemberEdges: Edge[] = []
+): ClassicEnrichPlan {
   const existingRootNode = rootNodeId === undefined ? undefined : graph.getNode(rootNodeId)
-
   const rootNode = rootNodeId !== undefined
     && existingRootNode === undefined
     && rootManifest?.name !== undefined
@@ -1440,7 +1468,140 @@ function planClassicEnrich(
     && rootManifest.version !== undefined
     ? { ...existingRootNode, workspacePath: '' }
     : undefined
+  return {
+    rootNode,
+    rootNodeReplacement,
+    memberNodeReplacements: [],
+    addMemberNodes: [],
+    addMemberEdges: [],
+    addRootEdges: [],
+    removeRootEdges: [],
+    markWorkspaceEdges: [],
+  }
+}
 
+function planExistingClassicMembers(
+  graph: Graph,
+  memberManifests: ReadonlyMap<string, ClassicMemberManifest>,
+  plan: ClassicEnrichPlan,
+): void {
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined) continue
+    const member = memberManifests.get(node.name)
+    if (member === undefined) continue
+    if (node.version !== '0.0.0-use.local' && node.version !== member.manifest.version) continue
+    const tarball = graph.tarballOf(node.id)
+    if (tarball !== undefined && tarball.resolution?.type !== 'directory') continue
+    plan.memberNodeReplacements.push({ ...node, workspacePath: member.path })
+  }
+}
+
+function classicMembersAlreadyInLock(graph: Graph, plan: ClassicEnrichPlan): Set<string> {
+  const members = new Set(plan.memberNodeReplacements.map(n => n.name))
+  for (const node of graph.nodes()) {
+    if (node.workspacePath !== undefined) members.add(node.name)
+  }
+  return members
+}
+
+function planMissingClassicMembers(
+  graph: Graph,
+  memberManifests: Map<string, ClassicMemberManifest>,
+  specIndex: Map<string, string>,
+  overrides: readonly OverrideConstraint[],
+  plan: ClassicEnrichPlan,
+): void {
+  const membersAlreadyInLock = classicMembersAlreadyInLock(graph, plan)
+  for (const [name, { path, manifest }] of memberManifests) {
+    if (manifest.version === undefined) continue
+    if (membersAlreadyInLock.has(name)) continue
+    const memberId = `${name}@${manifest.version}`
+    plan.addMemberNodes.push({
+      id: memberId,
+      name,
+      version: manifest.version,
+      peerContext: [],
+      workspacePath: path,
+    })
+    for (const edge of desiredManifestEdges(
+      graph, memberId, manifest, memberManifests, specIndex, overrides,
+    )) {
+      plan.addMemberEdges.push(edge)
+    }
+  }
+}
+
+function classicEdgesByDestination(edges: readonly Edge[]): Map<string, Edge[]> {
+  const byDst = new Map<string, Edge[]>()
+  for (const edge of edges) {
+    const current = byDst.get(edge.dst)
+    if (current === undefined) byDst.set(edge.dst, [edge])
+    else current.push(edge)
+  }
+  return byDst
+}
+
+function planClassicRootEdges(
+  graph: Graph,
+  rootNodeId: string | undefined,
+  rootManifest: YarnClassicManifest | undefined,
+  memberManifests: Map<string, ClassicMemberManifest>,
+  specIndex: Map<string, string>,
+  overrides: readonly OverrideConstraint[],
+  plan: ClassicEnrichPlan,
+): void {
+  if (rootNodeId === undefined || rootManifest === undefined) return
+  const desired = desiredManifestEdges(
+    graph, rootNodeId, rootManifest, memberManifests, specIndex, overrides,
+  )
+  const existingByDst = classicEdgesByDestination(graph.out(rootNodeId))
+  for (const edge of desired) {
+    const existing = existingByDst.get(edge.dst) ?? []
+    const matches = existing.some(candidate => rootEdgeMatches(candidate, edge))
+    if (!matches) plan.addRootEdges.push(edge)
+    for (const candidate of existing) {
+      if (!rootEdgeMatches(candidate, edge)) plan.removeRootEdges.push(candidate)
+    }
+  }
+}
+
+function planClassicWorkspaceEdges(
+  graph: Graph,
+  memberManifests: ReadonlyMap<string, ClassicMemberManifest>,
+  plan: ClassicEnrichPlan,
+): void {
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (edge.kind === 'peer'
+        || edge.attrs?.workspace === true
+        || edge.attrs?.range === undefined
+        || !isWorkspaceProtocolRange(edge.attrs.range)) {
+        continue
+      }
+      const dst = graph.getNode(edge.dst)
+      if (dst === undefined || !memberManifests.has(dst.name)) continue
+      const workspaceRange = dst.version !== undefined && dst.version !== ''
+        ? { specifier: '', resolvedVersion: dst.version }
+        : { specifier: '' }
+      plan.markWorkspaceEdges.push({
+        src: edge.src,
+        dst: edge.dst,
+        kind: edge.kind,
+        attrs: { ...edge.attrs, workspace: true, workspaceRange },
+      })
+    }
+  }
+}
+
+function planClassicEnrich(
+  graph: Graph,
+  rootNodeId: string | undefined,
+  rootManifest: YarnClassicManifest | undefined,
+  memberManifests: Map<string, { path: string; manifest: YarnClassicManifest }>,
+  specIndex: Map<string, string>,
+  overrides: readonly OverrideConstraint[],
+): ClassicEnrichPlan {
+  const plan = createClassicEnrichPlan(graph, rootNodeId, rootManifest)
   // §C item (b): distinguish workspace-member entries from external lookalikes
   // by setting `workspacePath` on each in-graph node whose name matches a
   // manifest workspace member. Without this, downstream emit (e.g. yarn-berry
@@ -1458,16 +1619,7 @@ function planClassicEnrich(
   // workspace member emitted as a plain package → `npm ci` "Missing … from lock
   // file"). `tarballOf(node.id)` is source-aware (keys by the node's full
   // identity incl. any `+src=`/`+patch=` slot).
-  for (const node of graph.nodes()) {
-    if (node.workspacePath !== undefined) continue
-    const member = memberManifests.get(node.name)
-    if (member === undefined) continue
-    if (node.version !== '0.0.0-use.local' && node.version !== member.manifest.version) continue
-    const tarball = graph.tarballOf(node.id)
-    if (tarball !== undefined && tarball.resolution?.type !== 'directory') continue
-    memberNodeReplacements.push({ ...node, workspacePath: member.path })
-  }
-
+  planExistingClassicMembers(graph, memberManifests, plan)
   // Synthesize INDEPENDENT workspace members. yarn 1 records a member in the lock
   // (a `file:` entry) only when something else depends on it; a member nothing
   // depends on has NO lock entry, so its node and its declared dep edges must be
@@ -1482,76 +1634,10 @@ function planClassicEnrich(
   // `is-number` alongside the npm `is-number` a sibling depends on): the external
   // node is not that member, so the member still needs synthesizing — otherwise
   // it vanishes and `npm ci` reports "Missing … from lock file".
-  const membersAlreadyInLock = new Set(memberNodeReplacements.map(n => n.name))
-  // The marking loop above skips a node that a PRIOR enrich already gave a
-  // `workspacePath` — such a member is still in the lock, so fold its name in
-  // too. Otherwise a second enrich (the idempotency path) re-synthesizes a
-  // duplicate member node at the manifest version alongside the sentinel one.
-  for (const node of graph.nodes()) {
-    if (node.workspacePath !== undefined) membersAlreadyInLock.add(node.name)
-  }
-  for (const [name, { path, manifest }] of memberManifests) {
-    if (manifest.version === undefined) continue
-    if (membersAlreadyInLock.has(name)) continue
-    const memberId = `${name}@${manifest.version}`
-    addMemberNodes.push({ id: memberId, name, version: manifest.version, peerContext: [], workspacePath: path })
-    for (const edge of desiredManifestEdges(graph, memberId, manifest, memberManifests, specIndex, overrides)) {
-      addMemberEdges.push(edge)
-    }
-  }
-
-  const rootOut = rootNodeId === undefined ? [] : graph.out(rootNodeId)
-  if (rootNodeId !== undefined && rootManifest !== undefined) {
-    const desired = desiredManifestEdges(graph, rootNodeId, rootManifest, memberManifests, specIndex, overrides)
-    const existingByDst = new Map<string, Edge[]>()
-    for (const edge of rootOut) {
-      const current = existingByDst.get(edge.dst)
-      if (current === undefined) existingByDst.set(edge.dst, [edge])
-      else current.push(edge)
-    }
-
-    for (const edge of desired) {
-      const existing = existingByDst.get(edge.dst) ?? []
-      const matches = existing.some(candidate => rootEdgeMatches(candidate, edge))
-      if (!matches) addRootEdges.push(edge)
-      for (const candidate of existing) {
-        if (!rootEdgeMatches(candidate, edge)) {
-          removeRootEdges.push(candidate)
-        }
-      }
-    }
-  }
-
-  for (const node of graph.nodes()) {
-    for (const edge of graph.out(node.id)) {
-      if (
-        edge.kind === 'peer'
-        || edge.attrs?.workspace === true
-        || edge.attrs?.range === undefined
-        || !isWorkspaceProtocolRange(edge.attrs.range)
-      ) {
-        continue
-      }
-
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined || !memberManifests.has(dst.name)) continue
-      // ADR-0014 §4.F4 — populate canonical workspaceRange sidecar; yarn-
-      // classic carries no `workspace:` protocol on disk, so the F4
-      // specifier is the empty pending sentinel and resolvedVersion is
-      // best-effort `dst.version`.
-      const workspaceRange = dst.version !== undefined && dst.version !== ''
-        ? { specifier: '', resolvedVersion: dst.version }
-        : { specifier: '' }
-      markWorkspaceEdges.push({
-        src: edge.src,
-        dst: edge.dst,
-        kind: edge.kind,
-        attrs: { ...edge.attrs, workspace: true, workspaceRange },
-      })
-    }
-  }
-
-  return { rootNode, rootNodeReplacement, memberNodeReplacements, addMemberNodes, addMemberEdges, addRootEdges, removeRootEdges, markWorkspaceEdges }
+  planMissingClassicMembers(graph, memberManifests, specIndex, overrides, plan)
+  planClassicRootEdges(graph, rootNodeId, rootManifest, memberManifests, specIndex, overrides, plan)
+  planClassicWorkspaceEdges(graph, memberManifests, plan)
+  return plan
 }
 
 // Synthesize the outgoing edges a manifest declares, from `srcNodeId` (the root
