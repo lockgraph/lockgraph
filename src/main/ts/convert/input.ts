@@ -13,9 +13,13 @@ import type {
   ProjectPathInput,
 } from './types.ts'
 
+// === CONSTANTS ==============================================================
+
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:([\\/]|$)/
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const CONFIG_NAMES = ['pnpm-workspace.yaml', '.npmrc', '.yarnrc.yml'] as const
+
+// === TYPES ==================================================================
 
 type FileRole =
   | { readonly kind: 'lock'; readonly family: 'npm' | 'yarn' | 'pnpm' | 'bun' | 'lockgraph' }
@@ -477,6 +481,7 @@ async function preparePathInput(
   }
 }
 
+/** Resolves a conversion input to lockfile text and source context. */
 export async function prepareConvertInput(
   input: ConvertInput,
   options: PrepareOptions,

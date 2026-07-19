@@ -11,6 +11,8 @@ import type { FormatId } from '../api/format-contract.ts'
 import type { ConvertInput, ConvertOptions } from '../convert/types.ts'
 import type { PackumentVersion } from '../registry/types.ts'
 
+// === TYPES ==================================================================
+
 export type Knowledge = 'none' | 'partial' | 'complete'
 
 /** Authority over the override and redirect surface. */

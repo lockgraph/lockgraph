@@ -122,6 +122,8 @@ function canonicalRange(range: string): string {
 const descriptorKey = (name: string, range: string): string =>
   `${name} ${canonicalRange(range)}`
 
+// === API ====================================================================
+
 /**
  * Walk graph, query registry for missing transitive deps, wire edges.
  * Monotone-additive: returned graph ⊇ input graph (no removals).
@@ -154,7 +156,7 @@ export async function completeTransitives(
   // exactly ONE version project-wide). Pre-seeded from every EXISTING edge so a
   // newly-introduced edge whose range already exists reuses that binding instead
   // of minting a SECOND entry for the same descriptor — a double-bound range
-  // that `yarn install --immutable` rejects (yaf .77 berry semver regression).
+  // that `yarn install --immutable` rejects (a berry semver regression).
   // Kept current as completion wires fresh edges.
   const descriptorResolution = new Map<string, NodeId>()
   for (const node of graph.nodes()) {
@@ -186,7 +188,7 @@ export async function completeTransitives(
   // The seed BOUNDS the work. With a seed supplied, ONLY `recentlyAdded` seeds
   // the frontier — BFS then walks their transitive closure, so cost is
   // O(changed-subtree) and an empty seed does ~zero work (the incremental
-  // contract yaf relies on). With NO seed, complete the WHOLE graph from every
+  // public completion contract). With NO seed, complete the WHOLE graph from every
   // root. `recentlyOrphaned` is excluded from the frontier either way (the
   // optimize phase collects orphans).
   // Parallel prefetch of packuments — a packument is an order-independent read
@@ -304,10 +306,10 @@ export async function completeTransitives(
         // STEP 0 — descriptor-identity dedup (BOTH strategies, before any
         // version selection). The EFFECTIVE descriptor resolves to ONE version
         // project-wide: if `name@effective` is already bound (an existing edge OR
-        // an earlier-wired completion edge), reuse that resolution. Without this,
+        // an existing completion edge), reuse that resolution. Without this,
         // `highest` re-resolves an already-present range to a newer version and
         // emits a SECOND entry for it → a double-bound descriptor `yarn install
-        // --immutable` rejects (yaf .77 semver). Peers keep their dedicated
+        // --immutable` rejects (a berry semver regression). Peers keep their dedicated
         // incomplete-handling on the paths below.
         if (kind !== 'peer') {
           const boundId = descriptorResolution.get(descriptorKey(depName, effectiveRange))
@@ -487,6 +489,8 @@ export async function completeTransitives(
     unresolved,
   }
 }
+
+// === INTERNALS ==============================================================
 
 function alreadyWired(
   graph: Graph,

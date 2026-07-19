@@ -70,8 +70,9 @@ export interface SelectResult {
  * required target: `semver.satisfies(minVersion(required[engine]), declared)`.
  * So target `node '>=18'` (floor = node 18) ACCEPTS a package declaring
  * `>=16`, `>=18`, or the ubiquitous discrete `^16 || ^18 || ^20`, and REJECTS
- * one declaring `>=20` (it needs a newer node than your floor — the pijma
- * break: install passes, runtime on the older node fails). A point target
+ * one declaring `>=20` (it needs a newer node than your floor — a project
+ * declaring a newer engine floor: install passes, runtime on the older node
+ * fails). A point target
  * (`'18.17.0'`) degrades to npm's exact `satisfies`. NOTE the target's floor is
  * what's checked: for a multi-range target like `'18 || 20'` only node 18 (the
  * minimum) is verified. `mode` `'lenient'` (default, npm parity): a package

@@ -168,7 +168,7 @@ export async function replaceVersion(
       // The rebound node still carries the OLD version's outgoing deps. Clear
       // the dep/optional out-edges so completeTransitives rewires them from the
       // NEW manifest — else the stale deps linger and MERGE with the new set,
-      // yielding an invalid node (yaf lockgraph-message, 2026-06-20). (peer edges
+      // yielding an invalid node (a missing peer-context rewrite). (peer edges
       // are left — peerContext coherence is out of scope here.)
       const staleOut = [...currentGraph.out(targetId)]
         .filter(e => e.kind === 'dep' || e.kind === 'optional')

@@ -63,6 +63,8 @@ type CacheIndex = Map<string, Map<string, IndexedEntry>>
 const KEY_URL_RE =
   /\/(?<encoded>(?:@[^/]+(?:%2[fF]|\/))?[^/]+)\/-\/(?<filename>[^/]+)\.tgz(?:\?|$)/
 
+// === API ====================================================================
+
 export function npmCache(opts: NpmCacheOptions = {}): CacheAdapter {
   const cacheDir = resolveCacheDir(opts)
 
@@ -117,6 +119,8 @@ export function npmCache(opts: NpmCacheOptions = {}): CacheAdapter {
     },
   }
 }
+
+// === INTERNALS ==============================================================
 
 function resolveCacheDir(opts: NpmCacheOptions): string {
   if (opts.cacheDir !== undefined) return opts.cacheDir
