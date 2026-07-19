@@ -6,11 +6,19 @@ import type {
 } from './format-contract.ts'
 import {
   hasAdapterState as hasPnpmFlatAdapterState,
+  rebindAdapterState as rebindPnpmFlatAdapterState,
   stringifyFamily as stringifyPnpmFamily,
   type PnpmWorkspacePeerProjection,
 } from '../formats/_pnpm-flat-core.ts'
-import { hasAdapterState as hasNpmFlatAdapterState } from '../formats/_npm-core.ts'
-import { hasAdapterState as hasYarnBerryAdapterState } from '../formats/_yarn-berry-core.ts'
+import {
+  hasAdapterState as hasNpmFlatAdapterState,
+  rebindAdapterState as rebindNpmFlatAdapterState,
+} from '../formats/_npm-core.ts'
+import { rebindNpm2MirrorState } from '../formats/_npm-2-mirror.ts'
+import {
+  hasAdapterState as hasYarnBerryAdapterState,
+  rebindAdapterState as rebindYarnBerryAdapterState,
+} from '../formats/_yarn-berry-core.ts'
 
 import * as bunText from '../formats/bun-text.ts'
 import * as npm1 from '../formats/npm-1.ts'
@@ -44,6 +52,19 @@ type FormatAdapter = FormatAdapterContract<
   ParseDispatchContext,
   StringifyDispatchContext
 >
+
+interface AdapterStateRebindResult {
+  readonly graph: Graph
+  readonly invalidated: readonly string[]
+}
+
+interface AdapterStateContract {
+  readonly hasAdapterState: (graph: Graph) => boolean
+  readonly rebindAdapterState: (
+    source: Graph,
+    target: Graph,
+  ) => AdapterStateRebindResult
+}
 
 const yarnBerryAdapter = (
   adapter: Pick<typeof yarnBerryV4, 'check' | 'parse' | 'stringify'>,
@@ -98,6 +119,54 @@ const pnpmFlatAdapter = (
         },
       ),
 })
+
+const yarnBerryStateAdapter = {
+  hasAdapterState: hasYarnBerryAdapterState,
+  rebindAdapterState: rebindYarnBerryAdapterState,
+} satisfies AdapterStateContract
+
+const npmFlatStateAdapter = {
+  hasAdapterState: hasNpmFlatAdapterState,
+  rebindAdapterState: rebindNpmFlatAdapterState,
+} satisfies AdapterStateContract
+
+const pnpmFlatStateAdapter = {
+  hasAdapterState: hasPnpmFlatAdapterState,
+  rebindAdapterState: rebindPnpmFlatAdapterState,
+} satisfies AdapterStateContract
+
+const npm2StateAdapter = {
+  hasAdapterState: hasNpmFlatAdapterState,
+  rebindAdapterState(source, target): AdapterStateRebindResult {
+    const flat = rebindNpmFlatAdapterState(source, target)
+    return {
+      graph: flat.graph,
+      invalidated: [...new Set([
+        ...flat.invalidated,
+        ...rebindNpm2MirrorState(source, flat.graph),
+      ])].sort(),
+    }
+  },
+} satisfies AdapterStateContract
+
+const FORMAT_STATE_REGISTRY = {
+  'yarn-berry-v4': yarnBerryStateAdapter,
+  'yarn-berry-v5': yarnBerryStateAdapter,
+  'yarn-berry-v6': yarnBerryStateAdapter,
+  'yarn-berry-v7': yarnBerryStateAdapter,
+  'yarn-berry-v8': yarnBerryStateAdapter,
+  'yarn-berry-v9': yarnBerryStateAdapter,
+  'yarn-berry-v10': yarnBerryStateAdapter,
+  'yarn-classic': yarnClassic,
+  'npm-1': npm1,
+  'npm-2': npm2StateAdapter,
+  'npm-3': npmFlatStateAdapter,
+  'pnpm-v5': pnpmV5,
+  'pnpm-v6': pnpmFlatStateAdapter,
+  'pnpm-v9': pnpmFlatStateAdapter,
+  'bun-text': bunText,
+  lockgraph: undefined,
+} as const satisfies Readonly<Record<FormatId, AdapterStateContract | undefined>>
 
 export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
   'yarn-berry-v4': yarnBerryAdapter(yarnBerryV4),
@@ -208,17 +277,15 @@ export function stringifyFormat(
 
 /** Whether the graph identity still carries its source adapter's native replay state. */
 export function hasFormatAdapterState(format: FormatId, graph: Graph): boolean {
-  if (format.startsWith('yarn-berry-')) return hasYarnBerryAdapterState(graph)
-  switch (format) {
-    case 'yarn-classic': return yarnClassic.hasAdapterState(graph)
-    case 'npm-1': return npm1.hasAdapterState(graph)
-    case 'npm-2':
-    case 'npm-3': return hasNpmFlatAdapterState(graph)
-    case 'pnpm-v5': return pnpmV5.hasAdapterState(graph)
-    case 'pnpm-v6':
-    case 'pnpm-v9': return hasPnpmFlatAdapterState(graph)
-    case 'bun-text': return bunText.hasAdapterState(graph)
-    case 'lockgraph': return false
-  }
-  return false
+  return FORMAT_STATE_REGISTRY[format]?.hasAdapterState(graph) ?? false
+}
+
+/** @internal Rebind source-format replay state after a graph transformation. */
+export function rebindFormatAdapterState(
+  format: FormatId | undefined,
+  source: Graph,
+  target: Graph,
+): AdapterStateRebindResult {
+  const adapter = format === undefined ? undefined : FORMAT_STATE_REGISTRY[format]
+  return adapter?.rebindAdapterState(source, target) ?? { graph: target, invalidated: [] }
 }

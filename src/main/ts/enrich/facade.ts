@@ -9,6 +9,7 @@ import {
   type TarballKey,
 } from '../graph.ts'
 import type { FormatId } from '../api/format-contract.ts'
+import { rebindFormatAdapterState } from '../api/format-registry.ts'
 import { completeTransitives } from '../complete/tree-complete.ts'
 import {
   deriveEnrichedEvidence,
@@ -44,12 +45,9 @@ import * as bunText from '../formats/bun-text.ts'
 import * as npm1 from '../formats/npm-1.ts'
 import * as npm2 from '../formats/npm-2.ts'
 import * as npm3 from '../formats/npm-3.ts'
-import { rebindAdapterState as rebindNpmFlatState } from '../formats/_npm-core.ts'
-import { rebindNpm2MirrorState } from '../formats/_npm-2-mirror.ts'
 import * as pnpmV5 from '../formats/pnpm-v5.ts'
 import * as pnpmV6 from '../formats/pnpm-v6.ts'
 import * as pnpmV9 from '../formats/pnpm-v9.ts'
-import { rebindAdapterState as rebindPnpmFlatState } from '../formats/_pnpm-flat-core.ts'
 import * as yarnBerryV4 from '../formats/yarn-berry-v4.ts'
 import * as yarnBerryV5 from '../formats/yarn-berry-v5.ts'
 import * as yarnBerryV6 from '../formats/yarn-berry-v6.ts'
@@ -57,7 +55,6 @@ import * as yarnBerryV7 from '../formats/yarn-berry-v7.ts'
 import * as yarnBerryV8 from '../formats/yarn-berry-v8.ts'
 import * as yarnBerryV9 from '../formats/yarn-berry-v9.ts'
 import * as yarnBerryV10 from '../formats/yarn-berry-v10.ts'
-import { rebindAdapterState as rebindYarnBerryState } from '../formats/_yarn-berry-core.ts'
 import * as yarnClassic from '../formats/yarn-classic.ts'
 import {
   enrichAdapterStateInvalidated,
@@ -191,28 +188,6 @@ function sourceAdapterEnrich(
     })
     case 'lockgraph': return { graph, diagnostics: [] }
   }
-}
-
-function rebindSourceState(
-  format: FormatId | undefined,
-  source: Graph,
-  target: Graph,
-): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
-  if (format === undefined || format === 'lockgraph') return { graph: target, invalidated: [] }
-  if (format === 'npm-1') return npm1.rebindAdapterState(source, target)
-  if (format === 'npm-2') {
-    const flat = rebindNpmFlatState(source, target)
-    return {
-      graph: flat.graph,
-      invalidated: [...new Set([...flat.invalidated, ...rebindNpm2MirrorState(source, flat.graph)])].sort(),
-    }
-  }
-  if (format === 'npm-3') return rebindNpmFlatState(source, target)
-  if (format === 'pnpm-v5') return pnpmV5.rebindAdapterState(source, target)
-  if (format === 'pnpm-v6' || format === 'pnpm-v9') return rebindPnpmFlatState(source, target)
-  if (format === 'yarn-classic') return yarnClassic.rebindAdapterState(source, target)
-  if (format.startsWith('yarn-berry-')) return rebindYarnBerryState(source, target)
-  return bunText.rebindAdapterState(source, target)
 }
 
 function appendEvidenceDiagnostics(
@@ -562,12 +537,12 @@ export async function enrich(
     working = working.mutate(() => {}).graph
   }
 
-  let transferred = rebindSourceState(sourceFormat, stateSource, working)
+  let transferred = rebindFormatAdapterState(sourceFormat, stateSource, working)
   if (transferred.invalidated.length > 0) {
     const diagnostic = enrichAdapterStateInvalidated(sourceFormat ?? 'unknown', transferred.invalidated)
     diagnostics.push(diagnostic)
     const withDiagnostic = landDiagnostics(transferred.graph, [diagnostic])
-    transferred = rebindSourceState(sourceFormat, transferred.graph, withDiagnostic)
+    transferred = rebindFormatAdapterState(sourceFormat, transferred.graph, withDiagnostic)
   }
   working = transferred.graph
 
