@@ -49,6 +49,8 @@ import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, pa
 import { catalogResolve, distTagResolve, overrideTargetFor, patchPreferenceFor, semverResolve, type PatchSibling, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import { readInstalledManifest, type InstalledManifestMeta } from '../complete/local-manifest.ts'
 
+// === CONSTANTS =============================================================
+
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
 // (`parseSpec` throws PARSE_FAILED otherwise). Cross-family inputs
 // (pnpm-v9 bare semver ranges) lack the scheme — synthesise `npm:` so
@@ -56,8 +58,8 @@ import { readInstalledManifest, type InstalledManifestMeta } from '../complete/l
 // protocol for registry packages.
 const PROTOCOL_RE = /^[A-Za-z][A-Za-z0-9+\-.]*:/
 
-// #119 NIT A — a GitHub-shorthand range (`owner/repo`, `owner/repo#ref`) is NOT
-// a bare npm range: yarn writes it VERBATIM in both the entry key and the
+// A GitHub-shorthand range (`owner/repo`, `owner/repo#ref`) is not a bare npm
+// range: yarn writes it verbatim in both the entry key and the
 // dependency-block value (`pem: dexus/pem`, `buffer: "mischnic/buffer#…"`),
 // resolving it via the `git`/`github` plugin — it must NEVER be defaulted to
 // `npm:`. This is the no-protocol branch of yarn's `gitUtils.gitPatterns`
@@ -65,17 +67,17 @@ const PROTOCOL_RE = /^[A-Za-z][A-Za-z0-9+\-.]*:/
 // `yarnpkg/berry/packages/plugin-git/sources/gitUtils.ts`:
 //   /^(?:github:|https:\/\/github\.com\/)?(?!\.{1,2}\/)([a-zA-Z._0-9-]+)\/
 //    (?!\.{1,2}(?:#|$))([a-zA-Z._0-9-]+?)(?:\.git)?(?:#.*)?$/
-// reduced to the bare form (the optional `github:`/URL prefix is already caught
+// reduced to the bare form (the optional `github:`/URL prefix is already handled
 // by `PROTOCOL_RE` / `hasExplicitProtocol`, so only the prefix-less `owner/repo`
 // shape reaches here). The `(?!\.{1,2}\/)` / `(?!\.{1,2}(?:#|$))` look-aheads
 // reject `./`-`../` relative paths; the `[a-zA-Z._0-9-]+` segments forbid `:`
 // and whitespace, so a semver range (`5.0.x || 5.1.x`, `>=4.8.4 <6.1.0`) — which
 // never contains `/` — and any protocol-bearing or path range can never match.
-// Validated against the whole real-world berry corpus: the ONLY two prefix-less
-// dependency ranges containing `/` are exactly `dexus/pem` and
-// `mischnic/buffer#b8a4fa94`, both genuine GitHub shorthands.
+// Prefix-less dependency ranges containing `/` use this GitHub shorthand form.
 const GITHUB_SHORTHAND_RE =
   /^(?!\.{1,2}\/)[a-zA-Z._0-9-]+\/(?!\.{1,2}(?:#|$))[a-zA-Z._0-9-]+?(?:\.git)?(?:#.*)?$/
+
+// === HELPERS — LOCATOR IDENTITY ============================================
 
 // Does `range` need the synthesised `npm:` default protocol? No for an explicit
 // `<scheme>:` (already well-formed) and no for a GitHub shorthand (yarn keeps it
@@ -110,12 +112,9 @@ function isLinkOrPortalResolution(resolution: string, name: string): boolean {
 // records a `locator=<encoded-consumer-locator>` qualifier in its `::`-param
 // block, that qualifier names which workspace consumer owns the reference,
 // exactly as for `link:`/`portal:`. Such an entry can collide on NodeId with a
-// sibling registry entry at the SAME name@version yet be a genuinely different
-// artefact (Bug #76: resolution
-// `@k8ts/sample-interfaces@file:.lib/….tgz#….tgz::hash=17d4d9&locator=…`
-// — canonical `tarball`, its own checksum + dep ranges — vs the sibling
-// `@k8ts/sample-interfaces@npm:0.6.3` — registry). They must stay DISTINCT
-// nodes, so the `file:` alias takes the same sentinel-patch disambiguator.
+// sibling registry entry at the same name@version while carrying different
+// resolution, checksum, and dependency data. They must stay distinct nodes, so
+// the `file:` alias takes the same sentinel-patch disambiguator.
 // Gate on the `locator=` qualifier (NB: in the *resolution* it rides the `::`
 // param block as `::hash=…&locator=…`, whereas the *entry key* writes a bare
 // `::locator=…`) so a plain `file:../dir` directory link with no consumer
@@ -141,9 +140,11 @@ const PREAMBLE =
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 const EMPTY_SIDECAR: YarnBerryFamilySidecar = {}
 
+// === TYPES =================================================================
+
 export interface YarnBerryFamilyParseOptions {
   workspaceRoot?: string
-  // Bug #99 — canonical override constraints (ADR-0025), threaded from the public
+  // ADR-0025 canonical override constraints, threaded from the public
   // `parse()` after F6-capturing `ParseOptions.manifests`. yarn writes NO
   // lock-borne resolutions, so a `resolutions` pin that rewrote an entry key to a
   // possibly-NON-satisfying descriptor (csstype `^3.1.3` → `3.0.9`) can only be
@@ -160,7 +161,7 @@ export interface YarnBerryFamilyStringifyOptions {
 }
 
 export interface YarnBerryFamilyEnrichOptions {
-  // Rung-2 fill source for peer-optional reconstruction (task #86). When set,
+  // Rung-2 fill source for peer-optional reconstruction. When set,
   // the enrich pass consults `<workspaceRoot>/node_modules/<parent>/
   // package.json` to recover `peerDependenciesMeta[peer].optional` that a
   // non-yarn source PM (npm / bun / yarn-classic) dropped on parse. Stays
@@ -217,8 +218,8 @@ export interface YarnBerryFamilySidecar {
   // faithfully (corrects ADR-0018 §A.v5, which mis-modelled it as a SymlMap).
   conditions?: Map<string, string>
   // `dependenciesMeta:` ({ pkg: { optional|built|… } }) captured as a verbatim
-  // per-node block. Round-trip-fidelity only — deep EdgeAttrs modelling for
-  // cross-format translation is intentionally out of scope (task #89).
+  // per-node block. Round-trip-fidelity only; cross-format EdgeAttrs modelling
+  // is intentionally out of scope.
   dependenciesMeta?: Map<string, SymlMap>
   // `peerDependenciesMeta:` ({ peer: { optional: true } }) captured verbatim per
   // node and fed to `peerDependenciesMetaOfNode` as its rung-0 hint, so emit goes
@@ -262,8 +263,7 @@ interface DerivedPeer {
   name: string
   range: string
   dstOldId: string
-  // Set true when the fill ladder (task #86) determined this peer is optional
-  // in the parent's manifest; threaded onto the new peer edge's attrs.
+  // True when the fill ladder finds this peer optional in the parent manifest.
   optional?: boolean
 }
 
@@ -317,6 +317,8 @@ interface YarnBerryParsedNodeIdentity {
   readonly id: string
   readonly patchResult: ReturnType<typeof extractPatchFingerprint>
 }
+
+// === PARSE =================================================================
 
 export function hasAdapterState(graph: Graph): boolean {
   return sidecarByGraph.has(graph)
@@ -699,6 +701,8 @@ export function parseFamily(
   return sealYarnBerryParseContext(context)
 }
 
+// === SERIALIZE =============================================================
+
 interface YarnBerryStringifyEntry {
   readonly nodeId: string
   readonly key: string
@@ -820,6 +824,8 @@ export function stringifyFamily(
   writeYarnBerryStringifyEntries(context, collectYarnBerryStringifyEntries(context))
   return { lockfile: emitYarnBerryStringifyResult(context), diagnostics: context.diagnostics }
 }
+
+// === ENRICH ================================================================
 
 interface YarnBerryEnrichContext {
   readonly graph: Graph
@@ -1107,6 +1113,8 @@ export function enrichFamily(
   }
 }
 
+// === OPTIMIZE ==============================================================
+
 export function optimizeFamily(
   graph: Graph,
   _options: YarnBerryFamilyOptimizeOptions = {},
@@ -1128,6 +1136,8 @@ export function optimizeFamily(
   if (result.graph !== graph) rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
   return result
 }
+
+// === SIDECAR ===============================================================
 
 export function rememberSidecar(graph: Graph, sidecar: YarnBerryFamilySidecar): void {
   if (isEmptySidecar(sidecar)) return
@@ -1341,6 +1351,8 @@ export function rawPeerDependenciesMetaBlockOfNode(graph: Graph, nodeId: string)
   return block === undefined ? undefined : coerceSymlMap(block)
 }
 
+// === HELPERS ===============================================================
+
 // F8/#103 — verbatim Rung-4-dropped dep refs for `nodeId` that belong to the
 // given emit block (`dependencies` / `optionalDependencies`). Folded into the
 // live-edge block on emit so a same-format round-trip re-emits them byte-for-byte.
@@ -1507,7 +1519,7 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   // the referencing RANGE(s), and the resolved-version locator is NEVER a key
   // descriptor — so the exact `<name>@npm:<version>` is used only as a LAST-RESORT
   // anchor when the node has no incoming-edge descriptor (keeping reparse bindable),
-  // never prepended alongside real ranges (the B-EXACT synthesis bug).
+  // never prepended alongside real ranges.
   const payload = graph.tarballOf(node.id)
   const specs = reconstructedEntryKeyDescriptors(graph, node, payload)
 
@@ -1590,8 +1602,8 @@ function ensureEntryNameAnchor(
   specs.add(synthesisedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
 }
 
-// Bug #90 — is `secondary` exactly the unqualified prefix of a
-// `::locator=`-qualified `primary` (`<…>@link:packages/x` vs
+// Tests whether `secondary` is the unqualified prefix of a `::locator=`-
+// qualified `primary` (`<…>@link:packages/x` vs
 // `<…>@link:packages/x::locator=<consumer>`)? Such a `secondary` is the BARE
 // descriptor a consumer records for a `link:`/`portal:`/`file:` dep whose
 // resolved entry yarn keyed with the `::locator=` ownership qualifier. The
@@ -1752,8 +1764,7 @@ function entryOfNode(
   const bin = binBlockOfNode(node, payload)
   if (bin !== undefined) entry['bin'] = bin
 
-  // Trailing-field schedule is FIXED by yarn's emitter and verified byte-for-byte
-  // against the real-world berry corpus (v4–v10, ~50k entries, zero inversions):
+  // Yarn's trailing-field schedule is fixed:
   //   … bin, checksum, conditions, languageName, linkType
   // (#117). `checksum` precedes `conditions`, which precedes `languageName`, which
   // precedes `linkType`. Any other interleaving breaks byte-fidelity and
@@ -1851,8 +1862,8 @@ function resolutionOfNode(
     }
     // Local-artefact locator-disambiguator path: the patch slot is a sentinel
     // keyed off the locator string (parse-side disambiguation per ADR-0011),
-    // NOT a real patch — covers `link:` / `portal:` references AND a
-    // `::locator=`-qualified `file:` local-tarball alias (Bug #76). The
+    // not a real patch. It covers `link:` / `portal:` references and a
+    // `::locator=`-qualified `file:` local-tarball alias. The
     // verbatim resolution carries the locator + `::locator=` qualifier intact,
     // so round-trip is lossless — no `RECIPE_FEATURE_DROPPED` to emit.
     if (native !== undefined && isLocalLocatorDisambiguatedResolution(native, node.name)) {
@@ -1889,7 +1900,7 @@ function resolutionOfNode(
   // is undefined here. Its canonical resolution is `{type:'tarball', url}`
   // (the registry tarball), recomposed below to the exact `name@npm:version`
   // line. The bare-`npm:` fallback at the end covers a node with neither native
-  // nor canonical (a hand-built graph), keeping the prior behaviour.
+  // nor canonical (a hand-built graph), keeping the default behaviour.
   //
   // TARBALL SYNTHESIS (cross-format convert): when `native` is a FOREIGN bare
   // URL leaked by a yarn-classic/npm/pnpm source sidecar — NOT a berry locator —
@@ -2036,7 +2047,6 @@ function emittedRangeOfEdge(kind: EdgeKind, range: string, config: YarnBerryFami
   // resolver") and `yarn install` aborts. `entryKeyRangeOf` adds `npm:` only to
   // a prefix-less semver — explicit protocols / GitHub shorthands stay verbatim,
   // and an already-`npm:` range is identity, so round-trip byte-fidelity holds.
-  // (yaf lockgraph-message, 2026-06-20.)
   if (config.rangeEmit !== 'bare') return entryKeyRangeOf(range)
   return range.startsWith('npm:') ? range.slice('npm:'.length) : range
 }
@@ -2111,15 +2121,12 @@ function scalarConditionsHintOfNode(node: Node): string | undefined {
 // `install --immutable` (YN0028 — the pijma/napi-rs break). Faithful port of
 // `@yarnpkg/core` Manifest.getConditions: axes in FIXED order os → cpu → libc, a
 // single value is bare (`os=darwin`), multiple are OR-grouped in parens
-// (`(os=linux | os=android)`), present axes `&`-joined. Verified byte-identical to
-// the real-world corpus on the single-value case (`os=darwin & cpu=arm64`,
-// `os=linux & cpu=x64 & libc=musl`).
+// (`(os=linux | os=android)`), present axes `&`-joined.
 // Faithful port of yarn's `toConditionToken` (@yarnpkg/core Manifest): a value's
 // LEADING `!` run migrates to a prefix BEFORE the axis name — `!win32` → `!os=win32`,
 // NOT `os=!win32` — and an EVEN-length run cancels (`!!win32` → `os=win32`). Getting
 // this wrong is itself a YN0028: yarn recomputes the canonical token on `install
-// --immutable`, sees `os=!win32` ≠ its `!os=win32`, and rewrites. Real trigger:
-// `eiows` publishes `os: ["!win32"]`. Verbatim slice math (incl. the JS `search`
+// --immutable`, sees `os=!win32` ≠ its `!os=win32`, and rewrites. Verbatim slice math (incl. the JS `search`
 // returning -1 for an all-`!` value) mirrors yarn byte-for-byte.
 export function conditionToken(name: string, raw: string): string {
   const index = raw.search(/[^!]/)
@@ -2175,8 +2182,7 @@ function peerDependenciesMetaOfNode(graph: Graph, node: Node, payload: TarballPa
   // then the payload block a COMPLETION-added node carries (a minted node has no
   // sidecar/edges — the payload is its only peer-meta source).
   // Carried through to emit so any NON-`optional` key yarn might write (today it
-  // only writes `optional`) survives unmodelled, per task #89's preserve-via-
-  // sidecar requirement.
+  // only writes `optional`) survives unmodelled through the sidecar.
   const hint = rawPeerDependenciesMetaBlockOfNode(graph, node.id)
     ?? extraBlockOfNode(node, 'peerDependenciesMeta')
     ?? coerceSymlMap(payload?.peerDependenciesMeta)
@@ -2531,7 +2537,7 @@ function ambiguousPeerMessage(peerName: string, candidates: readonly string[]): 
   return `peer "${peerName}" matches multiple installed versions: [${candidates.join(', ')}]`
 }
 
-// === peerDependenciesMeta fill ladder (task #86) ============================
+// === HELPERS — PEER OPTIONALITY ============================================
 
 interface PeerMetaContext {
   workspaceRoot?: string
@@ -2553,8 +2559,8 @@ function peerEdgeKey(src: string, dst: string): string {
   return `${src} ${dst}`
 }
 
-// Rung-0 (task #89): is `peerName` marked optional in the node's VERBATIM
-// `peerDependenciesMeta` sidecar captured from a real berry lock? Authoritative
+// Rung 0 reads `peerName` from the verbatim `peerDependenciesMeta` sidecar.
+// This is the authoritative
 // on-lock signal — no external lookup. Keys are the peer's descriptor name
 // (alias-aware on emit), matched here against the resolved peer name.
 //
@@ -2690,8 +2696,8 @@ function resolvePatchAndLinkFallbacks(
   diagnostics: Diagnostic[],
 ): string | undefined | null {
   if (isPatchRange(normalizedRange)) {
-    // Bug #88 (form b) — the dep is referenced DIRECTLY via a `patch:`
-    // descriptor (`<name>@patch:<inner>#<patchPath>`). The bound patch entry
+    // A direct `patch:` descriptor omits the entry's resolution parameters.
+    // The bound patch entry
     // carries an extra `::version=…&hash=…[&locator=…]` block its consumers
     // omit, so the bare descriptor never hit `specIndex`. Strip the param block
     // off the descriptor and resolve to the patch NODE keyed under it.
@@ -2722,14 +2728,14 @@ export function isRegistryRange(range: string): boolean {
   return !hasExplicitProtocol(range)
 }
 
-// Bug #99 — the descriptor→node ladder's Rung-2/3 inputs (see
+// Descriptor→node ladder inputs for Rungs 2 and 3 (see
 // spec/formats/_common.md §"Descriptor→node resolution"). Bundled so the
 // steady-state Rung-0 exact-match path stays a single `index.get`.
 interface EdgeLadderContext {
   /** name → registry-class candidates for Rung-3 max-satisfying semver. */
   candidatesByName: Map<string, SemverCandidate[]>
-  /** `name@version` → sibling registry-base patch nodes for the Bug #104
-   *  Rung-3 patch-preference OVERLAY (`[]`/absent = none). */
+  /** `name@version` → sibling registry-base patch nodes for the Rung-3
+   *  patch-preference overlay (`[]`/absent = none). */
   patchSiblingsByBase: Map<string, PatchSibling[]>
   /** canonical override constraints for Rung-2 forced links (`[]` = none). */
   overrides: readonly OverrideConstraint[]
@@ -2792,8 +2798,8 @@ function addEdgesFromBlock(
     // (not yet resolved), so the generic UNRESOLVED_DEP fallback is skipped.
     // Rung 0 — exact specIndex match (UNCHANGED, first, O(1)).
     let dstId: string | undefined | null = index.get(lookup)
-    // Bug #104 — track whether Rung 2 (override map) forced this bind, so the
-    // patch-preference OVERLAY does NOT fire on top of an override redirect (the
+    // Track whether Rung 2 forced this bind so patch preference does not
+    // redirect it again (the
     // override already points at whatever node the human declared, patch or not).
     let boundViaOverride = false
     // Rung 1 — patch-descriptor (#88) + link/portal `::locator=` (#90)
@@ -2878,7 +2884,7 @@ function addEdgesFromBlock(
       const result = catalogResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
       if (result.kind === 'bound') dstId = result.id
     }
-    // Bug #104 Rung-3 OVERLAY — PATCH PREFERENCE (berry only). After a REGISTRY
+    // Rung-3 patch-preference overlay (berry only). After a registry
     // range bound its BASE node via Rung 0 or 3 with NO override forcing it, yarn
     // redirects the consumer onto a sibling `patch:` copy of the same
     // `name@version` when the lock carries one (the `patchedDependencies` map
@@ -2963,7 +2969,7 @@ function normalizedEdgeRange(kind: EdgeKind, range: string): string {
   return hasExplicitProtocol(range) || GITHUB_SHORTHAND_RE.test(range) ? range : `npm:${range}`
 }
 
-// Bug #104 — project a bound NodeId to its bare `${name}@${version}` key for the
+// Project a bound NodeId to its bare `${name}@${version}` key for the
 // patch-sibling index lookup, stripping a peerContext `(...)` tail and a
 // `+<slot>=…` disambiguator suffix. At parse time a Rung-0/3-bound base id is
 // already bare (peerContext is empty pre-enrich, a registry base carries no patch
@@ -2994,8 +3000,8 @@ function isLinkOrPortalRange(range: string): boolean {
 }
 
 // Is this dependency range a `patch:` locator (`patch:<inner>#<patchPath>`)?
-// True for a descriptor that references its dep DIRECTLY through a patch
-// (Bug #88, form b). Form a — a plain `npm:`/`workspace:` range whose ENTRY
+// True for a descriptor that references its dep directly through a patch.
+// A plain `npm:`/`workspace:` range whose entry
 // merely happens to carry a `patch:` resolution — is NOT a patch range and
 // resolves through the ordinary `specIndex` path (the entry key is the bare
 // `npm:` descriptor), so it is unaffected here.
@@ -3040,7 +3046,7 @@ export function locatorQualifierOfPatchSpec(spec: string): string | undefined {
   return undefined
 }
 
-// Bug #104 — is this resolution a `@patch:` locator whose patched BASE is an
+// Tests whether this `@patch:` resolution wraps an
 // `npm:` registry artefact (`<name>@patch:<name>@npm%3A<ver>#<patch>…`)? Only such
 // patches are eligible for the patch-preference overlay: the base is a registry
 // node a consumer's `npm:`/bare range can bind, so redirecting to the patched copy
@@ -3056,7 +3062,7 @@ function isNpmBasePatchResolution(resolution: string, name: string): boolean {
   return base !== undefined && base.startsWith(`${name}@npm:`)
 }
 
-// Bug #104 — extract the `::locator=<encoded-consumer>` qualifier from a full
+// Extract the `::locator=<encoded-consumer>` qualifier from a full
 // patch RESOLUTION string (the `node.resolution` carrier), reusing the
 // post-`patch:`-body extractor. Returns undefined when the patch is not bound to
 // a specific consumer (no `locator=` in the `::`-param block).

@@ -84,7 +84,7 @@ import { readWorkspaceFileBytes } from './_path.ts'
 import { optimizeUnreachable } from './_optimize.ts'
 import { readYaml, emitYaml, flowMap, quoted, type YamlMap } from './_pnpm-yaml.ts'
 
-// === Public option types ====================================================
+// === TYPES =================================================================
 
 export interface PnpmFamilyParseOptions {
   /**
@@ -167,7 +167,7 @@ export interface PnpmSettings {
   excludeLinksFromLockfile?: boolean
 }
 
-// === Layout profiles (F1 resolution) =======================================
+// === CONSTANTS — LAYOUT PROFILES ===========================================
 //
 // Discriminated union — each supported on-disk shape is ONE coherent
 // profile object. The shape constants for each variant are pinned in
@@ -272,7 +272,7 @@ function resolveProfile(profile: PnpmLayoutProfile): PnpmLayoutShape {
   return PROFILE_TABLE[profile.profile]
 }
 
-// === Sidecar ===============================================================
+// === SIDECAR ================================================================
 
 export interface PnpmNodeSidecar {
   /** Declared peerDependencies (range record). */
@@ -322,20 +322,13 @@ export interface PnpmSidecar {
    *  ancestor node); the locator is not reproducible, so they surface as gaps. */
   workspacePeerCollisions: Set<string>
   overrides?: Record<string, string>
-  /** Verbatim top-level `catalogs:` block (pnpm v9+ catalog protocol). Captured
-   *  at parse, replayed on emit. The importer `specifier: 'catalog:'` refs
-   *  already round-trip on edges; WITHOUT re-emitting the `catalogs:` definitions
-   *  those refs resolve to nothing → invalid pnpm lockfile (e.g. directus: 662
-   *  catalog refs). Cross-PM `catalog:`→concrete-version resolution is a separate
-   *  concern (#56 layer 2); this just stops the same-PM round-trip drop. */
+  /** Verbatim top-level `catalogs:` block (pnpm v9+ catalog protocol). Replayed
+   *  on same-PM emit so retained `catalog:` specifiers remain resolvable.
+   *  Cross-PM catalog resolution is a separate conversion concern. */
   catalogs?: YamlMap
   /** Verbatim top-level `packageExtensionsChecksum:` scalar (pnpm v6+). pnpm
-   *  recomputes this digest of the effective `packageExtensions` config on every
-   *  install and frozen-compares it; dropping it on a same-PM round-trip makes
-   *  pnpm see "no checksum" ≠ "recomputed checksum" → recompute → NOT frozen-clean
-   *  (vite/angular real locks carry it). A derived digest of the manifest config,
-   *  not of the lock graph, so it round-trips verbatim same-PM and drops naturally
-   *  cross-PM (no sidecar there). */
+   *  frozen-compares this manifest-config digest, so same-PM emit preserves it.
+   *  It drops cross-PM because it is not graph state. */
   packageExtensionsChecksum?: string
   /** Verbatim top-level `patchedDependencies:` block (pnpm v6+): each patched dep
    *  `name@version → { hash, path }`, where `path` is the repo-relative patch file.
@@ -345,10 +338,9 @@ export interface PnpmSidecar {
    *  only the hash), so the block is preserved verbatim, sidecar-only → drops
    *  naturally cross-PM (patch files are pnpm-specific config, not graph state). */
   patchedDependencies?: YamlMap
-  /** Verbatim top-level `pnpmfileChecksum:` scalar (pnpm v9+) — pnpm's digest of
-   *  `.pnpmfile.cjs`. Frozen-compared like `packageExtensionsChecksum`; dropping it
-   *  on a same-PM round-trip breaks `--frozen-lockfile` (real angular lock carries
-   *  it). Manifest-config-derived → sidecar-only, drops naturally cross-PM. */
+  /** Verbatim top-level `pnpmfileChecksum:` scalar (pnpm v9+). pnpm
+   *  frozen-compares this manifest-config digest, so same-PM emit preserves it.
+   *  It drops cross-PM because it is not graph state. */
   pnpmfileChecksum?: string
   /** Verbatim top-level `settings:` block (pnpm v6+). `extractSettings` keeps only
    *  the two resolution-affecting booleans for the model, but pnpm frozen-compares
@@ -434,13 +426,11 @@ export function getPnpmOverridesCanonical(graph: Graph): OverrideConstraint[] | 
   return captureOverrides(versionOnly, 'pnpm').canonical
 }
 
-// === Public API: check / parse / stringify / enrich / optimize =============
+// === PARSE =================================================================
 
 export function checkFamily(input: string, profile: PnpmLayoutProfile): boolean {
   const shape = resolveProfile(profile)
-  // Empirical probe — anchor on the version literal handshake. Both v6 and v9
-  // use quoted strings (`'6.0'` / `'9.0'`), distinguishing them from v5
-  // decimal (`5.4`).
+  // The quoted version literal is the family discriminator; v5 uses a decimal.
   const escaped = shape.lockfileVersion.replace(/\./g, '\\.')
   const re = new RegExp(`^\\s*lockfileVersion\\s*:\\s*['"]${escaped}['"]`, 'm')
   return re.test(input)
@@ -1117,6 +1107,8 @@ function freezeWorkspacePeerProjection(state: WorkspacePeerProjectionState): Pnp
   })
 }
 
+// === SERIALIZE ==============================================================
+
 interface PnpmStringifyContext {
   readonly graph: Graph
   readonly shape: PnpmLayoutShape
@@ -1388,6 +1380,8 @@ export function stringifyFamily(
   return emitPnpmStringifyResult(context)
 }
 
+// === SERIALIZE — VALIDATION =================================================
+
 // ADR-0028 INV-RESOLVE (pnpm v9/v6) — the resolution-graph verifier.
 //
 // For every DECLARED edge `(c → d)` of kind dep/dev/optional (NOT peer), assert
@@ -1560,6 +1554,8 @@ function resolveEmittedTarget(
     ?? resolveAliasedSnapshotTarget(context.seenIds, value, context.importerByPath)
 }
 
+// === ENRICH =================================================================
+
 interface PnpmEnrichContext {
   readonly graph: Graph
   readonly shape: PnpmLayoutShape
@@ -1681,6 +1677,8 @@ export function enrichFamily(
   return { graph: enrichedGraph, diagnostics: context.diagnostics }
 }
 
+// === OPTIMIZE ===============================================================
+
 export function optimizeFamily(
   graph: Graph,
   _profile: PnpmLayoutProfile,
@@ -1707,7 +1705,7 @@ export function optimizeFamily(
   return result
 }
 
-// === Helpers ===============================================================
+// === HELPERS ================================================================
 //
 // Micro-utilities below are exported for consumption by pnpm-family
 // adapters that own their own pipelines but share family-internal infra
@@ -2301,25 +2299,21 @@ function resolveAliasedSnapshotTarget(
  * either the bare id or a parenthesised peer-virt instance. Used by both
  * v9 snapshot edges and v5 peer edges from `packages` entries.
  *
- * `peerVersion` may be a BARE version (`8.0.8`, v5 / leaf peers) or a FULL
+ * `peerVersion` may be a bare version (`8.0.8`, v5 / leaf peers) or a full
  * peer-virt form carrying the consumer's recorded nested suffix
- * (`8.0.8(@types/node@…)(esbuild@0.26.0)…`, v9 #70). Resolution order:
+ * (`8.0.8(@types/node@…)(esbuild@0.26.0)…`). Resolution order:
  *   1. EXACT match on the full form — selects the precise virtual-store
- *      instance when the consumer's suffix equals the target node's id (the
- *      directus `vite` #70 case: two `vite@8.0.8(…)` siblings differing only
- *      in `esbuild`, each spelled in full on the consumer).
+ *      instance when same-version siblings differ only by peer context.
  *   2. EXACT match on the bare base.
  *   3. PREFIX scan on the bare base (`base@ver(`) — first match. pnpm records
  *      only a SUBSET of a peer's transitive peers on a consumer's reference
- *      (e.g. supabase's `next@16.2.6(…)` ref omits the target's
- *      `babel-plugin-macros@3.1.0`), so the full form may match no node id.
+ *      on some consumer references, so the full form may match no node id.
  *      The bare prefix scan still wires the edge to a real instance, keeping
  *      the peer-edge ↔ peerContext base-key bijection (the seal, ADR-0017)
  *      intact — the seal compares BASE keys, so any same-base instance
  *      satisfies it. A consumer carries at most one peer per name, so this
- *      cannot collapse two distinct same-name peers (that #70 hazard lives in
- *      the `dependencies` block, fixed by the peerContext token carrying the
- *      suffix — not here).
+ *      cannot collapse two distinct same-name peers; dependency slots retain
+ *      their full peer-context token.
  */
 export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, peerVersion: string): string | undefined {
   const fullId = `${peerName}@${peerVersion}`
@@ -2365,7 +2359,7 @@ export function resolveWorkspacePeerId(
   // e.g. a package published from a sub-dir encodes `packages+<name>+build`
   // (`packages/<name>/build`) while the importer is `packages/<name>`.
   // Walk up to the nearest ANCESTOR importer. Never match the root `.` (it
-  // prefixes every path); a real semver `+build` tail simply finds no importer.
+  // prefixes every path); an ordinary semver `+build` tail finds no importer.
   while (path.includes('/')) {
     path = path.slice(0, path.lastIndexOf('/'))
     if (path.length === 0 || path === '.') break
