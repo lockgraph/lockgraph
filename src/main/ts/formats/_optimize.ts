@@ -4,6 +4,7 @@ import {
   toTarballKey,
   type Diagnostic,
   type Graph,
+  type GraphResult,
   type Node,
   type NodeId,
   type TarballKeyInputs,
@@ -17,6 +18,10 @@ export interface UnreachableOptimizationOptions {
   readonly skipMissingTarballs: boolean
 }
 
+type UnreachableOptimizationResult = GraphResult & {
+  readonly diagnostics: Diagnostic[]
+}
+
 /**
  * Shared adapter optimization invariant: prune nodes unreachable from the
  * adapter's roots, remove their internal edges in deterministic order, and
@@ -26,7 +31,7 @@ export interface UnreachableOptimizationOptions {
 export function optimizeUnreachable(
   graph: Graph,
   options: UnreachableOptimizationOptions,
-): { graph: Graph; diagnostics: Diagnostic[] } {
+): UnreachableOptimizationResult {
   const reachable = new Set(graph.walk(Array.from(options.seeds)))
   const unreachableNodes = Array.from(graph.nodes(), node => node.id)
     .filter(nodeId => !reachable.has(nodeId))

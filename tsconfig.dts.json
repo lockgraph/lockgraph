@@ -5,6 +5,7 @@
     "emitDeclarationOnly": true,
     "declaration": true,
     "declarationMap": false,
+    "stripInternal": true,
     "removeComments": true,
     "rootDir": "src/main/ts",
     "outDir": "dist"
