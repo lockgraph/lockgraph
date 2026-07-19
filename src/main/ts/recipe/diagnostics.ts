@@ -338,7 +338,7 @@ export function emitPatchNormalised(
   onDiagnostic(patchNormalisedDiagnostic(nodeId))
 }
 
-// === F6 manifest override capture diagnostics ==============================
+// === F6 manifest override capture diagnostics ===============================
 //
 // `RECIPE_OVERRIDE_NORMALISED` (info, per ADR-0025 §6) — emitted once per
 // successful `captureOverrides` call when a manifest's PM-native override

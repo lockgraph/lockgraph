@@ -16,10 +16,10 @@
 //     these three generations is pako's match-finding hash (spec/formats/_common.md
 //     §1.7 checksum matrix):
 //       – cacheKey 7/8 (yarn 2.4 / 3.1–3.8): pako's LEGACY hash (`legacyHash:true`),
-//         proven over real caches + mware's real lock (ADR-0035 §7).
+//         proven over real cache archives (ADR-0035 §7).
 //       – cacheKey 9  (yarn 4.0.0-rc.27…4.0.0 — the Yarn-4 RC window, lockfile v7):
 //         pako's "nodejs-compatible" hash (`legacyHash:false`) — verified byte-exact
-//         over the real cache (40/40) + the qiwi-nestjs-enterprise v7 lock.
+//         over the real v7 cache archive.
 //     cacheKey 10 (yarn-4 stable `mixed`) is built by yarn's zlib-ng, whose DEFLATE pako
 //     matches at NEITHER hash — so v10-`mixed` throws and the caller soft-falls-back
 //     to the OPTIONAL `@yarnpkg/libzip` backend (when installed — yarn's OWN packer,
@@ -233,7 +233,7 @@ const STORE_MIN_CACHE_VERSION = 8
 /** Whether `computeBerryChecksum` can byte-reproduce a digest for `cacheKey`:
  *  STORE (`cN0`) at cacheKey VERSION >= 8, or `mixed` at cacheKey VERSION 7/8/9.
  *  Keyed off the PER-LOCK cacheKey, not the lockfile format version (so a bare-
- *  era v6 lock at cacheKey 8 — yarn 3.8 / mware — is fillable; a cacheKey-10
+ *  era v6 lock at cacheKey 8 — yarn 3.8 — is fillable; a cacheKey-10
  *  `mixed`, an explicit `cN`, STORE below v8, or a malformed key defers). */
 export function berryCacheKeyReproducible(cacheKey: string): boolean {
   const p = parseCacheKey(cacheKey)
