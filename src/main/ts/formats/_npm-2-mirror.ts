@@ -40,10 +40,6 @@ import {
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 
-function deriveLegacyResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
-  if (canonical === undefined) return undefined
-  return stringifyForNpm(canonical)
-}
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -56,7 +52,7 @@ import {
   type NpmSidecar,
 } from './_npm-flat-types.ts'
 
-// === Sidecar state ==========================================================
+// === SIDECAR ===============================================================
 
 // npm-2-only composed sidecar — recovered `resolved` URLs per NodeId,
 // keyed for emit-time mirror reconstruction. Absent on npm-3.
@@ -80,7 +76,7 @@ export function setMirrorSidecar(graph: Graph, sidecar: Npm2MirrorSidecar): void
   mirrorSidecarByGraph.set(graph, sidecar)
 }
 
-// === Public hooks (wired by `npm-2.ts` into NpmFamilyConfig.hooks) =========
+// === API ===================================================================
 
 export const NPM2_HOOKS: NpmFamilyHooks = {
   validateTopLevel(lf: NpmLockfile): void {
@@ -168,7 +164,7 @@ export function rebindNpm2MirrorState(
   return invalidated
 }
 
-// === Dual-mode drift detection (parse-side) ================================
+// === PARSE — DUAL-MODE DRIFT ==============================================
 
 // Detect mismatches between `packages` and the legacy `dependencies` mirror
 // for npm-2 dual-mode reconciliation. Returns the set of mirror entry names
@@ -216,14 +212,13 @@ export function detectDualModeDrift(
   return Array.from(drift).sort(cmpStr)
 }
 
-// === Legacy mirror reconstruction (stringify-side) =========================
+// === SERIALIZE — LEGACY MIRROR ============================================
 
 interface LegacyMirrorContext {
   graph: Graph
   sidecar: NpmSidecar | undefined
   rootId: string | undefined
-  // workspacePath -> NodeId for "we recognise this install path as a
-  // workspace symlink" lookups when building nested mirrors.
+  // workspacePath -> NodeId for recognized workspace-symlink install paths.
   workspacePathToId: Map<string, string>
   // NodeId -> workspacePath for the reverse lookup.
   workspacePathById: Map<string, string>
@@ -431,4 +426,9 @@ function synthesizeFromSpec(ctx: LegacyMirrorContext, node: Node): string | unde
     }
   }
   return undefined
+}
+
+function deriveLegacyResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
+  if (canonical === undefined) return undefined
+  return stringifyForNpm(canonical)
 }

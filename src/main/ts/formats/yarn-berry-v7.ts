@@ -14,11 +14,9 @@
 //   - conditionsAllowed: true         — `conditions:` block is supported
 //                     (v5+ inheritance per ADR-0018 §A.delta).
 //
-// ADR-0018 does not list v7 in its concrete-deltas table; the v7 generation
-// was a brief Yarn 4 transitional state. The follow-up amendment is tracked
-// via QUEUE.md (see commit message); this adapter is a strict mechanical
-// composition of existing `_yarn-berry-core` capabilities, so no ADR change
-// is required to ship.
+// ADR-0018 does not list v7 in its concrete-deltas table. QUEUE.md tracks the
+// required specification amendment; this adapter strictly composes existing
+// `_yarn-berry-core` capabilities.
 
 import type { Diagnostic, Graph } from '../graph.ts'
 import {

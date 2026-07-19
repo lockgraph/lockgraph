@@ -12,13 +12,10 @@ import {
 } from './_yarn-berry-core.ts'
 
 // `__metadata.version: 10` — yarn 5 dev-branch / yarnpkg-berry master.
-// Bumped in `Project.ts` (LOCKFILE_VERSION constant) ahead of yarn 5 GA. Structural
-// body is identical to v9 at the time of this adapter's introduction —
-// the bump is mechanical (`version: N` field only). Family config tracks
-// v9 verbatim: `quoted-protocol` range emit, `cachekey-prefixed` checksum,
-// `conditions:` block permitted on entries. When yarn 5 ships a real
-// structural change in the lockfile body, fork the family config from this
-// constant rather than re-pointing v10 to share v9's identity.
+// The structural body currently matches v9; the bump is mechanical (`version:
+// N` only). Family config tracks v9's `quoted-protocol` range emit,
+// `cachekey-prefixed` checksum, and permitted `conditions:` block, but remains
+// separately owned so future v10 changes cannot alter v9 identity.
 const CONFIG = {
   lockfileVersion: 10,
   codePrefix: 'YARN_BERRY_V10',

@@ -24,7 +24,7 @@
 // npm-1 (recursive `dependencies` tree shape) is OUT OF SCOPE for this
 // core — the tree walker is fundamentally different from the flat-shape
 // `packages` reader/writer and forcing a unified pipeline rots both
-// sides. The future npm-1 adapter will reuse the standalone utilities
+// sides. The npm-1 adapter reuses the standalone utilities
 // (`cmpStr`, `sortRecord`, `derivePeerCandidates`, `pruneSidecar`,
 // `resolveDepTarget`) but own its top-level parse/stringify pipeline,
 // matching the yarn-classic precedent.
@@ -89,6 +89,8 @@ import {
   type NpmSidecar,
 } from './_npm-flat-types.ts'
 
+// === API ===================================================================
+
 // Re-export shared types/utilities so adapter thin entries that import
 // from `_npm-core.ts` keep working without touching the types module
 // directly.
@@ -109,13 +111,15 @@ export {
   type NpmSidecar,
 }
 
+// === SIDECAR ===============================================================
+
 const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
 
 export function hasAdapterState(graph: Graph): boolean {
   return sidecarByGraph.has(graph)
 }
 
-// === checkFamily ===========================================================
+// === PARSE — HANDSHAKE =====================================================
 
 export function checkFamily(input: string, config: NpmFamilyConfig): boolean {
   const versionRe = new RegExp(`"lockfileVersion"\\s*:\\s*${config.lockfileVersion}\\b`)
@@ -132,7 +136,7 @@ export function checkFamily(input: string, config: NpmFamilyConfig): boolean {
   }
 }
 
-// === parseFamily ===========================================================
+// === PARSE — GRAPH CONSTRUCTION ===========================================
 
 export function parseFamily(
   input: string,
@@ -299,7 +303,7 @@ export function parseFamily(
       throw parseFailed(config, `entry ${JSON.stringify(path)} missing version`)
     }
     // ADR-0032 — fold the `+src=` non-registry discriminator into the NodeId so a
-    // git `is@6.3.1` does not collapse onto a registry `is@6.3.1` (#2b).
+    // git `is@6.3.1` cannot collapse onto a registry `is@6.3.1`.
     const source = sourceDiscriminatorOfNpmEntry(entry)
     const id = serializeNodeId(tailName, version, [], undefined, source)
     pathToId.set(path, id)
@@ -387,8 +391,8 @@ export function parseFamily(
   // Defensive capture ONLY. Real npm `package-lock.json` carries NO
   // `packages[""].overrides` — npm reads the override policy from the root
   // MANIFEST, never the lock (canary: overrides-canary.test.ts). This fires only
-  // for a non-native lock that happens to carry the field; we preserve it in the
-  // graph (`nativeOverrides` verbatim + `overrides` canonical for query) but
+  // for a non-native lock that happens to carry the field; capture preserves it
+  // in the graph (`nativeOverrides` verbatim + `overrides` canonical for query) but
   // NEVER re-emit it into npm output (see stringify — the field is not npm-native
   // and cannot preserve policy). F6 capture is recipe-pure; RECIPE_OVERRIDE_
   // NORMALISED funnels through the same `diagnostics` buffer as the rest of parse.
@@ -443,7 +447,7 @@ export function parseFamily(
   }
 }
 
-// === stringifyFamily =======================================================
+// === SERIALIZE =============================================================
 
 export function stringifyFamily(
   graph: Graph,
@@ -480,7 +484,7 @@ export function stringifyFamily(
   // from `package-lock.json`: real npm locks carry no `packages[""].overrides`
   // (canary: overrides-canary.test.ts), and npm — unlike pnpm 6–10, which
   // deep-compare a lock `overrides` block in frozen mode — does not consume such
-  // a field. So we do NOT synthesize it into npm output: it cannot preserve
+  // a field. Stringify does NOT synthesize it into npm output: it cannot preserve
   // policy (npm ignores it) and would create false `npm ci` confidence while
   // weakening byte-stability. When there IS an override policy to carry (caller
   // `options.overrides`, or one captured from a non-native lock / a manifest), it
@@ -514,7 +518,7 @@ export function stringifyFamily(
     // otherwise emit one extra top-level link beyond npm's set). The
     // flag is captured layout attribution, replayed here. A cross-PM / post-mutate
     // graph carries no sidecar, so the default (no flag ⇒ linked) links every
-    // member — matching the prior unconditional behaviour for the generate path.
+    // member.
     const extraneous = sidecar?.nodes.get(node.id)?.extraneous === true
     if (!extraneous) {
       packages[`node_modules/${node.name}`] = {
@@ -552,7 +556,7 @@ export function stringifyFamily(
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
-// === enrichFamily ==========================================================
+// === ENRICH ================================================================
 
 export function enrichFamily(
   graph: Graph,
@@ -632,7 +636,7 @@ export function enrichFamily(
   return { graph: result.graph, diagnostics }
 }
 
-// === optimizeFamily ========================================================
+// === OPTIMIZE ==============================================================
 
 export function optimizeFamily(
   graph: Graph,
@@ -664,7 +668,7 @@ export function optimizeFamily(
   return result
 }
 
-// === derivePeerCandidates (exported for cross-format reuse) ===============
+// === HELPERS — PEER CANDIDATES ============================================
 
 export type PeerCandidateOutcome =
   | { kind: 'single'; candidate: string }
@@ -689,7 +693,7 @@ export function derivePeerCandidates(graph: Graph, peerName: string, range: stri
   return { kind: 'ambiguous', candidates }
 }
 
-// === pruneSidecar ==========================================================
+// === SIDECAR — PRUNING =====================================================
 
 export function pruneSidecar(sidecar: NpmSidecar, graph: Graph): NpmSidecar {
   const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))
@@ -723,7 +727,7 @@ export function pruneSidecar(sidecar: NpmSidecar, graph: Graph): NpmSidecar {
   }
 }
 
-// === Sidecar accessor (exported for hook implementations) =================
+// === SIDECAR — ACCESS ======================================================
 
 export function getFlatSidecar(graph: Graph): NpmSidecar | undefined {
   return sidecarByGraph.get(graph)
@@ -747,7 +751,7 @@ export function rebindAdapterState(
   return { graph: target, invalidated }
 }
 
-// === Helpers ===============================================================
+// === HELPERS ===============================================================
 
 function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
   let parsed: unknown
@@ -800,7 +804,7 @@ function hasTarballPayload(entry: NpmEntry): boolean {
 // ADR-0032 — the `+src=` discriminator for an npm entry's NON-REGISTRY source.
 // npm keys an install entry's node by `<name>@<version>` (the resolution URL is
 // only the `resolved:` field), so a registry `is@6.3.1` and a git `is@6.3.1`
-// would collapse onto one NodeId (#2b). Derived from the same `resolved`-URL
+// would collapse onto one NodeId. Derived from the same `resolved`-URL
 // canonical as `tarballPayloadOf`; bare for registry / directory / link / absent
 // (zero registry blast radius). A `link:` entry is a workspace/local link whose
 // identity is on Node.workspacePath, never source-discriminated.
@@ -878,8 +882,8 @@ function addDepEdges(
     }
     // EdgeAttrs.alias — preserved when the manifest dep key differs from
     // the target's actual name. npm encodes aliases via `node_modules/<alias>`
-    // entries whose `entry.name` is the target's real name; we already
-    // resolve dstId through that channel, so a mismatch between `name`
+    // entries whose `entry.name` is the target's real name; resolution already
+    // follows that channel, so a mismatch between `name`
     // (the manifest key) and the dst node's name reveals the alias.
     // `edgeRanges` / `edgeDeclaredNames` keep the existing 3-part key
     // shape (pruneSidecar splits on `|`); cross-format consumers that
