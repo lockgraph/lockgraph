@@ -81,6 +81,18 @@ export interface EnrichResult {
   readonly diagnostics: readonly Diagnostic[]
 }
 
+interface SourceAdapterContext {
+  readonly manifests: Record<string, Manifest> | undefined
+  readonly overrides: readonly OverrideConstraint[]
+}
+
+interface SourceAdapterContract {
+  readonly enrich: (
+    graph: Graph,
+    context: SourceAdapterContext,
+  ) => GraphResult
+}
+
 interface MemoizedRegistry {
   readonly adapter: RegistryAdapter
   readonly packuments: ReadonlyMap<string, Promise<Packument | undefined>>
@@ -160,34 +172,65 @@ function mutableManifests(
   return manifests === undefined ? undefined : mutableValue(manifests)
 }
 
+const SOURCE_ADAPTER_REGISTRY: Readonly<Record<FormatId, SourceAdapterContract>> = {
+  'bun-text': {
+    enrich(graph, { manifests }) {
+      const manifestOptions = manifests === undefined ? {} : { manifests }
+      return bunText.enrich(graph, manifestOptions)
+    },
+  },
+  'npm-1': {
+    enrich(graph, { manifests }) {
+      const manifestOptions = manifests === undefined ? {} : { manifests }
+      return npm1.enrich(graph, manifestOptions)
+    },
+  },
+  'npm-2': { enrich: graph => npm2.enrich(graph) },
+  'npm-3': { enrich: graph => npm3.enrich(graph) },
+  'pnpm-v5': {
+    enrich(graph, { manifests }) {
+      const manifestOptions = manifests === undefined ? {} : { manifests }
+      return pnpmV5.enrich(graph, manifestOptions)
+    },
+  },
+  'pnpm-v6': {
+    enrich(graph, { manifests }) {
+      const manifestOptions = manifests === undefined ? {} : { manifests }
+      return pnpmV6.enrich(graph, manifestOptions)
+    },
+  },
+  'pnpm-v9': {
+    enrich(graph, { manifests }) {
+      const manifestOptions = manifests === undefined ? {} : { manifests }
+      return pnpmV9.enrich(graph, manifestOptions)
+    },
+  },
+  'yarn-berry-v4': { enrich: graph => yarnBerryV4.enrich(graph) },
+  'yarn-berry-v5': { enrich: graph => yarnBerryV5.enrich(graph) },
+  'yarn-berry-v6': { enrich: graph => yarnBerryV6.enrich(graph) },
+  'yarn-berry-v7': { enrich: graph => yarnBerryV7.enrich(graph) },
+  'yarn-berry-v8': { enrich: graph => yarnBerryV8.enrich(graph) },
+  'yarn-berry-v9': { enrich: graph => yarnBerryV9.enrich(graph) },
+  'yarn-berry-v10': { enrich: graph => yarnBerryV10.enrich(graph) },
+  'yarn-classic': {
+    enrich(graph, { manifests, overrides }) {
+      const manifestOptions = manifests === undefined ? {} : { manifests }
+      return yarnClassic.enrich(graph, undefined, {
+        ...manifestOptions,
+        overrides,
+      })
+    },
+  },
+  lockgraph: { enrich: graph => ({ graph, diagnostics: [] }) },
+}
+
 function sourceAdapterEnrich(
   format: FormatId,
   graph: Graph,
   manifests: Record<string, Manifest> | undefined,
   overrides: readonly OverrideConstraint[],
 ): GraphResult {
-  const manifestOptions = manifests === undefined ? {} : { manifests }
-  switch (format) {
-    case 'bun-text': return bunText.enrich(graph, manifestOptions)
-    case 'npm-1': return npm1.enrich(graph, manifestOptions)
-    case 'npm-2': return npm2.enrich(graph)
-    case 'npm-3': return npm3.enrich(graph)
-    case 'pnpm-v5': return pnpmV5.enrich(graph, manifestOptions)
-    case 'pnpm-v6': return pnpmV6.enrich(graph, manifestOptions)
-    case 'pnpm-v9': return pnpmV9.enrich(graph, manifestOptions)
-    case 'yarn-berry-v4': return yarnBerryV4.enrich(graph)
-    case 'yarn-berry-v5': return yarnBerryV5.enrich(graph)
-    case 'yarn-berry-v6': return yarnBerryV6.enrich(graph)
-    case 'yarn-berry-v7': return yarnBerryV7.enrich(graph)
-    case 'yarn-berry-v8': return yarnBerryV8.enrich(graph)
-    case 'yarn-berry-v9': return yarnBerryV9.enrich(graph)
-    case 'yarn-berry-v10': return yarnBerryV10.enrich(graph)
-    case 'yarn-classic': return yarnClassic.enrich(graph, undefined, {
-      ...manifestOptions,
-      overrides,
-    })
-    case 'lockgraph': return { graph, diagnostics: [] }
-  }
+  return SOURCE_ADAPTER_REGISTRY[format].enrich(graph, { manifests, overrides })
 }
 
 function appendEvidenceDiagnostics(
