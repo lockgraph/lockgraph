@@ -3,6 +3,7 @@ import {
   toTarballKey,
   type Diagnostic,
   type Graph,
+  type GraphResult,
   type Manifest,
   type OverrideConstraint,
   type TarballKey,
@@ -167,7 +168,7 @@ function sourceAdapterEnrich(
   graph: Graph,
   manifests: Record<string, Manifest> | undefined,
   overrides: readonly OverrideConstraint[],
-): Readonly<{ graph: Graph; diagnostics: readonly Diagnostic[] }> {
+): GraphResult {
   const manifestOptions = manifests === undefined ? {} : { manifests }
   switch (format) {
     case 'bun-text': return bunText.enrich(graph, manifestOptions)

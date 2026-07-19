@@ -268,6 +268,29 @@ export interface MutateResult {
   unresolved: Diagnostic[]
 }
 
+/**
+ * Result of a graph-transforming operation.
+ * @internal
+ */
+export interface GraphResult {
+  readonly graph: Graph
+  readonly diagnostics: readonly Diagnostic[]
+}
+
+/**
+ * Manifest fields accepted by dependency-declaration consumers.
+ * @internal
+ */
+export type DependencyManifest = Pick<
+  Manifest,
+  | 'name'
+  | 'version'
+  | 'dependencies'
+  | 'devDependencies'
+  | 'optionalDependencies'
+  | 'peerDependencies'
+>
+
 export interface Mutator {
   replaceNode(id: NodeId, newNode: Node):                                   void
   addNode(node: Node):                                                      void
