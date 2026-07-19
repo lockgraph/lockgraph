@@ -511,7 +511,7 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
   }
   // Sort: unpatched nodes first (patch === undefined) for any given
   // `<name>@<version>` tuple, so the dedup loop below keeps the cleaner shape
-  // and the patched siblings are dropped via `warnPatchDrop` /
+  // and the patched siblings are dropped via `reportPatchDrop` /
   // RECIPE_FEATURE_DROPPED. bun-text has no patch protocol, so patched and
   // unpatched siblings of the same `<name>@<version>` collapse onto one
   // entry on reparse — emit only one to keep the seal invariant.
@@ -525,16 +525,16 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
   const warnedResolutions = new Set<string>()
   const emittedNameVersion = new Set<string>()
   for (const node of regularNodes) {
-    warnPatchDrop(node, warnedPatches, emitDiagnostic)
-    warnPeerVirt(node, warnedPeerVirt, emitDiagnostic)
-    warnResolutionDrop(graph, node, warnedResolutions, emitDiagnostic)
+    reportPatchDrop(node, warnedPatches, emitDiagnostic)
+    reportPeerVirt(node, warnedPeerVirt, emitDiagnostic)
+    reportResolutionDrop(graph, node, warnedResolutions, emitDiagnostic)
 
     const nameVersion = `${node.name}@${node.version}`
     if (emittedNameVersion.has(nameVersion)) {
       // Patched sibling of a `<name>@<version>` already emitted — bun-text
       // has no patch protocol, so this would collapse onto the same key on
       // reparse and break the seal with a duplicate-edge error. Drop the
-      // duplicate emit; the `warnPatchDrop` diagnostic already encodes the
+      // duplicate emit; the `reportPatchDrop` diagnostic already encodes the
       // RECIPE_FEATURE_DROPPED loss.
       continue
     }
@@ -1141,7 +1141,7 @@ function chooseNodeEmitKey(
   return `${node.name}@${node.version}`
 }
 
-function warnPatchDrop(
+function reportPatchDrop(
   node: Node,
   warned: Set<string>,
   emitDiagnostic: (diagnostic: Diagnostic) => void,
@@ -1162,7 +1162,7 @@ function warnPatchDrop(
 // no representation in bun-text and are dropped with RECIPE_FEATURE_DROPPED.
 // Nodes that ALSO drop patch (F2) skip the F3 drop — the patch diagnostic
 // already represents the loss (the F3 unknown shape is the patch locator).
-function warnResolutionDrop(
+function reportResolutionDrop(
   graph: Graph,
   node: Node,
   warned: Set<string>,
@@ -1182,7 +1182,7 @@ function warnResolutionDrop(
   )
 }
 
-function warnPeerVirt(
+function reportPeerVirt(
   node: Node,
   warned: Set<string>,
   emitDiagnostic: (diagnostic: Diagnostic) => void,

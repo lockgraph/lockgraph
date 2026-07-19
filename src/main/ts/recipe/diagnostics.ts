@@ -414,7 +414,7 @@ export function interopOverrideNotProjected(pm: 'yarn' | 'npm', count: number): 
  * Iterate every `Node.patch !== undefined` on `graph` and fire
  * `RECIPE_FEATURE_DROPPED (feature='patch')` once per affected node.
  * The universal patch-incapable-adapter helper — replaces per-adapter
- * `warnPatchDrop` family across yarn-classic / npm / pnpm-v5 / bun-text.
+ * `reportPatchDrop` family across yarn-classic / npm / pnpm-v5 / bun-text.
  */
 export function dropAllPatchSlots(
   graph: Graph,

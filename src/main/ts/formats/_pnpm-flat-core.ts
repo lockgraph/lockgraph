@@ -521,7 +521,7 @@ function capturePnpmParseSidecar(yaml: YamlMap): PnpmSidecar {
  * This must precede package parsing: workspace peers encode importer paths in
  * peer locators, and those paths participate in the package NodeId.
  */
-function synthesisePnpmImporterNodes(context: PnpmParseContext): void {
+function synthesizePnpmImporterNodes(context: PnpmParseContext): void {
   const { yaml, shape, builder, sidecar, effectiveImporters, importerPaths } = context
   const importersMap = isPlainObject(yaml.importers) ? yaml.importers : undefined
   const collapsedRootDeps = isCollapsedRoot(yaml, shape)
@@ -886,7 +886,7 @@ export function parseFamily(
   profile: PnpmLayoutProfile,
 ): Graph {
   const context = createPnpmParseContext(input, options, profile)
-  synthesisePnpmImporterNodes(context)
+  synthesizePnpmImporterNodes(context)
   addPnpmPackageNodes(context)
   addPnpmImporterEdges(context)
   addPnpmResolvedTreeEdges(context)
@@ -1141,7 +1141,7 @@ function createPnpmStringifyContext(
     options,
     internal,
     emitDiagnostic: diagnostic => options.onDiagnostic?.(diagnostic),
-    effectiveOverrides: synthesiseOverridePatches(graph, sidecar),
+    effectiveOverrides: synthesizeOverridePatches(graph, sidecar),
     rootNode: locatePnpmRootNode(graph, sidecar),
     workspaceNodes: [],
     resolvedNodes: [],
@@ -3143,7 +3143,7 @@ function resolvePatchForNode(
 // attribution wins when present, else a default entry is synthesised from
 // `Node.resolution` (preserves cross-format conversion's source-side
 // path) or from a generic per-hash convention.
-function synthesiseOverridePatches(
+function synthesizeOverridePatches(
   graph: Graph,
   sidecar: PnpmSidecar | undefined,
 ): Record<string, string> {

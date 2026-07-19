@@ -539,8 +539,8 @@ function createNpm1StringifyContext(
 
 function collectNpm1EmittableNodes(context: Npm1StringifyContext): void {
   for (const node of context.graph.nodes()) {
-    warnPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
-    warnPeerContextFlatten(node, context.warnedPeerVirt, context.emitDiagnostic)
+    reportPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
+    reportPeerContextFlatten(node, context.warnedPeerVirt, context.emitDiagnostic)
     if (context.rootNode !== undefined && node.id === context.rootNode.id) continue
     if (node.workspacePath !== undefined && node.workspacePath !== '') {
       reportNpm1WorkspaceDrop(context, node)
@@ -1152,7 +1152,7 @@ export function firstConsumerInstallPath(
 
 // === SERIALIZE — LOSS DIAGNOSTICS ===========================================
 
-function warnPeerContextFlatten(
+function reportPeerContextFlatten(
   node: Node,
   warned: Set<string>,
   emitDiagnostic: (diagnostic: Diagnostic) => void,
@@ -1167,7 +1167,7 @@ function warnPeerContextFlatten(
   })
 }
 
-function warnPatchDrop(
+function reportPatchDrop(
   node: Node,
   warned: Set<string>,
   emitDiagnostic: (diagnostic: Diagnostic) => void,

@@ -529,7 +529,7 @@ function dedupeClassicNodes(context: ClassicStringifyContext): Node[] {
       ? `${node.name}@${node.version}`
       : `${node.name}@${node.version}+src=${node.source}`
     if (identities.has(identity)) {
-      warnPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
+      reportPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
       continue
     }
     identities.add(identity)
@@ -542,9 +542,9 @@ function buildClassicEntry(
   context: ClassicStringifyContext,
   node: Node,
 ): { key: string; text: string; entrySortKey: string } {
-  warnPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
-  warnPeerContextFlatten(node, context.warnedPeerContexts, context.emitDiagnostic)
-  warnDroppedPeerEdges(context.graph, node.id, context.warnedPeerEdges, context.emitDiagnostic)
+  reportPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
+  reportPeerContextFlatten(node, context.warnedPeerContexts, context.emitDiagnostic)
+  reportDroppedPeerEdges(context.graph, node.id, context.warnedPeerEdges, context.emitDiagnostic)
   const specs = entrySpecsOfNode(context.graph, node)
   const key = stringifyEntryKey(specs)
   const lines = [`${key}:`, `  version "${escapeQuoted(node.version)}"`]
@@ -1981,7 +1981,7 @@ function withUnresolvedDepRefs(
   return Array.from(byName.entries()).sort((a, b) => cmpUtf16(a[0], b[0]))
 }
 
-function warnDroppedPeerEdges(
+function reportDroppedPeerEdges(
   graph: Graph,
   srcId: string,
   warned: Set<string>,
@@ -2004,7 +2004,7 @@ function warnDroppedPeerEdges(
   }
 }
 
-function warnPeerContextFlatten(
+function reportPeerContextFlatten(
   node: Node,
   warned: Set<string>,
   emitDiagnostic: (diagnostic: Diagnostic) => void,
@@ -2019,7 +2019,7 @@ function warnPeerContextFlatten(
   })
 }
 
-function warnPatchDrop(
+function reportPatchDrop(
   node: Node,
   warned: Set<string>,
   emitDiagnostic: (diagnostic: Diagnostic) => void,
@@ -2277,7 +2277,7 @@ export function deriveResolvedFromCanonical(
   // emit to re-parseable shapes only: URLs PLUS the `file:` / `link:` /
   // `portal:` local specifiers (a `directory` canonical projects to
   // `file:./<path>`, #83 finding 1). The underlying loss is already attributed
-  // by `warnPatchDrop` / `RECIPE_FEATURE_DROPPED` upstream when relevant.
+  // by `reportPatchDrop` / `RECIPE_FEATURE_DROPPED` upstream when relevant.
   if (
     candidate !== undefined
     && !isYarnClassicResolvableUrl(candidate)
