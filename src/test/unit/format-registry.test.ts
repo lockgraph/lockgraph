@@ -10,7 +10,9 @@ import {
   FORMAT_REGISTRY,
   checkFormat,
   detectFormat,
+  hasFormatAdapterState,
   parseFormat,
+  rebindFormatAdapterState,
   stringifyFormat,
 } from '../../main/ts/api/format-registry.ts'
 
@@ -84,6 +86,56 @@ describe('typed format registry — inventory and raw dispatch', () => {
     const graph = parseFormat(format, input)
     const output = stringifyFormat(format, graph)
     expect(checkFormat(format, output)).toBe(true)
+  })
+})
+
+describe('typed format registry — adapter state dispatch', () => {
+  it.each(EXPECTED_FORMATS)('maps %s state capability exhaustively', format => {
+    const source = parseFormat(format, inputFor(format))
+
+    expect(hasFormatAdapterState(format, source)).toBe(format !== 'lockgraph')
+  })
+
+  it.each(EXPECTED_FORMATS)('reports absent %s state on an unrelated graph', format => {
+    expect(hasFormatAdapterState(format, newBuilder().seal())).toBe(false)
+  })
+
+  it.each(EXPECTED_FORMATS.filter(format => format !== 'lockgraph'))(
+    'transfers %s state onto an identity-preserving graph copy',
+    format => {
+      const source = parseFormat(format, inputFor(format))
+      const target = source.mutate(() => {}).graph
+      const rebound = rebindFormatAdapterState(format, source, target)
+
+      expect(rebound.graph).toBe(target)
+      expect(rebound.invalidated).toEqual([])
+      expect(hasFormatAdapterState(format, rebound.graph)).toBe(true)
+    },
+  )
+
+  it('shares family state adapters across format aliases', () => {
+    const berry = parseFormat('yarn-berry-v8', inputFor('yarn-berry-v8'))
+    for (const format of EXPECTED_FORMATS.filter(format => format.startsWith('yarn-berry-'))) {
+      expect(hasFormatAdapterState(format, berry)).toBe(true)
+    }
+
+    const npmFlat = parseFormat('npm-3', inputFor('npm-3'))
+    expect(hasFormatAdapterState('npm-2', npmFlat)).toBe(true)
+    expect(hasFormatAdapterState('npm-3', npmFlat)).toBe(true)
+
+    const pnpmFlat = parseFormat('pnpm-v6', inputFor('pnpm-v6'))
+    expect(hasFormatAdapterState('pnpm-v6', pnpmFlat)).toBe(true)
+    expect(hasFormatAdapterState('pnpm-v9', pnpmFlat)).toBe(true)
+  })
+
+  it.each([undefined, 'lockgraph'] as const)('keeps %s rebinding a no-op', format => {
+    const source = newBuilder().seal()
+    const target = newBuilder().seal()
+
+    expect(rebindFormatAdapterState(format, source, target)).toEqual({
+      graph: target,
+      invalidated: [],
+    })
   })
 })
 

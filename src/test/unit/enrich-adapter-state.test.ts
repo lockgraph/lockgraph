@@ -12,11 +12,10 @@ import * as npm2 from '../../main/ts/formats/npm-2.ts'
 import * as npm3 from '../../main/ts/formats/npm-3.ts'
 import { rebindAdapterState as rebindNpmFlat } from '../../main/ts/formats/_npm-core.ts'
 import { rebindNpm2MirrorState } from '../../main/ts/formats/_npm-2-mirror.ts'
+import { rebindFormatAdapterState } from '../../main/ts/api/format-registry.ts'
 import * as pnpmV5 from '../../main/ts/formats/pnpm-v5.ts'
 import * as pnpmV9 from '../../main/ts/formats/pnpm-v9.ts'
-import { rebindAdapterState as rebindPnpmFlat } from '../../main/ts/formats/_pnpm-flat-core.ts'
 import * as yarnBerryV8 from '../../main/ts/formats/yarn-berry-v8.ts'
-import { rebindAdapterState as rebindYarnBerry } from '../../main/ts/formats/_yarn-berry-core.ts'
 import * as yarnClassic from '../../main/ts/formats/yarn-classic.ts'
 import { enrichAdapterStateInvalidated } from '../../main/ts/enrich/diagnostics.ts'
 import { fixture } from '../helpers/lockfile-test-utils.ts'
@@ -29,24 +28,6 @@ interface StateCase {
   readonly fixture: string
   readonly prepare: (graph: Graph) => Graph
   readonly emit: (graph: Graph) => string
-  readonly rebind: (
-    source: Graph,
-    target: Graph,
-  ) => Readonly<{ graph: Graph; invalidated: readonly string[] }>
-}
-
-function rebindNpm2(
-  source: Graph,
-  target: Graph,
-): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
-  const flat = rebindNpmFlat(source, target)
-  return {
-    graph: flat.graph,
-    invalidated: [...new Set([
-      ...flat.invalidated,
-      ...rebindNpm2MirrorState(source, flat.graph),
-    ])].sort(),
-  }
 }
 
 const cases: readonly StateCase[] = [
@@ -56,7 +37,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/yarn-berry-v8.lock',
     prepare: graph => yarnBerryV8.enrich(graph).graph,
     emit: graph => yarnBerryV8.stringify(graph),
-    rebind: rebindYarnBerry,
   },
   {
     label: 'Yarn Classic',
@@ -64,7 +44,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/yarn-classic.lock',
     prepare: graph => yarnClassic.enrich(graph, undefined, { manifests, overrides: [] }).graph,
     emit: graph => yarnClassic.stringify(graph),
-    rebind: yarnClassic.rebindAdapterState,
   },
   {
     label: 'npm v1',
@@ -72,7 +51,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/npm-1.lock',
     prepare: graph => npm1.enrich(graph, { manifests }).graph,
     emit: graph => npm1.stringify(graph),
-    rebind: npm1.rebindAdapterState,
   },
   {
     label: 'npm flat',
@@ -80,7 +58,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/npm-3.lock',
     prepare: graph => npm3.enrich(graph).graph,
     emit: graph => npm3.stringify(graph),
-    rebind: rebindNpmFlat,
   },
   {
     label: 'npm v2 mirror',
@@ -88,7 +65,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/npm-2.lock',
     prepare: graph => npm2.enrich(graph).graph,
     emit: graph => npm2.stringify(graph),
-    rebind: rebindNpm2,
   },
   {
     label: 'pnpm flat',
@@ -96,7 +72,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/pnpm-v9.lock',
     prepare: graph => pnpmV9.enrich(graph, { manifests }).graph,
     emit: graph => pnpmV9.stringify(graph),
-    rebind: rebindPnpmFlat,
   },
   {
     label: 'pnpm v5',
@@ -104,7 +79,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/pnpm-v5.lock',
     prepare: graph => pnpmV5.enrich(graph, { manifests }).graph,
     emit: graph => pnpmV5.stringify(graph),
-    rebind: pnpmV5.rebindAdapterState,
   },
   {
     label: 'Bun',
@@ -112,7 +86,6 @@ const cases: readonly StateCase[] = [
     fixture: 'simple/bun-text.lock',
     prepare: graph => bunText.enrich(graph, { manifests }).graph,
     emit: graph => bunText.stringify(graph),
-    rebind: bunText.rebindAdapterState,
   },
 ]
 
@@ -131,9 +104,14 @@ describe('enrich adapter-state derivation', () => {
 
     it(`prunes and reports invalidated ${stateCase.label} state`, () => {
       const source = parse(stateCase.format, fixture(stateCase.fixture))
-      const rebound = stateCase.rebind(source, newBuilder().seal())
+      const rebound = rebindFormatAdapterState(
+        stateCase.format,
+        source,
+        newBuilder().seal(),
+      )
 
       expect(rebound.invalidated.length).toBeGreaterThan(0)
+      expect(rebound.invalidated).toEqual([...rebound.invalidated].sort())
       expect(enrichAdapterStateInvalidated(stateCase.format, rebound.invalidated)).toMatchObject({
         code: 'ENRICH_ADAPTER_STATE_INVALIDATED',
         severity: 'warning',
@@ -141,4 +119,19 @@ describe('enrich adapter-state derivation', () => {
       })
     })
   }
+
+  it('composes npm v2 flat and mirror invalidations in sorted unique order', () => {
+    const source = parse('npm-2', fixture('simple/npm-2.lock'))
+    const expectedFlat = rebindNpmFlat(source, newBuilder().seal())
+    const expected = [...new Set([
+      ...expectedFlat.invalidated,
+      ...rebindNpm2MirrorState(source, expectedFlat.graph),
+    ])].sort()
+    const target = newBuilder().seal()
+    const actual = rebindFormatAdapterState('npm-2', source, target)
+
+    expect(actual.graph).toBe(target)
+    expect(actual.invalidated).toEqual(expected)
+    expect(actual.invalidated).toEqual([...new Set(actual.invalidated)].sort())
+  })
 })
