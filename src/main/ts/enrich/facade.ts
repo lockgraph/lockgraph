@@ -2,6 +2,7 @@ import {
   stripPeerContextFromNodeId,
   toTarballKey,
   type Diagnostic,
+  type DependencyManifest,
   type Graph,
   type GraphResult,
   type Manifest,
@@ -82,7 +83,7 @@ export interface EnrichResult {
 }
 
 interface SourceAdapterContext {
-  readonly manifests: Record<string, Manifest> | undefined
+  readonly manifests: Record<string, DependencyManifest> | undefined
   readonly overrides: readonly OverrideConstraint[]
 }
 
@@ -167,8 +168,8 @@ function mutableValue<T>(value: T): T {
 }
 
 function mutableManifests(
-  manifests: Readonly<Record<string, Manifest>> | undefined,
-): Record<string, Manifest> | undefined {
+  manifests: Readonly<Record<string, DependencyManifest>> | undefined,
+): Record<string, DependencyManifest> | undefined {
   return manifests === undefined ? undefined : mutableValue(manifests)
 }
 
@@ -227,7 +228,7 @@ const SOURCE_ADAPTER_REGISTRY: Readonly<Record<FormatId, SourceAdapterContract>>
 function sourceAdapterEnrich(
   format: FormatId,
   graph: Graph,
-  manifests: Record<string, Manifest> | undefined,
+  manifests: Record<string, DependencyManifest> | undefined,
   overrides: readonly OverrideConstraint[],
 ): GraphResult {
   return SOURCE_ADAPTER_REGISTRY[format].enrich(graph, { manifests, overrides })
