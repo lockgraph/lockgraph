@@ -33,7 +33,7 @@ import {
   type PnpmSettings,
 } from './_pnpm-flat-core.ts'
 
-const PROFILE: PnpmLayoutProfile = { profile: 'v6-collapsed-root' }
+const CONFIG: PnpmLayoutProfile = { profile: 'v6-collapsed-root' }
 
 export type PnpmV6ParseOptions = PnpmFamilyParseOptions
 export type PnpmV6StringifyOptions = PnpmFamilyStringifyOptions
@@ -44,27 +44,27 @@ export type PnpmV6Manifest = PnpmManifest
 export type PnpmV6Settings = PnpmSettings
 
 export function check(input: string): boolean {
-  return checkFamily(input, PROFILE)
+  return checkFamily(input, CONFIG)
 }
 
 export function parse(input: string, options: PnpmV6ParseOptions = {}): Graph {
-  return parseFamily(input, options, PROFILE)
+  return parseFamily(input, options, CONFIG)
 }
 
 export function stringify(graph: Graph, options: PnpmV6StringifyOptions = {}): string {
-  return stringifyFamily(graph, PROFILE, options)
+  return stringifyFamily(graph, CONFIG, options)
 }
 
 export function enrich(
   graph: Graph,
   options: PnpmV6EnrichOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  return enrichFamily(graph, PROFILE, options)
+  return enrichFamily(graph, CONFIG, options)
 }
 
 export function optimize(
   graph: Graph,
   options: PnpmV6OptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
-  return optimizeFamily(graph, PROFILE, options)
+  return optimizeFamily(graph, CONFIG, options)
 }

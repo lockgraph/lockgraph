@@ -503,8 +503,8 @@ export function stringifyFamily(
 
   const workspaceMembers: Node[] = []
   for (const node of graph.nodes()) {
-    warnPatchDrop(config, node, warnedPatches, emitDiagnostic)
-    warnPeerContextFlatten(config, node, warnedPeerVirt, emitDiagnostic)
+    reportPatchDrop(config, node, warnedPatches, emitDiagnostic)
+    reportPeerContextFlatten(config, node, warnedPeerVirt, emitDiagnostic)
     if (rootNode !== undefined && node.id === rootNode.id) continue
     if (node.workspacePath !== undefined && node.workspacePath !== '') {
       workspaceMembers.push(node)
@@ -1328,7 +1328,7 @@ export function collectManifestBlocks(
   }
 }
 
-function warnPeerContextFlatten(
+function reportPeerContextFlatten(
   config: NpmFamilyConfig,
   node: Node,
   warned: Set<string>,
@@ -1344,7 +1344,7 @@ function warnPeerContextFlatten(
   })
 }
 
-function warnPatchDrop(
+function reportPatchDrop(
   config: NpmFamilyConfig,
   node: Node,
   warned: Set<string>,

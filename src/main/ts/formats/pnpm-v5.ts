@@ -575,7 +575,7 @@ export function stringify(
   const context = createPnpmV5StringifyContext(graph, options, internal)
   reportPnpmV5UnsupportedFeatures(context)
   const nodes = partitionPnpmV5StringifyNodes(context)
-  const out = createPnpmV5Output(context)
+  const out = buildPnpmV5Output(context)
   writePnpmV5Overrides(context, out)
   writePnpmV5ImporterLayout(context, nodes.workspace, out)
   writePnpmV5Packages(context, nodes.resolved, out)
@@ -646,7 +646,7 @@ function partitionPnpmV5StringifyNodes(
   return { workspace: workspaceNodes, resolved: resolvedNodes }
 }
 
-function createPnpmV5Output(_context: PnpmV5StringifyContext): YamlMap {
+function buildPnpmV5Output(_context: PnpmV5StringifyContext): YamlMap {
   const out: YamlMap = {}
   out.lockfileVersion = V5_LOCKFILE_VERSION_CANONICAL
   return out
