@@ -1382,7 +1382,7 @@ function resolveManifestTarget(
       const memberId = `${name}@${memberVersion}`
       const candidate = graph.getNode(memberId)
       if (candidate !== undefined) return candidate.id
-      // Member node will be synthesised by the surrounding plan; bind to it
+      // Member node will be synthesized by the surrounding plan; bind to it
       // prospectively so the desired-root-edge can be created.
       if (prospectiveIds.has(memberId)) return memberId
     }

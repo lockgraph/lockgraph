@@ -5,7 +5,7 @@
 // module. pnpm-v5 (decimal version literal, dense snapshot tree) ships
 // standalone with its own profile and codec per ADR-0022 phase order,
 // but reuses the format-neutral helpers exported here — `tarballPayloadOf`
-// (F1/F3 shared parser), peer-target resolution, line-ending normalisation,
+// (F1/F3 shared parser), peer-target resolution, line-ending normalization,
 // importer-path math. v5 takes the parts that have no on-disk shape
 // dependency; the v6/v9 YAML codec, profile semantics, and
 // peer-virt encoding stay in scope.
@@ -411,7 +411,7 @@ function canonicalFeatureValue(value: unknown): unknown {
 /**
  * Lock-borne pnpm overrides as canonical `OverrideConstraint[]` (ADR-0025 §6,
  * A2). Reads the verbatim `sidecar.overrides` block captured at parse and
- * canonicalises it via the F6 `captureOverrides('pnpm')` grammar. F2 `patch:`
+ * canonicalizes it via the F6 `captureOverrides('pnpm')` grammar. F2 `patch:`
  * directives are dropped — those are patch slots, not version overrides.
  * Returns undefined when the graph carries no pnpm overrides block (or the
  * sidecar was lost to a `mutate`). Consumed by `index.ts` `overridesOf`.
@@ -1335,7 +1335,7 @@ function writePnpmStringifySnapshots(context: PnpmStringifyContext): void {
   out.snapshots = sortRecord(snapshots) as YamlMap
 }
 
-/** Verify emitted adjacency, serialise deterministic YAML, and apply line endings. */
+/** Verify emitted adjacency, serialize deterministic YAML, and apply line endings. */
 function emitPnpmStringifyResult(context: PnpmStringifyContext): string {
   const {
     graph,
@@ -2253,7 +2253,7 @@ function resolveSnapshotTarget(
   const parsedTail = parsePackagesOrSnapshotKey(`${depName}@${rawValue}`)
   if (parsedTail === undefined) return undefined
   // buildPeerContext drops workspace peers, embeds each surviving peer's
-  // recursively-normalised nested suffix (#70), and appends the bare-hex
+  // recursively-normalized nested suffix (#70), and appends the bare-hex
   // HASHED PEER-SET token(s) (#69/ADR-0030) — the exact form the target node id
   // carries, so a dep value whose target is hash- or transitive-peer-
   // discriminated resolves to the now-distinct node rather than collapsing onto
@@ -2284,7 +2284,7 @@ function resolveAliasedSnapshotTarget(
   if (!hasInteriorAt) return undefined
   const parsed = parsePackagesOrSnapshotKey(rawValue)
   if (parsed === undefined) return undefined
-  // buildPeerContext — drop workspace peers, embed normalised nested (#70),
+  // buildPeerContext — drop workspace peers, embed normalized nested (#70),
   // append hashed peer-set token(s) (#69/ADR-0030). See resolveSnapshotTarget.
   const peerContext = buildPeerContext(parsed.peers, importerByPath, parsed.opaquePeers)
   const candidateId = serializeNodeId(parsed.name, parsed.version, peerContext)
@@ -2342,7 +2342,7 @@ export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, pe
  * workspace importer by stuffing the importer directory into the peer's
  * version slot with `/` → `+` (e.g. `vue@packages+vue` → importer dir
  * `packages/vue`, materialised in the snapshot's `dependencies` as
- * `vue: link:packages/vue`). Such a peer's true target is the synthesised
+ * `vue: link:packages/vue`). Such a peer's true target is the synthesized
  * importer member node (`packages/vue@0.0.0`).
  *
  * Returns the canonical importer member NodeId when `peerVersion` decodes to a
@@ -2370,7 +2370,7 @@ export function resolveWorkspacePeerId(
 }
 
 /**
- * Recursively normalise a peer's `(...)` nested suffix into the form the
+ * Recursively normalize a peer's `(...)` nested suffix into the form the
  * peer's own node id carries. Workspace locators are replaced recursively with
  * canonical workspace node ids so each token matches the referenced identity.
  */
@@ -2385,7 +2385,7 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
 /**
  * Build the ADR-0006 peerContext for a node from its parsed suffix peers.
  * Workspace peers become canonical workspace node ids. A registry peer keeps
- * `name@version` plus its recursively-normalised nested suffix so two
+ * `name@version` plus its recursively-normalized nested suffix so two
  * consumer instances that differ only in a transitive peer's resolution stay
  * distinct NodeIds. The seal (graph.ts) reconciles this token against the peer
  * edge target by BASE-KEY projection (ADR-0017), which strips the nested
@@ -2411,7 +2411,7 @@ function buildPeerContext(
 ): string[] {
   // A workspace peer becomes the canonical workspace node id, backed by a real `peer`
   // edge (every token stays edge-bearing); a registry peer keeps `name@version` plus its
-  // normalised nested suffix. The native locator is reconstructed at emit, not here.
+  // normalized nested suffix. The native locator is reconstructed at emit, not here.
   const contextPeers = peers.map(p => {
     const wsId = resolveWorkspacePeerId(p.version, importerByPath)
     return wsId ?? `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`
@@ -3032,7 +3032,7 @@ interface PatchDirective {
   readonly match:      PatchMatcher
   /** Canonical sha512-hex iff patch source bytes were readable at parse. */
   readonly canonical?: string
-  /** True iff ADR-0014 §4.F5 byte normalisation altered ≥ 1 source byte
+  /** True iff ADR-0014 §4.F5 byte normalization altered ≥ 1 source byte
    * (drives per-node `RECIPE_PATCH_NORMALISED` emission). */
   readonly normalised?: boolean
 }
@@ -3055,7 +3055,7 @@ function parseOverridePatches(
       try {
         const bytes = readWorkspaceFileBytes(workspaceRoot, workspacePath, rawValue)
         if (bytes !== undefined) {
-          // ADR-0014 §4.F5 — normalise CRLF / strip leading BOM BEFORE the
+          // ADR-0014 §4.F5 — normalize CRLF / strip leading BOM BEFORE the
           // F2 sha512 fingerprint; track whether ≥ 1 byte changed so per-
           // node `RECIPE_PATCH_NORMALISED` emits at directive-match time.
           // Combined helper avoids double-scan via canonicalHashOfBytes.
@@ -3087,7 +3087,7 @@ export function parseOverrideKey(key: string): PatchMatcher | undefined {
   if (name === '' || spec === '') return undefined
   if (spec.startsWith('npm:')) spec = spec.slice('npm:'.length)
   if (spec === '') return undefined
-  // semver.valid() normalises the version (strips build metadata), so a
+  // semver.valid() normalizes the version (strips build metadata), so a
   // literal exact key like `foo@1.2.3+build.1` would lose `+build.1` and
   // fail to match the actual `1.2.3+build.1` node. Use semver.parse() —
   // non-mutating validity check — and keep the verbatim spec.
@@ -3140,7 +3140,7 @@ function resolvePatchForNode(
 // ADR-0014 §4.F2 stringify-side: pnpm v6/v9 SUPPORT patch slots via the
 // `overrides:` block carrier. When `Node.patch` is set on the graph, the
 // adapter ensures the overrides block carries an entry; sidecar.overrides
-// attribution wins when present, else a default entry is synthesised from
+// attribution wins when present, else a default entry is synthesized from
 // `Node.resolution` (preserves cross-format conversion's source-side
 // path) or from a generic per-hash convention.
 function synthesizeOverridePatches(

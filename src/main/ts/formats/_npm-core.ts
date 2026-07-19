@@ -1085,7 +1085,7 @@ function deriveInstallPathsForStringify(
       addPlacement(node.id, fallbackInstallPathForNode(node, pathToId))
       drainBfsQueue()
     }
-    // ADR-0026 §Diagnostics — the emitted tree is a re-synthesised valid
+    // ADR-0026 §Diagnostics — the emitted tree is a re-synthesized valid
     // projection, not a byte/structure copy of any original (cross-PM input or
     // post-mutate). Surface it so byte-divergence is attributed, not silent.
     onDiagnostic?.({
