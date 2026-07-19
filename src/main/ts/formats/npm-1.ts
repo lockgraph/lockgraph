@@ -1,6 +1,6 @@
 // npm-1 adapter — npm `package-lock.json` lockfileVersion 1 (nested-tree shape).
 //
-// Standalone adapter per ADR-0021 §5 + r2 collab gate verdict: the npm-1
+// Standalone adapter per ADR-0021 §5: the npm-1
 // recursive `dependencies` tree shape is fundamentally different from the
 // flat `packages` block layout shared by npm-2/npm-3. Forcing a unified
 // pipeline rots both sides; this module owns its own parse / stringify
@@ -71,7 +71,7 @@ import {
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 
-// === TYPES =================================================================
+// === TYPES ==================================================================
 
 export interface Npm1ParseOptions {}
 export interface Npm1StringifyOptions {
@@ -147,7 +147,7 @@ export function rebindAdapterState(
   return { graph: target, invalidated }
 }
 
-// === PARSE =================================================================
+// === PARSE ==================================================================
 
 export function check(input: string): boolean {
   // The numeric version literal is the primary discriminator; an empty lock

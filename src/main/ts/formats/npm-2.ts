@@ -11,7 +11,7 @@
 //   - hooks: NPM2_HOOKS from `_npm-2-mirror.ts` (dual-mode validation,
 //     drift detection, `resolved`-URL recovery, legacy-mirror emit)
 //
-// Dependency direction (per r2 cycle-break): npm-2.ts imports BOTH core
+// Dependency direction (cycle-break): npm-2.ts imports BOTH core
 // and mirror. Core does NOT import mirror; mirror does NOT import core.
 // Both depend on `_npm-flat-types.ts` for shared types only. The npm-1
 // adapter reuses core without pulling in npm-2 mirror baggage.

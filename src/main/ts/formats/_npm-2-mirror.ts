@@ -1,7 +1,7 @@
 // _npm-2-mirror.ts — npm-2 dual-mode reconciliation + legacy mirror.
 //
 // npm-2-only logic split out of `_npm-core.ts` per ADR-0021 §5 mining
-// strategy r1 fix-up + r2 cycle-break. The core (`_npm-core.ts`) handles
+// strategy fix-up and cycle-break. The core (`_npm-core.ts`) handles
 // the flat `packages` block shared with npm-3; this module owns:
 //
 //   - parse-time dual-mode `dependencies` requirement (validateTopLevel)
@@ -13,7 +13,7 @@
 //     the on-disk `resolved` URL needed to replay it on both the
 //     `packages` and `dependencies` blocks (npm-3 has no mirror).
 //
-// Dependency direction (per r2 cycle-break):
+// Dependency direction (cycle-break):
 //   - this module imports ONLY from `_npm-flat-types.ts` + `../graph.ts`.
 //   - it does NOT import from `_npm-core.ts`.
 //   - `_npm-core.ts` does NOT import this module.
@@ -52,7 +52,7 @@ import {
   type NpmSidecar,
 } from './_npm-flat-types.ts'
 
-// === SIDECAR ===============================================================
+// === SIDECAR ================================================================
 
 // npm-2-only composed sidecar — recovered `resolved` URLs per NodeId,
 // keyed for emit-time mirror reconstruction. Absent on npm-3.
@@ -76,7 +76,7 @@ export function setMirrorSidecar(graph: Graph, sidecar: Npm2MirrorSidecar): void
   mirrorSidecarByGraph.set(graph, sidecar)
 }
 
-// === API ===================================================================
+// === API ====================================================================
 
 export const NPM2_HOOKS: NpmFamilyHooks = {
   validateTopLevel(lf: NpmLockfile): void {
@@ -164,7 +164,7 @@ export function rebindNpm2MirrorState(
   return invalidated
 }
 
-// === PARSE — DUAL-MODE DRIFT ==============================================
+// === PARSE — DUAL-MODE DRIFT ================================================
 
 // Detect mismatches between `packages` and the legacy `dependencies` mirror
 // for npm-2 dual-mode reconciliation. Returns the set of mirror entry names
@@ -212,7 +212,7 @@ export function detectDualModeDrift(
   return Array.from(drift).sort(cmpStr)
 }
 
-// === SERIALIZE — LEGACY MIRROR ============================================
+// === SERIALIZE — LEGACY MIRROR ==============================================
 
 interface LegacyMirrorContext {
   graph: Graph

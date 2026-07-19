@@ -1,3 +1,5 @@
+// Shared optimization helpers for format adapters.
+
 import {
   toTarballKey,
   type Diagnostic,

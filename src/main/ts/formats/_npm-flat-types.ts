@@ -8,7 +8,7 @@
 // acyclic and core remains a standalone-reuse surface for future
 // flat-family adapters.
 //
-// Layered constraint per ADR-0021 §5 + r2 cycle-break:
+// Layered constraint per ADR-0021 §5, breaking the import cycle:
 //   - core: depends on types only.
 //   - mirror (npm-2-only): depends on types only.
 //   - npm-{2,3}.ts thin entries: wire core + (optional) mirror via the
@@ -16,7 +16,7 @@
 
 import { type Diagnostic, type EdgeKind, type Graph, type Node, type OverrideConstraint } from '../graph.ts'
 
-// === Tiny utilities ========================================================
+// === Tiny utilities =========================================================
 
 export const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 
@@ -84,7 +84,7 @@ export function edgeTripleKey(src: string, kind: EdgeKind, dst: string): string 
   return `${src}|${kind}|${dst}`
 }
 
-// === Family config + options ==============================================
+// === Family config + options ================================================
 
 // Top-level layout shapes recognised by the flat-family core. The
 // `dependencies-tree` (npm-1) shape is intentionally absent — see
@@ -155,7 +155,7 @@ export interface NpmFamilyStringifyOptions {
 export type NpmFamilyEnrichOptions = {}
 export type NpmFamilyOptimizeOptions = {}
 
-// === JSON entry schemas ====================================================
+// === JSON entry schemas =====================================================
 
 // JSON-shape of an npm `packages` entry.
 export interface NpmEntry {

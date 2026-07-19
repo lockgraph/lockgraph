@@ -1,3 +1,5 @@
+// yarn-berry-v8 exposes its shared family core with version-specific configuration.
+
 import type { Diagnostic, Graph } from '../graph.ts'
 import {
   checkFamily,

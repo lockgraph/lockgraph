@@ -9,12 +9,12 @@
 // them. Output is a JSON-like AST; caller (yarn-berry-vN adapter)
 // interprets entry keys (incl. multi-spec `"foo@npm:^1, foo@npm:^2"`).
 
-// === TYPES =================================================================
+// === TYPES ==================================================================
 
 export type SymlValue = string | SymlMap
 export interface SymlMap { [key: string]: SymlValue }
 
-// === CONSTANTS =============================================================
+// === CONSTANTS ==============================================================
 
 // Yarn's SYML writer leaves a scalar UNQUOTED iff it matches this pattern,
 // otherwise it `JSON.stringify`s it (double-quoted). Transcribed verbatim from
@@ -31,7 +31,7 @@ export interface SymlMap { [key: string]: SymlValue }
 // The mandatory leading `.` also forces the empty string to be quoted.
 const SYML_SIMPLE_STRING_RE = /^(?![-?:,\][{}#&*!|>'"%@` \t\r\n]).([ \t]*(?![,\][{}:# \t\r\n]).)*$/
 
-// === PARSE =================================================================
+// === PARSE ==================================================================
 
 export class SymlParseError extends Error {
   readonly line: number
@@ -238,7 +238,7 @@ export function parse(input: string): SymlMap {
   return root
 }
 
-// === SERIALIZE =============================================================
+// === SERIALIZE ==============================================================
 
 function needsQuotes(raw: string): boolean {
   // Quote exactly when yarn would: i.e. when the value is NOT a simple string
