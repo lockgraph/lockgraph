@@ -31,11 +31,11 @@
 // This module is not a general-purpose YAML 1.2 implementation. Supported
 // syntax is bounded by the pnpm-emitted fixture corpus.
 
-// === TYPES =================================================================
+// === TYPES ==================================================================
 
 export interface YamlMap { [k: string]: unknown }
 
-// === CONSTANTS =============================================================
+// === CONSTANTS ==============================================================
 
 const FLOW_MAP_TAG = Symbol.for('lockgraph/_pnpm-yaml/flow-map')
 const QUOTED_TAG = Symbol.for('lockgraph/_pnpm-yaml/quoted')
@@ -50,7 +50,7 @@ export interface YamlQuotedScalar {
   readonly value: string
 }
 
-// === API — TAGGED VALUES ===================================================
+// === API — TAGGED VALUES ====================================================
 
 /** Wrap an entries record as a flow-style inline map (`{k: v, ...}`). */
 export function flowMap(entries: YamlMap): YamlFlowMap {
@@ -70,7 +70,7 @@ function isQuotedScalar(value: unknown): value is YamlQuotedScalar {
   return value !== null && typeof value === 'object' && (value as YamlQuotedScalar)[QUOTED_TAG] === true
 }
 
-// === API — CODEC ===========================================================
+// === API — CODEC ============================================================
 
 export function readYaml(input: string): YamlMap {
   const reader: YamlReader = {
@@ -139,7 +139,7 @@ export function emitYaml(
   return lines.join('\n') + '\n'
 }
 
-// === PARSE =================================================================
+// === PARSE ==================================================================
 
 interface YamlReader {
   source: string
@@ -401,7 +401,7 @@ function findFlowColon(item: string): number {
   return -1
 }
 
-// === SERIALIZE =============================================================
+// === SERIALIZE ==============================================================
 
 function orderTopLevelKeys(root: YamlMap, order: readonly string[]): string[] {
   const seen = new Set<string>()
@@ -517,7 +517,7 @@ function emitQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
-// === HELPERS ===============================================================
+// === HELPERS ================================================================
 
 function isPlainObject(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)

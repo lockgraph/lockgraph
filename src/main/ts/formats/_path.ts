@@ -1,3 +1,5 @@
+// Shared lockfile path and filesystem guards.
+
 import {
   closeSync,
   constants as fsConstants,
