@@ -1,8 +1,8 @@
 // pnpm-v9 adapter — pnpm `pnpm-lock.yaml` lockfileVersion 9.0.
 //
 // Thin entry threading the `v9-importers-snapshots` profile through
-// `_pnpm-flat-core.ts`. Per ADR-0022 §5 mining strategy r2 — extraction
-// round (mirrors npm-flat family core-extraction precedent). All
+// `_pnpm-flat-core.ts`. Per ADR-0022 §5 mining strategy r2, the extraction
+// mirrors the npm-flat family core boundary. All
 // version-agnostic logic lives in `_pnpm-flat-core.ts`; this module owns
 // the v9 profile + v9-specific option/result types.
 //

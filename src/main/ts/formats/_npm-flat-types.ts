@@ -33,11 +33,10 @@ export function sortRecord<V>(record: Record<string, V>): Record<string, V> {
 // value is a nested object sort AFTER keys whose value is scalar/array; within
 // each group a preferred-key prefix (`NPM_SW_KEY_ORDER`) leads, then the
 // remainder is alphabetical by `localeCompare('en')`. Emitting in that exact
-// order lets a generated lock survive a MUTABLE `npm install` unchanged, not only
-// `npm ci` (which is order-insensitive). Validated byte-identical against npm's
-// own output. The same ordering applies recursively, so it also fixes the
-// `packages`/`dependencies` MAP key order (npm sorts those by `localeCompare`,
-// not the codepoint `cmpStr` used elsewhere in this module).
+// order keeps a generated lock stable under a MUTABLE `npm install`, not only
+// `npm ci` (which is order-insensitive). The same ordering applies recursively,
+// including `packages`/`dependencies` MAP keys, which npm sorts by
+// `localeCompare` rather than the codepoint `cmpStr` used elsewhere here.
 const NPM_SW_KEY_ORDER = [
   'name', 'version', 'lockfileVersion', 'resolved', 'integrity',
   'requires', 'packages', 'dependencies',

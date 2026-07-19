@@ -9,8 +9,12 @@
 // them. Output is a JSON-like AST; caller (yarn-berry-vN adapter)
 // interprets entry keys (incl. multi-spec `"foo@npm:^1, foo@npm:^2"`).
 
+// === TYPES =================================================================
+
 export type SymlValue = string | SymlMap
 export interface SymlMap { [key: string]: SymlValue }
+
+// === CONSTANTS =============================================================
 
 // Yarn's SYML writer leaves a scalar UNQUOTED iff it matches this pattern,
 // otherwise it `JSON.stringify`s it (double-quoted). Transcribed verbatim from
@@ -18,18 +22,16 @@ export interface SymlMap { [key: string]: SymlValue }
 // (`simpleStringPattern`), which is the single source of truth for yarn's
 // quoting — there is NO separate YAML number/boolean/null/non-ASCII rule.
 //
-// Decoded (and validated byte-for-byte against 6571 distinct real-fixture
-// dependency/peerDependency values, 1958 bare + 4613 quoted, zero mismatches):
+// Decoded grammar:
 //   - FIRST char must NOT be one of `- ? : , ] [ { } # & * ! | > ' " % @ ` `,
 //     space, tab, CR, LF (a leading YAML indicator);
 //   - after each (optional run of) space/tab in the BODY, the next char must NOT
 //     be one of `, ] [ { } : # `, space, tab, CR, LF.
-// Crucially `|` is allowed in the BODY, so `^16 || ^17`, `^3.0.0 || ^4.0.0`,
-// `0.12 - 0.28`, `^7.0.0-0 || ^8.0.0-0 <8.0.0` stay BARE — fixing the F3c/#106
-// over-quote — while a leading `>` (`>=4.8.4 <6.1.0`) or a `:` anywhere
-// (`npm:^1 || ^2`, `workspace:*`) still forces quoting (no under-quote). The
-// empty string fails the mandatory leading `.`, so it is quoted, as before.
+// `|` remains valid in the BODY, while a leading `>` or any `:` forces quoting.
+// The mandatory leading `.` also forces the empty string to be quoted.
 const SYML_SIMPLE_STRING_RE = /^(?![-?:,\][{}#&*!|>'"%@` \t\r\n]).([ \t]*(?![,\][{}:# \t\r\n]).)*$/
+
+// === PARSE =================================================================
 
 export class SymlParseError extends Error {
   readonly line: number
@@ -236,6 +238,8 @@ export function parse(input: string): SymlMap {
   return root
 }
 
+// === SERIALIZE =============================================================
+
 function needsQuotes(raw: string): boolean {
   // Quote exactly when yarn would: i.e. when the value is NOT a simple string
   // per the upstream `simpleStringPattern`. See SYML_SIMPLE_STRING_RE above.
@@ -243,15 +247,9 @@ function needsQuotes(raw: string): boolean {
 }
 
 function escapeQuoted(raw: string): string {
-  // #112 — yarn's SYML writer stringifies a non-simple value with `JSON.stringify`,
-  // which keeps a non-ASCII codepoint (`>U+007F`) LITERAL inside the quotes (it
-  // does NOT emit `\uXXXX`). The previous `\uXXXX` branch both diverged from yarn
-  // AND corrupted round-trips: our `unquote` only decodes `\\`/`\"`, so a `\uXXXX`
-  // it emitted came back as the literal 6 chars `é` rather than `é`. So a
-  // non-ASCII char now passes through verbatim, matching yarn byte-for-byte and
-  // surviving parse → stringify → parse. (`\n`/`\t`/`\r` stay escaped — yarn's
-  // JSON.stringify escapes those too — and no yarn.lock scalar carries a literal
-  // control char in practice.)
+  // Yarn's writer follows `JSON.stringify`: non-ASCII codepoints remain literal,
+  // while backslash, quote, and control characters stay escaped. `unquote`
+  // decodes the corresponding backslash and quote forms on parse.
   let out = ''
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i]
@@ -269,8 +267,8 @@ function formatScalar(raw: string): string {
   return needsQuotes(raw) ? `"${escapeQuoted(raw)}"` : raw
 }
 
-// #119 NIT B — yarn's SYML writer switches a key from the inline `<key>:` form to
-// the YAML explicit-key form `? <key>\n<indent>:` once the STRINGIFIED (quoted)
+// Yarn's SYML writer switches a key from the inline `<key>:` form to the YAML
+// explicit-key form `? <key>\n<indent>:` once the STRINGIFIED (quoted)
 // key exceeds an internal line-width threshold. Transcribed verbatim from
 // `yarnpkg/berry/packages/yarnpkg-parsers/sources/syml.ts` (`stringifyValue`):
 //
@@ -278,12 +276,9 @@ function formatScalar(raw: string): string {
 //     ? `? ${stringifiedKey}\n${recordIndentation}:`
 //     : `${stringifiedKey}:`;
 //
-// The bound is `> 1024` on the QUOTED key length (`stringifiedKey` is produced by
-// the same string-stringifier as values, so the surrounding `"` count). Verified
-// against the real-world corpus: highlight's two ~1 KB compound `@babel/runtime`
-// keys (quoted length 1028 and 1092) are the ONLY keys that cross it; the longest
-// inline key anywhere is 978 (≤ 1024). `recordIndentation` is the key's own indent
-// padding (empty for a top-level entry key).
+// The bound is `> 1024` on the QUOTED key length (`stringifiedKey` uses the same
+// stringifier as values, so the surrounding `"` count). `recordIndentation` is
+// the key's own indent padding (empty for a top-level entry key).
 const EXPLICIT_KEY_LENGTH_THRESHOLD = 1024
 
 function keyPart(key: string, pad: string): string {
