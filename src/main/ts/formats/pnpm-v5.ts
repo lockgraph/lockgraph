@@ -48,8 +48,8 @@
 //
 // §B Lossy-but-acceptable (pnpm-v5 specific):
 //   - `RECIPE_FEATURE_DROPPED` (feature='patch') — patch slot drops on
-//     emit (v5 has no on-disk `patch:` protocol slot in the working
-//     corpus) per ADR-0014 §5 canonical loss code.
+//     emit because v5 has no on-disk `patch:` protocol slot, per
+//     ADR-0014 §5 canonical loss code.
 //   - `PNPM_V5_SETTINGS_DROPPED` — sidecar `settings` block dropped
 //     when present (v5 schema has no settings).
 //   - `PNPM_V5_DUAL_TOP_LEVEL_DRIFT` — both `specifiers`/`dependencies`
@@ -92,25 +92,6 @@ import {
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import { readYaml, emitYaml, flowMap, type YamlMap } from './_pnpm-yaml.ts'
-
-function tailOfName(name: string): string {
-  return name.startsWith('@') ? name.split('/').slice(1).join('/') : name
-}
-
-function derivePnpmResolutionFromCanonical(
-  canonical: ResolutionCanonical | undefined,
-): { tarball?: string; directory?: string } | undefined {
-  if (canonical === undefined) return undefined
-  const out = stringifyForPnpm(canonical)
-  if (out === undefined) return undefined
-  const result: { tarball?: string; directory?: string } = {}
-  if (out.tarball !== undefined) result.tarball = out.tarball
-  if (out.directory !== undefined) result.directory = out.directory
-  if (out.tarball === undefined && out.directory === undefined && out.extra?.tarball !== undefined) {
-    result.tarball = out.extra.tarball
-  }
-  return result.tarball === undefined && result.directory === undefined ? undefined : result
-}
 import {
   cmpStr,
   derivePeerCandidates,
@@ -125,7 +106,34 @@ import {
   tarballPayloadOf,
 } from './_pnpm-flat-core.ts'
 
-// === Public option types ====================================================
+// === CONSTANTS ==============================================================
+
+const V5_LOCKFILE_VERSION_CANONICAL = 5.4
+// Accepted on-disk literals (parsed back as bare strings by `_pnpm-yaml.ts`'s
+// reader, which never coerces scalars to numbers). The 5.0 → 5.4 minor-bump
+// range is collapsed to canonical `5.4` on emit per ADR-0022 §A.pnpm-v5.
+const V5_LOCKFILE_VERSION_ACCEPTED = new Set(['5.0', '5.1', '5.2', '5.3', '5.4'])
+
+const TOP_LEVEL_ORDER: readonly string[] = [
+  'lockfileVersion',
+  'overrides',
+  'specifiers',
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'importers',
+  'packages',
+]
+
+const TOP_LEVEL_SECTION_KEYS: readonly string[] = ['importers', 'packages']
+
+// Per ADR-0022 §A.pnpm-v5: right-to-left peel grammar.
+// Anchored at end-of-string; peer-name captures optional leading `@`
+// for scoped peers, optional `/sub` segment for scoped names, then
+// `@<version>` up to the next `_` boundary.
+const PEER_TAIL_RE = /_(@?[^_@]+(?:\/[^_@]+)?)@([^_]+)$/
+
+// === TYPES =================================================================
 
 export interface PnpmV5ParseOptions {}
 
@@ -166,7 +174,7 @@ export interface PnpmV5SettingsCrossVersion {
   excludeLinksFromLockfile?: boolean
 }
 
-// === Sidecar ================================================================
+// === SIDECAR ================================================================
 
 interface PnpmV5NodeSidecar {
   peerDependencies?: Record<string, string>
@@ -240,34 +248,7 @@ export function getPnpmV5OverridesCanonical(graph: Graph): OverrideConstraint[] 
   return captureOverrides(versionOnly, 'pnpm').canonical
 }
 
-// === Constants ==============================================================
-
-const V5_LOCKFILE_VERSION_CANONICAL = 5.4
-// Accepted on-disk literals (parsed back as bare strings by `_pnpm-yaml.ts`'s
-// reader, which never coerces scalars to numbers). The 5.0 → 5.4 minor-bump
-// range is collapsed to canonical `5.4` on emit per ADR-0022 §A.pnpm-v5.
-const V5_LOCKFILE_VERSION_ACCEPTED = new Set(['5.0', '5.1', '5.2', '5.3', '5.4'])
-
-const TOP_LEVEL_ORDER: readonly string[] = [
-  'lockfileVersion',
-  'overrides',
-  'specifiers',
-  'dependencies',
-  'devDependencies',
-  'optionalDependencies',
-  'importers',
-  'packages',
-]
-
-const TOP_LEVEL_SECTION_KEYS: readonly string[] = ['importers', 'packages']
-
-// Per ADR-0022 §A.pnpm-v5: right-to-left peel grammar.
-// Anchored at end-of-string; peer-name captures optional leading `@`
-// for scoped peers, optional `/sub` segment for scoped names, then
-// `@<version>` up to the next `_` boundary.
-const PEER_TAIL_RE = /_(@?[^_@]+(?:\/[^_@]+)?)@([^_]+)$/
-
-// === Public API: check / parse / stringify / enrich / optimize =============
+// === PARSE =================================================================
 
 export function check(input: string): boolean {
   // Probe top-level `lockfileVersion: 5.<digit>` as a decimal scalar.
@@ -584,6 +565,8 @@ function sealPnpmV5Parse(context: PnpmV5ParseContext): Graph {
   }
 }
 
+// === SERIALIZE ==============================================================
+
 export function stringify(
   graph: Graph,
   options: PnpmV5StringifyOptions = {},
@@ -734,6 +717,8 @@ function writePnpmV5Packages(
   out.packages = packages
 }
 
+// === SERIALIZE — VALIDATION =================================================
+
 // ADR-0028 INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
 // v6/v9 `assertResolveValid` (`_pnpm-flat-core.ts`) over v5's standalone layout:
 //
@@ -867,6 +852,8 @@ function assertResolveValid(
   }
 }
 
+// === ENRICH =================================================================
+
 export function enrich(
   graph: Graph,
   options: PnpmV5EnrichOptions = {},
@@ -956,6 +943,8 @@ function applyPnpmV5ManifestPlan(graph: Graph, plan: PnpmV5ManifestPlan): Graph 
   }).graph
 }
 
+// === OPTIMIZE ===============================================================
+
 export function optimize(
   graph: Graph,
   _options: PnpmV5OptimizeOptions = {},
@@ -975,7 +964,7 @@ export function optimize(
   return result
 }
 
-// === Parse helpers ==========================================================
+// === HELPERS — PARSE ========================================================
 
 export interface PeerEntry { name: string; version: string }
 export interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] }
@@ -989,8 +978,8 @@ export interface ParsedPackagesKey { name: string; version: string; peers: PeerE
  * left).
  *
  * v5-scoped-peer-grammar edge per ADR-0022 stub: scoped peers containing
- * underscores in path segments are theoretically ambiguous; absent from
- * the working corpus. PEER_TAIL_RE handles the common scoped-peer shape
+ * underscores in path segments are theoretically ambiguous. PEER_TAIL_RE
+ * handles the common scoped-peer shape
  * `@scope/name@version` correctly.
  */
 export function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | undefined {
@@ -1188,7 +1177,26 @@ function buildCollapsedRootImporter(yaml: Record<string, unknown>): Record<strin
   return out
 }
 
-// === Stringify helpers ======================================================
+// === HELPERS — SERIALIZE ====================================================
+
+function tailOfName(name: string): string {
+  return name.startsWith('@') ? name.split('/').slice(1).join('/') : name
+}
+
+function derivePnpmResolutionFromCanonical(
+  canonical: ResolutionCanonical | undefined,
+): { tarball?: string; directory?: string } | undefined {
+  if (canonical === undefined) return undefined
+  const out = stringifyForPnpm(canonical)
+  if (out === undefined) return undefined
+  const result: { tarball?: string; directory?: string } = {}
+  if (out.tarball !== undefined) result.tarball = out.tarball
+  if (out.directory !== undefined) result.directory = out.directory
+  if (out.tarball === undefined && out.directory === undefined && out.extra?.tarball !== undefined) {
+    result.tarball = out.extra.tarball
+  }
+  return result.tarball === undefined && result.directory === undefined ? undefined : result
+}
 
 function packagesKeyForNode(node: Node): string {
   // v5: `/<name>/<version>[_<peer>@<v>…]` — slash separator, underscore peers.
@@ -1389,7 +1397,7 @@ function buildPackageEntry(
   return entry
 }
 
-// === §C peer-virt fallback / enrich plan ====================================
+// === ENRICH — PLANNING ======================================================
 
 interface EnrichPlan {
   addRootEdges: Edge[]

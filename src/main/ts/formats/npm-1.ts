@@ -71,7 +71,7 @@ import {
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 
-// === Public option types ====================================================
+// === TYPES =================================================================
 
 export interface Npm1ParseOptions {}
 export interface Npm1StringifyOptions {
@@ -94,7 +94,7 @@ export interface Npm1EnrichOptions {
 
 export interface Npm1OptimizeOptions {}
 
-// === npm-1 JSON schema ======================================================
+// === TYPES — ON-DISK SCHEMA =================================================
 
 interface Npm1Entry {
   version?: string
@@ -120,7 +120,7 @@ interface Npm1Lockfile {
   packages?: unknown
 }
 
-// === Sidecar (reuses NpmSidecar shape from _npm-flat-types.ts) =============
+// === SIDECAR ================================================================
 
 const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
 
@@ -147,11 +147,11 @@ export function rebindAdapterState(
   return { graph: target, invalidated }
 }
 
-// === Public API: check / parse / stringify / enrich / optimize =============
+// === PARSE =================================================================
 
 export function check(input: string): boolean {
-  // Empirical probe — accept loose v1 fixtures (some lack `dependencies`
-  // when no deps were installed, e.g. the workspaces-basic case).
+  // The numeric version literal is the primary discriminator; an empty lock
+  // may omit `dependencies`.
   if (!/"lockfileVersion"\s*:\s*1\b/.test(input)) return false
   // Reject inputs carrying a flat `packages` map (npm-2/npm-3 shape).
   if (/"packages"\s*:\s*\{/.test(input)) return false
@@ -168,6 +168,8 @@ export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
   return sealNpm1Parse(context)
 }
 
+// === SERIALIZE ==============================================================
+
 export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): string {
   const context = createNpm1StringifyContext(graph, options)
   collectNpm1EmittableNodes(context)
@@ -175,6 +177,8 @@ export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): str
   const out = buildNpm1Output(context)
   return renderNpm1Output(out, options)
 }
+
+// === ENRICH =================================================================
 
 export function enrich(
   graph: Graph,
@@ -190,6 +194,8 @@ export function enrich(
   if (isNpm1EnrichPlanEmpty(plan)) return { graph, diagnostics }
   return applyNpm1EnrichPlan(graph, sidecar, plan, diagnostics)
 }
+
+// === OPTIMIZE ===============================================================
 
 export function optimize(
   graph: Graph,
@@ -215,7 +221,7 @@ export function optimize(
   return result
 }
 
-// === Helpers ===============================================================
+// === HELPERS — PHASES =======================================================
 
 interface Npm1ParseContext {
   readonly lf: Npm1Lockfile
@@ -781,7 +787,7 @@ function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | u
   return undefined
 }
 
-// === Hoisting emit ==========================================================
+// === SERIALIZE — TREE PLACEMENT =============================================
 
 // Reconstruct the nested-tree shape for emit. Strategy (mining legacy
 // `preformat`): walk BFS from the root, hoist each transitive in the
@@ -851,8 +857,7 @@ function chooseNpm1Placement(
     // Conflict at chosen level; place during parent (de-hoist).
     chosen = parentPath
     if (chosen === '') {
-      // Root-level conflict: must de-hoist to consumer install path.
-      // We approximate by placing under the first incoming edge's
+      // Root-level conflicts de-hoist under the first incoming consumer's
       // install path.
       const consumerPath = firstConsumerInstallPath(graph, sidecar, node.id, emittableIds)
       if (consumerPath !== undefined) chosen = consumerPath
@@ -1145,7 +1150,7 @@ export function firstConsumerInstallPath(
   return undefined
 }
 
-// === Stringify-side lossy diagnostics ======================================
+// === SERIALIZE — LOSS DIAGNOSTICS ===========================================
 
 function warnPeerContextFlatten(
   node: Node,
@@ -1177,7 +1182,7 @@ function warnPatchDrop(
   )
 }
 
-// === Manifest-driven enrich plan ===========================================
+// === ENRICH — PLANNING ======================================================
 
 interface EnrichPlan {
   rootNodeReplacement: Node | undefined

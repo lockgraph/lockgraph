@@ -51,7 +51,7 @@ import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import type { OverrideConstraint } from '../graph.ts'
 
-// === Public option types ====================================================
+// === TYPES =================================================================
 
 export interface BunTextParseOptions {}
 
@@ -85,7 +85,7 @@ export interface BunTextEnrichOptions {
 
 export interface BunTextOptimizeOptions {}
 
-// === Schema types ===========================================================
+// === TYPES — ON-DISK SCHEMA =================================================
 
 interface BunTextInner {
   dependencies?: Record<string, string>
@@ -115,7 +115,7 @@ interface BunTextLockfile {
   [key: string]: unknown
 }
 
-// === Sidecar ================================================================
+// === SIDECAR ================================================================
 
 interface BunTextNodeSidecar {
   inner?: BunTextInner
@@ -190,7 +190,7 @@ export function getBunOverridesCanonical(graph: Graph): OverrideConstraint[] | u
   return sidecarByGraph.get(graph)?.canonicalOverrides
 }
 
-// === Public API: check / parse / stringify / enrich / optimize =============
+// === PARSE =================================================================
 
 export function check(input: string): boolean {
   // bun-text discriminant: `lockfileVersion: 1` numeric literal AND both
@@ -259,7 +259,7 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   // === Pass 1: register all packages entries as graph nodes ================
   //
   // bun-text `packages` map keys can carry slash segments for hoisting
-  // conflicts (`<consumer-path>/<dep-name>` form). We split on the last
+  // conflicts (`<consumer-path>/<dep-name>` form). Split on the last
   // `/` for name extraction where the leaf segment is the actual package name.
   // The id pulled from tuple slot [0] is the canonical `<name>@<version>` (or
   // workspace-form `<name>@workspace:<path>`).
@@ -480,6 +480,8 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   }
 }
 
+// === SERIALIZE ==============================================================
+
 export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): string {
   const sidecar = sidecarByGraph.get(graph)
   const emitDiagnostic = (diagnostic: Diagnostic): void => options.onDiagnostic?.(diagnostic)
@@ -591,6 +593,8 @@ export function resolveOverridesBlock(
   return undefined
 }
 
+// === ENRICH =================================================================
+
 export function enrich(
   graph: Graph,
   options: BunTextEnrichOptions = {},
@@ -661,6 +665,8 @@ export function enrich(
   return { graph: result.graph, diagnostics }
 }
 
+// === OPTIMIZE ===============================================================
+
 export function optimize(
   graph: Graph,
   _options: BunTextOptimizeOptions = {},
@@ -680,7 +686,7 @@ export function optimize(
   return result
 }
 
-// === Helpers: JSONC parser + emitter =======================================
+// === HELPERS — JSONC ========================================================
 
 function parseJsonc(input: string): BunTextLockfile {
   // Strip line + block comments + trailing commas, then JSON.parse.
@@ -835,7 +841,7 @@ function renderObject(obj: Record<string, unknown>, depth: number, isTopLevel: b
   return lines.join('\n')
 }
 
-// === Helpers: parsing ======================================================
+// === HELPERS — PARSE ========================================================
 
 function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, '\n')
@@ -993,7 +999,7 @@ function isWorkspaceProtocolRange(range: string): boolean {
   return range.startsWith('workspace:')
 }
 
-// === Helpers: stringify side ===============================================
+// === HELPERS — SERIALIZE ====================================================
 
 function locateRootNode(graph: Graph, sidecar: BunTextSidecar | undefined): Node | undefined {
   if (sidecar?.rootId !== undefined) {
