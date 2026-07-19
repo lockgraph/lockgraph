@@ -146,6 +146,8 @@ function readonlySet<T>(source: ReadonlySet<T>): ReadonlySet<T> {
   return view
 }
 
+// === API ====================================================================
+
 export function detectGraphFeatures(graph: Graph, pnpmCatalogQuery?: unknown): GraphFeatureDetection {
   const state: DetectionState = {
     features: new Set<GraphFeature>(),
@@ -183,6 +185,8 @@ export function detectGraphFeatures(graph: Graph, pnpmCatalogQuery?: unknown): G
     attribution: Object.freeze({ berryConditions, pnpmCatalogs, catalogRanges }),
   })
 }
+
+// === INTERNALS ==============================================================
 
 function inspectNode(node: unknown, state: DetectionState): void {
   if (!isRecord(node)) {

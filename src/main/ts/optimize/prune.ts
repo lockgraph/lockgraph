@@ -1,6 +1,6 @@
 // pruneOrphans — reference-count orphan GC (the sibling of `optimize`).
 //
-// yaf lockgraph-message (.69 follow-up): after a dependency-CHANGING bump,
+// After a dependency-changing bump,
 // `completeTransitives` (additive) leaves the OLD version's now-dereferenced
 // closure (e.g. handlebars 4.0.0's async / optimist / uglify-js@2.x + their
 // deps) behind as orphans. `yarn install --immutable` then fails because those
@@ -9,8 +9,8 @@
 // `optimize` (ADR-0024) is the WRONG tool here: it is a REACHABILITY sweep
 // (keep iff reachable from a workspace), so on a graph with incomplete edges it
 // drops present-but-unreferenced dev / optional / peer nodes a valid lock must
-// keep (yaf observed it remove 13 legitimate nodes on a clean adobe-react-
-// spectrum lock).
+// keep — a reachability sweep on an incomplete-edge graph removes valid
+// dev/optional/peer nodes.
 //
 // pruneOrphans is REFERENCE-COUNTING instead: it removes only a node that has
 // lost its LAST incoming edge of ANY kind (dep / dev / optional / peer) —

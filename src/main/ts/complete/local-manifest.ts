@@ -1,4 +1,4 @@
-// Rung-2 fill source for peer-optional reconstruction (task #86).
+// Rung-2 fill source for peer-optional reconstruction.
 //
 // Reads the PARENT package's *installed* `package.json` from a workspace's
 // `node_modules` so the yarn-berry enrich pass can recover

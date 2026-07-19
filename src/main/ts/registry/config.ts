@@ -169,7 +169,7 @@ function parseYarnrcYml(text: string, reg: RegMap, tokens: AuthEntry[], env: Rec
   let subKey = ''
   // Yarn keys registries as `//host` (or `https://host`); strip protocol + `//`
   // so the prefix matches `hostPathKey` — else the token is silently lost (the
-  // real qiwi/mware bug).
+  // real package metadata collision).
   const yarnPrefix = (k: string): string => k.replace(/^(https?:)?\/\//, '').replace(/\/+$/, '')
   for (const raw of text.split(/\r?\n/)) {
     if (raw.trim() === '' || raw.trim().startsWith('#')) continue

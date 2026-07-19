@@ -392,7 +392,7 @@ export async function refurbish(
   // legacy match-hash; yarn-4 RC window / lockfile v7 nodejs-compatible hash —
   // `berryCacheKeyReproducible`).
   // The gate keys off the PER-LOCK cacheKey, NOT the lockfile format version: a bare-
-  // era v6 lock pinned at cacheKey 8 (yarn 3.8, qiwi/mware) IS fillable once
+  // era v6 lock pinned at cacheKey 8 (yarn 3.8) IS fillable once
   // `opts.cacheKey` supplies its `__metadata.cacheKey` — the bare-vs-`<cacheKey>/` emit
   // is the format's job (`checksumPrefix`), so a fill never forces a foreign prefix into
   // a bare lock. An indeterminable cacheKey (`undefined`) defers everything.
@@ -408,7 +408,7 @@ export async function refurbish(
   //     explicit `cN`) by driving yarn's OWN ZipFS byte-exact — but only for the
   //     generation its INSTALLED version was built for (libzip 3.x → cacheKey 10, its
   //     zlib-ng), so it is trusted ONLY on a positive `match`. `@yarnpkg/libzip` is an
-  //     optional peer the consumer (e.g. yaf) installs; absent → this branch no-ops.
+  //     optional peer the consumer installs; absent → this branch no-ops.
   // On neither the gap defers — or the caller's oracle (`source.berryChecksum`) supplies
   // yarn's own digest below. A wrong digest hard-fails `--immutable`, strictly worse than
   // a clean omit yarn self-heals.

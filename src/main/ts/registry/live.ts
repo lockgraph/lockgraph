@@ -80,6 +80,8 @@ export interface LiveRegistryAdapter extends RegistryAdapter {
 const DEFAULT_URL    = DEFAULT_REGISTRY
 const INSTALL_ACCEPT = 'application/vnd.npm.install-v1+json, application/json;q=0.8'
 
+// === API ====================================================================
+
 export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapter {
   const baseUrl  = stripTrailingSlash(opts.url ?? DEFAULT_URL)
   const fetchImpl = opts.fetch ?? (nodeFetchNative as typeof fetch)
@@ -93,7 +95,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
   const authHeader = opts.authHeader ?? (opts.auth !== undefined ? `Bearer ${opts.auth}` : undefined)
   // Never send a credential over a plaintext channel — matches resolveRegistry's
   // https-only `authHeaderFor`, and defends the raw `liveRegistry({ url, authHeader })`
-  // path too (yaf token-attach rule B: "https only").
+  // path too (credential attachment invariant: "https only").
   const authIsSafe = authHeader !== undefined && baseUrl.startsWith('https:')
 
   // Fetch the FULL single-version manifest (`<registry>/<pkg>/<version>`, ~1-2 KB) —
@@ -152,10 +154,10 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
 
       // The abbreviated (corgi) packument DROPS `libc`, so a linux platform package
       // would emit `conditions: os=linux & cpu=x64` MISSING `& libc=<glibc|musl>` —
-      // which yarn re-adds on `install --immutable` (YN0028; the pijma napi-rs break).
+      // which yarn re-adds on `install --immutable` (YN0028).
       // Backfill a linux version from the light single-version manifest (full
       // os/cpu/libc). Non-linux platform packages carry no libc, so corgi is already
-      // complete for them (verified byte-identical vs pijma for os+cpu-only entries).
+      // complete for them (verified byte-identical for os+cpu-only entries).
       if (base.os?.includes('linux') === true && base.libc === undefined) {
         const full = await fetchVersionManifest(name, version)
         if (full !== undefined) return full
@@ -181,8 +183,8 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
         const batch: Record<string, string[]> = {}
         for (const name of names.slice(i, i + chunkSize)) batch[name] = pkgs[name]!
         // `redirect: 'manual'` → a 3xx surfaces as a non-ok response and throws below,
-        // rather than re-POSTing the package list to a redirect target (yaf rule B:
-        // "advisory POST rejects on >=300").
+        // rather than re-POSTing the package list to a redirect target (credential
+        // attachment invariant: "advisory POST rejects on >=300").
         const response = await limit(() => fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(batch), redirect: 'manual' }))
         if (!response.ok) throw new Error(`liveRegistry.audit: ${response.status} ${url}`)
         const body = (await response.json()) as Record<string, unknown>
@@ -199,6 +201,8 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
     limit,
   }
 }
+
+// === INTERNALS ==============================================================
 
 function stripTrailingSlash(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url

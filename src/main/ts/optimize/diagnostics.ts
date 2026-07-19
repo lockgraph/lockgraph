@@ -2,9 +2,9 @@
 //
 // Four codes total: NODE_REMOVED (per-removal info), NOOP (per-call info
 // when removed.length === 0), WORKSPACE_UNREACHABLE (reserved warning code
-// that v1 never emits — §6 r2 amendment keeps the factory for future
+// that v1 never emits — §6 amendment keeps the factory for future
 // opt-in mark-policy tightenings), NO_ROOTS (per-call warning when the mark
-// phase finds no live anchor on a non-empty graph — see §6 r3 amendment).
+// phase finds no live anchor on a non-empty graph — see §6 amendment).
 //
 // Subjects honour ADR-0023 §7.3: NodeId for per-node events, the 'graph'
 // literal for the per-call event. Severities follow §6's table verbatim.
@@ -105,7 +105,7 @@ export function pruneNoRoots(): PruneDiagnostic {
   }
 }
 
-// reserved — v1 never emits per ADR-0024 §6 r2 amendment.
+// reserved — v1 never emits per ADR-0024 §6 amendment.
 // The §4.1 explicit workspace mark unconditionally adds every workspace to
 // the live set, so the §4 sweep branch that would fire this diagnostic is
 // dead under the v1 mark policy. Factory kept for future opt-in mark-policy
@@ -143,7 +143,7 @@ export function optimizeNoop(): OptimizeDiagnostic {
 /**
  * Fires once per `optimize(graph)` call when the mark phase finds no live
  * anchor — no workspace nodes AND an empty `preserve` set — on a non-empty
- * graph (ADR-0024 §6 r3). Without an anchor, reachability cannot tell a
+ * graph (ADR-0024 §6). Without an anchor, reachability cannot tell a
  * wanted top-level dependency from an orphan (both are zero-incoming roots),
  * so optimize preserves every node and returns the graph unchanged rather
  * than wiping it. The caller supplies the real roots via `preserve` to

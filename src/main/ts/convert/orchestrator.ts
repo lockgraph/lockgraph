@@ -314,6 +314,7 @@ async function _convert(
   return projected.output
 }
 
+/** Converts one lockfile or project input to the requested format. */
 export function convert(input: ConvertInput, options: ConvertOptions): Promise<string> {
   return _convert(input, options, {
     ...(options.fs === undefined ? {} : { fs: options.fs }),
