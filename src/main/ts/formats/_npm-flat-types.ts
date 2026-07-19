@@ -28,7 +28,7 @@ export function sortRecord<V>(record: Record<string, V>): Record<string, V> {
   return out
 }
 
-// npm serialises `package-lock.json` via `json-stringify-nice` (see arborist
+// npm serializes `package-lock.json` via `json-stringify-nice` (see arborist
 // `lib/shrinkwrap.js`), NOT plain `JSON.stringify`. Its key order is: keys whose
 // value is a nested object sort AFTER keys whose value is scalar/array; within
 // each group a preferred-key prefix (`NPM_SW_KEY_ORDER`) leads, then the

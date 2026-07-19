@@ -21,7 +21,7 @@
 // §A pinning per ADR-0022 §A.pnpm-v5:
 //   - top-level `lockfileVersion: 5.<digit>` decimal scalar
 //     (NOT quoted). Parse rejects v6/v9 (quoted) and other PM
-//     families via `FORMAT_MISMATCH`. Emit canonicalises to `5.4`.
+//     families via `FORMAT_MISMATCH`. Emit canonicalizes to `5.4`.
 //   - NO `settings` block (v5 predates the pnpm settings table).
 //     Graphs carrying settings via cross-version composition trigger
 //     a `PNPM_V5_SETTINGS_DROPPED` warning on emit.

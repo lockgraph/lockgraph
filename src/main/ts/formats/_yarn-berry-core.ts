@@ -53,7 +53,7 @@ import { readInstalledManifest, type InstalledManifestMeta } from '../complete/l
 
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
 // (`parseSpec` throws PARSE_FAILED otherwise). Cross-family inputs
-// (pnpm-v9 bare semver ranges) lack the scheme — synthesise `npm:` so
+// (pnpm-v9 bare semver ranges) lack the scheme — synthesize `npm:` so
 // reparse stays well-formed. Per ADR-0016 §B `npm:` is the default
 // protocol for registry packages.
 const PROTOCOL_RE = /^[A-Za-z][A-Za-z0-9+\-.]*:/
@@ -79,7 +79,7 @@ const GITHUB_SHORTHAND_RE =
 
 // === HELPERS — LOCATOR IDENTITY ============================================
 
-// Does `range` need the synthesised `npm:` default protocol? No for an explicit
+// Does `range` need the synthesized `npm:` default protocol? No for an explicit
 // `<scheme>:` (already well-formed) and no for a GitHub shorthand (yarn keeps it
 // verbatim — #119 NIT A); yes for a prefix-less semver range.
 function entryKeyRangeOf(range: string): string {
@@ -253,7 +253,7 @@ interface SpecPart {
   spec: string
   // The VERBATIM range substring after `<name>@` (`npm:^1`, `dexus/pem`,
   // `workspace:.`, `1.14.1`). Drives the specIndex-key build through the SAME
-  // `entryKeyRangeOf` normalisation the edge side uses, so a GitHub-shorthand
+  // `entryKeyRangeOf` normalization the edge side uses, so a GitHub-shorthand
   // entry (#119 NIT A) indexes under its verbatim range and the Rung-0 lookup
   // aligns. `protocol`/`spec` stay split for the patch/workspace/name logic.
   raw: string
@@ -1315,7 +1315,7 @@ export function rawDependenciesMetaBlockOfNode(graph: Graph, nodeId: string): Sy
 // `dep` edges + a verbatim dependenciesMeta sidecar, so they surface no `optional`
 // edges here and round-trip untouched. `optional`-KIND edges only arise from
 // completion (a registry optionalDependency) or a cross-family convert
-// (npm/pnpm → berry); for those, synthesise the flag so the folded `dependencies`
+// (npm/pnpm → berry); for those, synthesize the flag so the folded `dependencies`
 // entry is read back as optional. The key matches the emitted dep key
 // (`alias ?? dst.name`, per edgeBlockOfKinds). Verbatim flags win a collision
 // (fidelity); synthesis only fills a name the sidecar didn't already cover. The
@@ -1416,7 +1416,7 @@ function parseSpec(raw: string): SpecPart {
   // (e.g. `"@scope/pkg@1.14.1, @scope/pkg@workspace:packages/pkg"`), and a
   // GitHub-shorthand half (`pem@dexus/pem` — #119 NIT A). `rest` (the verbatim
   // range) is carried on `raw` so the specIndex key is built through the shared
-  // `entryKeyRangeOf` normalisation: a bare semver gets `npm:`, a GitHub
+  // `entryKeyRangeOf` normalization: a bare semver gets `npm:`, a GitHub
   // shorthand stays verbatim — keeping the key aligned with the edge lookup.
   if (colon < 0) {
     return { name, protocol: 'npm', spec: rest, raw: rest }
@@ -1540,7 +1540,7 @@ function entryKeyOfNode(graph: Graph, node: Node): string {
   //
   // TARBALL SYNTHESIS (cross-format convert): a NON-default-registry or
   // `::`-bound tarball synth node anchors on the SAME `::__archiveUrl=…` locator
-  // its `resolution:` carries (via `synthesisedBerryTarballLocator`), NOT the bare
+  // its `resolution:` carries (via `synthesizedBerryTarballLocator`), NOT the bare
   // `<name>@npm:<version>` — otherwise a registry copy and a private-registry copy
   // at the same name@version both anchor on the identical `<name>@npm:<version>`
   // key and the second silently overwrites the first on emit. A default-registry
@@ -1599,7 +1599,7 @@ function ensureEntryNameAnchor(
   payload: TarballPayload | undefined,
 ): void {
   if ([...specs].some(spec => spec.startsWith(`${node.name}@`))) return
-  specs.add(synthesisedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
+  specs.add(synthesizedBerryTarballLocator(node, payload?.resolution) ?? `${node.name}@npm:${node.version}`)
 }
 
 // Tests whether `secondary` is the unqualified prefix of a `::locator=`-
@@ -1751,7 +1751,7 @@ function entryOfNode(
   // Optional deps folded into `dependencies` above are flagged here via
   // `dependenciesMeta.<name>.optional = true`. Parsed berry nodes already hold
   // this verbatim (their optional deps are `dep` edges); `optional`-KIND edges
-  // (completion / cross-family convert) get the flag synthesised.
+  // (completion / cross-family convert) get the flag synthesized.
   const dependenciesMeta = dependenciesMetaWithOptional(
     graph, node,
     rawDependenciesMetaBlockOfNode(graph, node.id) ?? extraBlockOfNode(node, 'dependenciesMeta'),
@@ -1824,7 +1824,7 @@ function entryOfNode(
 
 // A genuine berry locator for THIS node begins with `<name>@` (incl. an npm
 // alias `<name>@npm:<other>@<ver>`); a foreign sidecar leaked by a cross-format
-// source is a bare URL (`https://…`) and must be re-synthesised before emit.
+// source is a bare URL (`https://…`) and must be re-synthesized before emit.
 function isBerryLocatorOfNode(native: string, name: string): boolean {
   return native.startsWith(`${name}@`)
 }
@@ -1836,7 +1836,7 @@ function isBerryLocatorOfNode(native: string, name: string): boolean {
 // re-parse instead of collapsing onto a bare invalid URL. Gated on
 // `sourceDiscriminatorOf` so the registry split matches the node's `+src=` slot;
 // non-`tarball` canonicals keep their own emit paths.
-function synthesisedBerryTarballLocator(node: Node, canonical: ResolutionCanonical | undefined): string | undefined {
+function synthesizedBerryTarballLocator(node: Node, canonical: ResolutionCanonical | undefined): string | undefined {
   if (canonical === undefined || canonical.type !== 'tarball') return undefined
   if (sourceDiscriminatorOf(canonical) === undefined) {
     return `${node.name}@npm:${node.version}`
@@ -1906,7 +1906,7 @@ function resolutionOfNode(
   // URL leaked by a yarn-classic/npm/pnpm source sidecar — NOT a berry locator —
   // returning it verbatim emits a structurally-invalid `resolution:` (a bare URL
   // is not a `<name>@<protocol>:<spec>` locator). For a `tarball` canonical,
-  // re-synthesise a valid berry npm locator instead: a default-registry copy
+  // re-synthesize a valid berry npm locator instead: a default-registry copy
   // becomes `<name>@npm:<version>`, a non-registry/bound copy folds its host into
   // `::__archiveUrl=…` so a registry sibling and a private-registry sibling at the
   // SAME name@version stay distinct + valid. A genuine berry locator (`native`
@@ -1916,8 +1916,8 @@ function resolutionOfNode(
   if (node.workspacePath !== undefined) {
     return `${node.name}@workspace:${node.workspacePath === '' ? '.' : node.workspacePath}`
   }
-  const synthesised = synthesisedBerryTarballLocator(node, canonical)
-  if (synthesised !== undefined) return synthesised
+  const synthesized = synthesizedBerryTarballLocator(node, canonical)
+  if (synthesized !== undefined) return synthesized
   // A foreign non-tarball native (e.g. a leaked git/file URL the canonical could
   // not classify as tarball) still round-trips verbatim through the recipe.
   if (native !== undefined) return native
@@ -2278,7 +2278,7 @@ function extractPatchFingerprint(
       return unresolvedPatch(nodeId, locator, 'builtin patch yarn-major is unavailable at parse time')
     }
     // Builtin patches hash a synthetic string (no on-disk source); F5 byte
-    // normalisation is inapplicable.
+    // normalization is inapplicable.
     return { patch: sha512Hex(`${yarnMajor}:${source}`) }
   }
 
@@ -2291,7 +2291,7 @@ function extractPatchFingerprint(
     return unresolvedPatch(nodeId, locator, 'patch file is unavailable at parse time')
   }
 
-  // ADR-0014 §4.F5 — apply CRLF / BOM byte normalisation BEFORE the F2
+  // ADR-0014 §4.F5 — apply CRLF / BOM byte normalization BEFORE the F2
   // sha512 fingerprint; emit `RECIPE_PATCH_NORMALISED` (info) when ≥ 1
   // byte changed so cross-platform CRLF rewrites surface in diagnostics.
   // Combined helper avoids a second F5 scan inside canonicalHashOfBytes.

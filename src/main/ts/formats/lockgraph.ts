@@ -53,7 +53,7 @@
 //                protocol implicit, every other protocol inline); there is NO
 //                positional `-` alias padding and NO `workspaceRange` JSON — a
 //                w-edge's `workspaceRange.specifier` IS the descriptor (the `sp=`
-//                slot is the rare fallback when an adapter canonicalised them
+//                slot is the rare fallback when an adapter canonicalized them
 //                apart), and `resolvedVersion` rides `rv=`.
 //   L <json>   — OPTIONAL single trailing line of the GRAPH section, the graph's
 //                one LayoutHints as canonical JSON; absent when there are no hints.

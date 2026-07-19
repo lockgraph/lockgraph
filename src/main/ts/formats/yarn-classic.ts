@@ -2086,7 +2086,7 @@ export function parseLocalSpec(
 }
 
 // Canonical resolution for a yarn-classic `resolved` value. Local specifiers
-// (`file:` / `link:` / `portal:`) canonicalise to a `directory` resolution
+// (`file:` / `link:` / `portal:`) canonicalize to a `directory` resolution
 // adapter-side: the shared recipe deliberately routes bare `link:` to `unknown`
 // (recipe/resolution.ts) because in pnpm `link:` is a WORKSPACE shape — a
 // different meaning — so yarn-classic must NOT lean on the recipe for `link:` /

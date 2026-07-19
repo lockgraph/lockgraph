@@ -608,7 +608,7 @@ export function enrich(
     return { graph, diagnostics }
   }
 
-  // Manifest-driven workspace concretisation: synthesise workspace member nodes
+  // Manifest-driven workspace concretisation: synthesize workspace member nodes
   // not already present, tag existing nodes whose name matches a manifest.
   const memberByName = new Map<string, { path: string; manifest: BunTextManifest }>()
   for (const [path, manifest] of Object.entries(options.manifests)) {
