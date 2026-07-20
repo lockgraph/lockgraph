@@ -46,6 +46,7 @@ import {
   serializeNodeId,
   stripPeerContextFromNodeId,
   toTarballKey,
+  type DependencyManifest,
   type Diagnostic,
   type Edge,
   type EdgeAttrs,
@@ -71,13 +72,13 @@ import {
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import {
-  hashAndNormaliseBytes as patchHashAndNormaliseBytes,
+  hashAndNormalizeBytes as patchHashAndNormalizeBytes,
   isHashedPeerSetToken,
   sentinelHashOf as patchSentinelHashOf,
 } from '../recipe/patch.ts'
 import {
   invalidIntegrityDiagnostic,
-  patchNormalisedDiagnostic,
+  patchNormalizedDiagnostic,
   unknownResolutionDiagnostic,
 } from '../recipe/diagnostics.ts'
 import { readWorkspaceFileBytes } from './_path.ts'
@@ -206,14 +207,7 @@ export interface PnpmFamilyStringifyInternalOptions {
   readonly workspaceNames?: ReadonlyMap<string, string>
 }
 
-export interface PnpmManifest {
-  name?: string
-  version?: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-  peerDependencies?: Record<string, string>
-}
+export interface PnpmManifest extends DependencyManifest {}
 
 export interface PnpmFamilyEnrichOptions {
   manifests?: Record<string, PnpmManifest>
@@ -1359,7 +1353,7 @@ function parseOverridePatches(
           // F2 sha512 fingerprint; track whether ≥ 1 byte changed so per-
           // node `RECIPE_PATCH_NORMALISED` emits at directive-match time.
           // Combined helper avoids double-scan via canonicalHashOfBytes.
-          const { hash, normalised: didNormalise } = patchHashAndNormaliseBytes(bytes)
+          const { hash, normalised: didNormalise } = patchHashAndNormalizeBytes(bytes)
           canonical  = hash
           normalised = didNormalise
         }
@@ -1384,7 +1378,7 @@ function resolvePatchForNode(
     if (!matcherMatches(dir.match, name, version)) continue
     if (dir.canonical !== undefined) {
       if (dir.normalised === true) {
-        diagnostics.push(patchNormalisedDiagnostic(nodeId))
+        diagnostics.push(patchNormalizedDiagnostic(nodeId))
       }
       return dir.canonical
     }

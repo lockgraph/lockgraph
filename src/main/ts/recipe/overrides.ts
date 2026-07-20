@@ -30,7 +30,7 @@ import {
   bunOverrideNestedUnsupported,
   interopOverrideNotProjected,
   overrideParentRefDropped,
-  recipeOverrideNormalised,
+  recipeOverrideNormalized,
 } from './diagnostics.ts'
 
 export type { OverridePM } from '../graph.ts'
@@ -127,7 +127,7 @@ export function captureOverrides(
     Object.defineProperty(c, 'captureIndex', { value: i, enumerable: false, configurable: true, writable: true })
   })
 
-  onDiagnostic?.(recipeOverrideNormalised(pm, canonical.length))
+  onDiagnostic?.(recipeOverrideNormalized(pm, canonical.length))
   return { canonical, native }
 }
 
@@ -307,7 +307,7 @@ function asStringRecord(block: object): Record<string, string> {
  * object; pnpm a flat `Record` keyed by `>`-separated ancestor selectors. The
  * adapter writes the block into its lockfile (npm `packages[""].overrides` /
  * pnpm top-level `overrides:`). yarn has no lockfile overrides target — callers
- * use `noteYarnOverridesNotProjected` instead.
+ * use `reportYarnOverridesNotProjected` instead.
  *
  * Loss: an npm `$name` self-ref lowered to pnpm emits OVERRIDE_PARENT_REF_DROPPED.
  * The yarn deep-glob and pnpm leading-`>` transitive-only tails lose their
@@ -329,7 +329,7 @@ export function projectOverrides(
 }
 
 /** yarn-berry carries no lockfile overrides block; signal the non-projection. */
-export function noteYarnOverridesNotProjected(
+export function reportYarnOverridesNotProjected(
   count: number,
   onDiagnostic?: (d: Diagnostic) => void,
 ): void {

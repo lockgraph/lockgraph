@@ -272,7 +272,6 @@ export interface MutateResult {
 
 /**
  * Result of a graph-transforming operation.
- * @internal
  */
 export interface GraphResult {
   readonly graph: Graph
@@ -281,7 +280,6 @@ export interface GraphResult {
 
 /**
  * Manifest fields accepted by dependency-declaration consumers.
- * @internal
  */
 export type DependencyManifest = Pick<
   Manifest,

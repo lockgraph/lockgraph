@@ -6,6 +6,7 @@ import {
   serializeNodeId,
   stripPeerContextFromNodeId,
   toTarballKey,
+  type DependencyManifest,
   type Diagnostic,
   type Edge,
   type EdgeAttrs,
@@ -179,13 +180,9 @@ export interface YarnClassicStringifyOptions {
   registryFor?: (name: string) => string | undefined
 }
 
-export interface YarnClassicManifest {
-  name?: string
-  version?: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-}
+type YarnClassicDependencyManifest = Omit<DependencyManifest, 'peerDependencies'>
+
+export interface YarnClassicManifest extends YarnClassicDependencyManifest {}
 
 export interface YarnClassicEnrichOptions {
   manifests?: Record<string, YarnClassicManifest>

@@ -26,6 +26,7 @@
 import {
   GraphError,
   newBuilder,
+  type DependencyManifest,
   type Diagnostic,
   type Edge,
   type EdgeKind,
@@ -74,14 +75,7 @@ export interface BunTextStringifyOptions {
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
-export interface BunTextManifest {
-  name?: string
-  version?: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-  peerDependencies?: Record<string, string>
-}
+export interface BunTextManifest extends DependencyManifest {}
 
 export interface BunTextEnrichOptions {
   manifests?: Record<string, BunTextManifest>

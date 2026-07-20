@@ -11,8 +11,10 @@ export {
   type ProjectionRemedy,
 } from './api/errors.ts'
 export type {
+  DependencyManifest,
   Diagnostic,
   Graph,
+  GraphResult,
   Manifest,
   OverrideConstraint,
   PackageMetadataField,

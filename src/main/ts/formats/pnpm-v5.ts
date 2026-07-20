@@ -71,6 +71,7 @@ import {
   newBuilder,
   serializeNodeId,
   stripPeerContextFromNodeId,
+  type DependencyManifest,
   type Diagnostic,
   type Edge,
   type EdgeKind,
@@ -171,14 +172,7 @@ export interface PnpmV5StringifyInternalOptions {
   readonly workspaceNames?: ReadonlyMap<string, string>
 }
 
-export interface PnpmV5Manifest {
-  name?: string
-  version?: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-  peerDependencies?: Record<string, string>
-}
+export interface PnpmV5Manifest extends DependencyManifest {}
 
 export interface PnpmV5EnrichOptions {
   manifests?: Record<string, PnpmV5Manifest>

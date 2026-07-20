@@ -10,12 +10,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   captureOverrides,
-  noteYarnOverridesNotProjected,
+  reportYarnOverridesNotProjected,
   projectOverrides,
   splitNameVersion,
   type CapturedOverrides,
 } from '../../main/ts/recipe/overrides.ts'
-import { recipeOverrideNormalised } from '../../main/ts/recipe/diagnostics.ts'
+import { recipeOverrideNormalized } from '../../main/ts/recipe/diagnostics.ts'
 import type { Diagnostic, OverrideConstraint } from '../../main/ts/graph.ts'
 
 // Real override blocks copied VERBATIM from committed real-world fixture
@@ -298,7 +298,7 @@ describe('recipe/overrides — RECIPE_OVERRIDE_NORMALISED', () => {
     const seen: Diagnostic[] = []
     captureOverrides({ foo: '1.0.0', 'a>b': '2.0.0' }, 'pnpm', d => seen.push(d))
     expect(seen).toHaveLength(1)
-    expect(seen[0]).toEqual(recipeOverrideNormalised('pnpm', 2))
+    expect(seen[0]).toEqual(recipeOverrideNormalized('pnpm', 2))
     expect(seen[0]!.code).toBe('RECIPE_OVERRIDE_NORMALISED')
     expect(seen[0]!.severity).toBe('info')
   })
@@ -312,8 +312,8 @@ describe('recipe/overrides — RECIPE_OVERRIDE_NORMALISED', () => {
   })
 
   it('singular vs plural message form', () => {
-    expect(recipeOverrideNormalised('npm', 1).message).toContain('1 npm override into')
-    expect(recipeOverrideNormalised('npm', 3).message).toContain('3 npm overrides into')
+    expect(recipeOverrideNormalized('npm', 1).message).toContain('1 npm override into')
+    expect(recipeOverrideNormalized('npm', 3).message).toContain('3 npm overrides into')
   })
 })
 
@@ -477,11 +477,11 @@ describe('projectOverrides — canonical → PM-native (ADR-0025 §4)', () => {
 
   it('yarn note emits INTEROP_OVERRIDE_NOT_PROJECTED when overrides are present', () => {
     const diags: string[] = []
-    noteYarnOverridesNotProjected(3, d => diags.push(d.code))
+    reportYarnOverridesNotProjected(3, d => diags.push(d.code))
     expect(diags).toEqual(['INTEROP_OVERRIDE_NOT_PROJECTED'])
     // No diagnostic for an empty override set.
     const none: string[] = []
-    noteYarnOverridesNotProjected(0, d => none.push(d.code))
+    reportYarnOverridesNotProjected(0, d => none.push(d.code))
     expect(none).toEqual([])
   })
 })

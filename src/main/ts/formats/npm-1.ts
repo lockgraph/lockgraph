@@ -41,6 +41,7 @@ import {
   GraphError,
   newBuilder,
   serializeNodeId,
+  type DependencyManifest,
   type Diagnostic,
   type Edge,
   type EdgeKind,
@@ -80,14 +81,7 @@ export interface Npm1StringifyOptions {
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
-export interface Npm1Manifest {
-  name?: string
-  version?: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-  peerDependencies?: Record<string, string>
-}
+export interface Npm1Manifest extends DependencyManifest {}
 
 export interface Npm1EnrichOptions {
   manifests?: Record<string, Npm1Manifest>
