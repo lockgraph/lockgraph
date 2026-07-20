@@ -240,6 +240,18 @@ type FeatureEvaluator = (
 
 type MetadataGraphFeature = Extract<GraphFeature, `metadata:${string}`>
 
+interface AssessmentContext {
+  readonly graph: Graph
+  readonly options: AssessmentOptions
+  readonly runtime: AssessmentRuntime
+  readonly completeness: ReturnType<typeof completenessOf>
+  readonly state: InternalEvidenceState
+  readonly source: SourceCapabilityResult
+  readonly resolvedTarget: ReturnType<typeof targetAndRequirement>
+  readonly detected: ReturnType<typeof mergedFeatureDetection>
+  readonly requirements: RequirementAssessment[]
+}
+
 // === API ====================================================================
 
 /** Assesses which conversion guarantees the available evidence supports. */
@@ -248,25 +260,49 @@ export function assessConversion(
   options: AssessmentOptions,
   runtime: AssessmentRuntime = {},
 ): ConversionAssessment {
+  const context = assessmentContext(graph, options, runtime)
+  appendSourceRequirements(context)
+  appendFeatureRequirements(context)
+  appendRuntimeRequirements(context)
+  return frozenAssessment(context)
+}
+
+// === INTERNALS ==============================================================
+
+function assessmentContext(
+  graph: Graph,
+  options: AssessmentOptions,
+  runtime: AssessmentRuntime,
+): AssessmentContext {
   const completeness = completenessOf(graph, { evidence: options.evidence })
   const state = internalEvidenceOf(completeness.evidence)
-  const source = sourceCapabilities(state)
-  const resolvedTarget = targetAndRequirement(options)
   const detected = mergedFeatureDetection(graph, state)
-  const detection = detected.detection
-  const requirements = canonicalRequirements(
-    completeness.profile,
-    detection.features,
-    options.contract,
-  )
+  return {
+    graph,
+    options,
+    runtime,
+    completeness,
+    state,
+    source: sourceCapabilities(state),
+    resolvedTarget: targetAndRequirement(options),
+    detected,
+    requirements: canonicalRequirements(
+      completeness.profile,
+      detected.detection.features,
+      options.contract,
+    ),
+  }
+}
 
+function appendSourceRequirements(context: AssessmentContext): void {
+  const { detected, options, requirements, resolvedTarget, source, state } = context
   if (state.source === undefined) {
     requirements.push(requirement('source:format', 'unassessed', undefined, [diagnostic(
       'COMPLETENESS_EVALUATOR_DEFERRED',
       'source format evidence is unavailable',
     )]))
   }
-  const requiredDimensions = contractDimensions(options.contract, detection.features)
+  const requiredDimensions = contractDimensions(options.contract, detected.detection.features)
   for (const dimension of source.ambiguousDimensions) {
     if (!requiredDimensions.has(dimension)) continue
     requirements.push(requirement(
@@ -282,20 +318,27 @@ export function assessConversion(
   }
   if (resolvedTarget.requirement !== undefined) requirements.push(resolvedTarget.requirement)
   requirements.push(...sidecarAttributionRequirements(detected.source, detected.current))
+}
 
+function appendFeatureRequirements(context: AssessmentContext): void {
+  const { detection } = context.detected
   for (const feature of detection.features) {
     const evaluator = featureEvaluators[feature]
-    requirements.push(evaluator === undefined
+    context.requirements.push(evaluator === undefined
       ? requirement(`target-feature:${feature}`, 'unassessed', undefined, [diagnostic(
           'COMPLETENESS_EVALUATOR_DEFERRED',
           'graph feature has no target evaluator',
           { feature },
         )])
-      : evaluator(graph, resolvedTarget.target, options.contract, detection))
+      : evaluator(
+          context.graph,
+          context.resolvedTarget.target,
+          context.options.contract,
+          detection,
+        ))
   }
-
   for (const fact of detection.unmodeled) {
-    requirements.push(requirement(
+    context.requirements.push(requirement(
       `graph-feature:unmodeled:${fact.subject}:${fact.path}`,
       'unassessed',
       undefined,
@@ -306,24 +349,28 @@ export function assessConversion(
       )],
     ))
   }
+}
 
+function replaceRuntimeRequirement(
+  requirements: RequirementAssessment[],
+  runtimeRequirements: readonly RequirementAssessment[],
+  key: string,
+  enabled: boolean,
+): void {
+  if (!enabled) return
+  const supplied = runtimeRequirements.find(item => item.key === key)
+  if (supplied === undefined) return
+  const index = requirements.findIndex(item => item.key === key)
+  if (index >= 0) requirements[index] = supplied
+}
+
+function appendRuntimeRequirements(context: AssessmentContext): void {
+  const { graph, options, requirements, resolvedTarget, runtime, state } = context
   const runtimeRequirements = runtime.targetRequirements ?? []
-  const companion = runtimeRequirements.find(item => item.key === 'target:companion-projection')
-  if (companion !== undefined && (options.contract === 'project' || options.contract === 'frozen')) {
-    const index = requirements.findIndex(item => item.key === companion.key)
-    if (index >= 0) requirements[index] = companion
-  }
-  const frozenVerification = runtimeRequirements.find(item => item.key === 'target:frozen-verification')
-  if (frozenVerification !== undefined && options.contract === 'frozen') {
-    const index = requirements.findIndex(item => item.key === frozenVerification.key)
-    if (index >= 0) requirements[index] = frozenVerification
-  }
-  const frozenIntegrity = runtimeRequirements.find(item =>
-    item.key === 'target-feature:integrity:tarball')
-  if (frozenIntegrity !== undefined && options.contract === 'frozen') {
-    const index = requirements.findIndex(item => item.key === frozenIntegrity.key)
-    if (index >= 0) requirements[index] = frozenIntegrity
-  }
+  const projectContract = options.contract === 'project' || options.contract === 'frozen'
+  replaceRuntimeRequirement(requirements, runtimeRequirements, 'target:companion-projection', projectContract)
+  replaceRuntimeRequirement(requirements, runtimeRequirements, 'target:frozen-verification', options.contract === 'frozen')
+  replaceRuntimeRequirement(requirements, runtimeRequirements, 'target-feature:integrity:tarball', options.contract === 'frozen')
   if (options.contract !== 'snapshot') {
     requirements.push(policyProjectionRequirement(state, resolvedTarget.target, runtimeRequirements))
   }
@@ -336,35 +383,33 @@ export function assessConversion(
   const consumedRuntimeKeys = new Set([
     workspacePeer?.key,
     options.contract === 'snapshot' ? undefined : 'target:resolution-policy',
-    options.contract === 'project' || options.contract === 'frozen'
-      ? 'target:companion-projection'
-      : undefined,
+    projectContract ? 'target:companion-projection' : undefined,
     options.contract === 'frozen' ? 'target:frozen-verification' : undefined,
     options.contract === 'frozen' ? 'target-feature:integrity:tarball' : undefined,
   ])
   requirements.push(...runtimeRequirements.filter(item => !consumedRuntimeKeys.has(item.key)))
   requirements.push(outputProbeRequirement(runtime.outputProbe))
+}
 
-  const frozenRequirements = Object.freeze(requirements.map(item => Object.freeze({
+function frozenAssessment(context: AssessmentContext): ConversionAssessment {
+  const requirements = Object.freeze(context.requirements.map(item => Object.freeze({
     ...item,
     diagnostics: Object.freeze([...item.diagnostics]),
   })))
   const diagnostics = Object.freeze([
-    ...completeness.diagnostics,
-    ...frozenRequirements.flatMap(item => item.diagnostics),
+    ...context.completeness.diagnostics,
+    ...requirements.flatMap(item => item.diagnostics),
   ])
   return Object.freeze({
-    status: overallStatus(frozenRequirements),
-    contract: options.contract,
-    source,
-    target: resolvedTarget.target,
-    completeness,
-    requirements: frozenRequirements,
+    status: overallStatus(requirements),
+    contract: context.options.contract,
+    source: context.source,
+    target: context.resolvedTarget.target,
+    completeness: context.completeness,
+    requirements,
     diagnostics,
   })
 }
-
-// === INTERNALS ==============================================================
 
 function diagnostic(
   code: string,
@@ -536,13 +581,7 @@ function canonicalRequirements(
     ),
   ]
 
-  const requiredPeer: PeerKnowledge | undefined = features.has('peer-context')
-    ? 'virtualized'
-    : features.has('edge:peer')
-      ? 'resolved'
-      : features.has('metadata:peer-declarations')
-        ? 'declared'
-        : undefined
+  const requiredPeer = requiredPeerKnowledge(features)
   if (requiredPeer !== undefined) {
     requirements.push(thresholdRequirement(
       'canonical:peer-model',
@@ -563,33 +602,7 @@ function canonicalRequirements(
     ))
   }
   if (contract === 'project' || contract === 'frozen') {
-    requirements.push(
-      thresholdRequirement(
-        'canonical:project-topology',
-        'projectTopology',
-        profile.projectTopology,
-        'complete',
-        knowledgeRank,
-      ),
-      thresholdRequirement(
-        'canonical:edge-kinds',
-        'edgeKinds',
-        profile.edgeKinds,
-        'complete',
-        knowledgeRank,
-      ),
-      thresholdRequirement(
-        'canonical:package-metadata',
-        'packageMetadata',
-        profile.packageMetadata,
-        'complete',
-        knowledgeRank,
-      ),
-      requirement('target:companion-projection', 'unassessed', undefined, [diagnostic(
-        'COMPLETENESS_EVALUATOR_DEFERRED',
-        'runtime companion projection evidence is required',
-      )]),
-    )
+    requirements.push(...projectContractRequirements(profile))
   }
   if (contract === 'frozen') {
     requirements.push(requirement('target:frozen-verification', 'unassessed', 'verification', [diagnostic(
@@ -598,6 +611,44 @@ function canonicalRequirements(
     )]))
   }
   return requirements
+}
+
+function requiredPeerKnowledge(features: ReadonlySet<GraphFeature>): PeerKnowledge | undefined {
+  if (features.has('peer-context')) return 'virtualized'
+  if (features.has('edge:peer')) return 'resolved'
+  return features.has('metadata:peer-declarations') ? 'declared' : undefined
+}
+
+function projectContractRequirements(
+  profile: Readonly<CompletenessProfile>,
+): RequirementAssessment[] {
+  return [
+    thresholdRequirement(
+      'canonical:project-topology',
+      'projectTopology',
+      profile.projectTopology,
+      'complete',
+      knowledgeRank,
+    ),
+    thresholdRequirement(
+      'canonical:edge-kinds',
+      'edgeKinds',
+      profile.edgeKinds,
+      'complete',
+      knowledgeRank,
+    ),
+    thresholdRequirement(
+      'canonical:package-metadata',
+      'packageMetadata',
+      profile.packageMetadata,
+      'complete',
+      knowledgeRank,
+    ),
+    requirement('target:companion-projection', 'unassessed', undefined, [diagnostic(
+      'COMPLETENESS_EVALUATOR_DEFERRED',
+      'runtime companion projection evidence is required',
+    )]),
+  ]
 }
 
 function contractDimensions(

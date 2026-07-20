@@ -123,6 +123,34 @@ interface BunTextWorkspaceSidecar {
   manifest: BunTextWorkspaceManifest
 }
 
+interface BunTextPackageEntry {
+  id: string
+  inner?: BunTextInner
+  integrity?: string
+}
+
+interface BunTextParseContext {
+  readonly builder: ReturnType<typeof newBuilder>
+  readonly diagnostics: Diagnostic[]
+  readonly workspaces: Record<string, BunTextWorkspaceManifest>
+  readonly packages: Record<string, unknown[]>
+  readonly nodeSidecar: Map<string, BunTextNodeSidecar>
+  readonly workspaceSidecar: Map<string, BunTextWorkspaceSidecar>
+  readonly workspaceByPath: Map<string, string>
+  readonly peerDeclarations: Map<string, string>
+  readonly rootManifest: BunTextWorkspaceManifest
+  readonly rootId: string
+  readonly seenNodeIds: Set<string>
+  readonly entriesByKey: Map<string, BunTextPackageEntry>
+}
+
+interface BunTextFidelity {
+  readonly nativeOverrides: Record<string, unknown> | undefined
+  readonly canonicalOverrides: OverrideConstraint[] | undefined
+  readonly trustedDependencies: string[] | undefined
+  readonly patchedDependencies: Record<string, string> | undefined
+}
+
 interface BunTextSidecar {
   rootId?: string
   rootManifest?: BunTextWorkspaceManifest
@@ -202,9 +230,57 @@ export function check(input: string): boolean {
 }
 
 export function parse(input: string, _options: BunTextParseOptions = {}): Graph {
-  const normalized = normalizeLineEndings(input)
-  const lf = parseJsonc(normalized)
+  const lf = parseBunLockfile(input)
+  const context = createBunParseContext(lf)
 
+  // --- Pass 1: register all packages entries as graph nodes ----------------
+  //
+  // bun-text `packages` map keys can carry slash segments for hoisting
+  // conflicts (`<consumer-path>/<dep-name>` form). Split on the last
+  // `/` for name extraction where the leaf segment is the actual package name.
+  // The id pulled from tuple slot [0] is the canonical `<name>@<version>` (or
+  // workspace-form `<name>@workspace:<path>`).
+  registerPackageEntries(context)
+
+  // Pre-register workspace members declared in the `workspaces` map even
+  // when they don't appear in `packages` (rare; bun emits both, but if a
+  // member has no installed deps the packages-side entry is still emitted).
+  registerDeclaredWorkspaces(context)
+
+  // Pass 2: emit workspace-manifest edges. workspace-protocol ranges resolve
+  // via `workspaceByPath` (member name lookup); plain ranges resolve via
+  // the flat package index.
+  const packageByName = buildPackageByName(context.packages)
+  addWorkspaceManifestEdges(context, packageByName)
+
+  // Pass 3: emit packages inner-block edges. Resolution uses a per-consumer
+  // scoped index, since bun de-hoists conflicting entries under `<consumer>/<dep>`
+  // packages keys and those shadow the flat lookup for that consumer.
+  //
+  // A single NodeId can appear under multiple `packages` keys — via npm-alias
+  // siblings (`string-width` + `string-width-cjs`, both `string-width@4.2.3`)
+  // and via de-hoist keys (`<consumer>/<dep>`). Node registration already
+  // dedups on NodeId (`seenNodeIds`), but `entriesByKey` keeps one entry per
+  // key, so without a guard `addBlockEdges` re-emits the identical
+  // `(src, dep, kind)` edge 2-3× → seal `duplicate edge`. Emit each source
+  // node's inner-block exactly once; the first key wins (its de-hoist scope
+  // applies). The package's own dependency set is invariant across its keys,
+  // so collapsing is lossless — stringify re-expands one tuple per
+  // name@version regardless.
+  addPackageEntryEdges(context, packageByName)
+
+  // --- Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md) ----
+  // Capture `overrides` / `trustedDependencies` / `patchedDependencies`
+  // verbatim so a same-PM round-trip is lossless. `overrides` is bun's
+  // forced-resolution mechanism — the npm/bun analog of yarn `resolutions`,
+  // load-bearing for audit-fix transitive pins. The canonical projection
+  // (npm grammar — bun's block is npm-shaped) backs cross-PM reads.
+  const fidelity = captureBunFidelity(lf)
+  return sealBunGraph(context, fidelity)
+}
+
+function parseBunLockfile(input: string): BunTextLockfile {
+  const lf = parseJsonc(normalizeLineEndings(input))
   if (lf.lockfileVersion !== 1) {
     throw new LockfileError({
       code: 'FORMAT_MISMATCH',
@@ -231,7 +307,10 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
       message: 'bun-text adapter: `packages` entries must be positional tuples (arrays)',
     })
   }
+  return lf
+}
 
+function createBunParseContext(lf: BunTextLockfile): BunTextParseContext {
   const builder = newBuilder()
   const diagnostics: Diagnostic[] = []
   const nodeSidecar = new Map<string, BunTextNodeSidecar>()
@@ -253,176 +332,55 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   })
   workspaceByPath.set('', rootId)
   workspaceSidecar.set('', { path: '', manifest: rootManifest })
-
-  // --- Pass 1: register all packages entries as graph nodes ----------------
-  //
-  // bun-text `packages` map keys can carry slash segments for hoisting
-  // conflicts (`<consumer-path>/<dep-name>` form). Split on the last
-  // `/` for name extraction where the leaf segment is the actual package name.
-  // The id pulled from tuple slot [0] is the canonical `<name>@<version>` (or
-  // workspace-form `<name>@workspace:<path>`).
-
   const packages = lf.packages as Record<string, unknown[]>
   const seenNodeIds = new Set<string>([rootId])
-  const entriesByKey = new Map<string, { id: string; inner?: BunTextInner; integrity?: string }>()
+  const entriesByKey = new Map<string, BunTextPackageEntry>()
+  return {
+    builder,
+    diagnostics,
+    workspaces,
+    packages,
+    nodeSidecar,
+    workspaceSidecar,
+    workspaceByPath,
+    peerDeclarations,
+    rootManifest,
+    rootId,
+    seenNodeIds,
+    entriesByKey,
+  }
+}
 
-  for (const [packagesKey, raw] of Object.entries(packages)) {
-    if (!Array.isArray(raw) || raw.length === 0) {
-      diagnostics.push({
-        code: 'BUN_TEXT_BAD_ENTRY',
-        severity: 'warning',
-        message: `bun-text entry ${JSON.stringify(packagesKey)} is not a positional tuple; skipping`,
-      })
-      continue
-    }
-    const idToken = raw[0]
-    if (typeof idToken !== 'string') {
-      diagnostics.push({
-        code: 'BUN_TEXT_BAD_ENTRY',
-        severity: 'warning',
-        message: `bun-text entry ${JSON.stringify(packagesKey)} missing id token`,
-      })
-      continue
-    }
-
-    if (raw.length === 1) {
-      // Workspace member reference: `[<name>@workspace:<path>]`.
-      const parsed = parseWorkspaceRef(idToken)
-      if (parsed === undefined) {
-        diagnostics.push({
-          code: 'BUN_TEXT_BAD_ENTRY',
-          severity: 'warning',
-          message: `bun-text workspace-ref ${JSON.stringify(idToken)} unparseable; skipping`,
-        })
-        continue
-      }
-      const wsManifest = workspaces[parsed.path]
-      const wsVersion = wsManifest?.version ?? '0.0.0'
-      const wsId = `${parsed.name}@${wsVersion}`
-      if (!seenNodeIds.has(wsId)) {
-        seenNodeIds.add(wsId)
-        builder.addNode({
-          id: wsId,
-          name: parsed.name,
-          version: wsVersion,
-          peerContext: [],
-          workspacePath: parsed.path,
-        })
-      }
-      workspaceByPath.set(parsed.path, wsId)
-      if (wsManifest !== undefined) {
-        workspaceSidecar.set(parsed.path, { path: parsed.path, manifest: wsManifest })
-      }
-      nodeSidecar.set(wsId, { packagesKey })
-      entriesByKey.set(packagesKey, { id: wsId })
-      continue
-    }
-
-    // Regular package: `[id, "", inner, integrity]`.
-    const parsed = parsePackageId(idToken)
-    if (parsed === undefined) {
-      diagnostics.push({
-        code: 'BUN_TEXT_BAD_ENTRY',
-        severity: 'warning',
-        message: `bun-text id ${JSON.stringify(idToken)} unparseable; skipping`,
-      })
-      continue
-    }
-    const { name, version } = parsed
-    const nodeId = `${name}@${version}`
-    const inner = (raw.length >= 3 && raw[2] !== null && typeof raw[2] === 'object' && !Array.isArray(raw[2]))
-      ? raw[2] as BunTextInner
-      : undefined
-    const integrity = raw.length >= 4 && typeof raw[3] === 'string' && raw[3].length > 0
-      ? raw[3] as string
-      : undefined
-
-    if (!seenNodeIds.has(nodeId)) {
-      seenNodeIds.add(nodeId)
-      builder.addNode({
-        id: nodeId,
-        name,
-        version,
-        peerContext: [],
-      })
-      if (integrity !== undefined) {
-        const parsed = parseSri(integrity, 'sri')
-        if (isEmptyIntegrity(parsed)) {
-          diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
-        } else {
-          builder.setTarball({ name, version }, { integrity: parsed })
-        }
-      }
-    }
-    nodeSidecar.set(nodeId, { inner, packagesKey })
-    entriesByKey.set(packagesKey, { id: nodeId, inner, integrity })
+function sealBunGraph(context: BunTextParseContext, fidelity: BunTextFidelity): Graph {
+  for (const diagnostic of context.diagnostics) {
+    context.builder.diagnostic(diagnostic)
   }
 
-  // Pre-register workspace members declared in the `workspaces` map even
-  // when they don't appear in `packages` (rare; bun emits both, but if a
-  // member has no installed deps the packages-side entry is still emitted).
-  for (const [path, manifest] of Object.entries(workspaces)) {
-    if (path === '') continue
-    if (workspaceByPath.has(path)) continue
-    if (manifest === null || typeof manifest !== 'object') continue
-    const memberName = manifest.name
-    if (typeof memberName !== 'string' || memberName.length === 0) continue
-    const memberVersion = manifest.version ?? '0.0.0'
-    const memberId = `${memberName}@${memberVersion}`
-    if (!seenNodeIds.has(memberId)) {
-      seenNodeIds.add(memberId)
-      builder.addNode({
-        id: memberId,
-        name: memberName,
-        version: memberVersion,
-        peerContext: [],
-        workspacePath: path,
+  try {
+    const graph = context.builder.seal()
+    const sidecar: BunTextSidecar = {
+      rootId: context.rootId,
+      rootManifest: context.rootManifest,
+      workspaces: context.workspaceSidecar,
+      workspaceByPath: context.workspaceByPath,
+      nodes: context.nodeSidecar,
+      peerDeclarations: context.peerDeclarations,
+      ...fidelity,
+    }
+    rememberSidecar(graph, sidecar)
+    return graph
+  } catch (error) {
+    if (error instanceof GraphError) {
+      throw new LockfileError({
+        code: 'PARSE_FAILED',
+        message: `bun-text seal failed: ${error.message}`,
       })
     }
-    workspaceByPath.set(path, memberId)
-    workspaceSidecar.set(path, { path, manifest })
+    throw error
   }
+}
 
-  // Pass 2: emit workspace-manifest edges. workspace-protocol ranges resolve
-  // via `workspaceByPath` (member name lookup); plain ranges resolve via
-  // the flat package index.
-  const packageByName = buildPackageByName(packages)
-
-  for (const [path, ws] of workspaceSidecar) {
-    const srcId = workspaceByPath.get(path)
-    if (srcId === undefined) continue
-    addBlockEdges(builder, diagnostics, srcId, ws.manifest, packageByName, workspaceByPath, peerDeclarations)
-  }
-
-  // Pass 3: emit packages inner-block edges. Resolution uses a per-consumer
-  // scoped index, since bun de-hoists conflicting entries under `<consumer>/<dep>`
-  // packages keys and those shadow the flat lookup for that consumer.
-  //
-  // A single NodeId can appear under multiple `packages` keys — via npm-alias
-  // siblings (`string-width` + `string-width-cjs`, both `string-width@4.2.3`)
-  // and via de-hoist keys (`<consumer>/<dep>`). Node registration already
-  // dedups on NodeId (`seenNodeIds`), but `entriesByKey` keeps one entry per
-  // key, so without a guard `addBlockEdges` re-emits the identical
-  // `(src, dep, kind)` edge 2-3× → seal `duplicate edge`. Emit each source
-  // node's inner-block exactly once; the first key wins (its de-hoist scope
-  // applies). The package's own dependency set is invariant across its keys,
-  // so collapsing is lossless — stringify re-expands one tuple per
-  // name@version regardless.
-  const emittedSrc = new Set<string>()
-  for (const [packagesKey, entry] of entriesByKey) {
-    if (entry.inner === undefined) continue
-    if (emittedSrc.has(entry.id)) continue
-    emittedSrc.add(entry.id)
-    const consumerScope = buildConsumerScope(packagesKey, packages, packageByName)
-    addBlockEdges(builder, diagnostics, entry.id, entry.inner, consumerScope, undefined, peerDeclarations)
-  }
-
-  // --- Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md) ----
-  // Capture `overrides` / `trustedDependencies` / `patchedDependencies`
-  // verbatim so a same-PM round-trip is lossless. `overrides` is bun's
-  // forced-resolution mechanism — the npm/bun analog of yarn `resolutions`,
-  // load-bearing for audit-fix transitive pins. The canonical projection
-  // (npm grammar — bun's block is npm-shaped) backs cross-PM reads.
+function captureBunFidelity(lf: BunTextLockfile): BunTextFidelity {
   let nativeOverrides: Record<string, unknown> | undefined
   let canonicalOverrides: OverrideConstraint[] | undefined
   if (lf.overrides !== undefined && lf.overrides !== null && typeof lf.overrides === 'object') {
@@ -436,45 +394,207 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
     if (captured.canonical.length > 0) canonicalOverrides = captured.canonical
   }
   const trustedDependencies = Array.isArray(lf.trustedDependencies)
-    ? (lf.trustedDependencies as unknown[]).filter((v): v is string => typeof v === 'string')
+    ? (lf.trustedDependencies as unknown[]).filter((value): value is string => typeof value === 'string')
     : undefined
   const patchedDependencies = lf.patchedDependencies !== undefined
     && lf.patchedDependencies !== null
     && typeof lf.patchedDependencies === 'object'
     ? Object.fromEntries(
         Object.entries(lf.patchedDependencies as Record<string, unknown>)
-          .filter((e): e is [string, string] => typeof e[1] === 'string'),
+          .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
       )
     : undefined
+  return { nativeOverrides, canonicalOverrides, trustedDependencies, patchedDependencies }
+}
 
-  for (const diagnostic of diagnostics) {
-    builder.diagnostic(diagnostic)
-  }
-
-  try {
-    const graph = builder.seal()
-    const sidecar: BunTextSidecar = {
-      rootId,
-      rootManifest,
-      workspaces: workspaceSidecar,
-      workspaceByPath,
-      nodes: nodeSidecar,
-      peerDeclarations,
-      nativeOverrides,
-      canonicalOverrides,
-      trustedDependencies,
-      patchedDependencies,
-    }
-    rememberSidecar(graph, sidecar)
-    return graph
-  } catch (error) {
-    if (error instanceof GraphError) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `bun-text seal failed: ${error.message}`,
+function registerDeclaredWorkspaces(context: BunTextParseContext): void {
+  for (const [path, manifest] of Object.entries(context.workspaces)) {
+    if (path === '') continue
+    if (context.workspaceByPath.has(path)) continue
+    if (manifest === null || typeof manifest !== 'object') continue
+    const memberName = manifest.name
+    if (typeof memberName !== 'string' || memberName.length === 0) continue
+    const memberVersion = manifest.version ?? '0.0.0'
+    const memberId = `${memberName}@${memberVersion}`
+    if (!context.seenNodeIds.has(memberId)) {
+      context.seenNodeIds.add(memberId)
+      context.builder.addNode({
+        id: memberId,
+        name: memberName,
+        version: memberVersion,
+        peerContext: [],
+        workspacePath: path,
       })
     }
-    throw error
+    context.workspaceByPath.set(path, memberId)
+    context.workspaceSidecar.set(path, { path, manifest })
+  }
+}
+
+function addWorkspaceManifestEdges(
+  context: BunTextParseContext,
+  packageByName: Map<string, string>,
+): void {
+  for (const [path, workspace] of context.workspaceSidecar) {
+    const srcId = context.workspaceByPath.get(path)
+    if (srcId === undefined) continue
+    addBlockEdges(
+      context.builder,
+      context.diagnostics,
+      srcId,
+      workspace.manifest,
+      packageByName,
+      context.workspaceByPath,
+      context.peerDeclarations,
+    )
+  }
+}
+
+function addPackageEntryEdges(
+  context: BunTextParseContext,
+  packageByName: Map<string, string>,
+): void {
+  const emittedSrc = new Set<string>()
+  for (const [packagesKey, entry] of context.entriesByKey) {
+    if (entry.inner === undefined) continue
+    if (emittedSrc.has(entry.id)) continue
+    emittedSrc.add(entry.id)
+    const consumerScope = buildConsumerScope(packagesKey, context.packages, packageByName)
+    addBlockEdges(
+      context.builder,
+      context.diagnostics,
+      entry.id,
+      entry.inner,
+      consumerScope,
+      undefined,
+      context.peerDeclarations,
+    )
+  }
+}
+
+function registerPackageEntries(context: BunTextParseContext): void {
+  for (const [packagesKey, raw] of Object.entries(context.packages)) {
+    registerPackageEntry(context, packagesKey, raw)
+  }
+}
+
+function registerPackageEntry(
+  context: BunTextParseContext,
+  packagesKey: string,
+  raw: unknown[],
+): void {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    context.diagnostics.push({
+      code: 'BUN_TEXT_BAD_ENTRY',
+      severity: 'warning',
+      message: `bun-text entry ${JSON.stringify(packagesKey)} is not a positional tuple; skipping`,
+    })
+    return
+  }
+  const idToken = raw[0]
+  if (typeof idToken !== 'string') {
+    context.diagnostics.push({
+      code: 'BUN_TEXT_BAD_ENTRY',
+      severity: 'warning',
+      message: `bun-text entry ${JSON.stringify(packagesKey)} missing id token`,
+    })
+    return
+  }
+  if (raw.length === 1) {
+    registerWorkspacePackageEntry(context, packagesKey, idToken)
+    return
+  }
+  registerRegularPackageEntry(context, packagesKey, idToken, raw)
+}
+
+function registerWorkspacePackageEntry(
+  context: BunTextParseContext,
+  packagesKey: string,
+  idToken: string,
+): void {
+  // Workspace member reference: `[<name>@workspace:<path>]`.
+  const parsed = parseWorkspaceRef(idToken)
+  if (parsed === undefined) {
+    context.diagnostics.push({
+      code: 'BUN_TEXT_BAD_ENTRY',
+      severity: 'warning',
+      message: `bun-text workspace-ref ${JSON.stringify(idToken)} unparseable; skipping`,
+    })
+    return
+  }
+  const wsManifest = context.workspaces[parsed.path]
+  const wsVersion = wsManifest?.version ?? '0.0.0'
+  const wsId = `${parsed.name}@${wsVersion}`
+  if (!context.seenNodeIds.has(wsId)) {
+    context.seenNodeIds.add(wsId)
+    context.builder.addNode({
+      id: wsId,
+      name: parsed.name,
+      version: wsVersion,
+      peerContext: [],
+      workspacePath: parsed.path,
+    })
+  }
+  context.workspaceByPath.set(parsed.path, wsId)
+  if (wsManifest !== undefined) {
+    context.workspaceSidecar.set(parsed.path, { path: parsed.path, manifest: wsManifest })
+  }
+  context.nodeSidecar.set(wsId, { packagesKey })
+  context.entriesByKey.set(packagesKey, { id: wsId })
+}
+
+function registerRegularPackageEntry(
+  context: BunTextParseContext,
+  packagesKey: string,
+  idToken: string,
+  raw: unknown[],
+): void {
+  // Regular package: `[id, "", inner, integrity]`.
+  const parsed = parsePackageId(idToken)
+  if (parsed === undefined) {
+    context.diagnostics.push({
+      code: 'BUN_TEXT_BAD_ENTRY',
+      severity: 'warning',
+      message: `bun-text id ${JSON.stringify(idToken)} unparseable; skipping`,
+    })
+    return
+  }
+  const { name, version } = parsed
+  const nodeId = `${name}@${version}`
+  const inner = (raw.length >= 3 && raw[2] !== null && typeof raw[2] === 'object' && !Array.isArray(raw[2]))
+    ? raw[2] as BunTextInner
+    : undefined
+  const integrity = raw.length >= 4 && typeof raw[3] === 'string' && raw[3].length > 0
+    ? raw[3] as string
+    : undefined
+
+  if (!context.seenNodeIds.has(nodeId)) {
+    context.seenNodeIds.add(nodeId)
+    context.builder.addNode({
+      id: nodeId,
+      name,
+      version,
+      peerContext: [],
+    })
+    setBunTarball(context, name, version, nodeId, integrity)
+  }
+  context.nodeSidecar.set(nodeId, { inner, packagesKey })
+  context.entriesByKey.set(packagesKey, { id: nodeId, inner, integrity })
+}
+
+function setBunTarball(
+  context: BunTextParseContext,
+  name: string,
+  version: string,
+  nodeId: string,
+  integrity: string | undefined,
+): void {
+  if (integrity === undefined) return
+  const parsed = parseSri(integrity, 'sri')
+  if (isEmptyIntegrity(parsed)) {
+    context.diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
+  } else {
+    context.builder.setTarball({ name, version }, { integrity: parsed })
   }
 }
 
