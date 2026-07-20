@@ -743,6 +743,17 @@ function addResolvedTreeEdges(
   seenIds: Set<string>,
   sidecar: PnpmV5Sidecar,
 ): void {
+  addResolvedDependencyEdges(builder, diagnostics, srcId, entry, seenIds)
+  addResolvedPeerEdges(builder, diagnostics, srcId, peers, seenIds, sidecar)
+}
+
+function addResolvedDependencyEdges(
+  builder: ReturnType<typeof newBuilder>,
+  diagnostics: Diagnostic[],
+  srcId: string,
+  entry: Record<string, unknown>,
+  seenIds: Set<string>,
+): void {
   for (const [kind, blockName] of [
     ['dep', 'dependencies'],
     ['optional', 'optionalDependencies'],
@@ -770,17 +781,21 @@ function addResolvedTreeEdges(
         })
         continue
       }
-      try {
-        const attrs: { range: string; alias?: string } = { range: rawValue }
-        if (aliasSlot !== undefined) attrs.alias = aliasSlot
-        builder.addEdge(srcId, targetId, kind, attrs)
-      } catch (error) {
-        if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-        throw error
-      }
+      const attrs: { range: string; alias?: string } = { range: rawValue }
+      if (aliasSlot !== undefined) attrs.alias = aliasSlot
+      addEdgeTolerant(builder, srcId, targetId, kind, attrs)
     }
   }
+}
 
+function addResolvedPeerEdges(
+  builder: ReturnType<typeof newBuilder>,
+  diagnostics: Diagnostic[],
+  srcId: string,
+  peers: Array<{ name: string; version: string }>,
+  seenIds: Set<string>,
+  sidecar: PnpmV5Sidecar,
+): void {
   // Peer edges — derive from the parsed peers chain.
   for (const peer of peers) {
     const peerNodeId = resolvePeerTargetById(seenIds, peer.name, peer.version)
@@ -793,14 +808,9 @@ function addResolvedTreeEdges(
       })
       continue
     }
-    try {
-      const sc = sidecar.nodes.get(srcId)
-      const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
-      builder.addEdge(srcId, peerNodeId, 'peer', { range: peerRange })
-    } catch (error) {
-      if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-      throw error
-    }
+    const sc = sidecar.nodes.get(srcId)
+    const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
+    addEdgeTolerant(builder, srcId, peerNodeId, 'peer', { range: peerRange })
   }
 }
 
@@ -1473,6 +1483,21 @@ function isWorkspaceProtocolRange(range: string): boolean {
 }
 
 // === HELPERS ================================================================
+
+function addEdgeTolerant(
+  builder: ReturnType<typeof newBuilder>,
+  srcId: string,
+  dstId: string,
+  kind: EdgeKind,
+  attrs: { range: string; alias?: string },
+): void {
+  try {
+    builder.addEdge(srcId, dstId, kind, attrs)
+  } catch (error) {
+    if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') return
+    throw error
+  }
+}
 
 /**
  * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5. Given

@@ -961,62 +961,74 @@ export function buildWorkspaceManifest(
   // for the name / version pin.
   const out: BunTextWorkspaceManifest = {}
   if (workspaceNode !== undefined) {
-    out.name = workspaceNode.name
-    if (workspaceNode.workspacePath !== '') {
-      out.version = workspaceNode.version
-    }
+    captureGraphWorkspaceManifest(out, graph, workspaceNode, emitDiagnostic)
   } else if (sidecarManifest !== undefined) {
-    if (sidecarManifest.name !== undefined) out.name = sidecarManifest.name
-    if (sidecarManifest.version !== undefined) out.version = sidecarManifest.version
-  }
-
-  // Walk dep / dev / optional / peer edges and emit ranges.
-  if (workspaceNode !== undefined) {
-    const dependencies: Record<string, string> = {}
-    const devDependencies: Record<string, string> = {}
-    const optionalDependencies: Record<string, string> = {}
-    const peerDependencies: Record<string, string> = {}
-    for (const edge of graph.out(workspaceNode.id)) {
-      const dst = graph.getNode(edge.dst)
-      if (dst === undefined) continue
-      const range = edge.attrs?.range
-      if (typeof range !== 'string') continue
-      const target = edge.kind === 'dep' ? dependencies
-        : edge.kind === 'dev' ? devDependencies
-          : edge.kind === 'optional' ? optionalDependencies
-            : edge.kind === 'peer' ? peerDependencies
-              : undefined
-      if (target === undefined) continue
-      // ADR-0014 §4.F4 — bun-text canonical specifier is `workspace:*`
-      // (member-ref form has no version range). Cross-format sources that
-      // carry richer `^|~|<exact>` specifiers surface a collapse diagnostic;
-      // the verbatim range is preserved in the manifest dep block (bun
-      // tolerates richer protocol shapes on disk — the diagnostic is
-      // observability, not destructive).
-      if (isWorkspaceEdge(edge)) {
-        const ws = workspaceRangeOfEdge(edge, dst)
-        if (ws !== undefined && bunTextWouldCollapse(ws.specifier)) {
-          emitWorkspaceCollapsed(
-            { src: edge.src, dst: edge.dst, kind: edge.kind },
-            ws.specifier,
-            emitDiagnostic,
-          )
-        }
-      }
-      target[dst.name] = range
-    }
-    if (Object.keys(dependencies).length > 0) out.dependencies = sortRecord(dependencies)
-    if (Object.keys(devDependencies).length > 0) out.devDependencies = sortRecord(devDependencies)
-    if (Object.keys(optionalDependencies).length > 0) out.optionalDependencies = sortRecord(optionalDependencies)
-    if (Object.keys(peerDependencies).length > 0) out.peerDependencies = sortRecord(peerDependencies)
-  } else if (sidecarManifest !== undefined) {
-    if (sidecarManifest.dependencies !== undefined) out.dependencies = sortRecord(sidecarManifest.dependencies)
-    if (sidecarManifest.devDependencies !== undefined) out.devDependencies = sortRecord(sidecarManifest.devDependencies)
-    if (sidecarManifest.optionalDependencies !== undefined) out.optionalDependencies = sortRecord(sidecarManifest.optionalDependencies)
-    if (sidecarManifest.peerDependencies !== undefined) out.peerDependencies = sortRecord(sidecarManifest.peerDependencies)
+    captureSidecarWorkspaceManifest(out, sidecarManifest)
   }
 
   return out
+}
+
+function captureGraphWorkspaceManifest(
+  out: BunTextWorkspaceManifest,
+  graph: Graph,
+  workspaceNode: Node,
+  emitDiagnostic: (d: Diagnostic) => void,
+): void {
+  out.name = workspaceNode.name
+  if (workspaceNode.workspacePath !== '') {
+    out.version = workspaceNode.version
+  }
+  // Walk dep / dev / optional / peer edges and emit ranges.
+  const dependencies: Record<string, string> = {}
+  const devDependencies: Record<string, string> = {}
+  const optionalDependencies: Record<string, string> = {}
+  const peerDependencies: Record<string, string> = {}
+  for (const edge of graph.out(workspaceNode.id)) {
+    const dst = graph.getNode(edge.dst)
+    if (dst === undefined) continue
+    const range = edge.attrs?.range
+    if (typeof range !== 'string') continue
+    const target = edge.kind === 'dep' ? dependencies
+      : edge.kind === 'dev' ? devDependencies
+        : edge.kind === 'optional' ? optionalDependencies
+          : edge.kind === 'peer' ? peerDependencies
+            : undefined
+    if (target === undefined) continue
+    // ADR-0014 §4.F4 — bun-text canonical specifier is `workspace:*`
+    // (member-ref form has no version range). Cross-format sources that
+    // carry richer `^|~|<exact>` specifiers surface a collapse diagnostic;
+    // the verbatim range is preserved in the manifest dep block (bun
+    // tolerates richer protocol shapes on disk — the diagnostic is
+    // observability, not destructive).
+    if (isWorkspaceEdge(edge)) {
+      const ws = workspaceRangeOfEdge(edge, dst)
+      if (ws !== undefined && bunTextWouldCollapse(ws.specifier)) {
+        emitWorkspaceCollapsed(
+          { src: edge.src, dst: edge.dst, kind: edge.kind },
+          ws.specifier,
+          emitDiagnostic,
+        )
+      }
+    }
+    target[dst.name] = range
+  }
+  if (Object.keys(dependencies).length > 0) out.dependencies = sortRecord(dependencies)
+  if (Object.keys(devDependencies).length > 0) out.devDependencies = sortRecord(devDependencies)
+  if (Object.keys(optionalDependencies).length > 0) out.optionalDependencies = sortRecord(optionalDependencies)
+  if (Object.keys(peerDependencies).length > 0) out.peerDependencies = sortRecord(peerDependencies)
+}
+
+function captureSidecarWorkspaceManifest(
+  out: BunTextWorkspaceManifest,
+  sidecarManifest: BunTextWorkspaceManifest,
+): void {
+  if (sidecarManifest.name !== undefined) out.name = sidecarManifest.name
+  if (sidecarManifest.version !== undefined) out.version = sidecarManifest.version
+  if (sidecarManifest.dependencies !== undefined) out.dependencies = sortRecord(sidecarManifest.dependencies)
+  if (sidecarManifest.devDependencies !== undefined) out.devDependencies = sortRecord(sidecarManifest.devDependencies)
+  if (sidecarManifest.optionalDependencies !== undefined) out.optionalDependencies = sortRecord(sidecarManifest.optionalDependencies)
+  if (sidecarManifest.peerDependencies !== undefined) out.peerDependencies = sortRecord(sidecarManifest.peerDependencies)
 }
 
 export function buildInnerBlock(graph: Graph, node: Node, sidecar: BunTextSidecar | undefined): BunTextInner {
