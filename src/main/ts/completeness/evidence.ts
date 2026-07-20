@@ -25,12 +25,60 @@ import type {
   TargetOracleEvidence,
 } from './types.ts'
 
+// === CONSTANTS ==============================================================
+
+const contextState = new WeakMap<EvidenceContext, InternalEvidenceState>()
+const contextByGraph = new WeakMap<Graph, EvidenceContext>()
+
+const emptyContext = createContext(
+  { refs: Object.freeze([]), diagnostics: Object.freeze([]) },
+  emptyState(),
+)
+
+const formats = new Set<FormatId>([
+  'yarn-berry-v4',
+  'yarn-berry-v5',
+  'yarn-berry-v6',
+  'yarn-berry-v7',
+  'yarn-berry-v8',
+  'yarn-berry-v9',
+  'yarn-berry-v10',
+  'yarn-classic',
+  'npm-1',
+  'npm-2',
+  'npm-3',
+  'pnpm-v5',
+  'pnpm-v6',
+  'pnpm-v9',
+  'bun-text',
+  'lockgraph',
+])
+
+const exactVersion = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+const sha256Digest = /^sha256:[0-9a-f]{64}$/
+
+const repositoryDimensions: readonly CompletenessDimension[] = [
+  'projectTopology',
+  'edgeKinds',
+  'resolutionPolicy',
+]
+
+const manifestAuthorityRank: Record<PackageManifestEvidence['authority'], number> = {
+  'full-packument': 1,
+  'version-manifest': 2,
+  'tarball-manifest': 3,
+}
+
+// === TYPES ==================================================================
+
+/** Records conflicting evidence for one completeness dimension. */
 export interface EvidenceConflictRecord {
   readonly dimension: CompletenessDimension
   readonly subject?: string
   readonly sources: readonly string[]
 }
 
+/** Holds the evidence attached to one context. */
 export interface InternalEvidenceState {
   readonly anchor?: Graph
   readonly anchorSnapshot?: Graph
@@ -104,8 +152,202 @@ interface FactDelta {
   readonly layout: boolean
 }
 
-const contextState = new WeakMap<EvidenceContext, InternalEvidenceState>()
-const contextByGraph = new WeakMap<Graph, EvidenceContext>()
+// === API ====================================================================
+
+export function normalizePackageManifestEvidence(
+  input: PackageManifestEvidence,
+): PackageManifestEvidence {
+  assertEvidenceInput(input)
+  return cloneAndFreeze(input)
+}
+
+export function packageResolutionFactsEqual(
+  left: PackumentVersion,
+  right: PackumentVersion,
+): boolean {
+  const project = (manifest: PackumentVersion): unknown => ({
+    name: manifest.name,
+    version: manifest.version,
+    dependencies: manifest.dependencies,
+    optionalDependencies: manifest.optionalDependencies,
+    peerDependencies: manifest.peerDependencies,
+    peerDependenciesMeta: manifest.peerDependenciesMeta,
+  })
+  return equalValue(project(left), project(right))
+}
+
+export function evidenceOf(graph: Graph): EvidenceContext {
+  return contextByGraph.get(graph) ?? emptyContext
+}
+
+export function withEvidence(base: EvidenceContext, input: EvidenceInput | readonly EvidenceInput[]): EvidenceContext {
+  const baseState = stateOf(base)
+  const inputs = Array.isArray(input) ? input : [input]
+  let repositoryManifests = baseState.repositoryManifests
+  let pmConfigs = baseState.pmConfigs
+  let packageManifests = baseState.packageManifests
+  let targetOracles = baseState.targetOracles
+  const conflicts = [...baseState.conflicts]
+  const refs = [...base.ledger.refs]
+  const diagnostics = [...base.ledger.diagnostics]
+
+  for (const candidate of inputs) {
+    assertEvidenceInput(candidate)
+    const item = candidate.kind === 'repository-manifests'
+      ? normalizeRepositoryEvidence(candidate)
+      : candidate
+    appendUniqueRefs(refs, refsFor(item))
+    switch (item.kind) {
+      case 'repository-manifests':
+        repositoryManifests = mergeRepositoryManifests(
+          repositoryManifests, item, conflicts, diagnostics,
+        )
+        break
+      case 'pm-config':
+        pmConfigs = mergePmConfig(pmConfigs, item, conflicts, diagnostics)
+        break
+      case 'package-manifests':
+        packageManifests = mergePackageManifests(
+          packageManifests, item, conflicts, diagnostics,
+        )
+        break
+      case 'target-oracle':
+        targetOracles = mergeTargetOracle(targetOracles, item)
+        break
+    }
+  }
+
+  return createContext({
+    source: base.ledger.source,
+    refs,
+    diagnostics,
+  }, Object.freeze({
+    anchor: baseState.anchor,
+    anchorSnapshot: baseState.anchorSnapshot,
+    source: baseState.source,
+    observedPolicyCarrier: baseState.observedPolicyCarrier,
+    repositoryManifests,
+    pmConfigs,
+    packageManifests,
+    targetOracles,
+    conflicts: Object.freeze(conflicts),
+  }))
+}
+
+export function internalEvidenceOf(context: EvidenceContext): InternalEvidenceState {
+  return stateOf(context)
+}
+
+export function withSourceVersion(context: EvidenceContext, version: string): EvidenceContext {
+  const state = stateOf(context)
+  if (!exactVersion.test(version)) throw new TypeError('source manager version must be exact')
+  if (state.source === undefined) throw new TypeError('source manager version requires lock evidence')
+  const major = Number(version.slice(0, version.indexOf('.')))
+  const compatible = state.source.format === 'pnpm-v5'
+    ? major >= 3 && major <= 7
+    : state.source.format === 'pnpm-v6'
+      ? major === 8
+      : state.source.format === 'pnpm-v9'
+        ? major >= 9
+        : true
+  if (!compatible) throw new TypeError(`source manager version is incompatible with ${state.source.format}`)
+  const source = Object.freeze({ ...state.source, version })
+  return createContext({
+    ...context.ledger,
+    source,
+  }, Object.freeze({ ...state, source }))
+}
+
+export function attachEvidence(graph: Graph, context: EvidenceContext): void {
+  stateOf(context)
+  contextByGraph.set(graph, context)
+}
+
+export function deriveEnrichedEvidence(
+  inputGraph: Graph,
+  finalGraph: Graph,
+  context: EvidenceContext,
+  phases: readonly EnrichmentDerivationPhase[],
+  refs: readonly EvidenceRef[] = [],
+  diagnostics: readonly Diagnostic[] = [],
+): EvidenceContext {
+  const state = stateOf(context)
+  const anchor = state.anchorSnapshot ?? state.anchor
+  if (anchor !== undefined && !sameCanonicalGraph(anchor, inputGraph)) {
+    invariant('input graph does not match the evidence anchor')
+  }
+
+  let cursor = inputGraph
+  for (const phase of phases) {
+    if (!sameCanonicalGraph(cursor, phase.before)) invariant('phase chain is discontinuous')
+    assertPhaseReceipt(phase)
+    cursor = phase.after
+  }
+  if (!sameCanonicalGraph(cursor, finalGraph)) invariant('final graph contains an uncovered delta')
+
+  const nextRefs = [...context.ledger.refs]
+  appendUniqueRefs(nextRefs, refs.map(ref => cloneAndFreeze(ref)))
+  const nextDiagnostics = [...context.ledger.diagnostics]
+  for (const diagnostic of diagnostics) {
+    if (!nextDiagnostics.some(existing => equalValue(existing, diagnostic))) {
+      nextDiagnostics.push(cloneAndFreeze(diagnostic))
+    }
+  }
+  const derived = createContext({
+    source: context.ledger.source,
+    refs: nextRefs,
+    diagnostics: nextDiagnostics,
+  }, Object.freeze({
+    ...state,
+    anchor: finalGraph,
+    anchorSnapshot: snapshotGraph(finalGraph),
+  }))
+  attachEvidence(finalGraph, derived)
+  return derived
+}
+
+export function attachParsedEvidence(
+  graph: Graph,
+  format: FormatId,
+  manifests?: Readonly<Record<string, Manifest>>,
+  observedPolicyCarrier?: readonly OverrideConstraint[] | null,
+): void {
+  const source = Object.freeze({ format, manager: targetManagerOf(format) })
+  let context = createContext({
+    source,
+    refs: [
+      { kind: 'lockfile', subject: format },
+      ...(observedPolicyCarrier === undefined ? [] : [{
+        kind: 'lockfile' as const,
+        subject: 'overrides',
+        coverage: 'complete' as const,
+        presence: observedPolicyCarrier === null ? 'absent' as const : 'present' as const,
+      }]),
+    ],
+    diagnostics: [],
+  }, Object.freeze({
+    ...emptyState(),
+    anchor: graph,
+    anchorSnapshot: snapshotGraph(graph),
+    source,
+    observedPolicyCarrier: observedPolicyCarrier === undefined
+      ? undefined
+      : Object.freeze({
+        present: observedPolicyCarrier !== null,
+        overrides: cloneAndFreeze(observedPolicyCarrier ?? []),
+      }),
+  }))
+  if (manifests !== undefined) {
+    context = withEvidence(context, {
+      kind: 'repository-manifests',
+      manifests,
+      coverage: 'partial',
+    })
+  }
+  attachEvidence(graph, context)
+}
+
+// === INTERNALS ==============================================================
 
 function targetManagerOf(format: FormatId): TargetManager {
   if (format.startsWith('npm-')) return 'npm'
@@ -181,11 +423,6 @@ function emptyState(): InternalEvidenceState {
     conflicts: Object.freeze([]),
   })
 }
-
-const emptyContext = createContext(
-  { refs: Object.freeze([]), diagnostics: Object.freeze([]) },
-  emptyState(),
-)
 
 function stateOf(context: EvidenceContext): InternalEvidenceState {
   const state = contextState.get(context)
@@ -425,28 +662,6 @@ function assertOverride(value: unknown, label: string): asserts value is Overrid
   }
 }
 
-const formats = new Set<FormatId>([
-  'yarn-berry-v4',
-  'yarn-berry-v5',
-  'yarn-berry-v6',
-  'yarn-berry-v7',
-  'yarn-berry-v8',
-  'yarn-berry-v9',
-  'yarn-berry-v10',
-  'yarn-classic',
-  'npm-1',
-  'npm-2',
-  'npm-3',
-  'pnpm-v5',
-  'pnpm-v6',
-  'pnpm-v9',
-  'bun-text',
-  'lockgraph',
-])
-
-const exactVersion = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
-const sha256Digest = /^sha256:[0-9a-f]{64}$/
-
 function isGraph(value: unknown): value is Graph {
   if (value === null || typeof value !== 'object') return false
   const candidate = value as Partial<Record<keyof Graph, unknown>>
@@ -508,13 +723,6 @@ function assertEvidenceInput(input: EvidenceInput): void {
     default:
       throw new TypeError('invalid evidence input kind')
   }
-}
-
-export function normalizePackageManifestEvidence(
-  input: PackageManifestEvidence,
-): PackageManifestEvidence {
-  assertEvidenceInput(input)
-  return cloneAndFreeze(input)
 }
 
 function stableValue(value: unknown): unknown {
@@ -737,12 +945,6 @@ function repositoryProjection(manifest: Manifest | undefined, dimension: Complet
   }
 }
 
-const repositoryDimensions: readonly CompletenessDimension[] = [
-  'projectTopology',
-  'edgeKinds',
-  'resolutionPolicy',
-]
-
 function compareRepositorySubjects(
   current: Readonly<Record<string, Manifest>>,
   incoming: Readonly<Record<string, Manifest>>,
@@ -886,27 +1088,6 @@ function mergePmConfig(
   return current
 }
 
-const manifestAuthorityRank: Record<PackageManifestEvidence['authority'], number> = {
-  'full-packument': 1,
-  'version-manifest': 2,
-  'tarball-manifest': 3,
-}
-
-export function packageResolutionFactsEqual(
-  left: PackumentVersion,
-  right: PackumentVersion,
-): boolean {
-  const project = (manifest: PackumentVersion): unknown => ({
-    name: manifest.name,
-    version: manifest.version,
-    dependencies: manifest.dependencies,
-    optionalDependencies: manifest.optionalDependencies,
-    peerDependencies: manifest.peerDependencies,
-    peerDependenciesMeta: manifest.peerDependenciesMeta,
-  })
-  return equalValue(project(left), project(right))
-}
-
 function mergePackageManifests(
   current: InternalEvidenceState['packageManifests'],
   input: PackageManifestEvidence,
@@ -950,93 +1131,6 @@ function mergeTargetOracle(
   return Object.freeze([...current, Object.freeze({ ...input, target: cloneAndFreeze(input.target) })])
 }
 
-export function evidenceOf(graph: Graph): EvidenceContext {
-  return contextByGraph.get(graph) ?? emptyContext
-}
-
-export function withEvidence(base: EvidenceContext, input: EvidenceInput | readonly EvidenceInput[]): EvidenceContext {
-  const baseState = stateOf(base)
-  const inputs = Array.isArray(input) ? input : [input]
-  let repositoryManifests = baseState.repositoryManifests
-  let pmConfigs = baseState.pmConfigs
-  let packageManifests = baseState.packageManifests
-  let targetOracles = baseState.targetOracles
-  const conflicts = [...baseState.conflicts]
-  const refs = [...base.ledger.refs]
-  const diagnostics = [...base.ledger.diagnostics]
-
-  for (const candidate of inputs) {
-    assertEvidenceInput(candidate)
-    const item = candidate.kind === 'repository-manifests'
-      ? normalizeRepositoryEvidence(candidate)
-      : candidate
-    appendUniqueRefs(refs, refsFor(item))
-    switch (item.kind) {
-      case 'repository-manifests':
-        repositoryManifests = mergeRepositoryManifests(
-          repositoryManifests, item, conflicts, diagnostics,
-        )
-        break
-      case 'pm-config':
-        pmConfigs = mergePmConfig(pmConfigs, item, conflicts, diagnostics)
-        break
-      case 'package-manifests':
-        packageManifests = mergePackageManifests(
-          packageManifests, item, conflicts, diagnostics,
-        )
-        break
-      case 'target-oracle':
-        targetOracles = mergeTargetOracle(targetOracles, item)
-        break
-    }
-  }
-
-  return createContext({
-    source: base.ledger.source,
-    refs,
-    diagnostics,
-  }, Object.freeze({
-    anchor: baseState.anchor,
-    anchorSnapshot: baseState.anchorSnapshot,
-    source: baseState.source,
-    observedPolicyCarrier: baseState.observedPolicyCarrier,
-    repositoryManifests,
-    pmConfigs,
-    packageManifests,
-    targetOracles,
-    conflicts: Object.freeze(conflicts),
-  }))
-}
-
-export function internalEvidenceOf(context: EvidenceContext): InternalEvidenceState {
-  return stateOf(context)
-}
-
-export function withSourceVersion(context: EvidenceContext, version: string): EvidenceContext {
-  const state = stateOf(context)
-  if (!exactVersion.test(version)) throw new TypeError('source manager version must be exact')
-  if (state.source === undefined) throw new TypeError('source manager version requires lock evidence')
-  const major = Number(version.slice(0, version.indexOf('.')))
-  const compatible = state.source.format === 'pnpm-v5'
-    ? major >= 3 && major <= 7
-    : state.source.format === 'pnpm-v6'
-      ? major === 8
-      : state.source.format === 'pnpm-v9'
-        ? major >= 9
-        : true
-  if (!compatible) throw new TypeError(`source manager version is incompatible with ${state.source.format}`)
-  const source = Object.freeze({ ...state.source, version })
-  return createContext({
-    ...context.ledger,
-    source,
-  }, Object.freeze({ ...state, source }))
-}
-
-export function attachEvidence(graph: Graph, context: EvidenceContext): void {
-  stateOf(context)
-  contextByGraph.set(graph, context)
-}
-
 function snapshotGraph(graph: Graph): Graph {
   const builder = newBuilder()
   const tarballs = new Set<TarballKey>()
@@ -1062,88 +1156,4 @@ function snapshotGraph(graph: Graph): Graph {
   const layout = graph.layoutHints()
   if (layout !== undefined) builder.layoutHints(cloneAndFreeze(layout))
   return builder.seal()
-}
-
-export function deriveEnrichedEvidence(
-  inputGraph: Graph,
-  finalGraph: Graph,
-  context: EvidenceContext,
-  phases: readonly EnrichmentDerivationPhase[],
-  refs: readonly EvidenceRef[] = [],
-  diagnostics: readonly Diagnostic[] = [],
-): EvidenceContext {
-  const state = stateOf(context)
-  const anchor = state.anchorSnapshot ?? state.anchor
-  if (anchor !== undefined && !sameCanonicalGraph(anchor, inputGraph)) {
-    invariant('input graph does not match the evidence anchor')
-  }
-
-  let cursor = inputGraph
-  for (const phase of phases) {
-    if (!sameCanonicalGraph(cursor, phase.before)) invariant('phase chain is discontinuous')
-    assertPhaseReceipt(phase)
-    cursor = phase.after
-  }
-  if (!sameCanonicalGraph(cursor, finalGraph)) invariant('final graph contains an uncovered delta')
-
-  const nextRefs = [...context.ledger.refs]
-  appendUniqueRefs(nextRefs, refs.map(ref => cloneAndFreeze(ref)))
-  const nextDiagnostics = [...context.ledger.diagnostics]
-  for (const diagnostic of diagnostics) {
-    if (!nextDiagnostics.some(existing => equalValue(existing, diagnostic))) {
-      nextDiagnostics.push(cloneAndFreeze(diagnostic))
-    }
-  }
-  const derived = createContext({
-    source: context.ledger.source,
-    refs: nextRefs,
-    diagnostics: nextDiagnostics,
-  }, Object.freeze({
-    ...state,
-    anchor: finalGraph,
-    anchorSnapshot: snapshotGraph(finalGraph),
-  }))
-  attachEvidence(finalGraph, derived)
-  return derived
-}
-
-export function attachParsedEvidence(
-  graph: Graph,
-  format: FormatId,
-  manifests?: Readonly<Record<string, Manifest>>,
-  observedPolicyCarrier?: readonly OverrideConstraint[] | null,
-): void {
-  const source = Object.freeze({ format, manager: targetManagerOf(format) })
-  let context = createContext({
-    source,
-    refs: [
-      { kind: 'lockfile', subject: format },
-      ...(observedPolicyCarrier === undefined ? [] : [{
-        kind: 'lockfile' as const,
-        subject: 'overrides',
-        coverage: 'complete' as const,
-        presence: observedPolicyCarrier === null ? 'absent' as const : 'present' as const,
-      }]),
-    ],
-    diagnostics: [],
-  }, Object.freeze({
-    ...emptyState(),
-    anchor: graph,
-    anchorSnapshot: snapshotGraph(graph),
-    source,
-    observedPolicyCarrier: observedPolicyCarrier === undefined
-      ? undefined
-      : Object.freeze({
-        present: observedPolicyCarrier !== null,
-        overrides: cloneAndFreeze(observedPolicyCarrier ?? []),
-      }),
-  }))
-  if (manifests !== undefined) {
-    context = withEvidence(context, {
-      kind: 'repository-manifests',
-      manifests,
-      coverage: 'partial',
-    })
-  }
-  attachEvidence(graph, context)
 }

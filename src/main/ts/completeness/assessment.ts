@@ -29,22 +29,7 @@ import type {
   Verification,
 } from './types.ts'
 
-export interface OutputProbeResult {
-  readonly accepted: boolean
-  readonly diagnostics: readonly Diagnostic[]
-}
-
-export interface AssessmentRuntime {
-  readonly outputProbe?: OutputProbeResult
-  readonly targetRequirements?: readonly RequirementAssessment[]
-}
-
-type FeatureEvaluator = (
-  graph: Graph,
-  target: TargetProfile,
-  contract: ConversionContract,
-  detection: GraphFeatureDetection,
-) => RequirementAssessment
+// === CONSTANTS ==============================================================
 
 const knowledgeRank: Record<Knowledge, number> = { none: 0, partial: 1, complete: 2 }
 const policyRank: Record<PolicyKnowledge, number> = {
@@ -92,83 +77,6 @@ const nonRegistryTargets = new Set<TargetProfile['format']>([
   'lockgraph',
 ])
 
-function diagnostic(
-  code: string,
-  message: string,
-  data?: Record<string, unknown>,
-): Diagnostic {
-  return Object.freeze({
-    code,
-    severity: 'warning',
-    message,
-    ...(data === undefined ? {} : { data: Object.freeze(data) }),
-  })
-}
-
-function requirement(
-  key: string,
-  status: RequirementStatus,
-  dimension?: CompletenessDimension,
-  diagnostics: readonly Diagnostic[] = [],
-): RequirementAssessment {
-  return Object.freeze({
-    key,
-    ...(dimension === undefined ? {} : { dimension }),
-    status,
-    diagnostics: Object.freeze([...diagnostics]),
-  })
-}
-
-function thresholdRequirement<T extends string>(
-  key: string,
-  dimension: CompletenessDimension,
-  actual: T,
-  minimum: T,
-  ranks: Record<T, number>,
-): RequirementAssessment {
-  if (ranks[actual] >= ranks[minimum]) return requirement(key, 'satisfied', dimension)
-  return requirement(key, 'unassessed', dimension, [diagnostic(
-    'COMPLETENESS_REQUIREMENT_UNASSESSED',
-    `${dimension} lacks sufficient evidence for the required completeness`,
-    { dimension, actual, required: minimum },
-  )])
-}
-
-function capabilityRequirement(
-  feature: GraphFeature,
-  dimension: CompletenessDimension,
-  target: TargetProfile,
-  capabilities: readonly TargetCapability[],
-  supported: boolean,
-): RequirementAssessment {
-  const ambiguous = capabilities.filter(capability => target.ambiguousCapabilities.has(capability))
-  if (ambiguous.length > 0) {
-    return requirement(`target-feature:${feature}`, 'unassessed', dimension, [diagnostic(
-      'COMPLETENESS_TARGET_CAPABILITY_AMBIGUOUS',
-      'target manager version is required to assess this feature',
-      { feature, capabilities: ambiguous },
-    )])
-  }
-  if (supported) return requirement(`target-feature:${feature}`, 'satisfied', dimension)
-  return requirement(`target-feature:${feature}`, 'unsatisfied', dimension, [diagnostic(
-    'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
-    'target cannot represent a graph feature',
-    { feature, target: target.format },
-  )])
-}
-
-function edgeEvaluator(kind: EdgeKind): FeatureEvaluator {
-  return (_graph, target) => capabilityRequirement(
-    `edge:${kind}` as GraphFeature,
-    'edgeKinds',
-    target,
-    ['edgeKinds'],
-    target.capabilities.edgeKinds.has(kind),
-  )
-}
-
-type MetadataGraphFeature = Extract<GraphFeature, `metadata:${string}`>
-
 const metadataFeatureFields: Readonly<Record<MetadataGraphFeature, readonly PackageMetadataField[]>> = Object.freeze({
   'metadata:engines': ['engines'],
   'metadata:funding': ['funding'],
@@ -180,39 +88,6 @@ const metadataFeatureFields: Readonly<Record<MetadataGraphFeature, readonly Pack
   'metadata:bundled-dependencies': ['bundledDependencies'],
   'metadata:peer-declarations': ['peerDependencies', 'peerDependenciesMeta'],
 })
-
-function metadataEvaluator(feature: MetadataGraphFeature): FeatureEvaluator {
-  return (graph, target, contract) => {
-    if (contract === 'snapshot' || contract === 'policy') {
-      return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
-    }
-    const candidates = metadataFeatureFields[feature]
-    const present = candidates.filter(field => [...graph.tarballs()]
-      .some(([, payload]) => packageMetadataOfPayload(payload)[field] !== undefined))
-    const unsupported = present.filter(field =>
-      !target.capabilities.metadataFields.has(field)
-        && !isStructuralExpectedDrop(field, target.format))
-    if (unsupported.length === 0) {
-      return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
-    }
-    return requirement(`target-feature:${feature}`, 'unsatisfied', 'packageMetadata', [diagnostic(
-      'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
-      'target emitter does not preserve canonical package metadata',
-      { feature, fields: unsupported, target: target.format },
-    )])
-  }
-}
-
-function workspaceProtocolPresent(graph: Graph): boolean {
-  for (const node of graph.nodes()) {
-    for (const edge of graph.out(node.id)) {
-      if (edge.attrs?.workspaceRange !== undefined || edge.attrs?.range?.startsWith('workspace:')) {
-        return true
-      }
-    }
-  }
-  return false
-}
 
 const featureEvaluators: Record<GraphFeature, FeatureEvaluator> = {
   'edge:dep': edgeEvaluator('dep'),
@@ -342,6 +217,261 @@ const featureEvaluators: Record<GraphFeature, FeatureEvaluator> = {
   'metadata:install-script': metadataEvaluator('metadata:install-script'),
   'metadata:bundled-dependencies': metadataEvaluator('metadata:bundled-dependencies'),
   'metadata:peer-declarations': metadataEvaluator('metadata:peer-declarations'),
+}
+
+// === TYPES ==================================================================
+
+export interface OutputProbeResult {
+  readonly accepted: boolean
+  readonly diagnostics: readonly Diagnostic[]
+}
+
+export interface AssessmentRuntime {
+  readonly outputProbe?: OutputProbeResult
+  readonly targetRequirements?: readonly RequirementAssessment[]
+}
+
+type FeatureEvaluator = (
+  graph: Graph,
+  target: TargetProfile,
+  contract: ConversionContract,
+  detection: GraphFeatureDetection,
+) => RequirementAssessment
+
+type MetadataGraphFeature = Extract<GraphFeature, `metadata:${string}`>
+
+// === API ====================================================================
+
+/** Assesses which conversion guarantees the available evidence supports. */
+export function assessConversion(
+  graph: Graph,
+  options: AssessmentOptions,
+  runtime: AssessmentRuntime = {},
+): ConversionAssessment {
+  const completeness = completenessOf(graph, { evidence: options.evidence })
+  const state = internalEvidenceOf(completeness.evidence)
+  const source = sourceCapabilities(state)
+  const resolvedTarget = targetAndRequirement(options)
+  const detected = mergedFeatureDetection(graph, state)
+  const detection = detected.detection
+  const requirements = canonicalRequirements(
+    completeness.profile,
+    detection.features,
+    options.contract,
+  )
+
+  if (state.source === undefined) {
+    requirements.push(requirement('source:format', 'unassessed', undefined, [diagnostic(
+      'COMPLETENESS_EVALUATOR_DEFERRED',
+      'source format evidence is unavailable',
+    )]))
+  }
+  const requiredDimensions = contractDimensions(options.contract, detection.features)
+  for (const dimension of source.ambiguousDimensions) {
+    if (!requiredDimensions.has(dimension)) continue
+    requirements.push(requirement(
+      `source:manager-generation:${dimension}`,
+      'unassessed',
+      dimension,
+      [diagnostic(
+        'COMPLETENESS_MANAGER_GENERATION_AMBIGUOUS',
+        'source manager generation is required for this contract dimension',
+        { dimension, contract: options.contract },
+      )],
+    ))
+  }
+  if (resolvedTarget.requirement !== undefined) requirements.push(resolvedTarget.requirement)
+  requirements.push(...sidecarAttributionRequirements(detected.source, detected.current))
+
+  for (const feature of detection.features) {
+    const evaluator = featureEvaluators[feature]
+    requirements.push(evaluator === undefined
+      ? requirement(`target-feature:${feature}`, 'unassessed', undefined, [diagnostic(
+          'COMPLETENESS_EVALUATOR_DEFERRED',
+          'graph feature has no target evaluator',
+          { feature },
+        )])
+      : evaluator(graph, resolvedTarget.target, options.contract, detection))
+  }
+
+  for (const fact of detection.unmodeled) {
+    requirements.push(requirement(
+      `graph-feature:unmodeled:${fact.subject}:${fact.path}`,
+      'unassessed',
+      undefined,
+      [diagnostic(
+        'COMPLETENESS_FEATURE_UNMODELED',
+        'graph contains a fact outside the assessed feature model',
+        { subject: fact.subject, path: fact.path, reason: fact.reason },
+      )],
+    ))
+  }
+
+  const runtimeRequirements = runtime.targetRequirements ?? []
+  const companion = runtimeRequirements.find(item => item.key === 'target:companion-projection')
+  if (companion !== undefined && (options.contract === 'project' || options.contract === 'frozen')) {
+    const index = requirements.findIndex(item => item.key === companion.key)
+    if (index >= 0) requirements[index] = companion
+  }
+  const frozenVerification = runtimeRequirements.find(item => item.key === 'target:frozen-verification')
+  if (frozenVerification !== undefined && options.contract === 'frozen') {
+    const index = requirements.findIndex(item => item.key === frozenVerification.key)
+    if (index >= 0) requirements[index] = frozenVerification
+  }
+  const frozenIntegrity = runtimeRequirements.find(item =>
+    item.key === 'target-feature:integrity:tarball')
+  if (frozenIntegrity !== undefined && options.contract === 'frozen') {
+    const index = requirements.findIndex(item => item.key === frozenIntegrity.key)
+    if (index >= 0) requirements[index] = frozenIntegrity
+  }
+  if (options.contract !== 'snapshot') {
+    requirements.push(policyProjectionRequirement(state, resolvedTarget.target, runtimeRequirements))
+  }
+  const workspacePeer = workspacePeerProjectionRequirement(
+    graph,
+    resolvedTarget.target,
+    runtimeRequirements,
+  )
+  if (workspacePeer !== undefined) requirements.push(workspacePeer)
+  const consumedRuntimeKeys = new Set([
+    workspacePeer?.key,
+    options.contract === 'snapshot' ? undefined : 'target:resolution-policy',
+    options.contract === 'project' || options.contract === 'frozen'
+      ? 'target:companion-projection'
+      : undefined,
+    options.contract === 'frozen' ? 'target:frozen-verification' : undefined,
+    options.contract === 'frozen' ? 'target-feature:integrity:tarball' : undefined,
+  ])
+  requirements.push(...runtimeRequirements.filter(item => !consumedRuntimeKeys.has(item.key)))
+  requirements.push(outputProbeRequirement(runtime.outputProbe))
+
+  const frozenRequirements = Object.freeze(requirements.map(item => Object.freeze({
+    ...item,
+    diagnostics: Object.freeze([...item.diagnostics]),
+  })))
+  const diagnostics = Object.freeze([
+    ...completeness.diagnostics,
+    ...frozenRequirements.flatMap(item => item.diagnostics),
+  ])
+  return Object.freeze({
+    status: overallStatus(frozenRequirements),
+    contract: options.contract,
+    source,
+    target: resolvedTarget.target,
+    completeness,
+    requirements: frozenRequirements,
+    diagnostics,
+  })
+}
+
+// === INTERNALS ==============================================================
+
+function diagnostic(
+  code: string,
+  message: string,
+  data?: Record<string, unknown>,
+): Diagnostic {
+  return Object.freeze({
+    code,
+    severity: 'warning',
+    message,
+    ...(data === undefined ? {} : { data: Object.freeze(data) }),
+  })
+}
+
+function requirement(
+  key: string,
+  status: RequirementStatus,
+  dimension?: CompletenessDimension,
+  diagnostics: readonly Diagnostic[] = [],
+): RequirementAssessment {
+  return Object.freeze({
+    key,
+    ...(dimension === undefined ? {} : { dimension }),
+    status,
+    diagnostics: Object.freeze([...diagnostics]),
+  })
+}
+
+function thresholdRequirement<T extends string>(
+  key: string,
+  dimension: CompletenessDimension,
+  actual: T,
+  minimum: T,
+  ranks: Record<T, number>,
+): RequirementAssessment {
+  if (ranks[actual] >= ranks[minimum]) return requirement(key, 'satisfied', dimension)
+  return requirement(key, 'unassessed', dimension, [diagnostic(
+    'COMPLETENESS_REQUIREMENT_UNASSESSED',
+    `${dimension} lacks sufficient evidence for the required completeness`,
+    { dimension, actual, required: minimum },
+  )])
+}
+
+function capabilityRequirement(
+  feature: GraphFeature,
+  dimension: CompletenessDimension,
+  target: TargetProfile,
+  capabilities: readonly TargetCapability[],
+  supported: boolean,
+): RequirementAssessment {
+  const ambiguous = capabilities.filter(capability => target.ambiguousCapabilities.has(capability))
+  if (ambiguous.length > 0) {
+    return requirement(`target-feature:${feature}`, 'unassessed', dimension, [diagnostic(
+      'COMPLETENESS_TARGET_CAPABILITY_AMBIGUOUS',
+      'target manager version is required to assess this feature',
+      { feature, capabilities: ambiguous },
+    )])
+  }
+  if (supported) return requirement(`target-feature:${feature}`, 'satisfied', dimension)
+  return requirement(`target-feature:${feature}`, 'unsatisfied', dimension, [diagnostic(
+    'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
+    'target cannot represent a graph feature',
+    { feature, target: target.format },
+  )])
+}
+
+function edgeEvaluator(kind: EdgeKind): FeatureEvaluator {
+  return (_graph, target) => capabilityRequirement(
+    `edge:${kind}` as GraphFeature,
+    'edgeKinds',
+    target,
+    ['edgeKinds'],
+    target.capabilities.edgeKinds.has(kind),
+  )
+}
+
+function metadataEvaluator(feature: MetadataGraphFeature): FeatureEvaluator {
+  return (graph, target, contract) => {
+    if (contract === 'snapshot' || contract === 'policy') {
+      return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
+    }
+    const candidates = metadataFeatureFields[feature]
+    const present = candidates.filter(field => [...graph.tarballs()]
+      .some(([, payload]) => packageMetadataOfPayload(payload)[field] !== undefined))
+    const unsupported = present.filter(field =>
+      !target.capabilities.metadataFields.has(field)
+        && !isStructuralExpectedDrop(field, target.format))
+    if (unsupported.length === 0) {
+      return requirement(`target-feature:${feature}`, 'satisfied', 'packageMetadata')
+    }
+    return requirement(`target-feature:${feature}`, 'unsatisfied', 'packageMetadata', [diagnostic(
+      'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
+      'target emitter does not preserve canonical package metadata',
+      { feature, fields: unsupported, target: target.format },
+    )])
+  }
+}
+
+function workspaceProtocolPresent(graph: Graph): boolean {
+  for (const node of graph.nodes()) {
+    for (const edge of graph.out(node.id)) {
+      if (edge.attrs?.workspaceRange !== undefined || edge.attrs?.range?.startsWith('workspace:')) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 function emptySourceCapabilities(): SourceCapabilityResult {
@@ -704,125 +834,4 @@ function sidecarAttributionRequirements(
     }
   }
   return out
-}
-
-export function assessConversion(
-  graph: Graph,
-  options: AssessmentOptions,
-  runtime: AssessmentRuntime = {},
-): ConversionAssessment {
-  const completeness = completenessOf(graph, { evidence: options.evidence })
-  const state = internalEvidenceOf(completeness.evidence)
-  const source = sourceCapabilities(state)
-  const resolvedTarget = targetAndRequirement(options)
-  const detected = mergedFeatureDetection(graph, state)
-  const detection = detected.detection
-  const requirements = canonicalRequirements(
-    completeness.profile,
-    detection.features,
-    options.contract,
-  )
-
-  if (state.source === undefined) {
-    requirements.push(requirement('source:format', 'unassessed', undefined, [diagnostic(
-      'COMPLETENESS_EVALUATOR_DEFERRED',
-      'source format evidence is unavailable',
-    )]))
-  }
-  const requiredDimensions = contractDimensions(options.contract, detection.features)
-  for (const dimension of source.ambiguousDimensions) {
-    if (!requiredDimensions.has(dimension)) continue
-    requirements.push(requirement(
-      `source:manager-generation:${dimension}`,
-      'unassessed',
-      dimension,
-      [diagnostic(
-        'COMPLETENESS_MANAGER_GENERATION_AMBIGUOUS',
-        'source manager generation is required for this contract dimension',
-        { dimension, contract: options.contract },
-      )],
-    ))
-  }
-  if (resolvedTarget.requirement !== undefined) requirements.push(resolvedTarget.requirement)
-  requirements.push(...sidecarAttributionRequirements(detected.source, detected.current))
-
-  for (const feature of detection.features) {
-    const evaluator = featureEvaluators[feature]
-    requirements.push(evaluator === undefined
-      ? requirement(`target-feature:${feature}`, 'unassessed', undefined, [diagnostic(
-          'COMPLETENESS_EVALUATOR_DEFERRED',
-          'graph feature has no target evaluator',
-          { feature },
-        )])
-      : evaluator(graph, resolvedTarget.target, options.contract, detection))
-  }
-
-  for (const fact of detection.unmodeled) {
-    requirements.push(requirement(
-      `graph-feature:unmodeled:${fact.subject}:${fact.path}`,
-      'unassessed',
-      undefined,
-      [diagnostic(
-        'COMPLETENESS_FEATURE_UNMODELED',
-        'graph contains a fact outside the assessed feature model',
-        { subject: fact.subject, path: fact.path, reason: fact.reason },
-      )],
-    ))
-  }
-
-  const runtimeRequirements = runtime.targetRequirements ?? []
-  const companion = runtimeRequirements.find(item => item.key === 'target:companion-projection')
-  if (companion !== undefined && (options.contract === 'project' || options.contract === 'frozen')) {
-    const index = requirements.findIndex(item => item.key === companion.key)
-    if (index >= 0) requirements[index] = companion
-  }
-  const frozenVerification = runtimeRequirements.find(item => item.key === 'target:frozen-verification')
-  if (frozenVerification !== undefined && options.contract === 'frozen') {
-    const index = requirements.findIndex(item => item.key === frozenVerification.key)
-    if (index >= 0) requirements[index] = frozenVerification
-  }
-  const frozenIntegrity = runtimeRequirements.find(item =>
-    item.key === 'target-feature:integrity:tarball')
-  if (frozenIntegrity !== undefined && options.contract === 'frozen') {
-    const index = requirements.findIndex(item => item.key === frozenIntegrity.key)
-    if (index >= 0) requirements[index] = frozenIntegrity
-  }
-  if (options.contract !== 'snapshot') {
-    requirements.push(policyProjectionRequirement(state, resolvedTarget.target, runtimeRequirements))
-  }
-  const workspacePeer = workspacePeerProjectionRequirement(
-    graph,
-    resolvedTarget.target,
-    runtimeRequirements,
-  )
-  if (workspacePeer !== undefined) requirements.push(workspacePeer)
-  const consumedRuntimeKeys = new Set([
-    workspacePeer?.key,
-    options.contract === 'snapshot' ? undefined : 'target:resolution-policy',
-    options.contract === 'project' || options.contract === 'frozen'
-      ? 'target:companion-projection'
-      : undefined,
-    options.contract === 'frozen' ? 'target:frozen-verification' : undefined,
-    options.contract === 'frozen' ? 'target-feature:integrity:tarball' : undefined,
-  ])
-  requirements.push(...runtimeRequirements.filter(item => !consumedRuntimeKeys.has(item.key)))
-  requirements.push(outputProbeRequirement(runtime.outputProbe))
-
-  const frozenRequirements = Object.freeze(requirements.map(item => Object.freeze({
-    ...item,
-    diagnostics: Object.freeze([...item.diagnostics]),
-  })))
-  const diagnostics = Object.freeze([
-    ...completeness.diagnostics,
-    ...frozenRequirements.flatMap(item => item.diagnostics),
-  ])
-  return Object.freeze({
-    status: overallStatus(frozenRequirements),
-    contract: options.contract,
-    source,
-    target: resolvedTarget.target,
-    completeness,
-    requirements: frozenRequirements,
-    diagnostics,
-  })
 }
