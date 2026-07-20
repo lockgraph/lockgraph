@@ -384,14 +384,7 @@ export function parseEntries(input: string): YarnClassicEntry[] {
     if (line.startsWith('#')) continue
 
     if (!line.startsWith(' ')) {
-      if (!line.endsWith(':')) {
-        throw parseFailed(`top-level entry line must end with ':' (${JSON.stringify(line)})`)
-      }
-      current = {
-        key: parseEntryKeyToken(line.slice(0, -1)),
-        dependencies: new Map(),
-        optionalDependencies: new Map(),
-      }
+      current = parseEntryHeaderLine(line)
       entries.push(current)
       block = undefined
       continue
@@ -402,11 +395,7 @@ export function parseEntries(input: string): YarnClassicEntry[] {
     }
 
     if (line.startsWith('    ')) {
-      if (block === undefined) {
-        throw parseFailed(`dependency line outside dependency block (${JSON.stringify(line)})`)
-      }
-      const [name, range] = parseDependencyLine(line)
-      current[block].set(name, range)
+      captureDependencyLine(current, block, line)
       continue
     }
 
@@ -442,34 +431,19 @@ export function parseEntries(input: string): YarnClassicEntry[] {
       )
     }
     if (line.startsWith('  version ')) {
-      current.version = parseQuotedToken(line.slice('  version '.length))
+      captureEntryFieldLine(current, 'version', line)
       continue
     }
     if (line.startsWith('  resolved ')) {
-      current.resolved = parseQuotedToken(line.slice('  resolved '.length))
+      captureEntryFieldLine(current, 'resolved', line)
       continue
     }
     if (line.startsWith('  integrity ')) {
-      // A single integrity hash stays bare
-      // (`integrity sha512-…`) but QUOTED when it is a space-separated
-      // multi-hash SRI (`integrity "sha1-… sha512-…"`) — yarn 1 quotes any
-      // value containing a space. A quoted value must be un-quoted here, else
-      // the surrounding `"` glue onto the first/last members and `parseSri`
-      // skips every hash (silent integrity loss — the sha1 AND the sha512 both
-      // vanish). Un-quote into the bare SRI string so the shared multi-hash
-      // parser preserves every algorithm (spec/formats/_common.md §3.1).
-      const value = line.slice('  integrity '.length)
-      current.integrity = value.startsWith('"') ? parseQuotedToken(value) : value
+      captureEntryFieldLine(current, 'integrity', line)
       continue
     }
 
-    // Unknown scalar entry field — e.g. yarn-1's legacy `uid ""` on link:/file:
-    // entries. A universal converter must not reject a valid lockfile over an
-    // unmodelled field: capture the line VERBATIM (sans the 2-space indent) for
-    // faithful round-trip. The parse surfaces one info diagnostic listing the
-    // unmodelled field names.
-    current.extras ??= []
-    current.extras.push(line.slice(2))
+    captureEntryFieldLine(current, 'extra', line)
     continue
   }
 
@@ -953,6 +927,65 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
 }
 
 // === Parse helpers ==========================================================
+
+function parseEntryHeaderLine(line: string): YarnClassicEntry {
+  if (!line.endsWith(':')) {
+    throw parseFailed(`top-level entry line must end with ':' (${JSON.stringify(line)})`)
+  }
+  return {
+    key: parseEntryKeyToken(line.slice(0, -1)),
+    dependencies: new Map(),
+    optionalDependencies: new Map(),
+  }
+}
+
+function captureDependencyLine(
+  entry: YarnClassicEntry,
+  block: 'dependencies' | 'optionalDependencies' | undefined,
+  line: string,
+): void {
+  if (block === undefined) {
+    throw parseFailed(`dependency line outside dependency block (${JSON.stringify(line)})`)
+  }
+  const [name, range] = parseDependencyLine(line)
+  entry[block].set(name, range)
+}
+
+function captureEntryFieldLine(
+  entry: YarnClassicEntry,
+  field: 'version' | 'resolved' | 'integrity' | 'extra',
+  line: string,
+): void {
+  if (field === 'version') {
+    entry.version = parseQuotedToken(line.slice('  version '.length))
+    return
+  }
+  if (field === 'resolved') {
+    entry.resolved = parseQuotedToken(line.slice('  resolved '.length))
+    return
+  }
+  if (field === 'integrity') {
+    // A single integrity hash stays bare
+    // (`integrity sha512-…`) but QUOTED when it is a space-separated
+    // multi-hash SRI (`integrity "sha1-… sha512-…"`) — yarn 1 quotes any
+    // value containing a space. A quoted value must be un-quoted here, else
+    // the surrounding `"` glue onto the first/last members and `parseSri`
+    // skips every hash (silent integrity loss — the sha1 AND the sha512 both
+    // vanish). Un-quote into the bare SRI string so the shared multi-hash
+    // parser preserves every algorithm (spec/formats/_common.md §3.1).
+    const value = line.slice('  integrity '.length)
+    entry.integrity = value.startsWith('"') ? parseQuotedToken(value) : value
+    return
+  }
+
+  // Unknown scalar entry field — e.g. yarn-1's legacy `uid ""` on link:/file:
+  // entries. A universal converter must not reject a valid lockfile over an
+  // unmodelled field: capture the line VERBATIM (sans the 2-space indent) for
+  // faithful round-trip. The parse surfaces one info diagnostic listing the
+  // unmodelled field names.
+  entry.extras ??= []
+  entry.extras.push(line.slice(2))
+}
 
 function ensureClassicHeader(input: string): void {
   if (check(input)) return
