@@ -51,7 +51,11 @@ import { nodeVersionOf } from './_node-id.ts'
 import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import type { OverrideConstraint } from '../graph.ts'
 
-// === TYPES =================================================================
+// === CONSTANTS ==============================================================
+
+const INDENT = '  '
+
+// === TYPES ==================================================================
 
 export interface BunTextParseOptions {}
 
@@ -85,7 +89,7 @@ export interface BunTextEnrichOptions {
 
 export interface BunTextOptimizeOptions {}
 
-// === TYPES — ON-DISK SCHEMA =================================================
+// === On-disk schema =========================================================
 
 interface BunTextInner {
   dependencies?: Record<string, string>
@@ -114,8 +118,6 @@ interface BunTextLockfile {
   overrides?: Record<string, string>
   [key: string]: unknown
 }
-
-// === SIDECAR ================================================================
 
 interface BunTextNodeSidecar {
   inner?: BunTextInner
@@ -150,6 +152,8 @@ interface BunTextSidecar {
    *  (`<name>@<version>` -> patch-file path). */
   patchedDependencies?: Record<string, string>
 }
+
+// === SIDECAR ================================================================
 
 const sidecarByGraph = new WeakMap<Graph, BunTextSidecar>()
 
@@ -190,7 +194,7 @@ export function getBunOverridesCanonical(graph: Graph): OverrideConstraint[] | u
   return sidecarByGraph.get(graph)?.canonicalOverrides
 }
 
-// === PARSE =================================================================
+// === API ====================================================================
 
 export function check(input: string): boolean {
   // bun-text discriminant: `lockfileVersion: 1` numeric literal AND both
@@ -480,8 +484,6 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   }
 }
 
-// === SERIALIZE ==============================================================
-
 export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): string {
   const sidecar = sidecarByGraph.get(graph)
   const emitDiagnostic = (diagnostic: Diagnostic): void => options.onDiagnostic?.(diagnostic)
@@ -576,25 +578,6 @@ export function stringify(graph: Graph, options: BunTextStringifyOptions = {}): 
   return options.lineEnding === 'crlf' ? json.replace(/\n/g, '\r\n') : json
 }
 
-export function resolveOverridesBlock(
-  callerOverrides: OverrideConstraint[] | undefined,
-  sidecar: BunTextSidecar | undefined,
-  emitDiagnostic: (d: Diagnostic) => void,
-): Record<string, unknown> | undefined {
-  if (callerOverrides !== undefined) {
-    return callerOverrides.length > 0
-      ? projectOverrides(callerOverrides, 'bun', emitDiagnostic)
-      : undefined
-  }
-  if (sidecar?.nativeOverrides !== undefined) return sidecar.nativeOverrides
-  if (sidecar?.canonicalOverrides !== undefined && sidecar.canonicalOverrides.length > 0) {
-    return projectOverrides(sidecar.canonicalOverrides, 'bun', emitDiagnostic)
-  }
-  return undefined
-}
-
-// === ENRICH =================================================================
-
 export function enrich(
   graph: Graph,
   options: BunTextEnrichOptions = {},
@@ -665,8 +648,6 @@ export function enrich(
   return { graph: result.graph, diagnostics }
 }
 
-// === OPTIMIZE ===============================================================
-
 export function optimize(
   graph: Graph,
   _options: BunTextOptimizeOptions = {},
@@ -686,7 +667,79 @@ export function optimize(
   return result
 }
 
-// === HELPERS — JSONC ========================================================
+// === PARSE ==================================================================
+
+interface BunTextDepBlocks {
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+}
+
+// Adds dep / dev / optional / peer edges from a block-bearing source (workspace
+// manifest or inner-block of a packages entry). For source = 'manifest',
+// workspace-protocol ranges resolve via `workspaceByPath`; otherwise we
+// rely on the pre-scoped `byName` map. Peer ranges are stashed declaratively
+// — bun encodes peers as data, not graph edges (ADR-0006 / §C enrich).
+export function addBlockEdges(
+  builder: ReturnType<typeof newBuilder>,
+  diagnostics: Diagnostic[],
+  srcId: string,
+  blocks: BunTextDepBlocks,
+  byName: Map<string, string>,
+  workspaceByPath: Map<string, string> | undefined,
+  peerDeclarations: Map<string, string>,
+): void {
+  const sections: Array<[EdgeKind, Record<string, string> | undefined]> = [
+    ['dep', blocks.dependencies],
+    ['dev', blocks.devDependencies],
+    ['optional', blocks.optionalDependencies],
+    ['peer', blocks.peerDependencies],
+  ]
+  for (const [kind, deps] of sections) {
+    if (deps === undefined) continue
+    for (const [depName, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
+      if (kind === 'peer') {
+        peerDeclarations.set(`${srcId}|${depName}`, range)
+        continue
+      }
+      const dstId = workspaceByPath !== undefined && isWorkspaceProtocolRange(range)
+        ? resolveWorkspaceTarget(depName, workspaceByPath)
+        : byName.get(depName)
+      if (dstId === undefined) {
+        diagnostics.push({
+          code: 'BUN_TEXT_UNRESOLVED_DEP',
+          severity: 'warning',
+          subject: srcId,
+          message: `${srcId}: unresolved ${kind} ${depName}@${range}`,
+        })
+        continue
+      }
+      const attrs: { range: string; workspace?: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = { range }
+      if (isWorkspaceProtocolRange(range)) {
+        attrs.workspace = true
+        // ADR-0014 §4.F4 — bun-text member-ref form has no version range;
+        // canonical specifier is `workspace:*` (bun's coarse default). The
+        // verbatim source-side richer specifier survives in `attrs.range`
+        // for same-format roundtrip; the canonical workspaceRange flags the
+        // coarse identity to cross-format consumers. resolvedVersion is
+        // best-effort — extracted from the canonical NodeId.
+        const dstVersion = nodeVersionOf(dstId)
+        attrs.workspaceRange = dstVersion !== undefined && dstVersion !== ''
+          ? { specifier: 'workspace:*', resolvedVersion: dstVersion }
+          : { specifier: 'workspace:*' }
+      }
+      try {
+        builder.addEdge(srcId, dstId, kind, attrs)
+      } catch (error) {
+        if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
+        throw error
+      }
+    }
+  }
+}
+
+// === JSONC helpers ==========================================================
 
 function parseJsonc(input: string): BunTextLockfile {
   // Strip line + block comments + trailing commas, then JSON.parse.
@@ -770,78 +823,7 @@ function stripJsoncExtensions(input: string): string {
   return out.join('')
 }
 
-// JSONC emitter with trailing commas on every `}` and `]` (one space leading,
-// matching bun's exact emit style; verified against the 7 fixtures).
-//
-// Pretty-print algorithm: standard 2-space indent for objects; arrays
-// always emit inline (tuple slot mode) because bun-text's tuple-form
-// packages entries are single-line.
-function renderJsonc(value: unknown): string {
-  return renderValue(value, 0, true) + '\n'
-}
-
-const INDENT = '  '
-
-export function renderValue(value: unknown, depth: number, isTopLevel: boolean): string {
-  if (Array.isArray(value)) return renderArray(value)
-  if (value !== null && typeof value === 'object') return renderObject(value as Record<string, unknown>, depth, isTopLevel)
-  return renderInlineValue(value)
-}
-
-function renderArray(arr: unknown[]): string {
-  // Arrays in bun-text are always positional tuples (1-elem for workspace refs,
-  // 4-elem for regular packages) — both short and single-line.
-  return `[${arr.map(renderInlineValue).join(', ')}]`
-}
-
-export function renderInlineValue(value: unknown): string {
-  if (value === null) return 'null'
-  if (typeof value === 'boolean') return value ? 'true' : 'false'
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null'
-  if (typeof value === 'string') return JSON.stringify(value)
-  if (Array.isArray(value)) {
-    return `[${value.map(item => renderInlineValue(item)).join(', ')}]`
-  }
-  if (typeof value === 'object') {
-    return renderInlineObject(value as Record<string, unknown>)
-  }
-  return 'null'
-}
-
-function renderInlineObject(obj: Record<string, unknown>): string {
-  const keys = Object.keys(obj)
-  if (keys.length === 0) return '{}'
-  const parts = keys.map(k => `${JSON.stringify(k)}: ${renderInlineValue(obj[k])}`)
-  return `{ ${parts.join(', ')} }`
-}
-
-function renderObject(obj: Record<string, unknown>, depth: number, isTopLevel: boolean): string {
-  const keys = Object.keys(obj)
-  if (keys.length === 0) return '{}'
-  const indent = INDENT.repeat(depth + 1)
-  const closeIndent = INDENT.repeat(depth)
-  const lines: string[] = ['{']
-  // Walk keys. Each entry indented to depth+1. Trailing commas after every
-  // value (bun-text always-trailing-comma style); the outer-most object emits
-  // no trailing comma on its last entry to match the fixture shape.
-  for (const key of keys) {
-    const val = obj[key]
-    const rendered = Array.isArray(val)
-      ? renderArray(val)
-      : (val !== null && typeof val === 'object'
-        ? renderObject(val as Record<string, unknown>, depth + 1, false)
-        : renderInlineValue(val))
-    lines.push(`${indent}${JSON.stringify(key)}: ${rendered},`)
-  }
-  if (isTopLevel) {
-    const last = lines.pop()!
-    lines.push(last.replace(/,$/, ''))
-  }
-  lines.push(`${closeIndent}}`)
-  return lines.join('\n')
-}
-
-// === HELPERS — PARSE ========================================================
+// === Parse helpers ==========================================================
 
 function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, '\n')
@@ -915,76 +897,6 @@ function buildConsumerScope(
   return scoped
 }
 
-interface BunTextDepBlocks {
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-  peerDependencies?: Record<string, string>
-}
-
-// Adds dep / dev / optional / peer edges from a block-bearing source (workspace
-// manifest or inner-block of a packages entry). For source = 'manifest',
-// workspace-protocol ranges resolve via `workspaceByPath`; otherwise we
-// rely on the pre-scoped `byName` map. Peer ranges are stashed declaratively
-// — bun encodes peers as data, not graph edges (ADR-0006 / §C enrich).
-export function addBlockEdges(
-  builder: ReturnType<typeof newBuilder>,
-  diagnostics: Diagnostic[],
-  srcId: string,
-  blocks: BunTextDepBlocks,
-  byName: Map<string, string>,
-  workspaceByPath: Map<string, string> | undefined,
-  peerDeclarations: Map<string, string>,
-): void {
-  const sections: Array<[EdgeKind, Record<string, string> | undefined]> = [
-    ['dep', blocks.dependencies],
-    ['dev', blocks.devDependencies],
-    ['optional', blocks.optionalDependencies],
-    ['peer', blocks.peerDependencies],
-  ]
-  for (const [kind, deps] of sections) {
-    if (deps === undefined) continue
-    for (const [depName, range] of Object.entries(deps).sort((a, b) => cmpStr(a[0], b[0]))) {
-      if (kind === 'peer') {
-        peerDeclarations.set(`${srcId}|${depName}`, range)
-        continue
-      }
-      const dstId = workspaceByPath !== undefined && isWorkspaceProtocolRange(range)
-        ? resolveWorkspaceTarget(depName, workspaceByPath)
-        : byName.get(depName)
-      if (dstId === undefined) {
-        diagnostics.push({
-          code: 'BUN_TEXT_UNRESOLVED_DEP',
-          severity: 'warning',
-          subject: srcId,
-          message: `${srcId}: unresolved ${kind} ${depName}@${range}`,
-        })
-        continue
-      }
-      const attrs: { range: string; workspace?: boolean; workspaceRange?: { specifier: string; resolvedVersion?: string } } = { range }
-      if (isWorkspaceProtocolRange(range)) {
-        attrs.workspace = true
-        // ADR-0014 §4.F4 — bun-text member-ref form has no version range;
-        // canonical specifier is `workspace:*` (bun's coarse default). The
-        // verbatim source-side richer specifier survives in `attrs.range`
-        // for same-format roundtrip; the canonical workspaceRange flags the
-        // coarse identity to cross-format consumers. resolvedVersion is
-        // best-effort — extracted from the canonical NodeId.
-        const dstVersion = nodeVersionOf(dstId)
-        attrs.workspaceRange = dstVersion !== undefined && dstVersion !== ''
-          ? { specifier: 'workspace:*', resolvedVersion: dstVersion }
-          : { specifier: 'workspace:*' }
-      }
-      try {
-        builder.addEdge(srcId, dstId, kind, attrs)
-      } catch (error) {
-        if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-        throw error
-      }
-    }
-  }
-}
-
 function resolveWorkspaceTarget(name: string, workspaceByPath: Map<string, string>): string | undefined {
   // workspace:<path> | workspace:* | workspace:^ | workspace:<version> — bun
   // resolves all variants to the same member; lookup by member name suffices.
@@ -999,22 +911,43 @@ function isWorkspaceProtocolRange(range: string): boolean {
   return range.startsWith('workspace:')
 }
 
-// === HELPERS — SERIALIZE ====================================================
+// === SERIALIZE ==============================================================
 
-function locateRootNode(graph: Graph, sidecar: BunTextSidecar | undefined): Node | undefined {
-  if (sidecar?.rootId !== undefined) {
-    const node = graph.getNode(sidecar.rootId)
-    if (node !== undefined) return node
+export function resolveOverridesBlock(
+  callerOverrides: OverrideConstraint[] | undefined,
+  sidecar: BunTextSidecar | undefined,
+  emitDiagnostic: (d: Diagnostic) => void,
+): Record<string, unknown> | undefined {
+  if (callerOverrides !== undefined) {
+    return callerOverrides.length > 0
+      ? projectOverrides(callerOverrides, 'bun', emitDiagnostic)
+      : undefined
   }
-  for (const node of graph.nodes()) {
-    if (node.workspacePath === '') return node
-  }
-  const roots = Array.from(graph.roots())
-  if (roots.length === 1) {
-    const sole = roots[0]
-    if (sole !== undefined) return graph.getNode(sole)
+  if (sidecar?.nativeOverrides !== undefined) return sidecar.nativeOverrides
+  if (sidecar?.canonicalOverrides !== undefined && sidecar.canonicalOverrides.length > 0) {
+    return projectOverrides(sidecar.canonicalOverrides, 'bun', emitDiagnostic)
   }
   return undefined
+}
+
+export function renderValue(value: unknown, depth: number, isTopLevel: boolean): string {
+  if (Array.isArray(value)) return renderArray(value)
+  if (value !== null && typeof value === 'object') return renderObject(value as Record<string, unknown>, depth, isTopLevel)
+  return renderInlineValue(value)
+}
+
+export function renderInlineValue(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null'
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (Array.isArray(value)) {
+    return `[${value.map(item => renderInlineValue(item)).join(', ')}]`
+  }
+  if (typeof value === 'object') {
+    return renderInlineObject(value as Record<string, unknown>)
+  }
+  return 'null'
 }
 
 export function buildWorkspaceManifest(
@@ -1122,6 +1055,73 @@ export function buildInnerBlock(graph: Graph, node: Node, sidecar: BunTextSideca
   return inner
 }
 
+// JSONC emitter with trailing commas on every `}` and `]` (one space leading,
+// matching bun's exact emit style; verified against the 7 fixtures).
+//
+// Pretty-print algorithm: standard 2-space indent for objects; arrays
+// always emit inline (tuple slot mode) because bun-text's tuple-form
+// packages entries are single-line.
+function renderJsonc(value: unknown): string {
+  return renderValue(value, 0, true) + '\n'
+}
+
+function renderArray(arr: unknown[]): string {
+  // Arrays in bun-text are always positional tuples (1-elem for workspace refs,
+  // 4-elem for regular packages) — both short and single-line.
+  return `[${arr.map(renderInlineValue).join(', ')}]`
+}
+
+function renderInlineObject(obj: Record<string, unknown>): string {
+  const keys = Object.keys(obj)
+  if (keys.length === 0) return '{}'
+  const parts = keys.map(k => `${JSON.stringify(k)}: ${renderInlineValue(obj[k])}`)
+  return `{ ${parts.join(', ')} }`
+}
+
+function renderObject(obj: Record<string, unknown>, depth: number, isTopLevel: boolean): string {
+  const keys = Object.keys(obj)
+  if (keys.length === 0) return '{}'
+  const indent = INDENT.repeat(depth + 1)
+  const closeIndent = INDENT.repeat(depth)
+  const lines: string[] = ['{']
+  // Walk keys. Each entry indented to depth+1. Trailing commas after every
+  // value (bun-text always-trailing-comma style); the outer-most object emits
+  // no trailing comma on its last entry to match the fixture shape.
+  for (const key of keys) {
+    const val = obj[key]
+    const rendered = Array.isArray(val)
+      ? renderArray(val)
+      : (val !== null && typeof val === 'object'
+        ? renderObject(val as Record<string, unknown>, depth + 1, false)
+        : renderInlineValue(val))
+    lines.push(`${indent}${JSON.stringify(key)}: ${rendered},`)
+  }
+  if (isTopLevel) {
+    const last = lines.pop()!
+    lines.push(last.replace(/,$/, ''))
+  }
+  lines.push(`${closeIndent}}`)
+  return lines.join('\n')
+}
+
+// === Serialize helpers ======================================================
+
+function locateRootNode(graph: Graph, sidecar: BunTextSidecar | undefined): Node | undefined {
+  if (sidecar?.rootId !== undefined) {
+    const node = graph.getNode(sidecar.rootId)
+    if (node !== undefined) return node
+  }
+  for (const node of graph.nodes()) {
+    if (node.workspacePath === '') return node
+  }
+  const roots = Array.from(graph.roots())
+  if (roots.length === 1) {
+    const sole = roots[0]
+    if (sole !== undefined) return graph.getNode(sole)
+  }
+  return undefined
+}
+
 function chooseNodeEmitKey(
   node: Node,
   sidecar: BunTextSidecar | undefined,
@@ -1196,6 +1196,8 @@ function reportPeerVirt(
     message: `peerContext ${JSON.stringify(node.peerContext)} is flattened on emit in bun-text (declarative peer-deps only)`,
   })
 }
+
+// === OPTIMIZE ===============================================================
 
 function pruneSidecar(sidecar: BunTextSidecar, graph: Graph): BunTextSidecar {
   const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))

@@ -109,6 +109,7 @@ import {
 // === CONSTANTS ==============================================================
 
 const V5_LOCKFILE_VERSION_CANONICAL = 5.4
+
 // Accepted on-disk literals (parsed back as bare strings by `_pnpm-yaml.ts`'s
 // reader, which never coerces scalars to numbers). The 5.0 → 5.4 minor-bump
 // range is collapsed to canonical `5.4` on emit per ADR-0022 §A.pnpm-v5.
@@ -133,7 +134,27 @@ const TOP_LEVEL_SECTION_KEYS: readonly string[] = ['importers', 'packages']
 // `@<version>` up to the next `_` boundary.
 const PEER_TAIL_RE = /_(@?[^_@]+(?:\/[^_@]+)?)@([^_]+)$/
 
-// === TYPES =================================================================
+// ADR-0028 INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
+// v6/v9 `assertResolveValid` (`_pnpm-flat-core.ts`) over v5's standalone layout:
+//
+//   - consumer hop (`c` is the root or a workspace importer): `importers[path]`
+//     `dependencies`/`devDependencies`/`optionalDependencies` (bare-string
+//     values), or — single-importer collapsed-root — the top-level `out`
+//     blocks. (The parallel `specifiers` map is the DESCRIPTOR, not a resolved
+//     ref, so it is not resolved here.)
+//   - package hop (`c` is a resolved package): the INLINE
+//     `packages[key(c)].dependencies`/`optionalDependencies` (v5 has no
+//     `snapshots:` block) — bare-string values.
+//
+// Resolution uses v5's own oracle (`resolveDependencyTarget` /
+// `resolveAliasedDependencyTarget`) over the emitted packages-key NodeId set.
+// Workspace-target (`link:`) edges are skipped. A miss is a soft
+// `LAYOUT_RESOLVE_VIOLATION` (error) — no throw.
+const PNPM_V5_CONSUMER_BLOCKS = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
+
+const PNPM_V5_PACKAGE_BLOCKS = ['dependencies', 'optionalDependencies'] as const
+
+// === TYPES ==================================================================
 
 export interface PnpmV5ParseOptions {}
 
@@ -174,7 +195,9 @@ export interface PnpmV5SettingsCrossVersion {
   excludeLinksFromLockfile?: boolean
 }
 
-// === SIDECAR ================================================================
+export interface PeerEntry { name: string; version: string }
+
+export interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] }
 
 interface PnpmV5NodeSidecar {
   peerDependencies?: Record<string, string>
@@ -206,6 +229,54 @@ interface PnpmV5Sidecar {
   /** Top-level `overrides:` block, verbatim (pnpm 6–7 carry + frozen-compare it). */
   overrides?: Record<string, string>
 }
+
+interface PnpmV5ParseContext {
+  yaml: YamlMap
+  builder: ReturnType<typeof newBuilder>
+  diagnostics: Diagnostic[]
+  sidecar: PnpmV5Sidecar
+  packagesMap: Record<string, unknown>
+  seenIds: Set<string>
+  idByPackagesKey: Map<string, string>
+}
+
+interface PnpmV5ImporterLayout {
+  effective: Record<string, unknown>
+  paths: string[]
+  rootPath: string
+}
+
+interface PnpmV5ImporterEdgeContext {
+  parse: PnpmV5ParseContext
+  importerPath: string
+  srcId: string
+  specMap: Record<string, unknown> | undefined
+}
+
+interface PnpmV5StringifyContext {
+  graph: Graph
+  options: PnpmV5StringifyOptions
+  internal: PnpmV5StringifyInternalOptions
+  sidecar: PnpmV5Sidecar | undefined
+  rootNode: Node | undefined
+  emitDiagnostic: (diagnostic: Diagnostic) => void
+}
+
+interface PnpmV5ResolveValidationContext {
+  graph:       Graph
+  rootNode:    Node | undefined
+  seenIds:     Set<string>
+  onDiagnostic: (d: Diagnostic) => void
+}
+
+interface EnrichPlan {
+  addRootEdges: Edge[]
+  markWorkspaceEdges: Edge[]
+}
+
+type PnpmV5MemberManifest = { path: string; manifest: PnpmV5Manifest }
+
+// === SIDECAR ================================================================
 
 const sidecarByGraph = new WeakMap<Graph, PnpmV5Sidecar>()
 
@@ -248,7 +319,7 @@ export function getPnpmV5OverridesCanonical(graph: Graph): OverrideConstraint[] 
   return captureOverrides(versionOnly, 'pnpm').canonical
 }
 
-// === PARSE =================================================================
+// === API ====================================================================
 
 export function check(input: string): boolean {
   // Probe top-level `lockfileVersion: 5.<digit>` as a decimal scalar.
@@ -269,27 +340,82 @@ export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
   return sealPnpmV5Parse(context)
 }
 
-interface PnpmV5ParseContext {
-  yaml: YamlMap
-  builder: ReturnType<typeof newBuilder>
-  diagnostics: Diagnostic[]
-  sidecar: PnpmV5Sidecar
-  packagesMap: Record<string, unknown>
-  seenIds: Set<string>
-  idByPackagesKey: Map<string, string>
+export function stringify(
+  graph: Graph,
+  options: PnpmV5StringifyOptions = {},
+  internal: PnpmV5StringifyInternalOptions = {},
+): string {
+  const context = createPnpmV5StringifyContext(graph, options, internal)
+  reportPnpmV5UnsupportedFeatures(context)
+  const nodes = partitionPnpmV5StringifyNodes(context)
+  const out = buildPnpmV5Output(context)
+  writePnpmV5Overrides(context, out)
+  writePnpmV5ImporterLayout(context, nodes.workspace, out)
+  writePnpmV5Packages(context, nodes.resolved, out)
+  assertResolveValid(graph, out, context.rootNode, nodes.resolved, context.emitDiagnostic)
+  const text = emitYaml(out, { topLevelOrder: TOP_LEVEL_ORDER, topLevelSectionKeys: TOP_LEVEL_SECTION_KEYS })
+  return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
-interface PnpmV5ImporterLayout {
-  effective: Record<string, unknown>
-  paths: string[]
-  rootPath: string
+export function enrich(
+  graph: Graph,
+  options: PnpmV5EnrichOptions = {},
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  const sidecar = sidecarByGraph.get(graph)
+  const diagnostics = collectPnpmV5PeerDiagnostics(graph, sidecar)
+  if (options.manifests === undefined) {
+    reportPnpmV5MissingManifests(graph, diagnostics)
+    return { graph, diagnostics }
+  }
+  const plan = planManifestEnrich(graph, sidecar, options.manifests)
+  if (plan.addRootEdges.length === 0 && plan.markWorkspaceEdges.length === 0) {
+    return { graph, diagnostics }
+  }
+  const enriched = applyPnpmV5ManifestPlan(graph, plan)
+  if (sidecar !== undefined) rememberSidecar(enriched, sidecar)
+  return { graph: enriched, diagnostics }
 }
 
-interface PnpmV5ImporterEdgeContext {
-  parse: PnpmV5ParseContext
-  importerPath: string
-  srcId: string
-  specMap: Record<string, unknown> | undefined
+export function optimize(
+  graph: Graph,
+  _options: PnpmV5OptimizeOptions = {},
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  const sidecar = sidecarByGraph.get(graph)
+  const result = optimizeUnreachable(graph, {
+    seeds: Array.from(graph.roots()),
+    compare: cmpStr,
+    edgeSeparator: ' ',
+    tarballInputs: node => ({ name: node.name, version: node.version, patch: node.patch }),
+    skipMissingTarballs: true,
+  })
+
+  if (result.graph !== graph && sidecar !== undefined) {
+    rememberSidecar(result.graph, prunePnpmSidecar(sidecar, result.graph))
+  }
+  return result
+}
+
+// === PARSE ==================================================================
+
+// === Parse helpers ==========================================================
+
+/**
+ * Parse a v5 `/<name>/<version>[<peer-tail>]` packages key. Strip the
+ * leading `/`, split on the LAST `/` for name vs `<version><peer-tail>`
+ * (the version segment contains no `/`, so the rule applies uniformly
+ * to scoped and unscoped names), then peel the peer tail right-to-left.
+ */
+export function parsePackagesKey(key: string): ParsedPackagesKey | undefined {
+  if (!key.startsWith('/')) return undefined
+  const body = key.slice(1)
+  const lastSlash = body.lastIndexOf('/')
+  if (lastSlash <= 0) return undefined
+  const name = body.slice(0, lastSlash)
+  const tail = body.slice(lastSlash + 1)
+  if (name.length === 0) return undefined
+  const peeled = peelPeerTail(tail)
+  if (peeled === undefined) return undefined
+  return { name, version: peeled.version, peers: peeled.peers }
 }
 
 function assertPnpmV5Version(normalized: string, yaml: YamlMap): void {
@@ -565,33 +691,129 @@ function sealPnpmV5Parse(context: PnpmV5ParseContext): Graph {
   }
 }
 
+function addPackageNode(
+  builder: ReturnType<typeof newBuilder>,
+  sidecar: PnpmV5Sidecar,
+  name: string,
+  version: string,
+  peerContext: string[],
+  nodeId: string,
+  pkgEntry: unknown,
+  diagnostics: Diagnostic[],
+): void {
+  const node: Node = {
+    id: nodeId,
+    name,
+    version,
+    peerContext,
+  }
+  builder.addNode(node)
+
+  const nodeSc: PnpmV5NodeSidecar = {}
+  if (isPlainObject(pkgEntry)) {
+    if (isPlainObject(pkgEntry.peerDependencies)) {
+      nodeSc.peerDependencies = { ...(pkgEntry.peerDependencies as Record<string, string>) }
+    }
+    if (isPlainObject(pkgEntry.engines)) {
+      nodeSc.engines = { ...(pkgEntry.engines as Record<string, string>) }
+    }
+    if (pkgEntry.hasBin === true) nodeSc.hasBin = true
+    if (Array.isArray(pkgEntry.os)) nodeSc.os = (pkgEntry.os as string[]).slice()
+    if (Array.isArray(pkgEntry.cpu)) nodeSc.cpu = (pkgEntry.cpu as string[]).slice()
+    if (typeof pkgEntry.dev === 'boolean') nodeSc.dev = pkgEntry.dev
+    if (typeof pkgEntry.optional === 'boolean') nodeSc.optional = pkgEntry.optional
+  }
+  sidecar.nodes.set(nodeId, nodeSc)
+
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  if (nodeSc.peerDependencies !== undefined) {
+    payload.peerDependencies = { ...nodeSc.peerDependencies }
+  }
+  if (Object.keys(payload).length > 0) {
+    builder.setTarball({ name, version }, payload)
+  }
+}
+
+function addResolvedTreeEdges(
+  builder: ReturnType<typeof newBuilder>,
+  diagnostics: Diagnostic[],
+  srcId: string,
+  entry: Record<string, unknown>,
+  peers: Array<{ name: string; version: string }>,
+  seenIds: Set<string>,
+  sidecar: PnpmV5Sidecar,
+): void {
+  for (const [kind, blockName] of [
+    ['dep', 'dependencies'],
+    ['optional', 'optionalDependencies'],
+  ] as const) {
+    const block = entry[blockName]
+    if (!isPlainObject(block)) continue
+    const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
+    for (const [depName, rawValue] of entries) {
+      if (typeof rawValue !== 'string') continue
+      let targetId = resolveDependencyTarget(seenIds, depName, rawValue)
+      let aliasSlot: string | undefined
+      if (targetId === undefined) {
+        const aliased = resolveAliasedDependencyTarget(seenIds, rawValue)
+        if (aliased !== undefined) {
+          targetId = aliased
+          aliasSlot = depName
+        }
+      }
+      if (targetId === undefined) {
+        diagnostics.push({
+          code: 'PNPM_UNRESOLVED_DEP',
+          severity: 'warning',
+          subject: srcId,
+          message: `pnpm-v5: ${srcId} dep ${depName}@${rawValue} resolves to no packages entry`,
+        })
+        continue
+      }
+      try {
+        const attrs: { range: string; alias?: string } = { range: rawValue }
+        if (aliasSlot !== undefined) attrs.alias = aliasSlot
+        builder.addEdge(srcId, targetId, kind, attrs)
+      } catch (error) {
+        if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
+        throw error
+      }
+    }
+  }
+
+  // Peer edges — derive from the parsed peers chain.
+  for (const peer of peers) {
+    const peerNodeId = resolvePeerTargetById(seenIds, peer.name, peer.version)
+    if (peerNodeId === undefined) {
+      diagnostics.push({
+        code: 'PNPM_UNRESOLVED_DEP',
+        severity: 'warning',
+        subject: srcId,
+        message: `pnpm-v5: ${srcId} peer ${peer.name}@${peer.version} resolves to no packages entry`,
+      })
+      continue
+    }
+    try {
+      const sc = sidecar.nodes.get(srcId)
+      const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
+      builder.addEdge(srcId, peerNodeId, 'peer', { range: peerRange })
+    } catch (error) {
+      if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
+      throw error
+    }
+  }
+}
+
+function buildCollapsedRootImporter(yaml: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (yaml.specifiers !== undefined) out.specifiers = yaml.specifiers
+  if (yaml.dependencies !== undefined) out.dependencies = yaml.dependencies
+  if (yaml.devDependencies !== undefined) out.devDependencies = yaml.devDependencies
+  if (yaml.optionalDependencies !== undefined) out.optionalDependencies = yaml.optionalDependencies
+  return out
+}
+
 // === SERIALIZE ==============================================================
-
-export function stringify(
-  graph: Graph,
-  options: PnpmV5StringifyOptions = {},
-  internal: PnpmV5StringifyInternalOptions = {},
-): string {
-  const context = createPnpmV5StringifyContext(graph, options, internal)
-  reportPnpmV5UnsupportedFeatures(context)
-  const nodes = partitionPnpmV5StringifyNodes(context)
-  const out = buildPnpmV5Output(context)
-  writePnpmV5Overrides(context, out)
-  writePnpmV5ImporterLayout(context, nodes.workspace, out)
-  writePnpmV5Packages(context, nodes.resolved, out)
-  assertResolveValid(graph, out, context.rootNode, nodes.resolved, context.emitDiagnostic)
-  const text = emitYaml(out, { topLevelOrder: TOP_LEVEL_ORDER, topLevelSectionKeys: TOP_LEVEL_SECTION_KEYS })
-  return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
-}
-
-interface PnpmV5StringifyContext {
-  graph: Graph
-  options: PnpmV5StringifyOptions
-  internal: PnpmV5StringifyInternalOptions
-  sidecar: PnpmV5Sidecar | undefined
-  rootNode: Node | undefined
-  emitDiagnostic: (diagnostic: Diagnostic) => void
-}
 
 function createPnpmV5StringifyContext(
   graph: Graph,
@@ -717,26 +939,7 @@ function writePnpmV5Packages(
   out.packages = packages
 }
 
-// === SERIALIZE — VALIDATION =================================================
-
-// ADR-0028 INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
-// v6/v9 `assertResolveValid` (`_pnpm-flat-core.ts`) over v5's standalone layout:
-//
-//   - consumer hop (`c` is the root or a workspace importer): `importers[path]`
-//     `dependencies`/`devDependencies`/`optionalDependencies` (bare-string
-//     values), or — single-importer collapsed-root — the top-level `out`
-//     blocks. (The parallel `specifiers` map is the DESCRIPTOR, not a resolved
-//     ref, so it is not resolved here.)
-//   - package hop (`c` is a resolved package): the INLINE
-//     `packages[key(c)].dependencies`/`optionalDependencies` (v5 has no
-//     `snapshots:` block) — bare-string values.
-//
-// Resolution uses v5's own oracle (`resolveDependencyTarget` /
-// `resolveAliasedDependencyTarget`) over the emitted packages-key NodeId set.
-// Workspace-target (`link:`) edges are skipped. A miss is a soft
-// `LAYOUT_RESOLVE_VIOLATION` (error) — no throw.
-const PNPM_V5_CONSUMER_BLOCKS = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
-const PNPM_V5_PACKAGE_BLOCKS = ['dependencies', 'optionalDependencies'] as const
+// === Validation =============================================================
 
 function pnpmV5ConsumerBlock(
   out: YamlMap,
@@ -776,13 +979,6 @@ function pnpmV5SlotValue(
 
 function isPnpmV5Importer(node: Node, rootNode: Node | undefined): boolean {
   return node.id === rootNode?.id || (node.workspacePath !== undefined && node.workspacePath !== '')
-}
-
-interface PnpmV5ResolveValidationContext {
-  graph:       Graph
-  rootNode:    Node | undefined
-  seenIds:     Set<string>
-  onDiagnostic: (d: Diagnostic) => void
 }
 
 function validatePnpmV5ResolvedEdge(
@@ -852,332 +1048,7 @@ function assertResolveValid(
   }
 }
 
-// === ENRICH =================================================================
-
-export function enrich(
-  graph: Graph,
-  options: PnpmV5EnrichOptions = {},
-): { graph: Graph; diagnostics: Diagnostic[] } {
-  const sidecar = sidecarByGraph.get(graph)
-  const diagnostics = collectPnpmV5PeerDiagnostics(graph, sidecar)
-  if (options.manifests === undefined) {
-    reportPnpmV5MissingManifests(graph, diagnostics)
-    return { graph, diagnostics }
-  }
-  const plan = planManifestEnrich(graph, sidecar, options.manifests)
-  if (plan.addRootEdges.length === 0 && plan.markWorkspaceEdges.length === 0) {
-    return { graph, diagnostics }
-  }
-  const enriched = applyPnpmV5ManifestPlan(graph, plan)
-  if (sidecar !== undefined) rememberSidecar(enriched, sidecar)
-  return { graph: enriched, diagnostics }
-}
-
-function collectPnpmV5PeerDiagnostics(
-  graph: Graph,
-  sidecar: PnpmV5Sidecar | undefined,
-): Diagnostic[] {
-  const diagnostics: Diagnostic[] = []
-  for (const node of graph.nodes()) {
-    const nodeSc = sidecar?.nodes.get(node.id)
-    const rawPeers = nodeSc?.peerDependencies
-    if (rawPeers === undefined) continue
-    for (const peerName of Object.keys(rawPeers).sort(cmpStr)) {
-      const peerRange = rawPeers[peerName]
-      if (peerRange === undefined) continue
-      const alreadyBound = node.peerContext.some(p => stripPeerContextFromNodeId(p).startsWith(`${peerName}@`))
-      if (alreadyBound) continue
-      diagnostics.push(pnpmV5PeerDiagnostic(graph, node, peerName, peerRange))
-    }
-  }
-  return diagnostics
-}
-
-function pnpmV5PeerDiagnostic(
-  graph: Graph,
-  node: Node,
-  peerName: string,
-  peerRange: string,
-): Diagnostic {
-  const candidates = derivePeerCandidates(graph, peerName, peerRange)
-  if (candidates.length === 1) {
-    return {
-      code: 'PNPM_V5_PEER_BOUND', severity: 'info', subject: node.id,
-      message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} → ${candidates[0]} (1-candidate fallback; on-disk peer-context absent)`,
-    }
-  }
-  if (candidates.length === 0) {
-    return {
-      code: 'PNPM_V5_PEER_UNSATISFIED', severity: 'warning', subject: node.id,
-      message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches no installed version`,
-    }
-  }
-  return {
-    code: 'PNPM_V5_PEER_AMBIGUOUS', severity: 'warning', subject: node.id,
-    message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches multiple candidates: ${candidates.join(', ')}`,
-  }
-}
-
-function reportPnpmV5MissingManifests(graph: Graph, diagnostics: Diagnostic[]): void {
-  const hasWorkspaceHint = Array.from(graph.nodes())
-    .some(node => node.workspacePath !== undefined && node.workspacePath !== '')
-  if (!hasWorkspaceHint) return
-  diagnostics.push({
-    code: 'PNPM_V5_NO_MANIFESTS',
-    severity: 'warning',
-    message: 'pnpm-v5 workspace concretisation requires manifests; leaving graph unclassified',
-  })
-}
-
-type PnpmV5ManifestPlan = ReturnType<typeof planManifestEnrich>
-
-function applyPnpmV5ManifestPlan(graph: Graph, plan: PnpmV5ManifestPlan): Graph {
-  return graph.mutate(m => {
-    for (const edge of plan.addRootEdges) {
-      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
-    }
-    for (const edge of plan.markWorkspaceEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
-    }
-  }).graph
-}
-
-// === OPTIMIZE ===============================================================
-
-export function optimize(
-  graph: Graph,
-  _options: PnpmV5OptimizeOptions = {},
-): { graph: Graph; diagnostics: Diagnostic[] } {
-  const sidecar = sidecarByGraph.get(graph)
-  const result = optimizeUnreachable(graph, {
-    seeds: Array.from(graph.roots()),
-    compare: cmpStr,
-    edgeSeparator: ' ',
-    tarballInputs: node => ({ name: node.name, version: node.version, patch: node.patch }),
-    skipMissingTarballs: true,
-  })
-
-  if (result.graph !== graph && sidecar !== undefined) {
-    rememberSidecar(result.graph, prunePnpmSidecar(sidecar, result.graph))
-  }
-  return result
-}
-
-// === HELPERS — PARSE ========================================================
-
-export interface PeerEntry { name: string; version: string }
-export interface ParsedPackagesKey { name: string; version: string; peers: PeerEntry[] }
-
-/**
- * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5. Given
- * `<version>[_<peer>@<v>…]`, peel `_<peerName>@<peerVersion>` segments
- * from the tail while PEER_TAIL_RE matches; returns the bare version
- * (unconsumed remainder) and peers in canonical order. Returns undefined
- * for an empty input or fully-consumed remainder (no base version
- * left).
- *
- * v5-scoped-peer-grammar edge per ADR-0022 stub: scoped peers containing
- * underscores in path segments are theoretically ambiguous. PEER_TAIL_RE
- * handles the common scoped-peer shape
- * `@scope/name@version` correctly.
- */
-export function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | undefined {
-  if (input.length === 0) return undefined
-  let rest = input
-  const peers: PeerEntry[] = []
-  while (rest.length > 0) {
-    const m = rest.match(PEER_TAIL_RE)
-    if (m === null) break
-    peers.unshift({ name: m[1]!, version: m[2]! })
-    rest = rest.slice(0, rest.length - m[0]!.length)
-  }
-  if (rest.length === 0) return undefined
-  return { version: rest, peers }
-}
-
-/**
- * Parse a v5 `/<name>/<version>[<peer-tail>]` packages key. Strip the
- * leading `/`, split on the LAST `/` for name vs `<version><peer-tail>`
- * (the version segment contains no `/`, so the rule applies uniformly
- * to scoped and unscoped names), then peel the peer tail right-to-left.
- */
-export function parsePackagesKey(key: string): ParsedPackagesKey | undefined {
-  if (!key.startsWith('/')) return undefined
-  const body = key.slice(1)
-  const lastSlash = body.lastIndexOf('/')
-  if (lastSlash <= 0) return undefined
-  const name = body.slice(0, lastSlash)
-  const tail = body.slice(lastSlash + 1)
-  if (name.length === 0) return undefined
-  const peeled = peelPeerTail(tail)
-  if (peeled === undefined) return undefined
-  return { name, version: peeled.version, peers: peeled.peers }
-}
-
-export function resolveDependencyTarget(
-  seenIds: Set<string>,
-  depName: string,
-  rawValue: string,
-): string | undefined {
-  const peeled = peelPeerTail(rawValue)
-  if (peeled === undefined) return undefined
-  const peerContext = peeled.peers.map(p => `${p.name}@${p.version}`).sort(cmpStr)
-  const candidate = serializeNodeId(depName, peeled.version, peerContext)
-  if (seenIds.has(candidate)) return candidate
-  const bare = `${depName}@${peeled.version}`
-  if (seenIds.has(bare)) return bare
-  return undefined
-}
-
-/** pnpm v5 npm-alias variant: rawValue carries `<target>@<version>` rather than a bare version. */
-export function resolveAliasedDependencyTarget(
-  seenIds: Set<string>,
-  rawValue: string,
-): string | undefined {
-  if (rawValue.indexOf('@', 1) <= 0) return undefined
-  // Split at last `@` to peel target name + version (peer-tail handled
-  // independently via peelPeerTail).
-  let lastAt = -1
-  for (let i = 1; i < rawValue.length; i++) {
-    if (rawValue[i] === '@' && (rawValue[i + 1] !== undefined && rawValue[i + 1] !== '(')) lastAt = i
-  }
-  if (lastAt <= 0) return undefined
-  const targetName = rawValue.slice(0, lastAt)
-  const rest = rawValue.slice(lastAt + 1)
-  const peeled = peelPeerTail(rest)
-  if (peeled === undefined) return undefined
-  const peerContext = peeled.peers.map(p => `${p.name}@${p.version}`).sort(cmpStr)
-  const candidate = serializeNodeId(targetName, peeled.version, peerContext)
-  if (seenIds.has(candidate)) return candidate
-  const bare = `${targetName}@${peeled.version}`
-  if (seenIds.has(bare)) return bare
-  return undefined
-}
-
-function addPackageNode(
-  builder: ReturnType<typeof newBuilder>,
-  sidecar: PnpmV5Sidecar,
-  name: string,
-  version: string,
-  peerContext: string[],
-  nodeId: string,
-  pkgEntry: unknown,
-  diagnostics: Diagnostic[],
-): void {
-  const node: Node = {
-    id: nodeId,
-    name,
-    version,
-    peerContext,
-  }
-  builder.addNode(node)
-
-  const nodeSc: PnpmV5NodeSidecar = {}
-  if (isPlainObject(pkgEntry)) {
-    if (isPlainObject(pkgEntry.peerDependencies)) {
-      nodeSc.peerDependencies = { ...(pkgEntry.peerDependencies as Record<string, string>) }
-    }
-    if (isPlainObject(pkgEntry.engines)) {
-      nodeSc.engines = { ...(pkgEntry.engines as Record<string, string>) }
-    }
-    if (pkgEntry.hasBin === true) nodeSc.hasBin = true
-    if (Array.isArray(pkgEntry.os)) nodeSc.os = (pkgEntry.os as string[]).slice()
-    if (Array.isArray(pkgEntry.cpu)) nodeSc.cpu = (pkgEntry.cpu as string[]).slice()
-    if (typeof pkgEntry.dev === 'boolean') nodeSc.dev = pkgEntry.dev
-    if (typeof pkgEntry.optional === 'boolean') nodeSc.optional = pkgEntry.optional
-  }
-  sidecar.nodes.set(nodeId, nodeSc)
-
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
-  if (nodeSc.peerDependencies !== undefined) {
-    payload.peerDependencies = { ...nodeSc.peerDependencies }
-  }
-  if (Object.keys(payload).length > 0) {
-    builder.setTarball({ name, version }, payload)
-  }
-}
-
-function addResolvedTreeEdges(
-  builder: ReturnType<typeof newBuilder>,
-  diagnostics: Diagnostic[],
-  srcId: string,
-  entry: Record<string, unknown>,
-  peers: Array<{ name: string; version: string }>,
-  seenIds: Set<string>,
-  sidecar: PnpmV5Sidecar,
-): void {
-  for (const [kind, blockName] of [
-    ['dep', 'dependencies'],
-    ['optional', 'optionalDependencies'],
-  ] as const) {
-    const block = entry[blockName]
-    if (!isPlainObject(block)) continue
-    const entries = Object.entries(block).sort((a, b) => cmpStr(a[0], b[0]))
-    for (const [depName, rawValue] of entries) {
-      if (typeof rawValue !== 'string') continue
-      let targetId = resolveDependencyTarget(seenIds, depName, rawValue)
-      let aliasSlot: string | undefined
-      if (targetId === undefined) {
-        const aliased = resolveAliasedDependencyTarget(seenIds, rawValue)
-        if (aliased !== undefined) {
-          targetId = aliased
-          aliasSlot = depName
-        }
-      }
-      if (targetId === undefined) {
-        diagnostics.push({
-          code: 'PNPM_UNRESOLVED_DEP',
-          severity: 'warning',
-          subject: srcId,
-          message: `pnpm-v5: ${srcId} dep ${depName}@${rawValue} resolves to no packages entry`,
-        })
-        continue
-      }
-      try {
-        const attrs: { range: string; alias?: string } = { range: rawValue }
-        if (aliasSlot !== undefined) attrs.alias = aliasSlot
-        builder.addEdge(srcId, targetId, kind, attrs)
-      } catch (error) {
-        if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-        throw error
-      }
-    }
-  }
-
-  // Peer edges — derive from the parsed peers chain.
-  for (const peer of peers) {
-    const peerNodeId = resolvePeerTargetById(seenIds, peer.name, peer.version)
-    if (peerNodeId === undefined) {
-      diagnostics.push({
-        code: 'PNPM_UNRESOLVED_DEP',
-        severity: 'warning',
-        subject: srcId,
-        message: `pnpm-v5: ${srcId} peer ${peer.name}@${peer.version} resolves to no packages entry`,
-      })
-      continue
-    }
-    try {
-      const sc = sidecar.nodes.get(srcId)
-      const peerRange = sc?.peerDependencies?.[peer.name] ?? peer.version
-      builder.addEdge(srcId, peerNodeId, 'peer', { range: peerRange })
-    } catch (error) {
-      if (error instanceof GraphError && error.code === 'INVARIANT_VIOLATION') continue
-      throw error
-    }
-  }
-}
-
-function buildCollapsedRootImporter(yaml: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  if (yaml.specifiers !== undefined) out.specifiers = yaml.specifiers
-  if (yaml.dependencies !== undefined) out.dependencies = yaml.dependencies
-  if (yaml.devDependencies !== undefined) out.devDependencies = yaml.devDependencies
-  if (yaml.optionalDependencies !== undefined) out.optionalDependencies = yaml.optionalDependencies
-  return out
-}
-
-// === HELPERS — SERIALIZE ====================================================
+// === Serialize helpers ======================================================
 
 function tailOfName(name: string): string {
   return name.startsWith('@') ? name.split('/').slice(1).join('/') : name
@@ -1397,14 +1268,79 @@ function buildPackageEntry(
   return entry
 }
 
-// === ENRICH — PLANNING ======================================================
+// === ENRICH =================================================================
 
-interface EnrichPlan {
-  addRootEdges: Edge[]
-  markWorkspaceEdges: Edge[]
+function collectPnpmV5PeerDiagnostics(
+  graph: Graph,
+  sidecar: PnpmV5Sidecar | undefined,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  for (const node of graph.nodes()) {
+    const nodeSc = sidecar?.nodes.get(node.id)
+    const rawPeers = nodeSc?.peerDependencies
+    if (rawPeers === undefined) continue
+    for (const peerName of Object.keys(rawPeers).sort(cmpStr)) {
+      const peerRange = rawPeers[peerName]
+      if (peerRange === undefined) continue
+      const alreadyBound = node.peerContext.some(p => stripPeerContextFromNodeId(p).startsWith(`${peerName}@`))
+      if (alreadyBound) continue
+      diagnostics.push(pnpmV5PeerDiagnostic(graph, node, peerName, peerRange))
+    }
+  }
+  return diagnostics
 }
 
-type PnpmV5MemberManifest = { path: string; manifest: PnpmV5Manifest }
+function pnpmV5PeerDiagnostic(
+  graph: Graph,
+  node: Node,
+  peerName: string,
+  peerRange: string,
+): Diagnostic {
+  const candidates = derivePeerCandidates(graph, peerName, peerRange)
+  if (candidates.length === 1) {
+    return {
+      code: 'PNPM_V5_PEER_BOUND', severity: 'info', subject: node.id,
+      message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} → ${candidates[0]} (1-candidate fallback; on-disk peer-context absent)`,
+    }
+  }
+  if (candidates.length === 0) {
+    return {
+      code: 'PNPM_V5_PEER_UNSATISFIED', severity: 'warning', subject: node.id,
+      message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches no installed version`,
+    }
+  }
+  return {
+    code: 'PNPM_V5_PEER_AMBIGUOUS', severity: 'warning', subject: node.id,
+    message: `peer ${JSON.stringify(peerName)} range ${JSON.stringify(peerRange)} matches multiple candidates: ${candidates.join(', ')}`,
+  }
+}
+
+function reportPnpmV5MissingManifests(graph: Graph, diagnostics: Diagnostic[]): void {
+  const hasWorkspaceHint = Array.from(graph.nodes())
+    .some(node => node.workspacePath !== undefined && node.workspacePath !== '')
+  if (!hasWorkspaceHint) return
+  diagnostics.push({
+    code: 'PNPM_V5_NO_MANIFESTS',
+    severity: 'warning',
+    message: 'pnpm-v5 workspace concretisation requires manifests; leaving graph unclassified',
+  })
+}
+
+type PnpmV5ManifestPlan = ReturnType<typeof planManifestEnrich>
+
+function applyPnpmV5ManifestPlan(graph: Graph, plan: PnpmV5ManifestPlan): Graph {
+  return graph.mutate(m => {
+    for (const edge of plan.addRootEdges) {
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+    for (const edge of plan.markWorkspaceEdges) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+  }).graph
+}
+
+// === Planning ===============================================================
 
 function pnpmV5MemberManifests(manifests: Record<string, PnpmV5Manifest>): Map<string, PnpmV5MemberManifest> {
   const memberByName = new Map<string, PnpmV5MemberManifest>()
@@ -1534,4 +1470,73 @@ function resolveManifestTarget(
 
 function isWorkspaceProtocolRange(range: string): boolean {
   return range.startsWith('workspace:')
+}
+
+// === HELPERS ================================================================
+
+/**
+ * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5. Given
+ * `<version>[_<peer>@<v>…]`, peel `_<peerName>@<peerVersion>` segments
+ * from the tail while PEER_TAIL_RE matches; returns the bare version
+ * (unconsumed remainder) and peers in canonical order. Returns undefined
+ * for an empty input or fully-consumed remainder (no base version
+ * left).
+ *
+ * v5-scoped-peer-grammar edge per ADR-0022 stub: scoped peers containing
+ * underscores in path segments are theoretically ambiguous. PEER_TAIL_RE
+ * handles the common scoped-peer shape
+ * `@scope/name@version` correctly.
+ */
+export function peelPeerTail(input: string): { version: string; peers: PeerEntry[] } | undefined {
+  if (input.length === 0) return undefined
+  let rest = input
+  const peers: PeerEntry[] = []
+  while (rest.length > 0) {
+    const m = rest.match(PEER_TAIL_RE)
+    if (m === null) break
+    peers.unshift({ name: m[1]!, version: m[2]! })
+    rest = rest.slice(0, rest.length - m[0]!.length)
+  }
+  if (rest.length === 0) return undefined
+  return { version: rest, peers }
+}
+
+export function resolveDependencyTarget(
+  seenIds: Set<string>,
+  depName: string,
+  rawValue: string,
+): string | undefined {
+  const peeled = peelPeerTail(rawValue)
+  if (peeled === undefined) return undefined
+  const peerContext = peeled.peers.map(p => `${p.name}@${p.version}`).sort(cmpStr)
+  const candidate = serializeNodeId(depName, peeled.version, peerContext)
+  if (seenIds.has(candidate)) return candidate
+  const bare = `${depName}@${peeled.version}`
+  if (seenIds.has(bare)) return bare
+  return undefined
+}
+
+/** pnpm v5 npm-alias variant: rawValue carries `<target>@<version>` rather than a bare version. */
+export function resolveAliasedDependencyTarget(
+  seenIds: Set<string>,
+  rawValue: string,
+): string | undefined {
+  if (rawValue.indexOf('@', 1) <= 0) return undefined
+  // Split at last `@` to peel target name + version (peer-tail handled
+  // independently via peelPeerTail).
+  let lastAt = -1
+  for (let i = 1; i < rawValue.length; i++) {
+    if (rawValue[i] === '@' && (rawValue[i + 1] !== undefined && rawValue[i + 1] !== '(')) lastAt = i
+  }
+  if (lastAt <= 0) return undefined
+  const targetName = rawValue.slice(0, lastAt)
+  const rest = rawValue.slice(lastAt + 1)
+  const peeled = peelPeerTail(rest)
+  if (peeled === undefined) return undefined
+  const peerContext = peeled.peers.map(p => `${p.name}@${p.version}`).sort(cmpStr)
+  const candidate = serializeNodeId(targetName, peeled.version, peerContext)
+  if (seenIds.has(candidate)) return candidate
+  const bare = `${targetName}@${peeled.version}`
+  if (seenIds.has(bare)) return bare
+  return undefined
 }

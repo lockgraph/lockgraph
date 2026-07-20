@@ -89,29 +89,14 @@ import {
   type NpmSidecar,
 } from './_npm-flat-types.ts'
 
-// === API ===================================================================
+// === TYPES ==================================================================
 
-// Re-export shared types/utilities so adapter thin entries that import
-// from `_npm-core.ts` keep working without touching the types module
-// directly.
-export {
-  NPM_EDGE_RANGE_ATTR,
-  cmpStr,
-  edgeTripleKey,
-  sortRecord,
-  type NpmEntry,
-  type NpmFamilyConfig,
-  type NpmFamilyEnrichOptions,
-  type NpmFamilyOptimizeOptions,
-  type NpmFamilyParseOptions,
-  type NpmFamilyStringifyOptions,
-  type NpmFlatSidecar,
-  type NpmLockfile,
-  type NpmRootMeta,
-  type NpmSidecar,
-}
+export type PeerCandidateOutcome =
+  | { kind: 'single'; candidate: string }
+  | { kind: 'ambiguous'; candidates: string[] }
+  | { kind: 'unsatisfied' }
 
-// === SIDECAR ===============================================================
+// === SIDECAR ================================================================
 
 const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
 
@@ -119,8 +104,33 @@ export function hasAdapterState(graph: Graph): boolean {
   return sidecarByGraph.has(graph)
 }
 
-// === PARSE — HANDSHAKE =====================================================
+// === Access =================================================================
 
+export function getFlatSidecar(graph: Graph): NpmSidecar | undefined {
+  return sidecarByGraph.get(graph)
+}
+
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = pruneSidecar(sidecar, target)
+  sidecarByGraph.set(target, pruned)
+  const invalidated = [
+    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
+    ...[...sidecar.edgeRanges.keys()].filter(key => !pruned.edgeRanges.has(key)),
+    ...[...sidecar.workspaceByPath.entries()]
+      .filter(([path, id]) => pruned.workspaceByPath.get(path) !== id)
+      .map(([path]) => `workspace:${path}`),
+  ].sort()
+  return { graph: target, invalidated }
+}
+
+// === API ====================================================================
+
+/** Detects whether input belongs to the configured npm layout. */
 export function checkFamily(input: string, config: NpmFamilyConfig): boolean {
   const versionRe = new RegExp(`"lockfileVersion"\\s*:\\s*${config.lockfileVersion}\\b`)
   if (!versionRe.test(input)) return false
@@ -136,8 +146,7 @@ export function checkFamily(input: string, config: NpmFamilyConfig): boolean {
   }
 }
 
-// === PARSE — GRAPH CONSTRUCTION ===========================================
-
+/** Parses the configured npm layout while preserving adapter sidecar state. */
 export function parseFamily(
   input: string,
   _options: NpmFamilyParseOptions,
@@ -447,8 +456,7 @@ export function parseFamily(
   }
 }
 
-// === SERIALIZE =============================================================
-
+/** Serializes a graph through the configured npm layout. */
 export function stringifyFamily(
   graph: Graph,
   config: NpmFamilyConfig,
@@ -556,8 +564,7 @@ export function stringifyFamily(
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
-// === ENRICH ================================================================
-
+/** Enriches a graph with declared npm manifest data. */
 export function enrichFamily(
   graph: Graph,
   config: NpmFamilyConfig,
@@ -636,8 +643,7 @@ export function enrichFamily(
   return { graph: result.graph, diagnostics }
 }
 
-// === OPTIMIZE ==============================================================
-
+/** Optimizes a graph without changing its npm serialization contract. */
 export function optimizeFamily(
   graph: Graph,
   config: NpmFamilyConfig,
@@ -668,90 +674,21 @@ export function optimizeFamily(
   return result
 }
 
-// === HELPERS — PEER CANDIDATES ============================================
+// === PARSE ==================================================================
 
-export type PeerCandidateOutcome =
-  | { kind: 'single'; candidate: string }
-  | { kind: 'ambiguous'; candidates: string[] }
-  | { kind: 'unsatisfied' }
-
-export function derivePeerCandidates(graph: Graph, peerName: string, range: string): PeerCandidateOutcome {
-  const normalizedRange = semver.validRange(range)
-  const candidates = graph.byName(peerName)
-    .filter(candidateId => {
-      const candidate = graph.getNode(candidateId)
-      if (candidate === undefined) return false
-      if (normalizedRange === null) return true
-      if (semver.valid(candidate.version) === null) return false
-      return semver.satisfies(candidate.version, normalizedRange)
-    })
-    .slice()
-    .sort(cmpStr)
-
-  if (candidates.length === 1) return { kind: 'single', candidate: candidates[0]! }
-  if (candidates.length === 0) return { kind: 'unsatisfied' }
-  return { kind: 'ambiguous', candidates }
+export function nameFromInstallPath(config: NpmFamilyConfig, path: string, entry: NpmEntry): string {
+  if (entry.name !== undefined && entry.link !== true) {
+    return entry.name
+  }
+  const chain = ('/' + path).split('/node_modules/').filter(Boolean)
+  const tail = chain[chain.length - 1]
+  if (tail === undefined || tail === '') {
+    throw parseFailed(config, `cannot derive name from install path ${JSON.stringify(path)}`)
+  }
+  return tail
 }
 
-// === SIDECAR — PRUNING =====================================================
-
-export function pruneSidecar(sidecar: NpmSidecar, graph: Graph): NpmSidecar {
-  const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))
-  const nodes = new Map<string, NpmFlatSidecar>()
-  for (const [nodeId, sc] of sidecar.nodes) {
-    if (reachableIds.has(nodeId)) {
-      nodes.set(nodeId, sc)
-    }
-  }
-  const edgeRanges = new Map<string, string>()
-  const edgeDeclaredNames = new Map<string, string>()
-  for (const [edgeKey, range] of sidecar.edgeRanges) {
-    const [src, , dst] = edgeKey.split('|')
-    if (src !== undefined && dst !== undefined && reachableIds.has(src) && reachableIds.has(dst)) {
-      edgeRanges.set(edgeKey, range)
-      const declaredName = sidecar.edgeDeclaredNames.get(edgeKey)
-      if (declaredName !== undefined) edgeDeclaredNames.set(edgeKey, declaredName)
-    }
-  }
-  const workspaceByPath = new Map<string, string>()
-  for (const [path, nodeId] of sidecar.workspaceByPath) {
-    if (reachableIds.has(nodeId)) workspaceByPath.set(path, nodeId)
-  }
-  return {
-    rootId: sidecar.rootId !== undefined && reachableIds.has(sidecar.rootId) ? sidecar.rootId : undefined,
-    rootMeta: sidecar.rootMeta,
-    nodes,
-    edgeRanges,
-    edgeDeclaredNames,
-    workspaceByPath,
-  }
-}
-
-// === SIDECAR — ACCESS ======================================================
-
-export function getFlatSidecar(graph: Graph): NpmSidecar | undefined {
-  return sidecarByGraph.get(graph)
-}
-
-export function rebindAdapterState(
-  source: Graph,
-  target: Graph,
-): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
-  const sidecar = sidecarByGraph.get(source)
-  if (sidecar === undefined) return { graph: target, invalidated: [] }
-  const pruned = pruneSidecar(sidecar, target)
-  sidecarByGraph.set(target, pruned)
-  const invalidated = [
-    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
-    ...[...sidecar.edgeRanges.keys()].filter(key => !pruned.edgeRanges.has(key)),
-    ...[...sidecar.workspaceByPath.entries()]
-      .filter(([path, id]) => pruned.workspaceByPath.get(path) !== id)
-      .map(([path]) => `workspace:${path}`),
-  ].sort()
-  return { graph: target, invalidated }
-}
-
-// === HELPERS ===============================================================
+// === Handshake ==============================================================
 
 function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
   let parsed: unknown
@@ -773,17 +710,7 @@ function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
   return parsed as NpmLockfile
 }
 
-export function nameFromInstallPath(config: NpmFamilyConfig, path: string, entry: NpmEntry): string {
-  if (entry.name !== undefined && entry.link !== true) {
-    return entry.name
-  }
-  const chain = ('/' + path).split('/node_modules/').filter(Boolean)
-  const tail = chain[chain.length - 1]
-  if (tail === undefined || tail === '') {
-    throw parseFailed(config, `cannot derive name from install path ${JSON.stringify(path)}`)
-  }
-  return tail
-}
+// === Graph construction =====================================================
 
 function hasTarballPayload(entry: NpmEntry): boolean {
   return entry.integrity !== undefined
@@ -911,29 +838,108 @@ function addDepEdges(
   }
 }
 
-export function resolveDepTarget(srcPath: string, name: string, pathToId: Map<string, string>): string | undefined {
-  const candidates: string[] = []
+function parseFailed(config: NpmFamilyConfig, message: string): LockfileError {
+  return new LockfileError({
+    code: 'PARSE_FAILED',
+    message: `npm-${config.lockfileVersion}: ${message}`,
+  })
+}
 
-  candidates.push(srcPath === '' ? `node_modules/${name}` : `${srcPath}/node_modules/${name}`)
+// === SERIALIZE ==============================================================
 
-  let current = srcPath
-  while (current !== '') {
-    const idx = current.lastIndexOf('/node_modules/')
-    if (idx >= 0) {
-      current = current.slice(0, idx)
-    } else if (current.startsWith('node_modules/')) {
-      current = ''
-    } else {
-      current = ''
+export function fallbackInstallPathForNode(node: Node, pathToId: ReadonlyMap<string, string>): string {
+  const primary = `node_modules/${node.name}`
+  const occupant = pathToId.get(primary)
+  if (occupant === undefined || occupant === node.id) return primary
+
+  let ordinal = 1
+  while (true) {
+    const synthetic = `node_modules/.lockfile-${encodeURIComponent(node.name)}-${encodeURIComponent(node.version)}-${ordinal}/node_modules/${node.name}`
+    const existing = pathToId.get(synthetic)
+    if (existing === undefined || existing === node.id) return synthetic
+    ordinal++
+  }
+}
+
+export function buildSyntheticRootEntry(rootMeta: NpmRootMeta): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  if (rootMeta.name !== undefined) body.name = rootMeta.name
+  if (rootMeta.version !== undefined) body.version = rootMeta.version
+  if (rootMeta.workspaces !== undefined) body.workspaces = rootMeta.workspaces
+  if (rootMeta.bundleDependencies !== undefined) body.bundleDependencies = rootMeta.bundleDependencies
+  return body
+}
+
+export function collectManifestBlocks(
+  graph: Graph,
+  srcId: string,
+  sidecar: NpmSidecar | undefined,
+  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
+): {
+  dep: Record<string, string>
+  dev: Record<string, string>
+  peer: Record<string, string>
+  optional: Record<string, string>
+} {
+  const dep: Record<string, string> = {}
+  const dev: Record<string, string> = {}
+  const peer: Record<string, string> = {}
+  const optional: Record<string, string> = {}
+  for (const edge of graph.out(srcId)) {
+    const dst = graph.getNode(edge.dst)
+    if (dst === undefined) continue
+    const rawRange = edge.attrs?.[NPM_EDGE_RANGE_ATTR]
+    if (typeof rawRange !== 'string') continue
+    const target = edge.kind === 'dep' ? dep
+      : edge.kind === 'dev' ? dev
+      : edge.kind === 'peer' ? peer
+      : edge.kind === 'optional' ? optional
+      : undefined
+    if (target === undefined) continue
+    const edgeKey = edgeTripleKey(edge.src, edge.kind, edge.dst)
+    // EdgeAttrs.alias is the canonical source for the per-edge declared
+    // descriptor key — sidecar.edgeDeclaredNames is a legacy parse-side
+    // cache kept for the rare case where the edge lost its attrs through
+    // a cross-format detour. Prefer the attrs slot; fall back to sidecar;
+    // fall back to dst.name (canonical descriptor).
+    const declaredName = edge.attrs?.alias ?? sidecar?.edgeDeclaredNames.get(edgeKey) ?? dst.name
+
+    // ADR-0014 §4.F4 — workspace edges: npm lacks the `workspace:` protocol
+    // entirely (link entries carry workspace identity; the dep range itself
+    // is a concrete version). When the source carried a non-empty workspace
+    // specifier, fire RECIPE_WORKSPACE_RESOLVED; when no resolvedVersion is
+    // available, fire RECIPE_WORKSPACE_UNRESOLVED and drop the entry.
+    if (isWorkspaceEdge(edge)) {
+      const ws = workspaceRangeOfEdge(edge, dst)
+      if (ws !== undefined) {
+        const resolved = stringifyForVersionOnly(ws)
+        if (resolved === undefined) {
+          emitWorkspaceUnresolved(
+            { src: edge.src, dst: edge.dst, kind: edge.kind },
+            emitDiagnostic,
+          )
+          continue
+        }
+        if (shouldEmitWorkspaceResolved(ws)) {
+          emitWorkspaceResolved(
+            { src: edge.src, dst: edge.dst, kind: edge.kind },
+            ws.specifier,
+            resolved,
+            emitDiagnostic,
+          )
+        }
+        target[declaredName] = resolved
+        continue
+      }
     }
-    candidates.push(current === '' ? `node_modules/${name}` : `${current}/node_modules/${name}`)
+    target[declaredName] = rawRange
   }
-
-  for (const candidate of candidates) {
-    const id = pathToId.get(candidate)
-    if (id !== undefined) return id
+  return {
+    dep: sortRecord(dep),
+    dev: sortRecord(dev),
+    peer: sortRecord(peer),
+    optional: sortRecord(optional),
   }
-  return undefined
 }
 
 function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | undefined {
@@ -1110,20 +1116,6 @@ function compareEdgesForBfs(a: Edge, b: Edge): number {
   return cmpStr(a.dst, b.dst)
 }
 
-export function fallbackInstallPathForNode(node: Node, pathToId: ReadonlyMap<string, string>): string {
-  const primary = `node_modules/${node.name}`
-  const occupant = pathToId.get(primary)
-  if (occupant === undefined || occupant === node.id) return primary
-
-  let ordinal = 1
-  while (true) {
-    const synthetic = `node_modules/.lockfile-${encodeURIComponent(node.name)}-${encodeURIComponent(node.version)}-${ordinal}/node_modules/${node.name}`
-    const existing = pathToId.get(synthetic)
-    if (existing === undefined || existing === node.id) return synthetic
-    ordinal++
-  }
-}
-
 function buildRootEntry(
   graph: Graph,
   rootNode: Node,
@@ -1144,15 +1136,6 @@ function buildRootEntry(
   else if (rootMeta?.optionalDependencies !== undefined) body.optionalDependencies = sortRecord(rootMeta.optionalDependencies)
   if (rootMeta?.workspaces !== undefined) body.workspaces = rootMeta.workspaces
   if (rootMeta?.bundleDependencies !== undefined) body.bundleDependencies = rootMeta.bundleDependencies
-  return body
-}
-
-export function buildSyntheticRootEntry(rootMeta: NpmRootMeta): Record<string, unknown> {
-  const body: Record<string, unknown> = {}
-  if (rootMeta.name !== undefined) body.name = rootMeta.name
-  if (rootMeta.version !== undefined) body.version = rootMeta.version
-  if (rootMeta.workspaces !== undefined) body.workspaces = rootMeta.workspaces
-  if (rootMeta.bundleDependencies !== undefined) body.bundleDependencies = rootMeta.bundleDependencies
   return body
 }
 
@@ -1256,78 +1239,6 @@ function installPathTail(path: string): string {
   return chain[chain.length - 1] ?? path
 }
 
-export function collectManifestBlocks(
-  graph: Graph,
-  srcId: string,
-  sidecar: NpmSidecar | undefined,
-  emitDiagnostic: (d: Diagnostic) => void = () => undefined,
-): {
-  dep: Record<string, string>
-  dev: Record<string, string>
-  peer: Record<string, string>
-  optional: Record<string, string>
-} {
-  const dep: Record<string, string> = {}
-  const dev: Record<string, string> = {}
-  const peer: Record<string, string> = {}
-  const optional: Record<string, string> = {}
-  for (const edge of graph.out(srcId)) {
-    const dst = graph.getNode(edge.dst)
-    if (dst === undefined) continue
-    const rawRange = edge.attrs?.[NPM_EDGE_RANGE_ATTR]
-    if (typeof rawRange !== 'string') continue
-    const target = edge.kind === 'dep' ? dep
-      : edge.kind === 'dev' ? dev
-      : edge.kind === 'peer' ? peer
-      : edge.kind === 'optional' ? optional
-      : undefined
-    if (target === undefined) continue
-    const edgeKey = edgeTripleKey(edge.src, edge.kind, edge.dst)
-    // EdgeAttrs.alias is the canonical source for the per-edge declared
-    // descriptor key — sidecar.edgeDeclaredNames is a legacy parse-side
-    // cache kept for the rare case where the edge lost its attrs through
-    // a cross-format detour. Prefer the attrs slot; fall back to sidecar;
-    // fall back to dst.name (canonical descriptor).
-    const declaredName = edge.attrs?.alias ?? sidecar?.edgeDeclaredNames.get(edgeKey) ?? dst.name
-
-    // ADR-0014 §4.F4 — workspace edges: npm lacks the `workspace:` protocol
-    // entirely (link entries carry workspace identity; the dep range itself
-    // is a concrete version). When the source carried a non-empty workspace
-    // specifier, fire RECIPE_WORKSPACE_RESOLVED; when no resolvedVersion is
-    // available, fire RECIPE_WORKSPACE_UNRESOLVED and drop the entry.
-    if (isWorkspaceEdge(edge)) {
-      const ws = workspaceRangeOfEdge(edge, dst)
-      if (ws !== undefined) {
-        const resolved = stringifyForVersionOnly(ws)
-        if (resolved === undefined) {
-          emitWorkspaceUnresolved(
-            { src: edge.src, dst: edge.dst, kind: edge.kind },
-            emitDiagnostic,
-          )
-          continue
-        }
-        if (shouldEmitWorkspaceResolved(ws)) {
-          emitWorkspaceResolved(
-            { src: edge.src, dst: edge.dst, kind: edge.kind },
-            ws.specifier,
-            resolved,
-            emitDiagnostic,
-          )
-        }
-        target[declaredName] = resolved
-        continue
-      }
-    }
-    target[declaredName] = rawRange
-  }
-  return {
-    dep: sortRecord(dep),
-    dev: sortRecord(dev),
-    peer: sortRecord(peer),
-    optional: sortRecord(optional),
-  }
-}
-
 function reportPeerContextFlatten(
   config: NpmFamilyConfig,
   node: Node,
@@ -1360,9 +1271,107 @@ function reportPatchDrop(
   )
 }
 
-function parseFailed(config: NpmFamilyConfig, message: string): LockfileError {
-  return new LockfileError({
-    code: 'PARSE_FAILED',
-    message: `npm-${config.lockfileVersion}: ${message}`,
-  })
+// === ENRICH =================================================================
+
+// === Peer candidates ========================================================
+
+export function derivePeerCandidates(graph: Graph, peerName: string, range: string): PeerCandidateOutcome {
+  const normalizedRange = semver.validRange(range)
+  const candidates = graph.byName(peerName)
+    .filter(candidateId => {
+      const candidate = graph.getNode(candidateId)
+      if (candidate === undefined) return false
+      if (normalizedRange === null) return true
+      if (semver.valid(candidate.version) === null) return false
+      return semver.satisfies(candidate.version, normalizedRange)
+    })
+    .slice()
+    .sort(cmpStr)
+
+  if (candidates.length === 1) return { kind: 'single', candidate: candidates[0]! }
+  if (candidates.length === 0) return { kind: 'unsatisfied' }
+  return { kind: 'ambiguous', candidates }
+}
+
+// === OPTIMIZE ===============================================================
+
+// === Pruning ================================================================
+
+export function pruneSidecar(sidecar: NpmSidecar, graph: Graph): NpmSidecar {
+  const reachableIds = new Set(Array.from(graph.nodes(), node => node.id))
+  const nodes = new Map<string, NpmFlatSidecar>()
+  for (const [nodeId, sc] of sidecar.nodes) {
+    if (reachableIds.has(nodeId)) {
+      nodes.set(nodeId, sc)
+    }
+  }
+  const edgeRanges = new Map<string, string>()
+  const edgeDeclaredNames = new Map<string, string>()
+  for (const [edgeKey, range] of sidecar.edgeRanges) {
+    const [src, , dst] = edgeKey.split('|')
+    if (src !== undefined && dst !== undefined && reachableIds.has(src) && reachableIds.has(dst)) {
+      edgeRanges.set(edgeKey, range)
+      const declaredName = sidecar.edgeDeclaredNames.get(edgeKey)
+      if (declaredName !== undefined) edgeDeclaredNames.set(edgeKey, declaredName)
+    }
+  }
+  const workspaceByPath = new Map<string, string>()
+  for (const [path, nodeId] of sidecar.workspaceByPath) {
+    if (reachableIds.has(nodeId)) workspaceByPath.set(path, nodeId)
+  }
+  return {
+    rootId: sidecar.rootId !== undefined && reachableIds.has(sidecar.rootId) ? sidecar.rootId : undefined,
+    rootMeta: sidecar.rootMeta,
+    nodes,
+    edgeRanges,
+    edgeDeclaredNames,
+    workspaceByPath,
+  }
+}
+
+// === HELPERS ================================================================
+
+// Re-export shared types/utilities so adapter thin entries that import
+// from `_npm-core.ts` keep working without touching the types module
+// directly.
+export {
+  NPM_EDGE_RANGE_ATTR,
+  cmpStr,
+  edgeTripleKey,
+  sortRecord,
+  type NpmEntry,
+  type NpmFamilyConfig,
+  type NpmFamilyEnrichOptions,
+  type NpmFamilyOptimizeOptions,
+  type NpmFamilyParseOptions,
+  type NpmFamilyStringifyOptions,
+  type NpmFlatSidecar,
+  type NpmLockfile,
+  type NpmRootMeta,
+  type NpmSidecar,
+}
+
+export function resolveDepTarget(srcPath: string, name: string, pathToId: Map<string, string>): string | undefined {
+  const candidates: string[] = []
+
+  candidates.push(srcPath === '' ? `node_modules/${name}` : `${srcPath}/node_modules/${name}`)
+
+  let current = srcPath
+  while (current !== '') {
+    const idx = current.lastIndexOf('/node_modules/')
+    if (idx >= 0) {
+      current = current.slice(0, idx)
+    } else if (current.startsWith('node_modules/')) {
+      current = ''
+    } else {
+      current = ''
+    }
+    candidates.push(current === '' ? `node_modules/${name}` : `${current}/node_modules/${name}`)
+  }
+
+  for (const candidate of candidates) {
+    const id = pathToId.get(candidate)
+    if (id !== undefined) return id
+  }
+  return undefined
 }

@@ -97,9 +97,11 @@ import type { Hash, HashOrigin, Integrity } from '../recipe/integrity.ts'
 import type { ResolutionCanonical } from '../recipe/resolution.ts'
 import { LockfileError } from '../api/errors.ts'
 
-export const version = '0.0.0'
+// === CONSTANTS ==============================================================
 
 // === Format constants =======================================================
+
+export const version = '0.0.0'
 
 /** The format generation written in the magic line `@lockgraph <GENERATION>`.
  *  In preview it is a detection discriminant, NOT a stability contract. */
@@ -203,6 +205,18 @@ const MARKER_TO_ORIGIN: Record<string, HashOrigin> = nullProtoMap<HashOrigin>({
 // === Determinism helpers ====================================================
 
 const cmpStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+const SHA1_HEX_RE = /^[0-9a-f]{40}$/
+const FUNDING_INDEX_RE = /^\d+$/
+const ARRAY_SLOT_ROOTS: Record<string, keyof TarballPayload> = {
+  cpu: 'cpu', os: 'os', libc: 'libc', bundled: 'bundledDependencies',
+}
+const STRING_ARRAY_SLOT_FIELDS: Array<[keyof TarballPayload, string]> = [
+  ['cpu', 'cpu'],
+  ['os', 'os'],
+  ['libc', 'libc'],
+  ['bundledDependencies', 'bundled'],
+]
 
 // Canonical JSON: object keys recursively sorted (ascending UTF-16 code-unit
 // order, JavaScript's default `Array.prototype.sort` string order) so
@@ -310,9 +324,7 @@ function parseNodeIndex(raw: string, nodeCount: number, where: string): number {
   return n
 }
 
-// =====================================================================================
-// SERIALIZE
-// =====================================================================================
+// === SERIALIZE ==============================================================
 
 export interface LockgraphStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -456,9 +468,7 @@ function stringifyMetadata(options: LockgraphStringifyOptions): string[] {
   ]
 }
 
-// =====================================================================================
-// PARSE
-// =====================================================================================
+// === PARSE ==================================================================
 
 export interface LockgraphParseOptions {
   onDiagnostic?: (d: Diagnostic) => void
@@ -810,9 +820,7 @@ function assemblePayload(
   return p as TarballPayload
 }
 
-// =====================================================================================
-// CHECK / detect discriminant
-// =====================================================================================
+// === Check / detect discriminant ============================================
 
 /** True iff `input` is a lockgraph document — the `@lockgraph` magic is the
  *  first token of the document (a leading UTF-8 BOM is tolerated). Cheap,
@@ -823,9 +831,7 @@ export function check(input: string): boolean {
   return text.startsWith(MAGIC + ' ') || text.startsWith(MAGIC + '\n') || text.startsWith(MAGIC + '\r')
 }
 
-// =====================================================================================
-// Internal helpers
-// =====================================================================================
+// === Internal helpers =======================================================
 
 // Mirrors graph.ts `tarballKeyInputsOfNode` — capture EVERY slot carrier on the
 // node so the re-derived TarballKey is byte-exact. ADR-0032 added `source` (the
@@ -926,8 +932,6 @@ export function parsePeerContext(s: string): NodeId[] {
 // BYTE-EXACT to the stored value; any mismatch (git, codeload, jsr, aliased,
 // url-encoded, re-pathed, …) keeps the verbatim encoding, so fidelity is never
 // at risk.
-
-const SHA1_HEX_RE = /^[0-9a-f]{40}$/
 
 // Resolve the `nativeResolution` carrier of an assembled payload: recompose the
 // canonical-URL native from the N-row integrity `fragment` when present. A plain
@@ -1255,7 +1259,6 @@ function rebuildStringArray(entries: Array<{ index: number; value: string }>, ro
 // A bare `funding=<v>` (no sub-segment) is the scalar string form.
 type FundingNode = string | FundingNode[] | { [k: string]: FundingNode }
 interface FundingRoot { container?: FundingNode }
-const FUNDING_INDEX_RE = /^\d+$/
 
 function rebuildFunding(slots: DecodedSlot[], tarballKey: TarballKey): unknown {
   // bare scalar: a single slot whose path is exactly ['funding'].
@@ -1366,10 +1369,6 @@ function groupDecodedSlots(fields: string[], tarballKey: TarballKey): Map<string
     else g.push(slot)
   }
   return groups
-}
-
-const ARRAY_SLOT_ROOTS: Record<string, keyof TarballPayload> = {
-  cpu: 'cpu', os: 'os', libc: 'libc', bundled: 'bundledDependencies',
 }
 
 function applyDecodedSlotGroup(
@@ -1577,13 +1576,6 @@ function appendScalarSlots(payload: TarballPayload, out: string[]): void {
   if (payload.license !== undefined) out.push(emitSlot(['license'], payload.license))
   if (payload.deprecated !== undefined) out.push(emitSlot(['deprecated'], payload.deprecated))
 }
-
-const STRING_ARRAY_SLOT_FIELDS: Array<[keyof TarballPayload, string]> = [
-  ['cpu', 'cpu'],
-  ['os', 'os'],
-  ['libc', 'libc'],
-  ['bundledDependencies', 'bundled'],
-]
 
 function appendStringArraySlots(payload: TarballPayload, out: string[]): void {
   for (const [field, root] of STRING_ARRAY_SLOT_FIELDS) {

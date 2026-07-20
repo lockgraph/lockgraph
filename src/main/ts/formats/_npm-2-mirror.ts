@@ -39,7 +39,6 @@ import {
   stripRegistrySha1Fragment,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
-
 import {
   NPM_EDGE_RANGE_ATTR,
   cmpStr,
@@ -52,7 +51,12 @@ import {
   type NpmSidecar,
 } from './_npm-flat-types.ts'
 
-// === SIDECAR ================================================================
+// === CONSTANTS ==============================================================
+
+// The npm-2 hooks share one parse capture until the family parse call returns.
+let currentParseCapture: Map<string, string> | undefined
+
+// === TYPES ==================================================================
 
 // npm-2-only composed sidecar — recovered `resolved` URLs per NodeId,
 // keyed for emit-time mirror reconstruction. Absent on npm-3.
@@ -60,13 +64,20 @@ export interface Npm2MirrorSidecar {
   resolvedByNodeId: Map<string, string>
 }
 
+interface LegacyMirrorContext {
+  graph: Graph
+  sidecar: NpmSidecar | undefined
+  rootId: string | undefined
+  // workspacePath -> NodeId for recognized workspace-symlink install paths.
+  workspacePathToId: Map<string, string>
+  // NodeId -> workspacePath for the reverse lookup.
+  workspacePathById: Map<string, string>
+}
+
+// === SIDECAR ================================================================
+
 // Per-graph mirror sidecar storage, independent of the core flat sidecar.
 const mirrorSidecarByGraph = new WeakMap<Graph, Npm2MirrorSidecar>()
-
-// In-flight `resolved` capture for the currently-parsing lockfile.
-// Populated by `captureEntry` and committed to the WeakMap in
-// `afterParse`. Keyed by NodeId (srcId).
-let currentParseCapture: Map<string, string> | undefined
 
 export function getMirrorSidecar(graph: Graph): Npm2MirrorSidecar | undefined {
   return mirrorSidecarByGraph.get(graph)
@@ -74,6 +85,20 @@ export function getMirrorSidecar(graph: Graph): Npm2MirrorSidecar | undefined {
 
 export function setMirrorSidecar(graph: Graph, sidecar: Npm2MirrorSidecar): void {
   mirrorSidecarByGraph.set(graph, sidecar)
+}
+
+export function rebindNpm2MirrorState(
+  source: Graph,
+  target: Graph,
+): readonly string[] {
+  const sidecar = mirrorSidecarByGraph.get(source)
+  if (sidecar === undefined) return []
+  const invalidated = [...sidecar.resolvedByNodeId.keys()]
+    .filter(id => target.getNode(id) === undefined)
+    .sort()
+  NPM2_HOOKS.rebindGraph?.(source, target)
+  NPM2_HOOKS.pruneToNodes?.(target, new Set([...target.nodes()].map(node => node.id)))
+  return invalidated
 }
 
 // === API ====================================================================
@@ -150,21 +175,9 @@ export const NPM2_HOOKS: NpmFamilyHooks = {
   },
 }
 
-export function rebindNpm2MirrorState(
-  source: Graph,
-  target: Graph,
-): readonly string[] {
-  const sidecar = mirrorSidecarByGraph.get(source)
-  if (sidecar === undefined) return []
-  const invalidated = [...sidecar.resolvedByNodeId.keys()]
-    .filter(id => target.getNode(id) === undefined)
-    .sort()
-  NPM2_HOOKS.rebindGraph?.(source, target)
-  NPM2_HOOKS.pruneToNodes?.(target, new Set([...target.nodes()].map(node => node.id)))
-  return invalidated
-}
+// === PARSE ==================================================================
 
-// === PARSE — DUAL-MODE DRIFT ================================================
+// === Dual-mode drift ========================================================
 
 // Detect mismatches between `packages` and the legacy `dependencies` mirror
 // for npm-2 dual-mode reconciliation. Returns the set of mirror entry names
@@ -212,17 +225,9 @@ export function detectDualModeDrift(
   return Array.from(drift).sort(cmpStr)
 }
 
-// === SERIALIZE — LEGACY MIRROR ==============================================
+// === SERIALIZE ==============================================================
 
-interface LegacyMirrorContext {
-  graph: Graph
-  sidecar: NpmSidecar | undefined
-  rootId: string | undefined
-  // workspacePath -> NodeId for recognized workspace-symlink install paths.
-  workspacePathToId: Map<string, string>
-  // NodeId -> workspacePath for the reverse lookup.
-  workspacePathById: Map<string, string>
-}
+// === Legacy mirror ==========================================================
 
 export function buildLegacyDependenciesMirror(
   graph: Graph,

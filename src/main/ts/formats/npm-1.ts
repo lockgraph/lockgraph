@@ -74,6 +74,7 @@ import {
 // === TYPES ==================================================================
 
 export interface Npm1ParseOptions {}
+
 export interface Npm1StringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
@@ -94,7 +95,7 @@ export interface Npm1EnrichOptions {
 
 export interface Npm1OptimizeOptions {}
 
-// === TYPES — ON-DISK SCHEMA =================================================
+// === On-disk schema =========================================================
 
 interface Npm1Entry {
   version?: string
@@ -119,109 +120,6 @@ interface Npm1Lockfile {
   dependencies?: Record<string, Npm1Entry>
   packages?: unknown
 }
-
-// === SIDECAR ================================================================
-
-const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
-
-export function hasAdapterState(graph: Graph): boolean {
-  return sidecarByGraph.has(graph)
-}
-
-function rememberSidecar(graph: Graph, sidecar: NpmSidecar): void {
-  sidecarByGraph.set(graph, sidecar)
-}
-
-export function rebindAdapterState(
-  source: Graph,
-  target: Graph,
-): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
-  const sidecar = sidecarByGraph.get(source)
-  if (sidecar === undefined) return { graph: target, invalidated: [] }
-  const pruned = pruneSidecar(sidecar, target)
-  rememberSidecar(target, pruned)
-  const invalidated = [
-    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
-    ...[...sidecar.edgeRanges.keys()].filter(key => !pruned.edgeRanges.has(key)),
-  ].sort()
-  return { graph: target, invalidated }
-}
-
-// === PARSE ==================================================================
-
-export function check(input: string): boolean {
-  // The numeric version literal is the primary discriminator; an empty lock
-  // may omit `dependencies`.
-  if (!/"lockfileVersion"\s*:\s*1\b/.test(input)) return false
-  // Reject inputs carrying a flat `packages` map (npm-2/npm-3 shape).
-  if (/"packages"\s*:\s*\{/.test(input)) return false
-  return true
-}
-
-export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
-  const lf = parseJson(input)
-  assertNpm1Shape(lf)
-  const context = createNpm1ParseContext(lf)
-  addNpm1TreeNodes(context, { deps: lf.dependencies, parentPath: '', inheritedDev: false, inheritedOptional: false })
-  addNpm1RootEdges(context)
-  normalizeNpm1InstallPaths(context)
-  return sealNpm1Parse(context)
-}
-
-// === SERIALIZE ==============================================================
-
-export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): string {
-  const context = createNpm1StringifyContext(graph, options)
-  collectNpm1EmittableNodes(context)
-  reportNpm1PeerEdgeDrops(context)
-  const out = buildNpm1Output(context)
-  return renderNpm1Output(out, options)
-}
-
-// === ENRICH =================================================================
-
-export function enrich(
-  graph: Graph,
-  options: Npm1EnrichOptions = {},
-): { graph: Graph; diagnostics: Diagnostic[] } {
-  const sidecar = sidecarByGraph.get(graph)
-  const diagnostics = collectNpm1PeerDiagnostics(graph, sidecar)
-  if (options.manifests === undefined) {
-    reportNpm1MissingManifests(graph, diagnostics)
-    return { graph, diagnostics }
-  }
-  const plan = planManifestEnrich(graph, sidecar, options.manifests)
-  if (isNpm1EnrichPlanEmpty(plan)) return { graph, diagnostics }
-  return applyNpm1EnrichPlan(graph, sidecar, plan, diagnostics)
-}
-
-// === OPTIMIZE ===============================================================
-
-export function optimize(
-  graph: Graph,
-  _options: Npm1OptimizeOptions = {},
-): { graph: Graph; diagnostics: Diagnostic[] } {
-  const sidecar = sidecarByGraph.get(graph)
-  const result = optimizeUnreachable(graph, {
-    seeds: Array.from(graph.roots()),
-    compare: cmpStr,
-    edgeSeparator: ' ',
-    tarballInputs: node => ({
-      name: node.name,
-      version: node.version,
-      patch: node.patch,
-      source: node.source,
-    }),
-    skipMissingTarballs: false,
-  })
-
-  if (result.graph !== graph && sidecar !== undefined) {
-    rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
-  }
-  return result
-}
-
-// === HELPERS — PHASES =======================================================
 
 interface Npm1ParseContext {
   readonly lf: Npm1Lockfile
@@ -263,6 +161,128 @@ interface Npm1StringifyContext {
   readonly rootName: string
   readonly rootVersion: string
 }
+
+// Reconstruct the nested-tree shape for emit. Strategy (mining legacy
+// `preformat`): walk BFS from the root, hoist each transitive in the
+// shallowest level that does not introduce a version conflict with an
+// already-hoisted sibling. Conflicts fall to nested `<parent>.dependencies`.
+//
+// Sidecar installPaths are an authoritative hint: if the parse-time tree
+// placed a node at a specific path, mirror that placement (this preserves
+// the `parse → stringify → parse` invariant for fixture inputs). Mutator-
+// added nodes have no install path; they get hoisted to the root level
+// unless that introduces a conflict.
+type PlacementQueueItem = { id: string; parentPath: string }
+
+interface EnrichPlan {
+  rootNodeReplacement: Node | undefined
+  addMemberNodes: Node[]
+  memberNodeReplacements: Node[]
+  addRootEdges: Edge[]
+  removeRootEdges: Edge[]
+  markWorkspaceEdges: Edge[]
+}
+
+type Npm1MemberManifest = { path: string; manifest: Npm1Manifest }
+
+// === SIDECAR ================================================================
+
+const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
+
+export function hasAdapterState(graph: Graph): boolean {
+  return sidecarByGraph.has(graph)
+}
+
+function rememberSidecar(graph: Graph, sidecar: NpmSidecar): void {
+  sidecarByGraph.set(graph, sidecar)
+}
+
+export function rebindAdapterState(
+  source: Graph,
+  target: Graph,
+): Readonly<{ graph: Graph; invalidated: readonly string[] }> {
+  const sidecar = sidecarByGraph.get(source)
+  if (sidecar === undefined) return { graph: target, invalidated: [] }
+  const pruned = pruneSidecar(sidecar, target)
+  rememberSidecar(target, pruned)
+  const invalidated = [
+    ...[...sidecar.nodes.keys()].filter(id => !pruned.nodes.has(id)),
+    ...[...sidecar.edgeRanges.keys()].filter(key => !pruned.edgeRanges.has(key)),
+  ].sort()
+  return { graph: target, invalidated }
+}
+
+// === API ====================================================================
+
+export function check(input: string): boolean {
+  // The numeric version literal is the primary discriminator; an empty lock
+  // may omit `dependencies`.
+  if (!/"lockfileVersion"\s*:\s*1\b/.test(input)) return false
+  // Reject inputs carrying a flat `packages` map (npm-2/npm-3 shape).
+  if (/"packages"\s*:\s*\{/.test(input)) return false
+  return true
+}
+
+export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
+  const lf = parseJson(input)
+  assertNpm1Shape(lf)
+  const context = createNpm1ParseContext(lf)
+  addNpm1TreeNodes(context, { deps: lf.dependencies, parentPath: '', inheritedDev: false, inheritedOptional: false })
+  addNpm1RootEdges(context)
+  normalizeNpm1InstallPaths(context)
+  return sealNpm1Parse(context)
+}
+
+export function stringify(graph: Graph, options: Npm1StringifyOptions = {}): string {
+  const context = createNpm1StringifyContext(graph, options)
+  collectNpm1EmittableNodes(context)
+  reportNpm1PeerEdgeDrops(context)
+  const out = buildNpm1Output(context)
+  return renderNpm1Output(out, options)
+}
+
+export function enrich(
+  graph: Graph,
+  options: Npm1EnrichOptions = {},
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  const sidecar = sidecarByGraph.get(graph)
+  const diagnostics = collectNpm1PeerDiagnostics(graph, sidecar)
+  if (options.manifests === undefined) {
+    reportNpm1MissingManifests(graph, diagnostics)
+    return { graph, diagnostics }
+  }
+  const plan = planManifestEnrich(graph, sidecar, options.manifests)
+  if (isNpm1EnrichPlanEmpty(plan)) return { graph, diagnostics }
+  return applyNpm1EnrichPlan(graph, sidecar, plan, diagnostics)
+}
+
+export function optimize(
+  graph: Graph,
+  _options: Npm1OptimizeOptions = {},
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  const sidecar = sidecarByGraph.get(graph)
+  const result = optimizeUnreachable(graph, {
+    seeds: Array.from(graph.roots()),
+    compare: cmpStr,
+    edgeSeparator: ' ',
+    tarballInputs: node => ({
+      name: node.name,
+      version: node.version,
+      patch: node.patch,
+      source: node.source,
+    }),
+    skipMissingTarballs: false,
+  })
+
+  if (result.graph !== graph && sidecar !== undefined) {
+    rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
+  }
+  return result
+}
+
+// === PARSE ==================================================================
+
+// === Parse helpers ==========================================================
 
 function assertNpm1Shape(lf: Npm1Lockfile): void {
   if (lf.lockfileVersion !== 1) {
@@ -516,6 +536,149 @@ function sealNpm1Parse(context: Npm1ParseContext): Graph {
   }
 }
 
+function parseJson(input: string): Npm1Lockfile {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(input)
+  } catch (error) {
+    throw new LockfileError({
+      code: 'FORMAT_MISMATCH',
+      message: `npm-1 adapter: input is not valid JSON: ${(error as Error).message}`,
+      cause: error,
+    })
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new LockfileError({
+      code: 'FORMAT_MISMATCH',
+      message: 'npm-1 adapter: top-level value must be a JSON object',
+    })
+  }
+  return parsed as Npm1Lockfile
+}
+
+function ensureSidecar(map: Map<string, NpmFlatSidecar>, id: string): NpmFlatSidecar {
+  let sc = map.get(id)
+  if (sc === undefined) {
+    sc = { installPaths: [] }
+    map.set(id, sc)
+  }
+  return sc
+}
+
+function collectRequires(entry: Npm1Entry): Record<string, string> | undefined {
+  if (entry.requires !== undefined) return entry.requires
+  // Fall back: legacy npm v5 fixtures sometimes encode declared deps via
+  // the nested `dependencies` block alone (with version pin as range).
+  if (entry.dependencies !== undefined) {
+    const out: Record<string, string> = {}
+    for (const [name, child] of Object.entries(entry.dependencies)) {
+      if (child !== null && typeof child === 'object' && typeof child.version === 'string') {
+        out[name] = child.version
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined
+  }
+  return undefined
+}
+
+function isUrlLikeVersion(version: string): boolean {
+  return version.startsWith('git+')
+    || version.startsWith('git:')
+    || version.startsWith('http://')
+    || version.startsWith('https://')
+    || version.startsWith('github:')
+    || version.startsWith('file:')
+}
+
+// Resolve a `requires` target to the closest hoisted parent. The
+// resolution chain mirrors npm v6's `findDependency`: try current scope
+// first, then walk ancestor scopes outward. Returns the matched NodeId
+// or undefined.
+function resolveTreeTarget(
+  name: string,
+  _installPath: string,
+  currentDeps: Record<string, Npm1Entry>,
+  parentScopes: Array<Record<string, Npm1Entry>>,
+): string | undefined {
+  if (currentDeps[name] !== undefined && typeof currentDeps[name].version === 'string') {
+    return `${name}@${currentDeps[name].version}`
+  }
+  for (let i = parentScopes.length - 1; i >= 0; i--) {
+    const scope = parentScopes[i]
+    if (scope === undefined) continue
+    const entry = scope[name]
+    if (entry !== undefined && typeof entry.version === 'string') {
+      return `${name}@${entry.version}`
+    }
+  }
+  return undefined
+}
+
+// === SERIALIZE ==============================================================
+
+export function buildDependenciesTree(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  rootId: string,
+  emittableIds: ReadonlySet<string>,
+): Record<string, Npm1Entry> | undefined {
+  // First, plan placements. `placements: Map<NodeId, parentPath>`. The empty
+  // string parentPath means top-level. Placement comes from either the sidecar
+  // installPaths (parse-time hint) or the BFS-with-conflict-resolution
+  // fallback (mutator state).
+  const placements = new Map<string, Set<string>>()
+  const hoistedByName = new Map<string, string>() // top-level name -> NodeId
+
+  replayNpm1InstallPaths(graph, sidecar, emittableIds, placements, hoistedByName)
+  placeReachableNpm1Nodes(graph, sidecar, rootId, emittableIds, placements, hoistedByName)
+  placeOrphanNpm1Nodes(emittableIds, placements)
+  const treeByParent = npm1TreeByParent(graph, placements)
+
+  const top = treeByParent.get('')
+  if (top === undefined || top.size === 0) {
+    // Root may also have no out-edges (workspaces-only graph); return empty.
+    if (emittableIds.size === 0) return undefined
+    return {}
+  }
+
+  return buildLayer(top, '', graph, sidecar, treeByParent)
+}
+
+export function parentPathFromInstall(installPath: string): string | undefined {
+  // Strip the trailing `/node_modules/<name>` segment.
+  const idx = installPath.lastIndexOf('/node_modules/')
+  if (idx < 0) {
+    // Top-level — `node_modules/<name>` becomes parent = ''.
+    if (installPath.startsWith('node_modules/')) return ''
+    return undefined
+  }
+  return installPath.slice(0, idx)
+}
+
+export function firstConsumerInstallPath(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  id: string,
+  emittableIds: ReadonlySet<string>,
+): string | undefined {
+  // Find an incoming edge from an emittable consumer; return that consumer's
+  // first install path + `/node_modules/<name>`. Used when a node conflicts
+  // at root and needs to be placed inside its consumer's nested tree.
+  const node = graph.getNode(id)
+  if (node === undefined) return undefined
+  for (const incoming of graph.in(id)) {
+    if (incoming.kind === 'peer') continue
+    if (!emittableIds.has(incoming.src)) continue
+    const consumer = graph.getNode(incoming.src)
+    if (consumer === undefined) continue
+    if (consumer.workspacePath === '') continue // root — already handled
+    const consumerPaths = sidecar?.nodes.get(consumer.id)?.installPaths ?? []
+    if (consumerPaths.length === 0) continue
+    return `${consumerPaths[0]}/node_modules/${node.name}`
+  }
+  return undefined
+}
+
 function createNpm1StringifyContext(
   graph: Graph,
   options: Npm1StringifyOptions,
@@ -615,160 +778,8 @@ function renderNpm1Output(out: Record<string, unknown>, options: Npm1StringifyOp
   return options.lineEnding === 'crlf' ? text.replace(/\n/g, '\r\n') : text
 }
 
-function collectNpm1PeerDiagnostics(
-  graph: Graph,
-  sidecar: NpmSidecar | undefined,
-): Diagnostic[] {
-  const diagnostics: Diagnostic[] = []
-  for (const node of graph.nodes()) {
-    const rawPeers = sidecar?.nodes.get(node.id)?.peerDependencies
-    if (rawPeers === undefined) continue
-    for (const [peerName, range] of Object.entries(rawPeers).sort((a, b) => cmpStr(a[0], b[0]))) {
-      const outcome = derivePeerCandidates(graph, peerName, range)
-      if (outcome.kind === 'single') continue
-      diagnostics.push(outcome.kind === 'unsatisfied'
-        ? {
-            code: 'NPM_V1_PEER_UNSATISFIED',
-            severity: 'warning',
-            subject: node.id,
-            message: `peer "${peerName}" range "${range}" matches no installed version`,
-          }
-        : {
-            code: 'NPM_V1_PEER_AMBIGUOUS',
-            severity: 'warning',
-            subject: node.id,
-            message: `peer "${peerName}" range "${range}" matches multiple candidates: ${outcome.candidates.join(', ')}`,
-          })
-    }
-  }
-  return diagnostics
-}
-
-function reportNpm1MissingManifests(graph: Graph, diagnostics: Diagnostic[]): void {
-  const hasWorkspaceHint = Array.from(graph.nodes())
-    .some(node => node.workspacePath !== undefined && node.workspacePath !== '')
-  if (!hasWorkspaceHint) return
-  diagnostics.push({
-    code: 'NPM_V1_NO_MANIFESTS',
-    severity: 'warning',
-    message: 'workspace concretisation requires manifests; leaving npm-1 graph unclassified',
-  })
-}
-
-function isNpm1EnrichPlanEmpty(plan: EnrichPlan): boolean {
-  return plan.rootNodeReplacement === undefined
-    && plan.addRootEdges.length === 0
-    && plan.removeRootEdges.length === 0
-    && plan.markWorkspaceEdges.length === 0
-    && plan.memberNodeReplacements.length === 0
-    && plan.addMemberNodes.length === 0
-}
-
-function applyNpm1EnrichPlan(
-  graph: Graph,
-  sidecar: NpmSidecar | undefined,
-  plan: EnrichPlan,
-  diagnostics: Diagnostic[],
-): { graph: Graph; diagnostics: Diagnostic[] } {
-  const result = graph.mutate(m => {
-    if (plan.rootNodeReplacement !== undefined) {
-      m.replaceNode(plan.rootNodeReplacement.id, plan.rootNodeReplacement)
-    }
-    for (const node of plan.addMemberNodes) m.addNode(node)
-    for (const replacement of plan.memberNodeReplacements) {
-      m.replaceNode(replacement.id, replacement)
-    }
-    for (const edge of plan.removeRootEdges) m.removeEdge(edge.src, edge.dst, edge.kind)
-    for (const edge of plan.addRootEdges) m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
-    for (const edge of plan.markWorkspaceEdges) {
-      m.removeEdge(edge.src, edge.dst, edge.kind)
-      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
-    }
-  })
-  if (sidecar !== undefined) rememberSidecar(result.graph, sidecar)
-  return { graph: result.graph, diagnostics }
-}
-
-function parseJson(input: string): Npm1Lockfile {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(input)
-  } catch (error) {
-    throw new LockfileError({
-      code: 'FORMAT_MISMATCH',
-      message: `npm-1 adapter: input is not valid JSON: ${(error as Error).message}`,
-      cause: error,
-    })
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new LockfileError({
-      code: 'FORMAT_MISMATCH',
-      message: 'npm-1 adapter: top-level value must be a JSON object',
-    })
-  }
-  return parsed as Npm1Lockfile
-}
-
-function ensureSidecar(map: Map<string, NpmFlatSidecar>, id: string): NpmFlatSidecar {
-  let sc = map.get(id)
-  if (sc === undefined) {
-    sc = { installPaths: [] }
-    map.set(id, sc)
-  }
-  return sc
-}
-
-function collectRequires(entry: Npm1Entry): Record<string, string> | undefined {
-  if (entry.requires !== undefined) return entry.requires
-  // Fall back: legacy npm v5 fixtures sometimes encode declared deps via
-  // the nested `dependencies` block alone (with version pin as range).
-  if (entry.dependencies !== undefined) {
-    const out: Record<string, string> = {}
-    for (const [name, child] of Object.entries(entry.dependencies)) {
-      if (child !== null && typeof child === 'object' && typeof child.version === 'string') {
-        out[name] = child.version
-      }
-    }
-    return Object.keys(out).length > 0 ? out : undefined
-  }
-  return undefined
-}
-
-function isUrlLikeVersion(version: string): boolean {
-  return version.startsWith('git+')
-    || version.startsWith('git:')
-    || version.startsWith('http://')
-    || version.startsWith('https://')
-    || version.startsWith('github:')
-    || version.startsWith('file:')
-}
-
 function isHttpUrl(value: string): boolean {
   return value.startsWith('https://') || value.startsWith('http://')
-}
-
-// Resolve a `requires` target to the closest hoisted parent. The
-// resolution chain mirrors npm v6's `findDependency`: try current scope
-// first, then walk ancestor scopes outward. Returns the matched NodeId
-// or undefined.
-function resolveTreeTarget(
-  name: string,
-  _installPath: string,
-  currentDeps: Record<string, Npm1Entry>,
-  parentScopes: Array<Record<string, Npm1Entry>>,
-): string | undefined {
-  if (currentDeps[name] !== undefined && typeof currentDeps[name].version === 'string') {
-    return `${name}@${currentDeps[name].version}`
-  }
-  for (let i = parentScopes.length - 1; i >= 0; i--) {
-    const scope = parentScopes[i]
-    if (scope === undefined) continue
-    const entry = scope[name]
-    if (entry !== undefined && typeof entry.version === 'string') {
-      return `${name}@${entry.version}`
-    }
-  }
-  return undefined
 }
 
 function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | undefined {
@@ -787,19 +798,7 @@ function locateRootNode(graph: Graph, sidecar: NpmSidecar | undefined): Node | u
   return undefined
 }
 
-// === SERIALIZE — TREE PLACEMENT =============================================
-
-// Reconstruct the nested-tree shape for emit. Strategy (mining legacy
-// `preformat`): walk BFS from the root, hoist each transitive in the
-// shallowest level that does not introduce a version conflict with an
-// already-hoisted sibling. Conflicts fall to nested `<parent>.dependencies`.
-//
-// Sidecar installPaths are an authoritative hint: if the parse-time tree
-// placed a node at a specific path, mirror that placement (this preserves
-// the `parse → stringify → parse` invariant for fixture inputs). Mutator-
-// added nodes have no install path; they get hoisted to the root level
-// unless that introduces a conflict.
-type PlacementQueueItem = { id: string; parentPath: string }
+// === Tree placement =========================================================
 
 function replayNpm1InstallPaths(
   graph: Graph,
@@ -948,34 +947,6 @@ function npm1TreeByParent(graph: Graph, placements: Map<string, Set<string>>): M
   return treeByParent
 }
 
-export function buildDependenciesTree(
-  graph: Graph,
-  sidecar: NpmSidecar | undefined,
-  rootId: string,
-  emittableIds: ReadonlySet<string>,
-): Record<string, Npm1Entry> | undefined {
-  // First, plan placements. `placements: Map<NodeId, parentPath>`. The empty
-  // string parentPath means top-level. Placement comes from either the sidecar
-  // installPaths (parse-time hint) or the BFS-with-conflict-resolution
-  // fallback (mutator state).
-  const placements = new Map<string, Set<string>>()
-  const hoistedByName = new Map<string, string>() // top-level name -> NodeId
-
-  replayNpm1InstallPaths(graph, sidecar, emittableIds, placements, hoistedByName)
-  placeReachableNpm1Nodes(graph, sidecar, rootId, emittableIds, placements, hoistedByName)
-  placeOrphanNpm1Nodes(emittableIds, placements)
-  const treeByParent = npm1TreeByParent(graph, placements)
-
-  const top = treeByParent.get('')
-  if (top === undefined || top.size === 0) {
-    // Root may also have no out-edges (workspaces-only graph); return empty.
-    if (emittableIds.size === 0) return undefined
-    return {}
-  }
-
-  return buildLayer(top, '', graph, sidecar, treeByParent)
-}
-
 function buildLayer(
   layer: Map<string, string>,
   parentPath: string,
@@ -1065,17 +1036,6 @@ function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined)
   return stringifyForNpm(canonical)
 }
 
-export function parentPathFromInstall(installPath: string): string | undefined {
-  // Strip the trailing `/node_modules/<name>` segment.
-  const idx = installPath.lastIndexOf('/node_modules/')
-  if (idx < 0) {
-    // Top-level — `node_modules/<name>` becomes parent = ''.
-    if (installPath.startsWith('node_modules/')) return ''
-    return undefined
-  }
-  return installPath.slice(0, idx)
-}
-
 function ensureSet<K>(map: Map<K, Set<string>>, key: K): Set<string> {
   let s = map.get(key)
   if (s === undefined) {
@@ -1126,31 +1086,7 @@ function hoistedAtPath(
   return undefined
 }
 
-export function firstConsumerInstallPath(
-  graph: Graph,
-  sidecar: NpmSidecar | undefined,
-  id: string,
-  emittableIds: ReadonlySet<string>,
-): string | undefined {
-  // Find an incoming edge from an emittable consumer; return that consumer's
-  // first install path + `/node_modules/<name>`. Used when a node conflicts
-  // at root and needs to be placed inside its consumer's nested tree.
-  const node = graph.getNode(id)
-  if (node === undefined) return undefined
-  for (const incoming of graph.in(id)) {
-    if (incoming.kind === 'peer') continue
-    if (!emittableIds.has(incoming.src)) continue
-    const consumer = graph.getNode(incoming.src)
-    if (consumer === undefined) continue
-    if (consumer.workspacePath === '') continue // root — already handled
-    const consumerPaths = sidecar?.nodes.get(consumer.id)?.installPaths ?? []
-    if (consumerPaths.length === 0) continue
-    return `${consumerPaths[0]}/node_modules/${node.name}`
-  }
-  return undefined
-}
-
-// === SERIALIZE — LOSS DIAGNOSTICS ===========================================
+// === Loss diagnostics =======================================================
 
 function reportPeerContextFlatten(
   node: Node,
@@ -1182,18 +1118,83 @@ function reportPatchDrop(
   )
 }
 
-// === ENRICH — PLANNING ======================================================
+// === ENRICH =================================================================
 
-interface EnrichPlan {
-  rootNodeReplacement: Node | undefined
-  addMemberNodes: Node[]
-  memberNodeReplacements: Node[]
-  addRootEdges: Edge[]
-  removeRootEdges: Edge[]
-  markWorkspaceEdges: Edge[]
+function collectNpm1PeerDiagnostics(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  for (const node of graph.nodes()) {
+    const rawPeers = sidecar?.nodes.get(node.id)?.peerDependencies
+    if (rawPeers === undefined) continue
+    for (const [peerName, range] of Object.entries(rawPeers).sort((a, b) => cmpStr(a[0], b[0]))) {
+      const outcome = derivePeerCandidates(graph, peerName, range)
+      if (outcome.kind === 'single') continue
+      diagnostics.push(outcome.kind === 'unsatisfied'
+        ? {
+            code: 'NPM_V1_PEER_UNSATISFIED',
+            severity: 'warning',
+            subject: node.id,
+            message: `peer "${peerName}" range "${range}" matches no installed version`,
+          }
+        : {
+            code: 'NPM_V1_PEER_AMBIGUOUS',
+            severity: 'warning',
+            subject: node.id,
+            message: `peer "${peerName}" range "${range}" matches multiple candidates: ${outcome.candidates.join(', ')}`,
+          })
+    }
+  }
+  return diagnostics
 }
 
-type Npm1MemberManifest = { path: string; manifest: Npm1Manifest }
+function reportNpm1MissingManifests(graph: Graph, diagnostics: Diagnostic[]): void {
+  const hasWorkspaceHint = Array.from(graph.nodes())
+    .some(node => node.workspacePath !== undefined && node.workspacePath !== '')
+  if (!hasWorkspaceHint) return
+  diagnostics.push({
+    code: 'NPM_V1_NO_MANIFESTS',
+    severity: 'warning',
+    message: 'workspace concretisation requires manifests; leaving npm-1 graph unclassified',
+  })
+}
+
+function isNpm1EnrichPlanEmpty(plan: EnrichPlan): boolean {
+  return plan.rootNodeReplacement === undefined
+    && plan.addRootEdges.length === 0
+    && plan.removeRootEdges.length === 0
+    && plan.markWorkspaceEdges.length === 0
+    && plan.memberNodeReplacements.length === 0
+    && plan.addMemberNodes.length === 0
+}
+
+function applyNpm1EnrichPlan(
+  graph: Graph,
+  sidecar: NpmSidecar | undefined,
+  plan: EnrichPlan,
+  diagnostics: Diagnostic[],
+): { graph: Graph; diagnostics: Diagnostic[] } {
+  const result = graph.mutate(m => {
+    if (plan.rootNodeReplacement !== undefined) {
+      m.replaceNode(plan.rootNodeReplacement.id, plan.rootNodeReplacement)
+    }
+    for (const node of plan.addMemberNodes) m.addNode(node)
+    for (const replacement of plan.memberNodeReplacements) {
+      m.replaceNode(replacement.id, replacement)
+    }
+    for (const edge of plan.removeRootEdges) m.removeEdge(edge.src, edge.dst, edge.kind)
+    for (const edge of plan.addRootEdges) m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    for (const edge of plan.markWorkspaceEdges) {
+      m.removeEdge(edge.src, edge.dst, edge.kind)
+      m.addEdge(edge.src, edge.dst, edge.kind, edge.attrs)
+    }
+  })
+  if (sidecar !== undefined) rememberSidecar(result.graph, sidecar)
+  return { graph: result.graph, diagnostics }
+}
+
+// === Planning ===============================================================
 
 function emptyNpm1EnrichPlan(): EnrichPlan {
   return {
