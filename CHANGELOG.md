@@ -1,3 +1,19 @@
+## [0.2.0](https://github.com/lockgraph/lockgraph/compare/v0.1.3...v0.2.0) (2026-07-20)
+
+### Fixes & improvements
+* refactor: decompose completion engine, assessment and bun parse into phases ([565e356](https://github.com/lockgraph/lockgraph/commit/565e356db8cc2b1a6969818d27720c21f916cfc1))
+* refactor: reorder companion zones, converge banner widths, sync paired diagnostic wording ([6791de5](https://github.com/lockgraph/lockgraph/commit/6791de56751c0aa2c13e338b1dfc74a4712eda93))
+* refactor(formats): decompose oversized parse and build functions into phases ([f083dfd](https://github.com/lockgraph/lockgraph/commit/f083dfd299ef6d23c61f5eff435477d78d8a6fad))
+* refactor(formats): reorder adapter anatomy into canonical zones ([3c43efc](https://github.com/lockgraph/lockgraph/commit/3c43efcc5d63172e579efe63c5ee5d9c4cf65b7a))
+* refactor(formats): reorder core anatomy into canonical zones ([a89c0e8](https://github.com/lockgraph/lockgraph/commit/a89c0e8fc64f76cf39608a062b5629687b32bcf1))
+* refactor(enrich): narrow private manifest transit ([21dd2d8](https://github.com/lockgraph/lockgraph/commit/21dd2d867c16a8c10fbf11f7a6fd6f5afdfaae39))
+* refactor(enrich): route source enrichment through an exhaustive registry ([fe439d6](https://github.com/lockgraph/lockgraph/commit/fe439d64f0fb2eadb8b09883feffacf262655c49))
+* refactor(api): route adapter state through an exhaustive format registry ([f4fc513](https://github.com/lockgraph/lockgraph/commit/f4fc513ce29ad2889be1b07ca7e4644667b9b8b6))
+* refactor(graph): introduce internal GraphResult and DependencyManifest ([25354fc](https://github.com/lockgraph/lockgraph/commit/25354fc881fafec867f657fbe116a9e1c7eeeb7e))
+
+### Features
+* feat(graph): export GraphResult and DependencyManifest, unify result and manifest contracts ([ae1e1f6](https://github.com/lockgraph/lockgraph/commit/ae1e1f688e26ee48773fa7a5abf348e553d7355e))
+
 ## [0.1.3](https://github.com/lockgraph/lockgraph/compare/v0.1.2...v0.1.3) (2026-07-18)
 
 ### Fixes & improvements
