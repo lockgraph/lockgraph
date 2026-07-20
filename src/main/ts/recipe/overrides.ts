@@ -131,7 +131,7 @@ export function captureOverrides(
   return { canonical, native }
 }
 
-// === npm — nested object ====================================================
+// === npm - nested object ====================================================
 //
 // `{ "foo": "1.0.0" }`                       → global override of foo
 // `{ "parent": { "foo": "1.0.0" } }`         → foo under parentPath ['parent']
@@ -172,7 +172,7 @@ function captureNpm(
   return out
 }
 
-// === yarn / pnpm — flat selector records ====================================
+// === yarn / pnpm - flat selector records ====================================
 
 function captureFlat(
   flat: Record<string, string>,
@@ -299,7 +299,7 @@ function asStringRecord(block: object): Record<string, string> {
   return out
 }
 
-// === projection (canonical → PM-native) =====================================
+// === projection (canonical -> PM-native) ====================================
 
 /**
  * Project canonical override constraints into a target PM's native override

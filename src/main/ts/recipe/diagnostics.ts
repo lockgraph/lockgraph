@@ -223,7 +223,7 @@ export function unknownResolutionDiagnostic(
     code:     'RECIPE_RESOLUTION_UNKNOWN',
     severity: 'warning',
     subject:  nodeId,
-    message:  `resolution shape not canonicalisable: ${JSON.stringify(raw)}`,
+    message:  `resolution shape not canonicalizable: ${JSON.stringify(raw)}`,
   }
 }
 

@@ -419,7 +419,7 @@ function npm1TarballPayload(
       code: 'RECIPE_RESOLUTION_UNKNOWN',
       severity: 'warning',
       subject: identity.id,
-      message: `resolution shape not canonicalisable: ${JSON.stringify(identity.resolved)}`,
+      message: `resolution shape not canonicalizable: ${JSON.stringify(identity.resolved)}`,
     })
   }
   payload.resolution = canonical

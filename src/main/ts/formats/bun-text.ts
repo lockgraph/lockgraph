@@ -254,7 +254,7 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
   workspaceByPath.set('', rootId)
   workspaceSidecar.set('', { path: '', manifest: rootManifest })
 
-  // === Pass 1: register all packages entries as graph nodes ================
+  // --- Pass 1: register all packages entries as graph nodes ----------------
   //
   // bun-text `packages` map keys can carry slash segments for hoisting
   // conflicts (`<consumer-path>/<dep-name>` form). Split on the last
@@ -417,7 +417,7 @@ export function parse(input: string, _options: BunTextParseOptions = {}): Graph 
     addBlockEdges(builder, diagnostics, entry.id, entry.inner, consumerScope, undefined, peerDeclarations)
   }
 
-  // === Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md) ====
+  // --- Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md) ----
   // Capture `overrides` / `trustedDependencies` / `patchedDependencies`
   // verbatim so a same-PM round-trip is lossless. `overrides` is bun's
   // forced-resolution mechanism — the npm/bun analog of yarn `resolutions`,

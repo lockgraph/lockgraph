@@ -50,7 +50,7 @@ export interface YamlQuotedScalar {
   readonly value: string
 }
 
-// === API — TAGGED VALUES ====================================================
+// === API - TAGGED VALUES ====================================================
 
 /** Wrap an entries record as a flow-style inline map (`{k: v, ...}`). */
 export function flowMap(entries: YamlMap): YamlFlowMap {
@@ -70,7 +70,7 @@ function isQuotedScalar(value: unknown): value is YamlQuotedScalar {
   return value !== null && typeof value === 'object' && (value as YamlQuotedScalar)[QUOTED_TAG] === true
 }
 
-// === API — CODEC ============================================================
+// === API - CODEC ============================================================
 
 export function readYaml(input: string): YamlMap {
   const reader: YamlReader = {
