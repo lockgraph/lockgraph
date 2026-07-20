@@ -12,6 +12,12 @@ import type {
   TargetProfile,
 } from './types.ts'
 
+// === CONSTANTS ==============================================================
+
+const emptyWorkspaceNames: ReadonlyMap<string, string> = new Map()
+
+// === TYPES ==================================================================
+
 interface CompanionProjectionPlan {
   readonly status: RequirementStatus
   readonly patches: readonly CompanionSetOperation[]
@@ -20,7 +26,38 @@ interface CompanionProjectionPlan {
   readonly pnpmWorkspaceNames: ReadonlyMap<string, string>
 }
 
-const emptyWorkspaceNames: ReadonlyMap<string, string> = new Map()
+// === API ====================================================================
+
+export function companionProjectionRuntime(
+  graph: Graph,
+  options: ProjectCompanionOptions,
+): {
+  readonly result: ProjectCompanionResult
+  readonly policyRequirement: RequirementAssessment
+  readonly pnpmWorkspaceNames: ReadonlyMap<string, string>
+} {
+  const plan = projectCompanionPlan(graph, options)
+  const requirement = requirementOf(plan, 'target:companion-projection')
+  return Object.freeze({
+    result: Object.freeze({
+      ...(plan.status === 'satisfied' ? { patches: plan.patches } : {}),
+      requirement,
+      target: plan.target,
+      diagnostics: plan.diagnostics,
+    }),
+    policyRequirement: requirementOf(plan, 'target:resolution-policy'),
+    pnpmWorkspaceNames: plan.pnpmWorkspaceNames,
+  })
+}
+
+export function projectCompanionsOf(
+  graph: Graph,
+  options: ProjectCompanionOptions,
+): ProjectCompanionResult {
+  return companionProjectionRuntime(graph, options).result
+}
+
+// === INTERNALS ==============================================================
 
 function diagnostic(code: string, message: string, data?: Readonly<Record<string, unknown>>): Diagnostic {
   return Object.freeze({
@@ -285,33 +322,4 @@ function projectCompanionPlan(
     target,
     pnpmWorkspaceNames,
   })
-}
-
-export function companionProjectionRuntime(
-  graph: Graph,
-  options: ProjectCompanionOptions,
-): {
-  readonly result: ProjectCompanionResult
-  readonly policyRequirement: RequirementAssessment
-  readonly pnpmWorkspaceNames: ReadonlyMap<string, string>
-} {
-  const plan = projectCompanionPlan(graph, options)
-  const requirement = requirementOf(plan, 'target:companion-projection')
-  return Object.freeze({
-    result: Object.freeze({
-      ...(plan.status === 'satisfied' ? { patches: plan.patches } : {}),
-      requirement,
-      target: plan.target,
-      diagnostics: plan.diagnostics,
-    }),
-    policyRequirement: requirementOf(plan, 'target:resolution-policy'),
-    pnpmWorkspaceNames: plan.pnpmWorkspaceNames,
-  })
-}
-
-export function projectCompanionsOf(
-  graph: Graph,
-  options: ProjectCompanionOptions,
-): ProjectCompanionResult {
-  return companionProjectionRuntime(graph, options).result
 }

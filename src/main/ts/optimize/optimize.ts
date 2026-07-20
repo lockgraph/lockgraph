@@ -47,7 +47,7 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
   const preserve     = options.preserve ?? EMPTY_PRESERVE
   const onDiagnostic = options.onDiagnostic
 
-  // === Phase 1 — mark (§4.1, §4.2) ===
+  // --- Phase 1 — mark (§4.1, §4.2) ---
   //
   // Live seeds: (graph.roots() ∩ workspaces) ∪ workspaces ∪ preserve.
   //
@@ -85,7 +85,7 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
   }
   for (const id of preserve) live.add(id)
 
-  // === Rootless guard (§4.1 edge case, §6 r3 amendment) ===
+  // --- Rootless guard (§4.1 edge case, §6 r3 amendment) ---
   //
   // The mark phase anchors liveness on workspace nodes and `preserve`. A
   // non-workspace graph — classic lockfiles carry no `workspacePath` — with
@@ -143,7 +143,7 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
     if (baseId !== node.id && graph.getNode(baseId) !== undefined) live.add(baseId)
   }
 
-  // === Phase 2 — sweep (§4.3, §4.4, §4.5) ===
+  // --- Phase 2 — sweep (§4.3, §4.4, §4.5) ---
   //
   // Iterate the INPUT snapshot in content-sort order (§4.5 normative —
   // graph.nodes() yields content-sorted NodeIds per graph.ts:453-459). The

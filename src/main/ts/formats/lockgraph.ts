@@ -178,7 +178,7 @@ const WORD_TO_KIND: Record<string, EdgeKind> = nullProtoMap<EdgeKind>({
 const FLAG_OPTIONAL = 'o'
 const FLAG_WORKSPACE = 'w'
 
-// === Integrity origin ⇄ 1-char marker (the node `integrity` column) =========
+// === Integrity origin <-> 1-char marker (the node `integrity` column) =======
 // Each multiset member is `<originMarker><algo>-<digest>`, `;`-joined. The
 // marker preserves the derive-vs-fetch boundary. `u` is TRANSPORT-ONLY: it
 // carries the `#<sha1hex>` fragment of a canonical-URL Node.resolution (always
@@ -917,7 +917,7 @@ export function parsePeerContext(s: string): NodeId[] {
   return out
 }
 
-// === npm-registry recomposition — store FACTS, derive MECHANICS ==============
+// === npm-registry recomposition - store FACTS, derive MECHANICS =============
 //
 // Hashes/names/versions are DATA; the tarball path is a FUNCTION of the
 // registry type. For an npm-class registry the tarball URL is
@@ -1018,7 +1018,7 @@ export function registrySourceOf(node: Node, payload: TarballPayload | undefined
   }
 }
 
-// === Integrity multiset column ⇄ Integrity (+ the transport `u`-member) =====
+// === Integrity multiset column <-> Integrity (+ the transport `u`-member) ===
 //
 // The `integrity` column carries the ENTIRE integrity multiset with origin tags
 // (never a truncated single hash). Each member is `<originMarker><algo>-<digest>`
@@ -1161,7 +1161,7 @@ function decodeUrlFragment(
 }
 
 
-// === F section parse — reconstruct the residual TarballPayload (schema-driven) =
+// === F parse - reconstruct residual TarballPayload (schema-driven) ==========
 //
 // A decoded slot: its dotpath (list of key segments, segment-unescaped) and its
 // value (a string leaf). The two-pass discipline (spec § Schema-driven parse):
@@ -1485,7 +1485,7 @@ function rebuildResolution(slots: DecodedSlot[], tarballKey: TarballKey): Resolu
   return rec as unknown as ResolutionCanonical
 }
 
-// === F section — flatten the residual TarballPayload to dot-path slots ======
+// === F section - flatten residual TarballPayload to dot-path slots ==========
 //
 // The residual TarballPayload is every artifact-metadata field NOT captured by
 // the GRAPH section: `integrity` (the N-row integrity column, whose `berry-zip`

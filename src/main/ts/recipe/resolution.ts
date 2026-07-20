@@ -421,7 +421,7 @@ export function isUnknown(can: ResolutionCanonical): can is { type: 'unknown'; r
   return can.type === 'unknown'
 }
 
-// === Source discriminator (ADR-0032 §"+src= slot") ==========================
+// === Source discriminator (ADR-0032 "+src= slot") ===========================
 
 // The default public npm-registry hosts. A `tarball` canonical pointing at one
 // of these is the content-addressed registry artefact for `(name, version)` —
