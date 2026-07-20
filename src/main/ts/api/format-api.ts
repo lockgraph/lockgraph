@@ -44,7 +44,7 @@ import {
   projectionWarning,
   type ProjectionResult,
 } from '../completeness/projection.ts'
-import { captureOverrides, noteYarnOverridesNotProjected, type OverridePM } from '../recipe/overrides.ts'
+import { captureOverrides, reportYarnOverridesNotProjected, type OverridePM } from '../recipe/overrides.ts'
 import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
 import type { Integrity } from '../recipe/integrity.ts'
 import type { ResolutionCanonical } from '../recipe/resolution.ts'
@@ -115,7 +115,7 @@ export function stringifyProjected(
   if (options.overrides !== undefined
     && options.overrides.length > 0
     && format.startsWith('yarn')) {
-    noteYarnOverridesNotProjected(options.overrides.length, diagnostic => {
+    reportYarnOverridesNotProjected(options.overrides.length, diagnostic => {
       emittedDiagnostics.push(diagnostic)
     })
   }

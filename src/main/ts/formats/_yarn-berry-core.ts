@@ -42,10 +42,10 @@ import {
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
 import {
-  hashAndNormaliseBytes as patchHashAndNormaliseBytes,
+  hashAndNormalizeBytes as patchHashAndNormalizeBytes,
   sentinelHashOfLocator,
 } from '../recipe/patch.ts'
-import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, patchNormalisedDiagnostic, patchPreferredDiagnostic, recipePeerMetaIncomplete, resolutionPinUnresolvedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
+import { ambiguousResolutionDiagnostic, emitDropped, emitIntegrityIncomplete, patchNormalizedDiagnostic, patchPreferredDiagnostic, recipePeerMetaIncomplete, resolutionPinUnresolvedDiagnostic, unknownResolutionDiagnostic } from '../recipe/diagnostics.ts'
 import { catalogResolve, distTagResolve, overrideTargetFor, patchPreferenceFor, semverResolve, type PatchSibling, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import { readInstalledManifest, type InstalledManifestMeta } from '../complete/local-manifest.ts'
 
@@ -1208,9 +1208,9 @@ function extractPatchFingerprint(
   // ADR-0014 §4.F5 — apply CRLF / BOM byte normalization before the sha512 fingerprint; emit `RECIPE_PATCH_NORMALISED` (info) when ≥ 1
   // byte changed so cross-platform CRLF rewrites surface in diagnostics.
   // Combined helper avoids a second normalization scan inside canonicalHashOfBytes.
-  const { hash: patch, normalised: didNormalise } = patchHashAndNormaliseBytes(bytes)
+  const { hash: patch, normalised: didNormalise } = patchHashAndNormalizeBytes(bytes)
   return didNormalise
-    ? { patch, diagnostic: patchNormalisedDiagnostic(nodeId) }
+    ? { patch, diagnostic: patchNormalizedDiagnostic(nodeId) }
     : { patch }
 }
 

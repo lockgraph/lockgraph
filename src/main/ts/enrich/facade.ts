@@ -79,10 +79,7 @@ export interface EnrichOptions {
   readonly cacheKey?: string
 }
 
-export interface EnrichResult {
-  readonly graph: Graph
-  readonly diagnostics: readonly Diagnostic[]
-}
+export interface EnrichResult extends GraphResult {}
 
 interface SourceAdapterContext {
   readonly manifests: Record<string, DependencyManifest> | undefined

@@ -19,8 +19,8 @@ import {
   type NodeId,
   type TarballPayload,
 } from '../graph.ts'
-import { hashAndNormaliseBytes, isSentinelPatch } from '../recipe/patch.ts'
-import { patchNormalisedDiagnostic } from '../recipe/diagnostics.ts'
+import { hashAndNormalizeBytes, isSentinelPatch } from '../recipe/patch.ts'
+import { patchNormalizedDiagnostic } from '../recipe/diagnostics.ts'
 import type { ModifyContext } from './context.ts'
 import {
   modifyPatchApplied,
@@ -67,7 +67,7 @@ export async function applyPatch(
   }
 
   // F5 normalization + F2 sha512 fingerprint in one linear pass.
-  const { hash, normalised } = hashAndNormaliseBytes(patchBytes)
+  const { hash, normalised } = hashAndNormalizeBytes(patchBytes)
   const range = spec.range ?? '*'
 
   // Enumerate matched nodes — work on a snapshot copy to avoid index issues
@@ -146,7 +146,7 @@ export async function applyPatch(
   // patched node there is no useful locus, so skip.
   if (normalised && patched.length > 0) {
     const subject = patched[0]!.to
-    const d = patchNormalisedDiagnostic(subject)
+    const d = patchNormalizedDiagnostic(subject)
     emit(d)
     currentGraph = currentGraph.mutate(m => { m.diagnostic(d) }).graph
   }

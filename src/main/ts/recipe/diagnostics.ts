@@ -321,7 +321,7 @@ export function emitWorkspaceUnresolved(
 // patch input (CRLF → LF rewrite or leading BOM stripped). When source
 // bytes pass through unchanged the diagnostic does not fire; this is
 // observability for editor / `core.autocrlf` rewrites, not a noise floor.
-export function patchNormalisedDiagnostic(nodeId: NodeId): Diagnostic {
+export function patchNormalizedDiagnostic(nodeId: NodeId): Diagnostic {
   return {
     code:     'RECIPE_PATCH_NORMALISED',
     severity: 'info',
@@ -330,12 +330,12 @@ export function patchNormalisedDiagnostic(nodeId: NodeId): Diagnostic {
   }
 }
 
-export function emitPatchNormalised(
+export function emitPatchNormalized(
   nodeId: NodeId,
   onDiagnostic?: (d: Diagnostic) => void,
 ): void {
   if (onDiagnostic === undefined) return
-  onDiagnostic(patchNormalisedDiagnostic(nodeId))
+  onDiagnostic(patchNormalizedDiagnostic(nodeId))
 }
 
 // === F6 manifest override capture diagnostics ===============================
@@ -348,7 +348,7 @@ export function emitPatchNormalised(
 // (`OVERRIDE_PARENT_REF_DROPPED` / `OVERRIDE_GLOB_NARROWED` /
 // `OVERRIDE_TRANSITIVE_HINT_DROPPED`) fire at stringify, not here. Subjectless
 // — a manifest override block is not a NodeId or an edge.
-export function recipeOverrideNormalised(
+export function recipeOverrideNormalized(
   pm: 'npm' | 'yarn' | 'pnpm',
   count: number,
 ): Diagnostic {
@@ -359,13 +359,13 @@ export function recipeOverrideNormalised(
   }
 }
 
-export function emitOverrideNormalised(
+export function emitOverrideNormalized(
   pm: 'npm' | 'yarn' | 'pnpm',
   count: number,
   onDiagnostic?: (d: Diagnostic) => void,
 ): void {
   if (onDiagnostic === undefined) return
-  onDiagnostic(recipeOverrideNormalised(pm, count))
+  onDiagnostic(recipeOverrideNormalized(pm, count))
 }
 
 // Projection-side override loss diagnostics (ADR-0025 §6). Fire when

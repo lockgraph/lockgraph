@@ -104,7 +104,7 @@ export function validateCanonicalHash(raw: string): string | undefined {
  * The function never mutates `input`; on the unchanged path the same
  * reference is returned for zero-copy semantics.
  */
-export function normalisePatchBytes(input: Uint8Array): {
+export function normalizePatchBytes(input: Uint8Array): {
   bytes: Uint8Array
   normalised: boolean
 } {
@@ -149,7 +149,7 @@ export function normalisePatchBytes(input: Uint8Array): {
  * so the rule applies uniformly through both call shapes).
  */
 export function canonicalHashOfBytes(bytes: Uint8Array | string): string {
-  return hashAndNormaliseBytes(bytes).hash
+  return hashAndNormalizeBytes(bytes).hash
 }
 
 /**
@@ -160,12 +160,12 @@ export function canonicalHashOfBytes(bytes: Uint8Array | string): string {
  * re-scanning the buffer; `canonicalHashOfBytes` delegates here for
  * hash-only callers.
  */
-export function hashAndNormaliseBytes(bytes: Uint8Array | string): {
+export function hashAndNormalizeBytes(bytes: Uint8Array | string): {
   hash:       string
   normalised: boolean
 } {
   const raw = typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes
-  const { bytes: normalized, normalised: didNormalize } = normalisePatchBytes(raw)
+  const { bytes: normalized, normalised: didNormalize } = normalizePatchBytes(raw)
   const hash = createHash('sha512').update(normalized).digest('hex')
   return { hash, normalised: didNormalize }
 }

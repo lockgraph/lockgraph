@@ -12,11 +12,11 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
   canonicalHashOfBytes,
-  normalisePatchBytes,
+  normalizePatchBytes,
 } from '../../main/ts/recipe/patch.ts'
 import {
-  patchNormalisedDiagnostic,
-  emitPatchNormalised,
+  patchNormalizedDiagnostic,
+  emitPatchNormalized,
 } from '../../main/ts/recipe/diagnostics.ts'
 import { toTarballKey, type Diagnostic } from '../../main/ts/graph.ts'
 import { parse } from '../../main/ts/index.ts'
@@ -49,19 +49,19 @@ function toCRLF(bytes: Uint8Array): Uint8Array {
   return Uint8Array.from(out)
 }
 
-// === Primitive: normalisePatchBytes =========================================
+// === Primitive: normalizePatchBytes =========================================
 
-describe('recipe/patch — normalisePatchBytes (F5 primitive)', () => {
+describe('recipe/patch — normalizePatchBytes (F5 primitive)', () => {
   it('rewrites every CRLF pair to a single LF and reports normalised', () => {
     const input = new TextEncoder().encode('a\r\nb\r\nc\r\n')
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(true)
     expect(new TextDecoder().decode(bytes)).toBe('a\nb\nc\n')
   })
 
   it('reports normalised=false when input is already LF-only', () => {
     const input = new TextEncoder().encode('a\nb\nc\n')
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(false)
     // zero-copy fast path returns the same reference.
     expect(bytes).toBe(input)
@@ -69,43 +69,43 @@ describe('recipe/patch — normalisePatchBytes (F5 primitive)', () => {
 
   it('preserves standalone CR (no CRLF pair) verbatim — F5 normalises the pair only', () => {
     const input = new TextEncoder().encode('a\rb\rc')
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(false)
     expect(bytes).toBe(input)
   })
 
   it('preserves a trailing newline byte-for-byte (F5 is line-ending equaliser, not trailing-byte rewrite)', () => {
     const withTrailing = new TextEncoder().encode('a\r\nb\r\n')
-    expect(new TextDecoder().decode(normalisePatchBytes(withTrailing).bytes)).toBe('a\nb\n')
+    expect(new TextDecoder().decode(normalizePatchBytes(withTrailing).bytes)).toBe('a\nb\n')
 
     const withoutTrailing = new TextEncoder().encode('a\r\nb')
-    expect(new TextDecoder().decode(normalisePatchBytes(withoutTrailing).bytes)).toBe('a\nb')
+    expect(new TextDecoder().decode(normalizePatchBytes(withoutTrailing).bytes)).toBe('a\nb')
   })
 
   it('strips a leading UTF-8 BOM (EF BB BF) and reports normalised', () => {
     const input = new Uint8Array([0xEF, 0xBB, 0xBF, 0x61, 0x0A])
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(true)
     expect(Array.from(bytes)).toEqual([0x61, 0x0A])
   })
 
   it('rewrites CRLF inside a BOM-leading input в one pass', () => {
     const input = new Uint8Array([0xEF, 0xBB, 0xBF, 0x61, 0x0D, 0x0A, 0x62])
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(true)
     expect(Array.from(bytes)).toEqual([0x61, 0x0A, 0x62])
   })
 
   it('handles empty input', () => {
     const input = new Uint8Array(0)
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(false)
     expect(bytes.length).toBe(0)
   })
 
   it('handles trailing lone CR at end-of-buffer (no following LF) — preserved verbatim', () => {
     const input = new Uint8Array([0x61, 0x0D])
-    const { bytes, normalised } = normalisePatchBytes(input)
+    const { bytes, normalised } = normalizePatchBytes(input)
     expect(normalised).toBe(false)
     expect(bytes).toBe(input)
   })
@@ -140,7 +140,7 @@ describe('recipe/patch — canonicalHashOfBytes applies F5 transparently (hash s
 
 describe('recipe/patch — RECIPE_PATCH_NORMALISED diagnostic factory', () => {
   it('builds the canonical info-severity diagnostic shape per ADR-0014 §5', () => {
-    const d = patchNormalisedDiagnostic('lodash@4.17.21')
+    const d = patchNormalizedDiagnostic('lodash@4.17.21')
     expect(d.code).toBe('RECIPE_PATCH_NORMALISED')
     expect(d.severity).toBe('info')
     expect(d.subject).toBe('lodash@4.17.21')
@@ -148,13 +148,13 @@ describe('recipe/patch — RECIPE_PATCH_NORMALISED diagnostic factory', () => {
     expect(d.message.length).toBeGreaterThan(0)
   })
 
-  it('emitPatchNormalised forwards through the callback exactly once and is silent without one', () => {
+  it('emitPatchNormalized forwards through the callback exactly once and is silent without one', () => {
     const seen: Diagnostic[] = []
-    emitPatchNormalised('lodash@4.17.21', d => seen.push(d))
+    emitPatchNormalized('lodash@4.17.21', d => seen.push(d))
     expect(seen).toHaveLength(1)
     expect(seen[0]!.code).toBe('RECIPE_PATCH_NORMALISED')
 
-    expect(() => emitPatchNormalised('lodash@4.17.21')).not.toThrow()
+    expect(() => emitPatchNormalized('lodash@4.17.21')).not.toThrow()
   })
 })
 
