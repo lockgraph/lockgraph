@@ -366,6 +366,23 @@ interface EdgeLadderContext {
   manifestsProvided: boolean
 }
 
+interface EdgeResolutionContext {
+  depName: string
+  normalizedRange: string
+  lookup: string
+  srcId: string
+  srcResolution: string | undefined
+  index: Map<string, string>
+  patchDescriptorIndex: Map<string, PatchDescriptorCandidate[]>
+  diagnostics: Diagnostic[]
+  ladder: EdgeLadderContext
+}
+
+interface EdgeResolutionState {
+  dstId: string | undefined
+  boundViaOverride: boolean
+}
+
 interface PatchDescriptorCandidate {
   id: string
   locatorQualifier?: string
@@ -1358,6 +1375,219 @@ function resolvePatchAndLinkFallbacks(
   return undefined
 }
 
+function resolveStructuralEdgeRung(
+  context: EdgeResolutionContext,
+  state: EdgeResolutionState,
+): EdgeResolutionState | null {
+  if (state.dstId !== undefined) return state
+  const dstId = resolvePatchAndLinkFallbacks(
+    context.lookup,
+    context.normalizedRange,
+    context.index,
+    context.patchDescriptorIndex,
+    context.srcResolution,
+    context.srcId,
+    context.diagnostics,
+  )
+  if (dstId === null) return null
+  return { dstId, boundViaOverride: state.boundViaOverride }
+}
+
+function resolveOverrideEdgeRung(
+  context: EdgeResolutionContext,
+  state: EdgeResolutionState,
+): EdgeResolutionState | null {
+  if (state.dstId !== undefined || context.ladder.overrides.length === 0) return state
+  const to = overrideTargetFor(
+    context.depName,
+    context.normalizedRange,
+    [nameOf(context.srcId)],
+    context.ladder.overrides,
+  )
+  if (to === undefined) return state
+
+  const toRange = entryKeyRangeOf(to)
+  const toLookup = `${context.depName}@${toRange}`
+  let dstId: string | undefined | null = context.index.get(toLookup)
+  if (dstId === undefined) {
+    dstId = resolvePatchAndLinkFallbacks(
+      toLookup,
+      toRange,
+      context.index,
+      context.patchDescriptorIndex,
+      context.srcResolution,
+      context.srcId,
+      context.diagnostics,
+    )
+  }
+  if (dstId === null) return null
+  if (dstId === undefined) return state
+  return { dstId, boundViaOverride: true }
+}
+
+function resolveSemverEdgeRung(
+  context: EdgeResolutionContext,
+  state: EdgeResolutionState,
+): EdgeResolutionState | null {
+  if (state.dstId !== undefined) return state
+  const result = semverResolve(
+    context.normalizedRange,
+    context.ladder.candidatesByName.get(context.depName) ?? [],
+  )
+  if (result.kind === 'bound') {
+    return { dstId: result.id, boundViaOverride: state.boundViaOverride }
+  }
+  if (result.kind === 'ambiguous') {
+    context.diagnostics.push(ambiguousResolutionDiagnostic(
+      context.ladder.codePrefix,
+      context.srcId,
+      context.depName,
+      context.normalizedRange,
+      result.candidateIds,
+    ))
+    return null
+  }
+  return state
+}
+
+function resolveDistTagEdgeRung(
+  context: EdgeResolutionContext,
+  state: EdgeResolutionState,
+): EdgeResolutionState | null {
+  if (state.dstId !== undefined) return state
+  const result = distTagResolve(
+    context.normalizedRange,
+    context.ladder.candidatesByName.get(context.depName) ?? [],
+  )
+  if (result.kind === 'bound') {
+    return { dstId: result.id, boundViaOverride: state.boundViaOverride }
+  }
+  if (result.kind !== 'ambiguous') return state
+
+  context.diagnostics.push(ambiguousResolutionDiagnostic(
+    context.ladder.codePrefix,
+    context.srcId,
+    context.depName,
+    context.normalizedRange,
+    result.candidateIds,
+  ))
+  if (!context.ladder.manifestsProvided) {
+    context.diagnostics.push(resolutionPinUnresolvedDiagnostic(
+      context.ladder.codePrefix,
+      context.srcId,
+      context.depName,
+      context.normalizedRange,
+    ))
+  }
+  return null
+}
+
+function resolveCatalogEdgeRung(
+  context: EdgeResolutionContext,
+  state: EdgeResolutionState,
+): EdgeResolutionState {
+  if (state.dstId !== undefined) return state
+  const result = catalogResolve(
+    context.normalizedRange,
+    context.ladder.candidatesByName.get(context.depName) ?? [],
+  )
+  if (result.kind === 'bound') {
+    return { dstId: result.id, boundViaOverride: state.boundViaOverride }
+  }
+  // Deliberately preserve the unresolved state: a non-unique catalog must
+  // fall through to Rung 4 so F8 records the descriptor verbatim.
+  return state
+}
+
+function applyPatchPreferenceEdgeRung(
+  context: EdgeResolutionContext,
+  state: EdgeResolutionState,
+): EdgeResolutionState {
+  if (
+    state.dstId === undefined
+    || state.boundViaOverride
+    || !isRegistryRange(context.normalizedRange)
+  ) {
+    return state
+  }
+  const bound = nodeNameVersion(state.dstId)
+  const siblings = bound === undefined
+    ? undefined
+    : context.ladder.patchSiblingsByBase.get(bound)
+  if (siblings === undefined || siblings.length === 0) return state
+
+  const consumerLocator = context.srcResolution !== undefined
+    ? encodeURIComponent(context.srcResolution)
+    : undefined
+  const patchId = patchPreferenceFor(
+    context.depName,
+    context.normalizedRange,
+    siblings,
+    consumerLocator,
+  )
+  if (patchId === undefined || patchId === state.dstId) return state
+  context.diagnostics.push(patchPreferredDiagnostic(
+    context.ladder.codePrefix,
+    context.srcId,
+    context.depName,
+    context.normalizedRange,
+    patchId,
+  ))
+  return { dstId: patchId, boundViaOverride: state.boundViaOverride }
+}
+
+function reportUnresolvedEdgeRung(
+  context: EdgeResolutionContext,
+  depRange: string,
+  kind: EdgeKind,
+  unresolvedDeps: Map<string, UnresolvedDepRef[]> | undefined,
+): void {
+  context.diagnostics.push({
+    code: 'YARN_BERRY_UNRESOLVED_DEP',
+    subject: context.srcId,
+    severity: 'warning',
+    message: `dependency ${context.depName}=${depRange} from ${context.srcId} has no matching lockfile entry`,
+  })
+  if (
+    !context.ladder.manifestsProvided
+    && isRegistryRange(context.normalizedRange)
+    && (context.ladder.candidatesByName.get(context.depName)?.length ?? 0) > 0
+  ) {
+    context.diagnostics.push(resolutionPinUnresolvedDiagnostic(
+      context.ladder.codePrefix,
+      context.srcId,
+      context.depName,
+      context.normalizedRange,
+    ))
+  }
+  // F8 — no graph edge can bind a target absent from the lock. Preserve the
+  // descriptor verbatim in the per-node sidecar without minting a phantom node.
+  if (unresolvedDeps !== undefined && (kind === 'dep' || kind === 'optional')) {
+    const refs = unresolvedDeps.get(context.srcId) ?? []
+    // Berry folds regular and optional deps into the same dependencies block;
+    // optionality remains in the verbatim dependenciesMeta sidecar.
+    refs.push({
+      block: 'dependencies',
+      name: context.depName,
+      range: depRange,
+    })
+    unresolvedDeps.set(context.srcId, refs)
+  }
+}
+
+function addResolvedBerryEdge(
+  builder: ReturnType<typeof newBuilder>,
+  context: EdgeResolutionContext,
+  kind: EdgeKind,
+  dstId: string,
+): void {
+  // Preserve the dependency-block key as an alias when it differs from the
+  // resolved target's package name.
+  const attrs: { range: string; alias?: string } = { range: context.normalizedRange }
+  if (context.depName !== nameOf(dstId)) attrs.alias = context.depName
+  builder.addEdge(context.srcId, dstId, kind, attrs)
+}
+
 function isOptionalDepFlag(meta: SymlMap, name: string): boolean {
   const entry = meta[name]
   if (entry === undefined || typeof entry === 'string') return false
@@ -1384,24 +1614,31 @@ function addEdgesFromBlock(
     if (typeof depRange !== 'string') continue
     const normalizedRange = normalizedEdgeRange(kind, depRange)
     const lookup = `${depName}@${normalizedRange}`
-    // `null` ⇒ resolution was attempted and deliberately abandoned (ambiguous
-    // patch descriptor, diagnostic already emitted) — distinct from `undefined`
-    // (not yet resolved), so the generic UNRESOLVED_DEP fallback is skipped.
     // Rung 0 — exact specIndex match (UNCHANGED, first, O(1)).
-    let dstId: string | undefined | null = index.get(lookup)
+    let state: EdgeResolutionState = {
+      dstId: index.get(lookup),
+      boundViaOverride: false,
+    }
     // Track whether Rung 2 forced this bind so patch preference does not
     // redirect it again (the
     // override already points at whatever node the human declared, patch or not).
-    let boundViaOverride = false
     // Rung 1 — patch-descriptor and link/portal locator-qualifier
     // fallbacks (UNCHANGED). Run on the Rung-0 MISS path only, before Rung 2/3,
     // so a more-specific structural match wins over the override/semver rungs.
-    if (dstId === undefined) {
-      dstId = resolvePatchAndLinkFallbacks(
-        lookup, normalizedRange, index, patchDescriptorIndex, srcResolution, srcId, diagnostics,
-      )
-      if (dstId === null) continue // ambiguous patch descriptor → diagnostic pushed
+    const resolutionContext: EdgeResolutionContext = {
+      depName,
+      normalizedRange,
+      lookup,
+      srcId,
+      srcResolution,
+      index,
+      patchDescriptorIndex,
+      diagnostics,
+      ladder,
     }
+    const structuralState = resolveStructuralEdgeRung(resolutionContext, state)
+    if (structuralState === null) continue // ambiguous patch descriptor → diagnostic pushed
+    state = structuralState
     // Rung 2 — OVERRIDE-MAP forced link. An authoritative human declaration
     // (`resolutions` / `overrides`) beats inference, so it precedes semver and
     // handles a NON-satisfying pin (csstype `^3.1.3` → `3.0.9`) or a non-version
@@ -1409,55 +1646,23 @@ function addEdgesFromBlock(
     // 0+1 so `to:"3.0.9"` → the exact node and `to:"patch:…"` → the patch node.
     // Risk (e): an override `to` that fails Rung 0/1 falls through to Rung 3 on
     // the ORIGINAL descriptor below — never throws.
-    if (dstId === undefined && ladder.overrides.length > 0) {
-      const to = overrideTargetFor(depName, normalizedRange, [nameOf(srcId)], ladder.overrides)
-      if (to !== undefined) {
-        const toLookup = `${depName}@${entryKeyRangeOf(to)}`
-        let viaOverride: string | undefined | null = index.get(toLookup)
-        if (viaOverride === undefined) {
-          viaOverride = resolvePatchAndLinkFallbacks(
-            toLookup, entryKeyRangeOf(to), index, patchDescriptorIndex, srcResolution, srcId, diagnostics,
-          )
-          if (viaOverride === null) continue // ambiguous patch target → diagnostic pushed
-        }
-        if (viaOverride !== undefined) {
-          dstId = viaOverride
-          boundViaOverride = true
-        }
-      }
-    }
+    const overrideState = resolveOverrideEdgeRung(resolutionContext, state)
+    if (overrideState === null) continue // ambiguous patch target → diagnostic pushed
+    state = overrideState
     // Rung 3 — SOURCE-GATED max-satisfying semver. Only `npm:`/bare descriptors,
     // only tarball(registry)-class candidates (a git/directory/unknown node stays
     // invisible — the source-safety fallback). A final tie → diagnose + drop.
-    if (dstId === undefined) {
-      const result = semverResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
-      if (result.kind === 'bound') {
-        dstId = result.id
-      } else if (result.kind === 'ambiguous') {
-        diagnostics.push(ambiguousResolutionDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, result.candidateIds))
-        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
-      }
-    }
+    const semverState = resolveSemverEdgeRung(resolutionContext, state)
+    if (semverState === null) continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+    state = semverState
     // Rung 3.5 — dist-tag binding. A registry descriptor whose range is a
     // published dist-TAG (`latest` / `next`), not a semver range, binds the
     // UNIQUE registry sibling of that name (source-gated exactly like Rung 3). A
     // multi-version tag is genuine ambiguity → diagnose + drop (never guess a max
     // version: `latest`/`next` are channel pointers and `next` is often older).
-    if (dstId === undefined) {
-      const result = distTagResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
-      if (result.kind === 'bound') {
-        dstId = result.id
-      } else if (result.kind === 'ambiguous') {
-        diagnostics.push(ambiguousResolutionDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, result.candidateIds))
-        // The manifest-less INFO hint also applies to a multi-version tag drop:
-        // a `latest`/`next` against ≥2 siblings is the same "lock can't resolve
-        // it; a manifest could" signature as a non-satisfying pin.
-        if (!ladder.manifestsProvided) {
-          diagnostics.push(resolutionPinUnresolvedDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange))
-        }
-        continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
-      }
-    }
+    const distTagState = resolveDistTagEdgeRung(resolutionContext, state)
+    if (distTagState === null) continue // do not guess — mirror the *_PEER_AMBIGUOUS rule
+    state = distTagState
     // Rung 3.6 — CATALOG bind (berry catalog: protocol). A `catalog:` /
     // `catalog:<name>` descriptor defers its range to a catalog defined OUTSIDE
     // the lockfile (.yarnrc.yml / pnpm-workspace.yaml / root package.json); the
@@ -1471,10 +1676,7 @@ function addEdgesFromBlock(
     // `continue` here: that would skip the Rung-4 verbatim preservation and drop
     // the descriptor from emit, breaking byte round-trip — babel has multiple
     // `@jridgewell/trace-mapping` / `semver` versions behind one `catalog:`.)
-    if (dstId === undefined) {
-      const result = catalogResolve(normalizedRange, ladder.candidatesByName.get(depName) ?? [])
-      if (result.kind === 'bound') dstId = result.id
-    }
+    state = resolveCatalogEdgeRung(resolutionContext, state)
     // Rung-3 patch-preference overlay (berry only). After a registry
     // range bound its BASE node via Rung 0 or 3 with NO override forcing it, yarn
     // redirects the consumer onto a sibling `patch:` copy of the same
@@ -1485,32 +1687,13 @@ function addEdgesFromBlock(
     // rung already performed the redirect (boundViaOverride) → skip (no double-
     // redirect). The base node is left GC-able (the patch re-emits from its own
     // locator; `optimize()` prunes the orphan) — matching yarn.
-    if (typeof dstId === 'string' && !boundViaOverride && isRegistryRange(normalizedRange)) {
-      const bound = nodeNameVersion(dstId)
-      const siblings = bound === undefined ? undefined : ladder.patchSiblingsByBase.get(bound)
-      if (siblings !== undefined && siblings.length > 0) {
-        const consumerLocator = srcResolution !== undefined ? encodeURIComponent(srcResolution) : undefined
-        const patchId = patchPreferenceFor(depName, normalizedRange, siblings, consumerLocator)
-        if (patchId !== undefined && patchId !== dstId) {
-          dstId = patchId
-          diagnostics.push(patchPreferredDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange, patchId))
-        }
-      }
-    }
+    state = applyPatchPreferenceEdgeRung(resolutionContext, state)
+    const { dstId } = state
     if (!dstId) {
       // Rung 4 — drop (UNCHANGED). When a likely resolutions-pin missed both the
       // exact key and every semver candidate AND no manifests were supplied, add
       // an INFO hint pointing at the missing override source (the only place yarn
       // records a pin) so the non-satisfying-pin case is diagnosable.
-      diagnostics.push({
-        code: 'YARN_BERRY_UNRESOLVED_DEP',
-        subject: srcId,
-        severity: 'warning',
-        message: `dependency ${depName}=${depRange} from ${srcId} has no matching lockfile entry`,
-      })
-      if (!ladder.manifestsProvided && isRegistryRange(normalizedRange) && (ladder.candidatesByName.get(depName)?.length ?? 0) > 0) {
-        diagnostics.push(resolutionPinUnresolvedDiagnostic(ladder.codePrefix, srcId, depName, normalizedRange))
-      }
       // F8 — the dep target is ABSENT from the lock, so no graph edge can
       // bind it (we do NOT mint a phantom node — identity stays clean). Preserve
       // the descriptor VERBATIM (the on-disk block kind, dep-name, and exact range
@@ -1519,18 +1702,7 @@ function addEdgesFromBlock(
       // BOTH the bytes and the signal; it does not silence the MISSING-ENTRY warn.
       // `peer` never reaches here (peers round-trip via the peerDependencies raw
       // sidecar), so only the dep / optional emit blocks are addressed.
-      if (unresolvedDeps !== undefined && (kind === 'dep' || kind === 'optional')) {
-        const refs = unresolvedDeps.get(srcId) ?? []
-        // berry folds BOTH regular and optional deps into the single
-        // `dependencies` block, so an unresolvable optional ref re-emits there
-        // too (its optional-ness rides the verbatim dependenciesMeta sidecar).
-        refs.push({
-          block: 'dependencies',
-          name: depName,
-          range: depRange,
-        })
-        unresolvedDeps.set(srcId, refs)
-      }
+      reportUnresolvedEdgeRung(resolutionContext, depRange, kind, unresolvedDeps)
       continue
     }
     // EdgeAttrs.alias — preserved when the parent's dependencies-block key
@@ -1542,10 +1714,7 @@ function addEdgesFromBlock(
     // to the same dst (e.g. a lockfile declaring both
     // `@scope/pkg` and an npm-aliased `@scope/pkg--variant`
     // against the same target).
-    const dstName = nameOf(dstId)
-    const attrs: { range: string; alias?: string } = { range: normalizedRange }
-    if (depName !== dstName) attrs.alias = depName
-    builder.addEdge(srcId, dstId, kind, attrs)
+    addResolvedBerryEdge(builder, resolutionContext, kind, dstId)
   }
 }
 

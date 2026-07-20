@@ -78,7 +78,7 @@ const BITBUCKET_HOST = 'bitbucket.org'
 /**
  * Parse a source-form resolution string → canonical 4-case union.
  * Returns `{ type: 'unknown', raw }` for any shape this primitive cannot
- * canonicalise. Adapters use `emitUnknownResolution` from
+ * canonicalize. Adapters use `emitUnknownResolution` from
  * `recipe/diagnostics.ts` to surface the RECIPE_RESOLUTION_UNKNOWN
  * diagnostic per ADR-0014 §5.
  *
@@ -107,7 +107,7 @@ export function parse(raw: string, options: ParseOptions = {}): ResolutionCanoni
 
   // file: prefix → directory (npm / pnpm non-workspace).
   if (raw.startsWith('file:')) {
-    return { type: 'directory', path: normaliseDirectoryPath(raw.slice('file:'.length)) }
+    return { type: 'directory', path: normalizeDirectoryPath(raw.slice('file:'.length)) }
   }
 
   return parseUrlOrFallback(raw)
@@ -145,9 +145,9 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
       return { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry ?? DEFAULT_NPM_REGISTRY) }
     }
     case 'portal':
-      return { type: 'directory', path: normaliseDirectoryPath(spec) }
+      return { type: 'directory', path: normalizeDirectoryPath(spec) }
     case 'file':
-      return { type: 'directory', path: normaliseDirectoryPath(spec) }
+      return { type: 'directory', path: normalizeDirectoryPath(spec) }
     case 'patch':
       // patch: locators are F2's domain — the underlying base resolution is
       // recoverable from the URL fragment but is adapter-side scope. F3
@@ -251,7 +251,7 @@ function parseUrlOrFallback(raw: string): ResolutionCanonical {
   }
 
   if (raw.startsWith('http://') || raw.startsWith('https://')) {
-    // codeload-tarball form — canonicalise to upstream git url + sha.
+    // codeload-tarball form — canonicalize to upstream git url + sha.
     // Handles both bare `<codeload-url>` AND fragmented `<codeload-url>#commit=<sha>`
     // (yarn-berry-style fragment) by stripping the fragment before the codeload
     // pattern match. The URL-path sha is the canonical identity for the codeload
@@ -389,8 +389,8 @@ function peelYarnBerryLocator(raw: string): { name: string; protocol: string; sp
   return { name, protocol: after.slice(0, colonIdx), spec: after.slice(colonIdx + 1) }
 }
 
-// Normalise a directory path for `file:` / `portal:` dirs.
-function normaliseDirectoryPath(raw: string): string {
+// Normalize a directory path for `file:` / `portal:` dirs.
+function normalizeDirectoryPath(raw: string): string {
   const p = raw.trim()
   // strip a leading `./` only when followed by more path; bare `./` becomes `.`
   if (p === './') return '.'
@@ -430,7 +430,7 @@ export function isUnknown(can: ResolutionCanonical): can is { type: 'unknown'; r
 // `registry.npmjs.org` is npm's; `registry.yarnpkg.com` is yarn's CDN mirror of
 // it (yarn-classic's default `resolved` host) — neither is a distinct source.
 // Any OTHER tarball host (private registry, GitHub release `.tgz`, a CDN, a
-// codeload that did not canonicalise to git) can legitimately serve different
+// codeload that did not canonicalize to git) can legitimately serve different
 // code under the same `name@version`, so it IS discriminated.
 const REGISTRY_HOSTS: ReadonlySet<string> = new Set([
   'registry.npmjs.org',
@@ -482,14 +482,14 @@ function hostOfTarballUrl(url: string): string | undefined {
  *     collide on a directory locator already disambiguate via the sentinel-patch
  *     `::locator=` slot (`_yarn-berry-core.isLocalLocatorDisambiguatedResolution`).
  *   - `unknown` — the F3 escape hatch (ADR-0013): its `raw` is a PM-native shape
- *     the primitive could NOT canonicalise, so it has NO well-defined source
+ *     the primitive could NOT canonicalize, so it has NO well-defined source
  *     string. Folding it into identity is also UNSAFE for round-trips: a lossy
  *     cross-PM emit can turn a registry package's clean `tarball` canonical into
  *     an `unknown` raw on re-parse (e.g. a yarn-berry `name@npm:ver` locator
  *     written verbatim into npm's `resolved:` field, which `npm-resolved` parse
  *     cannot peel), so an `unknown`-derived slot would appear on ONE side of a
  *     convert but not the other and spuriously fork the node. A `patch:` locator
- *     also canonicalises to `unknown` — its identity is already F2's `+patch=`.
+ *     also canonicalizes to `unknown` — its identity is already F2's `+patch=`.
  *
  * The `hostingProvider` attribution hint is NEVER folded into the source string
  * — identity drops it, exactly as the canonical URL/sha already do (two git refs

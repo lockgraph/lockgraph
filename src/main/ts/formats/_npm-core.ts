@@ -96,6 +96,25 @@ export type PeerCandidateOutcome =
   | { kind: 'ambiguous'; candidates: string[] }
   | { kind: 'unsatisfied' }
 
+interface NpmParseContext {
+  config: NpmFamilyConfig
+  lf: NpmLockfile
+  packages: Record<string, NpmEntry>
+  rootEntry: NpmEntry
+  rootName: string
+  rootVersion: string
+  rootId: string
+  builder: ReturnType<typeof newBuilder>
+  diagnostics: Diagnostic[]
+  nodeSidecar: Map<string, NpmFlatSidecar>
+  edgeRanges: Map<string, string>
+  edgeDeclaredNames: Map<string, string>
+  workspaceByPath: Map<string, string>
+  pathToId: Map<string, string>
+  idToEntry: Map<string, NpmEntry>
+  linkNameByPath: Map<string, string>
+}
+
 // === SIDECAR ================================================================
 
 const sidecarByGraph = new WeakMap<Graph, NpmSidecar>()
@@ -152,308 +171,20 @@ export function parseFamily(
   _options: NpmFamilyParseOptions,
   config: NpmFamilyConfig,
 ): Graph {
-  const lf = parseJson(input, config)
+  const context = createNpmParseContext(input, config)
+  addNpmRootNode(context)
 
-  if (lf.lockfileVersion !== config.lockfileVersion) {
-    throw new LockfileError({
-      code: 'FORMAT_MISMATCH',
-      message: `npm-${config.lockfileVersion} adapter: expected lockfileVersion ${config.lockfileVersion}, got ${JSON.stringify(lf.lockfileVersion)}`,
-    })
-  }
+  indexNpmWorkspaceLinkNames(context)
 
-  // Top-level layout handshake.
-  const hasPackages = lf.packages !== undefined
-    && typeof lf.packages === 'object'
-    && !Array.isArray(lf.packages)
+  addWorkspaceMemberNodes(context)
 
-  if (!hasPackages) {
-    throw new LockfileError({
-      code: 'FORMAT_MISMATCH',
-      message: `npm-${config.lockfileVersion} adapter: top-level "packages" map is required`,
-    })
-  }
+  addInstalledPackageNodes(context)
 
-  // Adapter-specific top-level validation (npm-2: requires `dependencies`).
-  config.hooks?.validateTopLevel?.(lf)
+  addNpmPackageEdges(context)
 
-  const packages = lf.packages as Record<string, NpmEntry>
-  const rootEntry = packages['']
-  if (rootEntry === undefined) {
-    throw parseFailed(config, 'missing root entry under "packages"')
-  }
-
-  const builder = newBuilder()
-  const diagnostics: Diagnostic[] = []
-  const nodeSidecar = new Map<string, NpmFlatSidecar>()
-  const edgeRanges = new Map<string, string>()
-  const edgeDeclaredNames = new Map<string, string>()
-  const workspaceByPath = new Map<string, string>()
-  const pathToId = new Map<string, string>()
-  const idToEntry = new Map<string, NpmEntry>()
-
-  // npm's `packages[""]` (the project root, a workspace node per ADR-0017)
-  // legitimately omits `name` and/or `version` for private / unpublished
-  // roots — the dominant shape for apps and monorepo roots (some omit both;
-  // some carry a name but no version).
-  // Synthesize the missing pieces rather than refusing to parse: name falls
-  // back to npm's own root key `.`; version to the unpublished sentinel
-  // `0.0.0` (cf. yarn-berry's `0.0.0-use.local`, ADR-0017). A diagnostic
-  // records the synthesis so the round-trip stays auditable. Workspace
-  // MEMBERS (below) keep the strict name/version requirement.
-  const rootName = rootEntry.name ?? lf.name ?? '.'
-  const rootVersion = rootEntry.version ?? lf.version ?? '0.0.0'
-  if (rootEntry.version === undefined && lf.version === undefined) {
-    builder.diagnostic({
-      code:     `${config.diagnosticPrefix}_ROOT_VERSION_SYNTHESIZED`,
-      severity: 'info',
-      subject:  'graph',
-      message:  `private root entry carries no version; synthesised '${rootVersion}'`,
-    })
-  }
-  const rootId = `${rootName}@${rootVersion}`
-  pathToId.set('', rootId)
-  idToEntry.set(rootId, rootEntry)
-  builder.addNode({
-    id: rootId,
-    name: rootName,
-    version: rootVersion,
-    peerContext: [],
-    workspacePath: '',
-  })
-
-  // npm `link: true` entries are the symlinks (`node_modules/<pkgname>` →
-  // `resolved: <member-path>`) through which the rest of the tree references
-  // a workspace member. They are the authoritative source of a member's
-  // package name when the member's own `packages/<path>` entry omits it
-  // (private workspaces routinely do — a member's `packages/<dir>` entry can
-  // carry a version but no name). Unlike the path's last segment, the link
-  // name handles scoped packages (`@scope/pkg` linked from a `packages/pkg`
-  // dir). Build the path → link-name map up front.
-  const linkNameByPath = new Map<string, string>()
-  for (const [key, entry] of Object.entries(packages)) {
-    if (entry.link !== true || typeof entry.resolved !== 'string') continue
-    const at = key.lastIndexOf('node_modules/')
-    if (at < 0) continue
-    const linkName = key.slice(at + 'node_modules/'.length)
-    if (!linkNameByPath.has(entry.resolved)) linkNameByPath.set(entry.resolved, linkName)
-  }
-
-  // Pass 1a: workspace member entries (under bare `<wsPath>` keys).
-  for (const [path, entry] of Object.entries(packages)) {
-    if (path === '' || path.startsWith('node_modules/')) continue
-    if (path.includes('/node_modules/')) continue
-    if (entry.link === true) continue
-    // Synthesize a missing name from the symlink that references this member
-    // (falling back to the path's last segment), and a missing version from
-    // the unpublished sentinel `0.0.0` (cf. the root entry above). A private
-    // workspace member legitimately omits either.
-    const synthName = entry.name ?? linkNameByPath.get(path) ?? path.slice(path.lastIndexOf('/') + 1)
-    const synthVersion = entry.version ?? '0.0.0'
-    if (entry.name === undefined || entry.version === undefined) {
-      builder.diagnostic({
-        code:     `${config.diagnosticPrefix}_WORKSPACE_MEMBER_SYNTHESIZED`,
-        severity: 'info',
-        subject:  'graph',
-        message:  `private workspace member ${JSON.stringify(path)} omits ${entry.name === undefined ? 'name' : ''}${entry.name === undefined && entry.version === undefined ? '/' : ''}${entry.version === undefined ? 'version' : ''}; synthesised ${synthName}@${synthVersion}`,
-      })
-    }
-    const name = synthName
-    const version = synthVersion
-    const id = `${name}@${version}`
-    if (idToEntry.has(id) && idToEntry.get(id) !== entry) {
-      throw new LockfileError({
-        code: 'IRREDUCIBLE_LOSS',
-        message: `two npm-${config.lockfileVersion} entries collapse onto NodeId ${id}`,
-      })
-    }
-    pathToId.set(path, id)
-    idToEntry.set(id, entry)
-    workspaceByPath.set(path, id)
-    builder.addNode({
-      id,
-      name,
-      version,
-      peerContext: [],
-      workspacePath: path,
-    })
-  }
-
-  // Pass 1b: node_modules/... entries.
-  for (const [path, entry] of Object.entries(packages)) {
-    if (!path.startsWith('node_modules/') && !path.includes('/node_modules/')) continue
-
-    if (entry.link === true) {
-      const target = entry.resolved
-      if (target === undefined) {
-        throw parseFailed(config, `link entry ${JSON.stringify(path)} missing resolved`)
-      }
-      const targetId = pathToId.get(target)
-      if (targetId === undefined) {
-        throw parseFailed(config, `link entry ${JSON.stringify(path)} resolves to unknown workspace ${JSON.stringify(target)}`)
-      }
-      pathToId.set(path, targetId)
-      continue
-    }
-
-    // An uninstalled optional dependency: npm records a bare `{optional: true}`
-    // placeholder (no version / resolved / integrity) for a platform-specific
-    // optional native it did not install on this platform — e.g. a nested
-    // `node_modules/<pkg>/node_modules/<native-addon>` placeholder. There is
-    // no resolved instance to model, so skip it; the consumer's
-    // `optionalDependencies` edge simply finds no target, which is valid for
-    // an optional dep (emits a benign unresolved-dep warning at most).
-    if (entry.version === undefined && entry.resolved === undefined && entry.optional === true) {
-      continue
-    }
-
-    const tailName = nameFromInstallPath(config, path, entry)
-    const version = entry.version
-    if (version === undefined) {
-      throw parseFailed(config, `entry ${JSON.stringify(path)} missing version`)
-    }
-    // ADR-0032 — fold the `+src=` non-registry discriminator into the NodeId so a
-    // git `is@6.3.1` cannot collapse onto a registry `is@6.3.1`.
-    const source = sourceDiscriminatorOfNpmEntry(entry)
-    const id = serializeNodeId(tailName, version, [], undefined, source)
-    pathToId.set(path, id)
-
-    const existing = idToEntry.get(id)
-    if (existing === undefined) {
-      idToEntry.set(id, entry)
-      const node: Node = {
-        id,
-        name: tailName,
-        version,
-        peerContext: [],
-      }
-      // ADR-0032 — carry the slot on the Node so the seal re-derives the id.
-      if (source !== undefined) node.source = source
-      builder.addNode(node)
-      if (entry.integrity !== undefined || hasTarballPayload(entry)) {
-        builder.setTarball({ name: tailName, version, source }, tarballPayloadOf(entry, id, diagnostics))
-      }
-    }
-  }
-
-  // Pass 2: edges + per-node sidecar data.
-  for (const [path, entry] of Object.entries(packages)) {
-    const srcId = pathToId.get(path)
-    if (srcId === undefined) continue
-    if (entry.link === true && path !== '') continue
-
-    const nodeSide = ensureSidecar(nodeSidecar, srcId)
-    if (entry.inBundle === true) nodeSide.inBundle = true
-    if (entry.dev === true) nodeSide.dev = true
-    if (entry.optional === true) nodeSide.optional = true
-    if (entry.peer === true) nodeSide.peer = true
-    // WS-LINK (ADR-0027 §4): capture npm's `extraneous` flag so a workspace
-    // member that npm did NOT link (present on disk, absent from the install
-    // graph) re-emits without a top-level link on replay.
-    if (entry.extraneous === true) nodeSide.extraneous = true
-
-    // Adapter-specific per-entry capture (npm-2 mirror: stash `resolved`
-    // URL for legacy-mirror emit). Core stays version-neutral — it does
-    // not know what the hook is for.
-    config.hooks?.captureEntry?.(srcId, entry)
-
-    const isRoot = path === ''
-    const isWorkspaceMember = workspaceByPath.has(path)
-    const treatAsManifest = isRoot || isWorkspaceMember
-
-    addDepEdges(builder, edgeRanges, edgeDeclaredNames, path, srcId, entry.dependencies, 'dep', pathToId, diagnostics)
-    addDepEdges(builder, edgeRanges, edgeDeclaredNames, path, srcId, entry.optionalDependencies, 'optional', pathToId, diagnostics)
-
-    if (treatAsManifest) {
-      addDepEdges(builder, edgeRanges, edgeDeclaredNames, path, srcId, entry.devDependencies, 'dev', pathToId, diagnostics)
-    } else if (entry.devDependencies !== undefined) {
-      nodeSide.devDependencies = { ...entry.devDependencies }
-    }
-
-    if (entry.peerDependencies !== undefined) {
-      nodeSide.peerDependencies = { ...entry.peerDependencies }
-    }
-    if (entry.optionalDependencies !== undefined && !treatAsManifest) {
-      nodeSide.optionalDependencies = { ...entry.optionalDependencies }
-    }
-
-    if (path !== '' && !workspaceByPath.has(path)) {
-      nodeSide.installPaths.push(path)
-    }
-  }
-
-  // Pass 3: root meta.
-  const rootMeta: NpmRootMeta = {
-    name: lf.name ?? rootEntry.name,
-    version: lf.version ?? rootEntry.version,
-    requires: lf.requires,
-  }
-  if (rootEntry.workspaces !== undefined) rootMeta.workspaces = rootEntry.workspaces.slice()
-  if (rootEntry.bundleDependencies !== undefined) {
-    rootMeta.bundleDependencies = Array.isArray(rootEntry.bundleDependencies)
-      ? rootEntry.bundleDependencies.slice()
-      : rootEntry.bundleDependencies
-  }
-  if (rootEntry.devDependencies !== undefined) rootMeta.devDependencies = { ...rootEntry.devDependencies }
-  if (rootEntry.peerDependencies !== undefined) rootMeta.peerDependencies = { ...rootEntry.peerDependencies }
-  if (rootEntry.optionalDependencies !== undefined) rootMeta.optionalDependencies = { ...rootEntry.optionalDependencies }
-
-  // Defensive capture ONLY. Real npm `package-lock.json` carries NO
-  // `packages[""].overrides` — npm reads the override policy from the root
-  // MANIFEST, never the lock (canary: overrides-canary.test.ts). This fires only
-  // for a non-native lock that happens to carry the field; capture preserves it
-  // in the graph (`nativeOverrides` verbatim + `overrides` canonical for query) but
-  // NEVER re-emit it into npm output (see stringify — the field is not npm-native
-  // and cannot preserve policy). F6 capture is recipe-pure; RECIPE_OVERRIDE_
-  // NORMALISED funnels through the same `diagnostics` buffer as the rest of parse.
-  if (rootEntry.overrides !== undefined) {
-    const captured = captureOverrides(rootEntry.overrides, 'npm', d => diagnostics.push(d))
-    if (captured.canonical.length > 0) rootMeta.overrides = captured.canonical
-    if (captured.native.npmOverrides !== undefined) {
-      rootMeta.nativeOverrides = captured.native.npmOverrides as Record<string, unknown>
-    }
-  }
-
-  for (const sc of nodeSidecar.values()) {
-    sc.installPaths = Array.from(new Set(sc.installPaths)).sort(cmpStr)
-  }
-
-  // Top-level `dependencies` handling: packages-only emits the legacy-mirror
-  // warning unconditionally; dual delegates drift detection to the hook
-  // (which has the npm-2-specific shape knowledge).
-  if (lf.dependencies !== undefined && config.topLevelShape === 'packages-only') {
-    diagnostics.push({
-      code: `${config.diagnosticPrefix}_UNEXPECTED_LEGACY_MIRROR`,
-      severity: 'warning',
-      message: `npm-${config.lockfileVersion} lockfile carries a top-level "dependencies" mirror; dropping on parse`,
-    })
-  }
-  config.hooks?.emitParseDiagnostics?.({ lf, packages, diagnostics })
-
-  for (const diagnostic of diagnostics) {
-    builder.diagnostic(diagnostic)
-  }
-
-  try {
-    const graph = builder.seal()
-    sidecarByGraph.set(graph, {
-      rootId,
-      rootMeta,
-      edgeRanges,
-      edgeDeclaredNames,
-      nodes: nodeSidecar,
-      workspaceByPath,
-    })
-    config.hooks?.afterParse?.({ graph, lf, packages, rootId })
-    return graph
-  } catch (error) {
-    if (error instanceof GraphError) {
-      throw new LockfileError({
-        code: 'PARSE_FAILED',
-        message: `npm-${config.lockfileVersion} seal failed: ${error.message}`,
-      })
-    }
-    throw error
-  }
+  const rootMeta = captureNpmRootMeta(context)
+  emitNpmParseDiagnostics(context)
+  return sealNpmParseContext(context, rootMeta)
 }
 
 /** Serializes a graph through the configured npm layout. */
@@ -690,6 +421,54 @@ export function nameFromInstallPath(config: NpmFamilyConfig, path: string, entry
 
 // === Handshake ==============================================================
 
+function createNpmParseContext(input: string, config: NpmFamilyConfig): NpmParseContext {
+  const lf = parseJson(input, config)
+  if (lf.lockfileVersion !== config.lockfileVersion) {
+    throw new LockfileError({
+      code: 'FORMAT_MISMATCH',
+      message: `npm-${config.lockfileVersion} adapter: expected lockfileVersion ${config.lockfileVersion}, got ${JSON.stringify(lf.lockfileVersion)}`,
+    })
+  }
+
+  const hasPackages = lf.packages !== undefined
+    && typeof lf.packages === 'object'
+    && !Array.isArray(lf.packages)
+  if (!hasPackages) {
+    throw new LockfileError({
+      code: 'FORMAT_MISMATCH',
+      message: `npm-${config.lockfileVersion} adapter: top-level "packages" map is required`,
+    })
+  }
+
+  config.hooks?.validateTopLevel?.(lf)
+  const packages = lf.packages as Record<string, NpmEntry>
+  const rootEntry = packages['']
+  if (rootEntry === undefined) {
+    throw parseFailed(config, 'missing root entry under "packages"')
+  }
+
+  const rootName = rootEntry.name ?? lf.name ?? '.'
+  const rootVersion = rootEntry.version ?? lf.version ?? '0.0.0'
+  return {
+    config,
+    lf,
+    packages,
+    rootEntry,
+    rootName,
+    rootVersion,
+    rootId: `${rootName}@${rootVersion}`,
+    builder: newBuilder(),
+    diagnostics: [],
+    nodeSidecar: new Map(),
+    edgeRanges: new Map(),
+    edgeDeclaredNames: new Map(),
+    workspaceByPath: new Map(),
+    pathToId: new Map(),
+    idToEntry: new Map(),
+    linkNameByPath: new Map(),
+  }
+}
+
 function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
   let parsed: unknown
   try {
@@ -711,6 +490,313 @@ function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
 }
 
 // === Graph construction =====================================================
+
+function addNpmRootNode(context: NpmParseContext): void {
+  const { builder, config, idToEntry, lf, pathToId, rootEntry, rootId, rootName, rootVersion } = context
+  // npm's `packages[""]` (the project root, a workspace node per ADR-0017)
+  // legitimately omits `name` and/or `version` for private / unpublished
+  // roots — the dominant shape for apps and monorepo roots (some omit both;
+  // some carry a name but no version).
+  // Synthesize the missing pieces rather than refusing to parse: name falls
+  // back to npm's own root key `.`; version to the unpublished sentinel
+  // `0.0.0` (cf. yarn-berry's `0.0.0-use.local`, ADR-0017). A diagnostic
+  // records the synthesis so the round-trip stays auditable. Workspace
+  // MEMBERS (below) keep the strict name/version requirement.
+  if (rootEntry.version === undefined && lf.version === undefined) {
+    builder.diagnostic({
+      code:     `${config.diagnosticPrefix}_ROOT_VERSION_SYNTHESIZED`,
+      severity: 'info',
+      subject:  'graph',
+      message:  `private root entry carries no version; synthesised '${rootVersion}'`,
+    })
+  }
+  pathToId.set('', rootId)
+  idToEntry.set(rootId, rootEntry)
+  builder.addNode({
+    id: rootId,
+    name: rootName,
+    version: rootVersion,
+    peerContext: [],
+    workspacePath: '',
+  })
+}
+
+function indexNpmWorkspaceLinkNames(context: NpmParseContext): void {
+  const { linkNameByPath, packages } = context
+  // npm `link: true` entries are the symlinks (`node_modules/<pkgname>` →
+  // `resolved: <member-path>`) through which the rest of the tree references
+  // a workspace member. They are the authoritative source of a member's
+  // package name when the member's own `packages/<path>` entry omits it
+  // (private workspaces routinely do — a member's `packages/<dir>` entry can
+  // carry a version but no name). Unlike the path's last segment, the link
+  // name handles scoped packages (`@scope/pkg` linked from a `packages/pkg`
+  // dir). Build the path → link-name map up front.
+  for (const [key, entry] of Object.entries(packages)) {
+    if (entry.link !== true || typeof entry.resolved !== 'string') continue
+    const at = key.lastIndexOf('node_modules/')
+    if (at < 0) continue
+    const linkName = key.slice(at + 'node_modules/'.length)
+    if (!linkNameByPath.has(entry.resolved)) linkNameByPath.set(entry.resolved, linkName)
+  }
+}
+
+function addWorkspaceMemberNodes(context: NpmParseContext): void {
+  const { builder, config, idToEntry, linkNameByPath, packages, pathToId, workspaceByPath } = context
+  // Pass 1a: workspace member entries (under bare `<wsPath>` keys).
+  for (const [path, entry] of Object.entries(packages)) {
+    if (path === '' || path.startsWith('node_modules/')) continue
+    if (path.includes('/node_modules/')) continue
+    if (entry.link === true) continue
+    // Synthesize a missing name from the symlink that references this member
+    // (falling back to the path's last segment), and a missing version from
+    // the unpublished sentinel `0.0.0` (cf. the root entry above). A private
+    // workspace member legitimately omits either.
+    const synthName = entry.name ?? linkNameByPath.get(path) ?? path.slice(path.lastIndexOf('/') + 1)
+    const synthVersion = entry.version ?? '0.0.0'
+    if (entry.name === undefined || entry.version === undefined) {
+      builder.diagnostic({
+        code:     `${config.diagnosticPrefix}_WORKSPACE_MEMBER_SYNTHESIZED`,
+        severity: 'info',
+        subject:  'graph',
+        message:  `private workspace member ${JSON.stringify(path)} omits ${entry.name === undefined ? 'name' : ''}${entry.name === undefined && entry.version === undefined ? '/' : ''}${entry.version === undefined ? 'version' : ''}; synthesised ${synthName}@${synthVersion}`,
+      })
+    }
+    const name = synthName
+    const version = synthVersion
+    const id = `${name}@${version}`
+    if (idToEntry.has(id) && idToEntry.get(id) !== entry) {
+      throw new LockfileError({
+        code: 'IRREDUCIBLE_LOSS',
+        message: `two npm-${config.lockfileVersion} entries collapse onto NodeId ${id}`,
+      })
+    }
+    pathToId.set(path, id)
+    idToEntry.set(id, entry)
+    workspaceByPath.set(path, id)
+    builder.addNode({
+      id,
+      name,
+      version,
+      peerContext: [],
+      workspacePath: path,
+    })
+  }
+}
+
+function addInstalledPackageNodes(context: NpmParseContext): void {
+  const { builder, config, diagnostics, idToEntry, packages, pathToId } = context
+  // Pass 1b: node_modules/... entries. Workspace-member paths must already be
+  // indexed because link resolution below reads `pathToId`.
+  for (const [path, entry] of Object.entries(packages)) {
+    if (!path.startsWith('node_modules/') && !path.includes('/node_modules/')) continue
+
+    if (entry.link === true) {
+      const target = entry.resolved
+      if (target === undefined) {
+        throw parseFailed(config, `link entry ${JSON.stringify(path)} missing resolved`)
+      }
+      const targetId = pathToId.get(target)
+      if (targetId === undefined) {
+        throw parseFailed(config, `link entry ${JSON.stringify(path)} resolves to unknown workspace ${JSON.stringify(target)}`)
+      }
+      pathToId.set(path, targetId)
+      continue
+    }
+
+    // An uninstalled optional dependency: npm records a bare `{optional: true}`
+    // placeholder (no version / resolved / integrity) for a platform-specific
+    // optional native it did not install on this platform — e.g. a nested
+    // `node_modules/<pkg>/node_modules/<native-addon>` placeholder. There is
+    // no resolved instance to model, so skip it; the consumer's
+    // `optionalDependencies` edge simply finds no target, which is valid for
+    // an optional dep (emits a benign unresolved-dep warning at most).
+    if (entry.version === undefined && entry.resolved === undefined && entry.optional === true) {
+      continue
+    }
+
+    const tailName = nameFromInstallPath(config, path, entry)
+    const version = entry.version
+    if (version === undefined) {
+      throw parseFailed(config, `entry ${JSON.stringify(path)} missing version`)
+    }
+    // ADR-0032 — fold the `+src=` non-registry discriminator into the NodeId so a
+    // git `is@6.3.1` cannot collapse onto a registry `is@6.3.1`.
+    const source = sourceDiscriminatorOfNpmEntry(entry)
+    const id = serializeNodeId(tailName, version, [], undefined, source)
+    pathToId.set(path, id)
+
+    const existing = idToEntry.get(id)
+    if (existing === undefined) {
+      idToEntry.set(id, entry)
+      const node: Node = {
+        id,
+        name: tailName,
+        version,
+        peerContext: [],
+      }
+      // ADR-0032 — carry the slot on the Node so the seal re-derives the id.
+      if (source !== undefined) node.source = source
+      builder.addNode(node)
+      if (entry.integrity !== undefined || hasTarballPayload(entry)) {
+        builder.setTarball({ name: tailName, version, source }, tarballPayloadOf(entry, id, diagnostics))
+      }
+    }
+  }
+}
+
+function addNpmPackageEdges(context: NpmParseContext): void {
+  const {
+    builder,
+    config,
+    diagnostics,
+    edgeDeclaredNames,
+    edgeRanges,
+    nodeSidecar,
+    packages,
+    pathToId,
+    workspaceByPath,
+  } = context
+  // Pass 2: edges + per-node sidecar data. `pathToId` is total before this
+  // phase begins, so dependency resolution cannot observe a partial node pass.
+  for (const [path, entry] of Object.entries(packages)) {
+    const srcId = pathToId.get(path)
+    if (srcId === undefined) continue
+    if (entry.link === true && path !== '') continue
+
+    const nodeSide = ensureSidecar(nodeSidecar, srcId)
+    if (entry.inBundle === true) nodeSide.inBundle = true
+    if (entry.dev === true) nodeSide.dev = true
+    if (entry.optional === true) nodeSide.optional = true
+    if (entry.peer === true) nodeSide.peer = true
+    // WS-LINK (ADR-0027 §4): capture npm's `extraneous` flag so a workspace
+    // member that npm did NOT link (present on disk, absent from the install
+    // graph) re-emits without a top-level link on replay.
+    if (entry.extraneous === true) nodeSide.extraneous = true
+
+    // Adapter-specific per-entry capture (npm-2 mirror: stash `resolved`
+    // URL for legacy-mirror emit). Core stays version-neutral — it does
+    // not know what the hook is for.
+    config.hooks?.captureEntry?.(srcId, entry)
+
+    const isRoot = path === ''
+    const isWorkspaceMember = workspaceByPath.has(path)
+    const treatAsManifest = isRoot || isWorkspaceMember
+
+    addDepEdges(builder, edgeRanges, edgeDeclaredNames, path, srcId, entry.dependencies, 'dep', pathToId, diagnostics)
+    addDepEdges(builder, edgeRanges, edgeDeclaredNames, path, srcId, entry.optionalDependencies, 'optional', pathToId, diagnostics)
+
+    if (treatAsManifest) {
+      addDepEdges(builder, edgeRanges, edgeDeclaredNames, path, srcId, entry.devDependencies, 'dev', pathToId, diagnostics)
+    } else if (entry.devDependencies !== undefined) {
+      nodeSide.devDependencies = { ...entry.devDependencies }
+    }
+
+    if (entry.peerDependencies !== undefined) {
+      nodeSide.peerDependencies = { ...entry.peerDependencies }
+    }
+    if (entry.optionalDependencies !== undefined && !treatAsManifest) {
+      nodeSide.optionalDependencies = { ...entry.optionalDependencies }
+    }
+
+    if (path !== '' && !workspaceByPath.has(path)) {
+      nodeSide.installPaths.push(path)
+    }
+  }
+}
+
+function captureNpmRootMeta(context: NpmParseContext): NpmRootMeta {
+  const { diagnostics, lf, nodeSidecar, rootEntry } = context
+  // Pass 3: root meta.
+  const rootMeta: NpmRootMeta = {
+    name: lf.name ?? rootEntry.name,
+    version: lf.version ?? rootEntry.version,
+    requires: lf.requires,
+  }
+  if (rootEntry.workspaces !== undefined) rootMeta.workspaces = rootEntry.workspaces.slice()
+  if (rootEntry.bundleDependencies !== undefined) {
+    rootMeta.bundleDependencies = Array.isArray(rootEntry.bundleDependencies)
+      ? rootEntry.bundleDependencies.slice()
+      : rootEntry.bundleDependencies
+  }
+  if (rootEntry.devDependencies !== undefined) rootMeta.devDependencies = { ...rootEntry.devDependencies }
+  if (rootEntry.peerDependencies !== undefined) rootMeta.peerDependencies = { ...rootEntry.peerDependencies }
+  if (rootEntry.optionalDependencies !== undefined) rootMeta.optionalDependencies = { ...rootEntry.optionalDependencies }
+
+  // Defensive capture ONLY. Real npm `package-lock.json` carries NO
+  // `packages[""].overrides` — npm reads the override policy from the root
+  // MANIFEST, never the lock (canary: overrides-canary.test.ts). This fires only
+  // for a non-native lock that happens to carry the field; capture preserves it
+  // in the graph (`nativeOverrides` verbatim + `overrides` canonical for query) but
+  // NEVER re-emit it into npm output (see stringify — the field is not npm-native
+  // and cannot preserve policy). F6 capture is recipe-pure; RECIPE_OVERRIDE_
+  // NORMALISED funnels through the same `diagnostics` buffer as the rest of parse.
+  if (rootEntry.overrides !== undefined) {
+    const captured = captureOverrides(rootEntry.overrides, 'npm', d => diagnostics.push(d))
+    if (captured.canonical.length > 0) rootMeta.overrides = captured.canonical
+    if (captured.native.npmOverrides !== undefined) {
+      rootMeta.nativeOverrides = captured.native.npmOverrides as Record<string, unknown>
+    }
+  }
+
+  for (const sc of nodeSidecar.values()) {
+    sc.installPaths = Array.from(new Set(sc.installPaths)).sort(cmpStr)
+  }
+  return rootMeta
+}
+
+function emitNpmParseDiagnostics(context: NpmParseContext): void {
+  const { builder, config, diagnostics, lf, packages } = context
+  // Top-level `dependencies` handling: packages-only emits the legacy-mirror
+  // warning unconditionally; dual delegates drift detection to the hook
+  // (which has the npm-2-specific shape knowledge).
+  if (lf.dependencies !== undefined && config.topLevelShape === 'packages-only') {
+    diagnostics.push({
+      code: `${config.diagnosticPrefix}_UNEXPECTED_LEGACY_MIRROR`,
+      severity: 'warning',
+      message: `npm-${config.lockfileVersion} lockfile carries a top-level "dependencies" mirror; dropping on parse`,
+    })
+  }
+  config.hooks?.emitParseDiagnostics?.({ lf, packages, diagnostics })
+
+  for (const diagnostic of diagnostics) {
+    builder.diagnostic(diagnostic)
+  }
+}
+
+function sealNpmParseContext(context: NpmParseContext, rootMeta: NpmRootMeta): Graph {
+  const {
+    builder,
+    config,
+    edgeDeclaredNames,
+    edgeRanges,
+    lf,
+    nodeSidecar,
+    packages,
+    rootId,
+    workspaceByPath,
+  } = context
+  try {
+    const graph = builder.seal()
+    sidecarByGraph.set(graph, {
+      rootId,
+      rootMeta,
+      edgeRanges,
+      edgeDeclaredNames,
+      nodes: nodeSidecar,
+      workspaceByPath,
+    })
+    config.hooks?.afterParse?.({ graph, lf, packages, rootId })
+    return graph
+  } catch (error) {
+    if (error instanceof GraphError) {
+      throw new LockfileError({
+        code: 'PARSE_FAILED',
+        message: `npm-${config.lockfileVersion} seal failed: ${error.message}`,
+      })
+    }
+    throw error
+  }
+}
 
 function hasTarballPayload(entry: NpmEntry): boolean {
   return entry.integrity !== undefined

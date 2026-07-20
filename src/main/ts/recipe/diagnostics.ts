@@ -103,7 +103,7 @@ export function emitPeerMetaIncomplete(
   onDiagnostic(recipePeerMetaIncomplete(nodeId, peerName, reason))
 }
 
-// === Descriptor→node resolution diagnostics (Bug #99) =======================
+// === Descriptor→node resolution diagnostics (Bug #99) =====================
 //
 // The yarn-family descriptor→node ladder (spec/formats/_common.md
 // §"Descriptor→node resolution") layers source-safe fallback rungs over the
@@ -159,7 +159,7 @@ export function resolutionPinUnresolvedDiagnostic(
  * `<prefix>_PATCH_PREFERRED` (info, Bug #104, yarn-berry only) — a consumer's
  * REGISTRY range bound a base node, but the lock carries a sibling `patch:` copy
  * of that same `name@version`, so the edge was REDIRECTED to the patched node
- * (yarn's lock-borne `patchedDependencies` behaviour: a patch applies to every
+ * (yarn's lock-borne `patchedDependencies` behavior: a patch applies to every
  * consumer of the base). Fired only when the redirect happened WITHOUT an
  * override having forced it — so the purely lock-derived heuristic is
  * observable. With `manifests`, the override rung performs the redirect itself
@@ -314,10 +314,10 @@ export function emitWorkspaceUnresolved(
   onDiagnostic(workspaceUnresolvedDiagnostic(edge))
 }
 
-// === F5 patch byte normalisation diagnostics ================================
+// === F5 patch byte normalization diagnostics ================================
 //
 // `RECIPE_PATCH_NORMALISED` (info, per ADR-0014 §5) — once per affected
-// node when the F5 byte normalisation altered at least one byte of the
+// node when the F5 byte normalization altered at least one byte of the
 // patch input (CRLF → LF rewrite or leading BOM stripped). When source
 // bytes pass through unchanged the diagnostic does not fire; this is
 // observability for editor / `core.autocrlf` rewrites, not a noise floor.
@@ -342,7 +342,7 @@ export function emitPatchNormalised(
 //
 // `RECIPE_OVERRIDE_NORMALISED` (info, per ADR-0025 §6) — emitted once per
 // successful `captureOverrides` call when a manifest's PM-native override
-// block is normalised into the canonical `OverrideConstraint[]` form. Carries
+// block is normalized into the canonical `OverrideConstraint[]` form. Carries
 // the source PM and the canonical entry count for observability. This is the
 // CAPTURE-side info diagnostic; the projection-side loss codes
 // (`OVERRIDE_PARENT_REF_DROPPED` / `OVERRIDE_GLOB_NARROWED` /

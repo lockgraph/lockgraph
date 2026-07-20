@@ -36,7 +36,7 @@ export interface PackumentVersion {
   hasInstallScript?:    boolean
   /** SPDX license id (or expression). The abbreviated (corgi) packument OMITS
    *  this — it is present only on a FULL single-version manifest (see
-   *  `RegistryAdapter.manifest`). Normalised from `license` string / legacy
+   *  `RegistryAdapter.manifest`). Normalized from `license` string / legacy
    *  `{ type }` / `licenses[]` forms. Consumed by the completion `license`
    *  constraint. */
   license?:             string

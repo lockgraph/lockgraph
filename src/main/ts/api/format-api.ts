@@ -54,6 +54,8 @@ import {
   rememberManifestOverrides,
 } from '../recipe/override-carrier.ts'
 
+// === PROJECTION-AWARE STRINGIFY =============================================
+
 export type StringifyDispatchOptions = StringifyDispatchContext
 
 function observedPolicyCarrier(
@@ -153,6 +155,8 @@ export function stringifyProjected(
   return Object.freeze({ output, diagnostics, losses })
 }
 
+// === FORMAT DETECTION AND PARSING ===========================================
+
 export function check(format: FormatId, input: string): boolean {
   return checkFormat(format, input)
 }
@@ -199,6 +203,8 @@ export function parse(format: FormatId, input: string, options: ParseOptions = {
   attachParsedMutationLineage(graph, format, hasFormatAdapterState(format, graph))
   return graph
 }
+
+// === OVERRIDES AND STRINGIFY DISPATCH =======================================
 
 /** Map a FormatId to its override grammar family (ADR-0025 §6 capture). */
 export function packageManagerFamilyOf(format: FormatId): OverridePM {
@@ -304,6 +310,8 @@ export function stringify(
   }
   return projected.output
 }
+
+// === CANONICAL GRAPH SNAPSHOTS ==============================================
 
 export function assessedDiagnostic(
   code: string,
@@ -446,6 +454,8 @@ export function canonicalGraphSnapshot(
     tarballs,
   })
 }
+
+// === PROJECTION SNAPSHOTS ===================================================
 
 /** Snapshot the graph as the target adapter will project it. Most targets use
  * the canonical graph unchanged. Yarn classic is the exception for freshly
