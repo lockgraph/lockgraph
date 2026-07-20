@@ -288,33 +288,12 @@ function projectCompanionPlan(
     )], pnpmWorkspaceNames)
   }
 
-  const projected = target.manager === 'yarn'
-    ? projectYarn(graph, canonical, target)
-    : target.manager === 'npm'
-      ? projectedRecord(canonical, 'npm')
-      : target.manager === 'pnpm'
-        ? projectedRecord(canonical, 'pnpm')
-        : target.manager === 'bun'
-          ? projectedRecord(canonical, 'bun')
-          : { diagnostics: Object.freeze([diagnostic(
-              'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
-              'target has no companion override projection',
-              { target: target.format },
-            )]) }
+  const projected = projectedCompanionOverrides(graph, canonical, target)
   if (projected.value === undefined) {
     return failedPlan(target, 'unsatisfied', projected.diagnostics, pnpmWorkspaceNames)
   }
 
-  let patch: CompanionSetOperation
-  if (target.manager === 'npm' || target.manager === 'bun') {
-    patch = operation('package.json', '/overrides', projected.value)
-  } else if (target.manager === 'yarn') {
-    patch = operation('package.json', '/resolutions', projected.value)
-  } else if (target.capabilities.overridesConfigLocation === 'workspace-yaml') {
-    patch = operation('pnpm-workspace.yaml', '/overrides', projected.value)
-  } else {
-    patch = operation('package.json', '/pnpm/overrides', projected.value)
-  }
+  const patch = companionOperation(target, projected.value)
   return Object.freeze({
     status: 'satisfied',
     patches: Object.freeze([patch]),
@@ -322,4 +301,33 @@ function projectCompanionPlan(
     target,
     pnpmWorkspaceNames,
   })
+}
+
+function projectedCompanionOverrides(
+  graph: Graph,
+  canonical: readonly OverrideConstraint[],
+  target: TargetProfile,
+): { value?: Record<string, unknown>; diagnostics: readonly Diagnostic[] } {
+  if (target.manager === 'yarn') return projectYarn(graph, canonical, target)
+  if (target.manager === 'npm') return projectedRecord(canonical, 'npm')
+  if (target.manager === 'pnpm') return projectedRecord(canonical, 'pnpm')
+  if (target.manager === 'bun') return projectedRecord(canonical, 'bun')
+  return { diagnostics: Object.freeze([diagnostic(
+    'COMPLETENESS_TARGET_FEATURE_UNSUPPORTED',
+    'target has no companion override projection',
+    { target: target.format },
+  )]) }
+}
+
+function companionOperation(
+  target: TargetProfile,
+  value: Record<string, unknown>,
+): CompanionSetOperation {
+  if (target.manager === 'npm' || target.manager === 'bun') {
+    return operation('package.json', '/overrides', value)
+  }
+  if (target.manager === 'yarn') return operation('package.json', '/resolutions', value)
+  return target.capabilities.overridesConfigLocation === 'workspace-yaml'
+    ? operation('pnpm-workspace.yaml', '/overrides', value)
+    : operation('package.json', '/pnpm/overrides', value)
 }
