@@ -75,6 +75,8 @@ import type {
   ConvertOptions,
 } from './types.ts'
 
+// === BASE CONVERSION ========================================================
+
 function mergeManifestSources(
   sourceFormat: FormatId,
   prepared: PreparedConvertInput['manifests'],
@@ -321,6 +323,8 @@ export function convert(input: ConvertInput, options: ConvertOptions): Promise<s
     defaultFileSystem,
   })
 }
+
+// === ASSESSED CONVERSION ====================================================
 
 const assessedBlockingDiagnostic = (diagnostic: Diagnostic): boolean =>
   diagnostic.severity !== 'info'
@@ -960,6 +964,8 @@ export function convertAssessed(
   }, options.onDiagnostic))
 }
 
+// === PROJECT CONVERSION =====================================================
+
 /** Produces a project lockfile and companion operations only as one satisfied bundle. */
 export function convertProject(
   input: string,
@@ -987,6 +993,8 @@ export function convertProject(
     assessment: runtime.assessment,
   })
 }
+
+// === FROZEN PREPARATION =====================================================
 
 interface FrozenCandidateState {
   readonly graph: Graph
@@ -1189,6 +1197,8 @@ export async function prepareFrozen(
   }))
   return Object.freeze({ candidate, assessment: runtime.assessment })
 }
+
+// === FROZEN CERTIFICATION ===================================================
 
 function receiptDiagnostic(
   candidate: FrozenCandidate,

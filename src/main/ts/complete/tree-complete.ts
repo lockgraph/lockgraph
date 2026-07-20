@@ -95,7 +95,7 @@ export interface CompletionOptions {
    *  `NO_CANDIDATE`; `'accept'` skips the check. */
   onUnevaluable?: OnUnevaluable
   /** OPT-IN combinatorial budget for the bounded-backtracking DISCOVERY probe
-   *  (ADR-0037 v2). Absent (default) → v1 node-local behaviour verbatim. When
+   *  (ADR-0037 v2). Absent (default) → v1 node-local behavior verbatim. When
    *  set AND a dep hits `NO_CANDIDATE`, the resolver searches (bounded by
    *  `maxCombinations`) for a LOWER version of the consumer whose closure is
    *  constraint-clean and attaches it to the diagnostic as a `suggestion` (the
@@ -117,7 +117,7 @@ function canonicalRange(range: string): string {
   return range.startsWith('npm:') ? range.slice(4) : range
 }
 
-/** Identity key for a descriptor (`name@range`), protocol-normalised. A berry
+/** Identity key for a descriptor (`name@range`), protocol-normalized. A berry
  *  lock binds each such key to exactly ONE resolution project-wide. */
 const descriptorKey = (name: string, range: string): string =>
   `${name} ${canonicalRange(range)}`

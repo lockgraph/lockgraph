@@ -11,6 +11,8 @@ import type {
   TargetRequest,
 } from './types.ts'
 
+// === VERSION PARSING ========================================================
+
 interface ManagerVersion {
   major: number
   minor?: number
@@ -47,6 +49,8 @@ function readonlySet<T>(values: Iterable<T>): ReadonlySet<T> {
   })
   return view
 }
+
+// === CAPABILITY PROFILES ====================================================
 
 const edges = (...kinds: EdgeKind[]): ReadonlySet<EdgeKind> => readonlySet(kinds)
 const metadata = (...fields: PackageMetadataField[]): ReadonlySet<PackageMetadataField> => readonlySet(fields)
@@ -224,6 +228,8 @@ const lockgraph = capabilities({
   metadataFields: metadata(...PACKAGE_METADATA_FIELDS),
 })
 
+// === COMPATIBILITY GUARDS ===================================================
+
 function assertCompatible(format: FormatId, version: ManagerVersion | undefined): void {
   if (version === undefined) return
   const major = version.major
@@ -338,6 +344,8 @@ function resolvedCapabilities(
     case 'lockgraph': return { capabilities: lockgraph, ambiguous: [] }
   }
 }
+
+// === TARGET RESOLUTION ======================================================
 
 export function targetProfileOf(request: TargetRequest): TargetProfile {
   const version = request.managerVersion === undefined ? undefined : parseVersion(request.managerVersion)

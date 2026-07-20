@@ -10,6 +10,8 @@ import { detectGraphFeatures, type GraphFeature } from './features.ts'
 import { targetProfileOf } from './targets.ts'
 import type { TargetRequest } from './types.ts'
 
+// === PROJECTION MODEL =======================================================
+
 export interface ProjectionResult {
   readonly output: string
   readonly diagnostics: readonly Diagnostic[]
@@ -69,6 +71,8 @@ export function projectedStructuralMetadataDrops(
   }
   return projected.size === 0 ? undefined : projected
 }
+
+// === LOSS CLASSIFICATION ====================================================
 
 function allowLoss(): ProjectionRemedy {
   return Object.freeze({ kind: 'allow-loss', option: 'strict', value: false })
@@ -166,6 +170,8 @@ function structuralExpectedFeature(
     remedy,
   )
 }
+
+// === GRAPH PREFLIGHT ========================================================
 
 function workspaceProtocolPresent(graph: Graph): boolean {
   for (const node of graph.nodes()) {
@@ -350,6 +356,8 @@ export function projectionPreflightLosses(
   return dedupeProjectionLosses(losses)
 }
 
+// === DIAGNOSTIC CLASSIFICATION ==============================================
+
 function featureOfDiagnostic(diagnostic: Diagnostic, target: FormatId): string {
   const feature = diagnostic.data?.feature
   // String.prototype.replaceAll is Node 15+; the package floor is Node 14.18 and
@@ -433,6 +441,8 @@ export function projectionDiagnosticLosses(
   })
   return dedupeProjectionLosses(losses)
 }
+
+// === PROJECTION REPORTING ===================================================
 
 function subjectKey(subject: Diagnostic['subject']): string {
   return subject === undefined ? '' : typeof subject === 'string' ? subject : JSON.stringify(subject)

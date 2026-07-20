@@ -64,6 +64,8 @@ import {
 import { hydrateMetadata } from './hydrate-metadata.ts'
 import { berryCacheKeyFor, refurbish, type TarballSource } from './refurbish.ts'
 
+// === ENRICHMENT CONTRACT ====================================================
+
 export interface EnrichSources {
   readonly manifests?: Readonly<Record<string, Manifest>>
   readonly registry?: RegistryAdapter
@@ -101,6 +103,8 @@ interface MemoizedRegistry {
   manifest(name: string, version: string): Promise<PackumentVersion | undefined>
   hasManifest(): boolean
 }
+
+// === REGISTRY MEMOIZATION ===================================================
 
 const packageConflictDimensions = new Set([
   'resolvedGraph',
@@ -157,6 +161,8 @@ function memoizeRegistry(registry: RegistryAdapter): MemoizedRegistry {
     hasManifest: () => registry.manifest !== undefined,
   }
 }
+
+// === SOURCE ADAPTERS ========================================================
 
 function mutableValue<T>(value: T): T {
   if (Array.isArray(value)) return value.map(item => mutableValue(item)) as T
@@ -233,6 +239,8 @@ function sourceAdapterEnrich(
 ): GraphResult {
   return SOURCE_ADAPTER_REGISTRY[format].enrich(graph, { manifests, overrides })
 }
+
+// === EVIDENCE COLLECTION ====================================================
 
 function appendEvidenceDiagnostics(
   diagnostics: Diagnostic[],
@@ -404,6 +412,8 @@ function artifactRefs(graph: Graph, enriched: readonly string[]): EvidenceRef[] 
   }
   return refs
 }
+
+// === ENRICHMENT ORCHESTRATION ===============================================
 
 export async function enrich(
   graph: Graph,

@@ -1,11 +1,11 @@
 // ADR-0023 §3.2 — `applyPatch`.
 //
 // Wire `Node.patch` for every node matching a spec; canonical bytes via
-// ADR-0014 §4.F5 normalisation. Sentinel-keyed source nodes are refused
+// ADR-0014 §4.F5 normalization. Sentinel-keyed source nodes are refused
 // at the modifier floor (B1 / F5): the modifier detects the sentinel
 // BEFORE invoking the Mutator and emits MODIFY_SENTINEL_REFUSED.
 //
-// ADR-0023 §7.4 / §9.2: when F5 normalisation rewrites ≥ 1 byte of the
+// ADR-0023 §7.4 / §9.2: when F5 normalization rewrites ≥ 1 byte of the
 // patch input, fire RECIPE_PATCH_NORMALISED (info, recipe-layer code)
 // once per applyPatch call. Both that and MODIFY_PATCH_APPLIED land on
 // Graph.diagnostics() via Mutator.diagnostic (§8.6 emission path).
@@ -50,7 +50,7 @@ export interface ApplyPatchResult {
  * Mutator would throw LockfileError({code:'IRREDUCIBLE_LOSS'}) on
  * setTarball, so we pre-detect and emit MODIFY_SENTINEL_REFUSED.
  *
- * Bytes are F5-normalised before the F2 sha512 fingerprint runs.
+ * Bytes are F5-normalized before the F2 sha512 fingerprint runs.
  */
 export async function applyPatch(
   graph: Graph,
@@ -66,7 +66,7 @@ export async function applyPatch(
     if (onDiagnostic !== undefined) onDiagnostic(d)
   }
 
-  // F5 normalisation + F2 sha512 fingerprint in one linear pass.
+  // F5 normalization + F2 sha512 fingerprint in one linear pass.
   const { hash, normalised } = hashAndNormaliseBytes(patchBytes)
   const range = spec.range ?? '*'
 
@@ -139,7 +139,7 @@ export async function applyPatch(
   }
 
   // ADR-0023 §7.4 / §9.2: RECIPE_PATCH_NORMALISED fires once per applyPatch
-  // invocation when F5 normalisation altered ≥ 1 byte (CRLF→LF / BOM strip).
+  // invocation when F5 normalization altered ≥ 1 byte (CRLF→LF / BOM strip).
   // LF-only input passes through unchanged — no emit. The byte event is
   // call-level, but we subject it to the first patched NodeId so adapters
   // that key by NodeId (recipe convention) get a concrete locus; with no

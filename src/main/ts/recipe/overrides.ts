@@ -10,7 +10,7 @@
 //   - pnpm  `pnpm.overrides`   flat selectors: `foo`, `foo@2`, `a>b>c` chains,
 //                              leading-`>foo` transitive-only.
 //
-// `captureOverrides` normalises a PM-native override block into BOTH the
+// `captureOverrides` normalizes a PM-native override block into BOTH the
 // canonical PM-neutral `OverrideConstraint[]` (load-bearing per ADR-0013) and
 // the verbatim `Manifest.native.*` block (attribution, for lossless same-PM
 // round-trip). The canonical superset is modelled on npm's nested form — the
@@ -391,7 +391,7 @@ function projectPnpm(
 // Bun's `overrides` / `resolutions` grammar is FLAT top-level only — a global
 // `{ name: to }` (or `name@range`). An ancestry-scoped (parentPath) constraint has
 // no Bun representation, so it is DROPPED with BUN_OVERRIDE_NESTED_UNSUPPORTED
-// rather than emitted as a nested block bun cannot read. (Bun normalises manifest
+// rather than emitted as a nested block bun cannot read. (Bun normalizes manifest
 // `resolutions` into this same `overrides` block; capture already folds both into
 // the canonical form, so this projection is the single flat emitter.)
 function projectBun(

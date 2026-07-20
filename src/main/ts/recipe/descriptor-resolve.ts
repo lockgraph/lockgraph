@@ -29,7 +29,7 @@
 //     often < `latest`).
 //   - `patchPreferenceFor` — Rung-3 OVERLAY (berry only): after the registry
 //     range bound its base node, prefer a sibling PATCH node of the same
-//     `name@version` (the lock-borne yarn behaviour — a `patchedDependencies`
+//     `name@version` (the lock-borne yarn behavior — a `patchedDependencies`
 //     entry redirects every consumer of the base to the patched copy). A single
 //     patch sibling redirects; ≥2 disambiguate by `::locator=` against the
 //     consumer; no match keeps the base (no guess). PURE: returns the patch id or
@@ -46,9 +46,11 @@ import semver from 'semver'
 import type { ResolutionCanonical } from './resolution.ts'
 import type { OverrideConstraint } from '../graph.ts'
 
+// === CANDIDATE RESOLUTION ===================================================
+
 // Source class of a candidate node, projected from `TarballPayload.resolution`
 // (recipe/resolution.ts F3 taxonomy). `undefined` (no canonical resolution at
-// all — e.g. a workspace node, or a node whose resolution never canonicalised)
+// all — e.g. a workspace node, or a node whose resolution never canonicalized)
 // is treated as NON-registry and is INELIGIBLE for an `npm:` match: we cannot
 // prove it is a registry tarball, and risk (d) says an unprovable source must
 // not bind a registry range.
@@ -210,6 +212,8 @@ export function catalogResolve(range: string, candidates: readonly SemverCandida
   return { kind: 'ambiguous', candidateIds: eligible.map(c => c.id).sort(cmpStr) }
 }
 
+// === OVERRIDE RESOLUTION ====================================================
+
 /**
  * Rung 2 — OVERRIDE-MAP forced link. Find the human-declared override pin for a
  * dependency `(depName, declaredRange, consumerPath)` and return its verbatim
@@ -299,7 +303,7 @@ const specificity = (c: OverrideConstraint): number =>
 // range, protocol-insensitively. yarn `resolutions` keys carry the descriptor
 // protocol verbatim (`csstype@npm:^3.0.2` → condition `npm:^3.0.2`), while the
 // consumer deps-block range may be bare or `npm:`-prefixed depending on the
-// adapter's normalisation. Strip a leading `npm:` from BOTH sides before the
+// adapter's normalization. Strip a leading `npm:` from BOTH sides before the
 // exact compare so the two surfaces meet. Non-`npm:` protocols (`patch:`, etc.)
 // are compared verbatim (they are descriptor-identifying, not registry ranges).
 function conditionMatches(versionCondition: string, declaredRange: string): boolean {
@@ -325,6 +329,8 @@ function parentPathMatches(parentPath: readonly string[], consumerPath: readonly
   return true
 }
 
+// === PATCH PREFERENCE =======================================================
+
 /**
  * A patch node sibling of some base `name@version` (Rung-3 overlay input,
  * berry only). `id` is the patch node id; `locatorQualifier` is its
@@ -341,7 +347,7 @@ export interface PatchSibling {
 /**
  * Rung-3 OVERLAY — PATCH PREFERENCE (berry only; classic flattens patches so it
  * never calls this). After a REGISTRY range bound its base node (Rung 0 or Rung
- * 3) with NO override having fired, yarn's lock-borne behaviour is to redirect
+ * 3) with NO override having fired, yarn's lock-borne behavior is to redirect
  * the consumer to a sibling PATCH copy of the same `name@version` when the lock
  * carries one (the `patchedDependencies` map patches the package for every
  * consumer of the base). This primitive is the pure redirect decision:

@@ -7,10 +7,10 @@
 // reads — those layers stack on top via CacheAdapter (Phase D-B) and
 // the modify/complete tree-walks (already landed on Phase B/Phase C).
 //
-// Normalisation: the npm registry returns each version under
+// Normalization: the npm registry returns each version under
 // `versions[v]` with `dist.tarball` / `dist.integrity` nested under dist.
 // Per Phase C contract `PackumentVersion.tarball` / `.integrity` are
-// flat fields, so we lift them out of `dist` during normalisation.
+// flat fields, so we lift them out of `dist` during normalization.
 // dist-tags ship under the hyphenated key `'dist-tags'`; we re-key it
 // to `distTags` for the contract.
 //
@@ -108,7 +108,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
     try {
       const response = await limit(() => fetchImpl(url, { headers }))
       if (!response.ok) return undefined
-      return normaliseVersion(name, version, await response.json())
+      return normalizeVersion(name, version, await response.json())
     } catch {
       return undefined
     }
@@ -129,7 +129,7 @@ export function liveRegistry(opts: LiveRegistryOptions = {}): LiveRegistryAdapte
       }
 
       const body = await response.json()
-      return normalisePackument(name, body)
+      return normalizePackument(name, body)
     },
 
     async resolve(name, range) {
@@ -214,13 +214,13 @@ function encodePackageName(name: string): string {
   return name.startsWith('@') ? name.replace('/', '%2F') : name
 }
 
-function normalisePackument(name: string, body: any): Packument {
+function normalizePackument(name: string, body: any): Packument {
   const rawDistTags: Record<string, string> = body?.['dist-tags'] ?? body?.distTags ?? {}
   const rawVersions: Record<string, any>   = body?.versions ?? {}
 
   const versions: Record<string, PackumentVersion> = {}
   for (const [version, raw] of Object.entries(rawVersions)) {
-    versions[version] = normaliseVersion(name, version, raw)
+    versions[version] = normalizeVersion(name, version, raw)
   }
 
   return {
@@ -230,7 +230,7 @@ function normalisePackument(name: string, body: any): Packument {
   }
 }
 
-function normaliseVersion(name: string, version: string, raw: any): PackumentVersion {
+function normalizeVersion(name: string, version: string, raw: any): PackumentVersion {
   const dist: any = raw?.dist ?? {}
   const out: PackumentVersion = {
     name:    typeof raw?.name === 'string' ? raw.name : name,
@@ -262,7 +262,7 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
   if (typeof raw?.deprecated === 'string')    out.deprecated           = raw.deprecated
   if (isObject(raw?.scripts) && ['preinstall', 'install', 'postinstall']
     .some(name => typeof raw.scripts[name] === 'string')) out.hasInstallScript = true
-  const license = normaliseLicense(raw)
+  const license = normalizeLicense(raw)
   if (license !== undefined)                  out.license              = license
   // Module-format fields (full manifest only; corgi omits them) — for custom
   // module-format constraints via ctx.manifest().
@@ -281,14 +281,14 @@ function normaliseVersion(name: string, version: string, raw: any): PackumentVer
   return out
 }
 
-// Normalise npm's several `license` shapes to a single SPDX-id string (or an
+// Normalize npm's several `license` shapes to a single SPDX-id string (or an
 // expression, left verbatim for the constraint layer to treat as unevaluable):
 //   - `license: "MIT"`                     → `"MIT"`
 //   - `license: { type: "MIT", url }`      → `"MIT"` (deprecated object form)
 //   - `licenses: [{ type: "MIT" }, …]`     → `"MIT OR …"` (deprecated array form)
 // The abbreviated (corgi) packument omits `license` entirely, so this only
 // yields a value on a full single-version manifest.
-function normaliseLicense(raw: any): string | undefined {
+function normalizeLicense(raw: any): string | undefined {
   const l = raw?.license
   // Empty / whitespace-only license strings are "unknown", not the id "" —
   // return undefined so a constraint treats them as unknown, not a comparable id.

@@ -2,7 +2,7 @@
 //
 // Canonical form on Graph: `+patch=<sha512-hex>` slot on TarballKey per
 // ADR-0011 — the slot value is the lowercase 128-char sha512 hex of the
-// patch source bytes after the F5 byte normalisation (CRLF → LF; leading
+// patch source bytes after the F5 byte normalization (CRLF → LF; leading
 // UTF-8 BOM stripped; trailing newline preserved verbatim) has been
 // applied. Sentinel form `unresolved-<sha256-hex>` (per ADR-0011 §Decision)
 // is admitted on the `Node.patch` carrier when patch source bytes are
@@ -88,7 +88,7 @@ export function validateCanonicalHash(raw: string): string | undefined {
 }
 
 /**
- * F5 byte normalisation per ADR-0014 §4.F5 — applied left-to-right BEFORE
+ * F5 byte normalization per ADR-0014 §4.F5 — applied left-to-right BEFORE
  * the F2 sha512 fingerprint runs:
  *
  *   1. Strip a leading UTF-8 BOM (`EF BB BF`) when present.
@@ -139,12 +139,12 @@ export function normalisePatchBytes(input: Uint8Array): {
 
 /**
  * Compute the canonical patch hash from source bytes — `sha512(bytes)` as
- * lowercase hex per ADR-0014 §4.F2, with F5 byte normalisation applied
+ * lowercase hex per ADR-0014 §4.F2, with F5 byte normalization applied
  * first per ADR-0014 §4.F5. Existing callers stay transparent: passing
- * already-LF-normalised input is a no-op fast-path and produces the same
+ * already-LF-normalized input is a no-op fast-path and produces the same
  * hex as raw `sha512(bytes)`.
  *
- * String inputs are encoded as UTF-8 before normalisation (note: the
+ * String inputs are encoded as UTF-8 before normalization (note: the
  * literal characters `\r\n` in a JS string encode to bytes `0x0D 0x0A`,
  * so the rule applies uniformly through both call shapes).
  */
@@ -153,7 +153,7 @@ export function canonicalHashOfBytes(bytes: Uint8Array | string): string {
 }
 
 /**
- * Combined F5 normalisation + F2 sha512 fingerprint in a single linear
+ * Combined F5 normalization + F2 sha512 fingerprint in a single linear
  * pass — returns `{ hash, normalised }`. Adapter call sites that need
  * BOTH the canonical hash AND the normalised-flag (for
  * `RECIPE_PATCH_NORMALISED` emission) MUST use this helper to avoid
@@ -165,9 +165,9 @@ export function hashAndNormaliseBytes(bytes: Uint8Array | string): {
   normalised: boolean
 } {
   const raw = typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes
-  const { bytes: normalised, normalised: didNormalise } = normalisePatchBytes(raw)
-  const hash = createHash('sha512').update(normalised).digest('hex')
-  return { hash, normalised: didNormalise }
+  const { bytes: normalized, normalised: didNormalize } = normalisePatchBytes(raw)
+  const hash = createHash('sha512').update(normalized).digest('hex')
+  return { hash, normalised: didNormalize }
 }
 
 /**

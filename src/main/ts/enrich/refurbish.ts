@@ -23,6 +23,8 @@ import {
   enrichNoop,
 } from './diagnostics.ts'
 
+// === REFURBISHMENT CONTRACT =================================================
+
 /** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3) — wired
  *  by the orchestrator (a CacheAdapter, a registry-backed fetch, or both). */
 export interface TarballSource {
@@ -71,6 +73,8 @@ export interface RefurbishResult {
   unresolved: Diagnostic[]
 }
 
+// === REACHABILITY ===========================================================
+
 const isBerryFormat = (format: string): boolean => format.startsWith('yarn-berry')
 
 /** First lockfile format version of the prefix era (`<cacheKey>/<hex>` per-node
@@ -98,7 +102,7 @@ function isOptionalBuildEdge(graph: Graph, edge: Edge): boolean {
 }
 
 /** Yarn's optionalBuilds set contains packages reachable only through a path
- * that has become optional. Its delete-on-any-required-path behaviour is
+ * that has become optional. Its delete-on-any-required-path behavior is
  * equivalent to finding every node reachable from a workspace through only
  * non-optional edges. */
 function nonOptionalReachableNodes(graph: Graph): ReadonlySet<NodeId> {
@@ -156,6 +160,8 @@ function ordinaryRequiredNodes(graph: Graph, format: string): ReadonlySet<NodeId
     ? firstVisitRequiredNodes(graph)
     : nonOptionalReachableNodes(graph)
 }
+
+// === BERRY LOCATOR IDENTITY =================================================
 
 function defaultBerryNpmLocator(node: Node): string {
   return `${node.name}@npm:${node.version}`
@@ -256,6 +262,8 @@ export function berryCacheKeyFor(
   return inference === 'format-default' && isPrefixEraFormat(format) ? '10c0' : undefined
 }
 
+// === CHECKSUM CALIBRATION ===================================================
+
 /** A `Recompute` reproduces yarn's cache-zip digest for `(tgz, name, cacheKey)`,
  *  or `undefined` when its backend cannot (e.g. libzip not installed). Both the
  *  pure-JS `pako` port (via `selectPakoProfile`) and the optional `@yarnpkg/libzip`
@@ -304,7 +312,7 @@ async function calibrate(graph: Graph, cacheKey: string, source: TarballSource, 
  *      outside our port (a foreign yarn build) → `undefined` (defer / try libzip).
  *    • only non-discriminating anchors matched (all single-dir), or no fetchable
  *      checksummed anchor exists (bare-era / fresh convert) → default to lazy/tar
- *      order (the yarn 3.6+/4 convention, and this module's prior sole behaviour).
+ *      order (the yarn 3.6+/4 convention, and this module's prior sole behavior).
  *  A wrong digest hard-fails `--immutable`, so an unresolvable order defers rather
  *  than guess — never a wrong value. */
 async function selectPakoProfile(graph: Graph, cacheKey: string, source: TarballSource): Promise<Recompute | undefined> {
@@ -350,6 +358,8 @@ async function mapPool<T, R>(items: readonly T[], limit: number, fn: (item: T) =
   await Promise.all(Array.from({ length: n }, () => worker()))
   return out
 }
+
+// === REFURBISHMENT PIPELINE =================================================
 
 /**
  * Fill install-required fields the graph's own format needs (v1: the yarn-berry
