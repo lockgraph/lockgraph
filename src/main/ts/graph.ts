@@ -7,6 +7,8 @@ import type { Integrity } from './recipe/integrity.ts'
 import type { ResolutionCanonical } from './recipe/resolution.ts'
 import type { WorkspaceRange } from './recipe/workspace.ts'
 
+// === TYPES ==================================================================
+
 export type NodeId = string
 
 /** `${name}@${version}[+patch=…][+src=…]` — NodeId stripped of peerContext. Per ADR-0010/0011/0032. */
@@ -336,6 +338,7 @@ export interface Builder {
   seal():                                                                   Graph
 }
 
+/** Reports graph invariant and patch-operation failures. */
 export class GraphError extends Error {
   readonly code: 'INVARIANT_VIOLATION' | 'PATCH_REJECTED'
 
@@ -346,7 +349,56 @@ export class GraphError extends Error {
   }
 }
 
-// === NodeId helpers (per spec/02-graph.md#canonical-nodeid-form, ADR-0006) ===
+// === API ====================================================================
+
+/** Creates a mutable builder for one graph construction. */
+export function newBuilder(): Builder {
+  const s = emptyState()
+  let sealed = false
+
+  const guard = (op: string): void => {
+    if (sealed) throw new GraphError('INVARIANT_VIOLATION', `builder ${op} after seal`)
+  }
+
+  return {
+    addNode(node) {
+      guard('addNode')
+      if (node.patch !== undefined) validatePatchToken(node.patch)
+      if (s.nodes.has(node.id)) {
+        throw new GraphError('INVARIANT_VIOLATION', `duplicate node id: ${node.id}`)
+      }
+      s.nodes.set(node.id, node)
+    },
+    addEdge(src, dst, kind, attrs) {
+      guard('addEdge')
+      const e: Edge = attrs ? { src, dst, kind, attrs } : { src, dst, kind }
+      pushTo(s.outgoing, src, e)
+      pushTo(s.incoming, dst, e)
+    },
+    setTarball(inputs, payload) {
+      guard('setTarball')
+      const key = toTarballKey(inputs)
+      s.tarballs.set(key, payload)
+    },
+    diagnostic(d) {
+      guard('diagnostic')
+      s.diagnostics.push(d)
+    },
+    layoutHints(h) {
+      guard('layoutHints')
+      s.layoutHints = h
+    },
+    seal() {
+      guard('seal')
+      sealed = true
+      validate(s)
+      reindex(s)
+      return new GraphImpl(s)
+    },
+  }
+}
+
+// === NodeId helpers (per spec/02-graph.md#canonical-nodeid-form, ADR-0006) ==
 
 /** Last `@` at depth 0 separates name from version+peerContext. Scoped names keep their leading `@`. */
 export function nameOf(id: NodeId): string {
@@ -372,28 +424,6 @@ export function serializeNodeId(
   const base = toTarballKey({ name, version, patch, source })
   if (peerContext.length === 0) return base
   return base + peerContext.map(p => `(${p})`).join('')
-}
-
-function acceptedNodeIds(node: Node): readonly NodeId[] {
-  // ADR-0032 — the `+src=` slot ALWAYS participates in the derived id (it
-  // describes which non-registry source minted the node and, unlike `patch`,
-  // has no bare/slotted duality: a node either is from a discriminated source
-  // or is bare). Thread `node.source` through every candidate so re-derivation
-  // is exact; the bare majority (`source === undefined`) is unaffected.
-  const bare = serializeNodeId(node.name, node.version, node.peerContext, undefined, node.source)
-  if (node.patch === undefined) return [bare]
-  const patched = serializeNodeId(node.name, node.version, node.peerContext, node.patch, node.source)
-  return bare === patched ? [bare] : [bare, patched]
-}
-
-function carriesPatchInNodeId(node: Pick<Node, 'id' | 'name' | 'version' | 'patch' | 'source'>): boolean {
-  if (node.patch === undefined) return false
-  return stripPeerContextFromNodeId(node.id) === toTarballKey({
-    name: node.name,
-    version: node.version,
-    patch: node.patch,
-    source: node.source,
-  })
 }
 
 /** Strips peerContext from a NodeId to derive the ADR-0010/0011 base key (`${name}@${version}[+patch=…]`). */
@@ -429,38 +459,6 @@ export function validatePatchToken(patch: string): void {
   }
 }
 
-function isSentinelPatch(patch: string): boolean {
-  return recipeIsSentinelPatch(patch)
-}
-
-// ADR-0011:282-304 — sentinel-keyed mutator coherence rule.
-//
-// A 'sentinel-keyed entry' is a Node whose .patch satisfies the spec-defined
-// predicate startsWith('unresolved-'). At the Mutator layer, ANY operation
-// that modifies-or-forks the bytes of a sentinel-keyed Node throws
-// LockfileError({ code: 'IRREDUCIBLE_LOSS' }). Pure-deletion ops do NOT fork
-// siblings (ADR-0011:301-304 explicitly carves out removeTarball; the same
-// logic extends to removeNode); they are permitted. Edge-structure ops
-// (addEdge, removeEdge) do not touch the Node's bytes; permitted. Builder is
-// parse-time and must remain unguarded — that is how sentinels land in the
-// graph.
-function refuseSentinelMutation(patch: Patch | undefined, opName: string, subject: string): void {
-  if (patch !== undefined && isSentinelPatch(patch)) {
-    throw new LockfileError({
-      code: 'IRREDUCIBLE_LOSS',
-      message: `${opName}: sentinel-keyed entries refuse mutation (${subject})`,
-    })
-  }
-}
-
-// ADR-0032 — the `+src=` slot value is the 16-lowercase-hex source discriminator
-// minted by `recipe/resolution.sourceDiscriminatorOf`. Guard the slot grammar
-// (no `+`/whitespace so the `+`-joined slot list stays parseable) exactly as
-// `validatePatchToken` guards `+patch=`. The 16-hex shape is asserted too — the
-// only legitimate producer is the recipe primitive, so a malformed value is a
-// caller bug, not lossy data.
-const SRC_TOKEN_RE = /^[0-9a-f]{16}$/
-
 export function validateSourceToken(source: string): void {
   if (source.length === 0) {
     throw new LockfileError({ code: 'INVALID_INPUT', message: `source slot must not be empty` })
@@ -494,6 +492,62 @@ export function toTarballKey(inputs: TarballKeyInputs): TarballKey {
     : `${inputs.name}@${inputs.version}+${slots.sort(cmpStr).join('+')}`
 }
 
+// === INTERNALS ==============================================================
+
+function acceptedNodeIds(node: Node): readonly NodeId[] {
+  // ADR-0032 — the `+src=` slot ALWAYS participates in the derived id (it
+  // describes which non-registry source minted the node and, unlike `patch`,
+  // has no bare/slotted duality: a node either is from a discriminated source
+  // or is bare). Thread `node.source` through every candidate so re-derivation
+  // is exact; the bare majority (`source === undefined`) is unaffected.
+  const bare = serializeNodeId(node.name, node.version, node.peerContext, undefined, node.source)
+  if (node.patch === undefined) return [bare]
+  const patched = serializeNodeId(node.name, node.version, node.peerContext, node.patch, node.source)
+  return bare === patched ? [bare] : [bare, patched]
+}
+
+function carriesPatchInNodeId(node: Pick<Node, 'id' | 'name' | 'version' | 'patch' | 'source'>): boolean {
+  if (node.patch === undefined) return false
+  return stripPeerContextFromNodeId(node.id) === toTarballKey({
+    name: node.name,
+    version: node.version,
+    patch: node.patch,
+    source: node.source,
+  })
+}
+
+function isSentinelPatch(patch: string): boolean {
+  return recipeIsSentinelPatch(patch)
+}
+
+// ADR-0011:282-304 — sentinel-keyed mutator coherence rule.
+//
+// A 'sentinel-keyed entry' is a Node whose .patch satisfies the spec-defined
+// predicate startsWith('unresolved-'). At the Mutator layer, ANY operation
+// that modifies-or-forks the bytes of a sentinel-keyed Node throws
+// LockfileError({ code: 'IRREDUCIBLE_LOSS' }). Pure-deletion ops do NOT fork
+// siblings (ADR-0011:301-304 explicitly carves out removeTarball; the same
+// logic extends to removeNode); they are permitted. Edge-structure ops
+// (addEdge, removeEdge) do not touch the Node's bytes; permitted. Builder is
+// parse-time and must remain unguarded — that is how sentinels land in the
+// graph.
+function refuseSentinelMutation(patch: Patch | undefined, opName: string, subject: string): void {
+  if (patch !== undefined && isSentinelPatch(patch)) {
+    throw new LockfileError({
+      code: 'IRREDUCIBLE_LOSS',
+      message: `${opName}: sentinel-keyed entries refuse mutation (${subject})`,
+    })
+  }
+}
+
+// ADR-0032 — the `+src=` slot value is the 16-lowercase-hex source discriminator
+// minted by `recipe/resolution.sourceDiscriminatorOf`. Guard the slot grammar
+// (no `+`/whitespace so the `+`-joined slot list stays parseable) exactly as
+// `validatePatchToken` guards `+patch=`. The 16-hex shape is asserted too — the
+// only legitimate producer is the recipe primitive, so a malformed value is a
+// caller bug, not lossy data.
+const SRC_TOKEN_RE = /^[0-9a-f]{16}$/
+
 function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch' | 'source'>): TarballKeyInputs {
   return {
     name: node.name,
@@ -503,7 +557,7 @@ function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch' | 
   }
 }
 
-// === Comparators ===
+// === Comparators ============================================================
 
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 
@@ -520,7 +574,7 @@ const cmpEdgeBy = (end: 'dst' | 'src') => (a: Edge, b: Edge): number => {
   return cmpAlias(a.attrs?.alias, b.attrs?.alias)
 }
 
-// === Internal state ===
+// === Internal state =========================================================
 
 interface State {
   nodes:        Map<NodeId, Node>
@@ -615,7 +669,7 @@ function rebindNodeId(s: State, oldId: NodeId, newId: NodeId, newNode: Node): vo
   }
 }
 
-// === Published-self-link seal carve-out (ADR-0017 amendment, Bug #4) ===
+// === Published-self-link seal carve-out (ADR-0017 amendment, Bug #4) ========
 
 // Extracts the protocol prefix of a descriptor range (the substring before the
 // first `:`), or `undefined` for a bare/unprefixed range. Mirrors the
@@ -653,7 +707,7 @@ function isPublishedSelfLink(edge: Edge): boolean {
   return proto === undefined || proto === 'npm'
 }
 
-// === Validation ===
+// === Validation =============================================================
 
 function validateDiagnostics(s: State): void {
   for (const d of s.diagnostics) {
@@ -1200,7 +1254,7 @@ function createMutator(next: State, applied: ChangeRecord[]): Mutator {
   }
 }
 
-// === Graph implementation ===
+// === Graph implementation ===================================================
 
 class GraphImpl implements Graph {
   constructor(private readonly s: State) {}
@@ -1329,52 +1383,4 @@ class GraphImpl implements Graph {
 
 function nodeEqual(a: Node, b: Node): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
-}
-
-// === Builder ===
-
-export function newBuilder(): Builder {
-  const s = emptyState()
-  let sealed = false
-
-  const guard = (op: string): void => {
-    if (sealed) throw new GraphError('INVARIANT_VIOLATION', `builder ${op} after seal`)
-  }
-
-  return {
-    addNode(node) {
-      guard('addNode')
-      if (node.patch !== undefined) validatePatchToken(node.patch)
-      if (s.nodes.has(node.id)) {
-        throw new GraphError('INVARIANT_VIOLATION', `duplicate node id: ${node.id}`)
-      }
-      s.nodes.set(node.id, node)
-    },
-    addEdge(src, dst, kind, attrs) {
-      guard('addEdge')
-      const e: Edge = attrs ? { src, dst, kind, attrs } : { src, dst, kind }
-      pushTo(s.outgoing, src, e)
-      pushTo(s.incoming, dst, e)
-    },
-    setTarball(inputs, payload) {
-      guard('setTarball')
-      const key = toTarballKey(inputs)
-      s.tarballs.set(key, payload)
-    },
-    diagnostic(d) {
-      guard('diagnostic')
-      s.diagnostics.push(d)
-    },
-    layoutHints(h) {
-      guard('layoutHints')
-      s.layoutHints = h
-    },
-    seal() {
-      guard('seal')
-      sealed = true
-      validate(s)
-      reindex(s)
-      return new GraphImpl(s)
-    },
-  }
 }

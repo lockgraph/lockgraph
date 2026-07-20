@@ -38,6 +38,8 @@ import type {
   Verification,
 } from './types.ts'
 
+// === CONSTANTS ==============================================================
+
 const emptyProfile = (): CompletenessProfile => ({
   projectTopology: 'none',
   resolvedGraph: 'none',
@@ -83,6 +85,181 @@ const verificationRank: Record<Verification, number> = {
   'mutable-stable': 3,
   'frozen-verified': 4,
 }
+
+// Object.hasOwn is Node 16.9+; the package floor is Node 14.18 and esbuild does
+// not polyfill runtime methods for target:node14, so use the prototype method.
+// Own-property semantics matter: a dependency named "toString" must not match
+// via the prototype chain the way `name in object` would.
+const hasOwn = (object: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(object, key)
+
+const graphGapPattern = /(BAD_ENTRY|UNRESOLVED|RESOLVE_VIOLATION|MISSING_(?:ENTRY|NODE|SNAPSHOT|TARGET)|UNKNOWN_(?:ENTRY|SNAPSHOT)|AMBIGUOUS_(?:RESOLUTION|TARGET)|COLLISION|IRREDUCIBLE_LOSS)/
+const topologyGapPattern = /(WORKSPACE|IMPORTER|ROOT).*(?:MISSING|UNKNOWN|UNRESOLVED|COLLISION)/
+const artifactGapPattern = /(INTEGRITY_INCOMPLETE|RESOLUTION_UNKNOWN|MISSING_(?:RESOLUTION|INTEGRITY))/
+const peerGapPattern = /(PEER.*(?:UNSATISFIED|AMBIGUOUS|UNRESOLVED|COLLISION|ATTRIBUTION|MISSING)|WORKSPACE_PEER.*(?:GAP|COLLISION|MISSING))/
+
+// === TYPES ==================================================================
+
+export type CompletionPolicyAuthority =
+  | Readonly<{ status: 'known'; overrides: readonly OverrideConstraint[] }>
+  | Readonly<{ status: 'unknown' | 'conflict' }>
+
+interface EvidenceScopeDelta {
+  readonly nodes: boolean
+  readonly edges: boolean
+  readonly tarballs: boolean
+  readonly layout: boolean
+}
+
+// === API ====================================================================
+
+/** Projects the graph's supported completeness profile. */
+export function completenessOf(graph: Graph, context: CompletenessContext = {}): CompletenessResult {
+  const evidence: EvidenceContext = context.evidence ?? evidenceOf(graph)
+  const state = internalEvidenceOf(evidence)
+  const structural = structuralCoverageOf(graph)
+  const generation = sourceGeneration(state)
+  const capabilities = state.source === undefined
+    ? undefined
+    : sourceCapabilitiesOf(state.source.format, generation)
+  const profile: CompletenessProfile = capabilities === undefined
+    ? emptyProfile()
+    : { ...capabilities.floor }
+  const diagnostics = [...graph.diagnostics(), ...evidence.ledger.diagnostics]
+
+  profile.verification = 'graph-validated'
+  if (graph.layoutHints() !== undefined) {
+    profile.layout = higher(profile.layout, 'hints', layoutRank)
+  }
+  const hasUnknownArtifact = [...graph.nodes()].some(node => !artifactIdentified(graph, node.id))
+  if (hasUnknownArtifact) profile.artifacts = 'none'
+  const scopeDelta = evidenceScopeDelta(graph, state.anchorSnapshot ?? state.anchor)
+  if (scopeDelta !== undefined) {
+    diagnostics.push(scopeMismatchDiagnostic(scopeDelta))
+    applyScopeDelta(graph, profile, scopeDelta)
+  }
+
+  if (state.source?.format === 'pnpm-v5' && state.observedPolicyCarrier?.present === true) {
+    profile.resolutionPolicy = higher(profile.resolutionPolicy, 'normalized', policyRank)
+  }
+  if (state.source?.format === 'pnpm-v9' && scopeDelta === undefined
+    && ![...graph.nodes()].some(node => node.peerContext.some(containsOpaquePeerToken))
+    && !graph.diagnostics().some(diagnostic => diagnostic.severity === 'error'
+      || graphGapPattern.test(diagnostic.code))) {
+    profile.resolvedGraph = 'complete'
+    profile.edgeKinds = 'complete'
+  }
+
+  const repositoryPreserved = repositoryPreservedInGraph(graph, state)
+  if (repositoryPreserved && !hasConflict(state, 'projectTopology')) {
+    profile.projectTopology = 'complete'
+  }
+  if (repositoryPreserved && packageEdgesClassified(graph, state)
+    && !hasConflict(state, 'edgeKinds')) {
+    profile.edgeKinds = 'complete'
+  }
+  const packageMetadata = assessPackageMetadata(graph, state)
+  diagnostics.push(...packageMetadata.diagnostics)
+  if (packageMetadata.complete && scopeDelta?.nodes !== true && scopeDelta?.tarballs !== true) {
+    profile.packageMetadata = 'complete'
+  }
+  applyPolicyEvidence(profile, state, repositoryRootComplete(graph, state), diagnostics)
+
+  applyConflicts(profile, state)
+  applyRetainedDiagnostics(profile, graph.diagnostics())
+
+  return Object.freeze({
+    profile: Object.freeze(profile),
+    structural,
+    evidence,
+    diagnostics: Object.freeze(diagnostics),
+  })
+}
+
+export function authoritativePolicyOverridesOf(
+  state: InternalEvidenceState,
+): readonly OverrideConstraint[] | undefined {
+  const manager = state.source?.manager
+  if (manager === undefined || manager === 'lockgraph' || hasConflict(state, 'resolutionPolicy')) {
+    return undefined
+  }
+  const manifestOverrides = canonicalManifestOverrides(rootManifest(state), manager)
+  if (manager !== 'pnpm') return manifestOverrides
+  const generation = sourceGeneration(state)
+  const major = managerMajor(generation)
+  if (generation === undefined || major === undefined) return undefined
+  const config = state.pmConfigs.find(candidate => candidate.manager === 'pnpm'
+    && candidate.version === generation && candidate.surface === 'overrides'
+    && candidate.coverage === 'complete')
+  if (major <= 10) {
+    return config !== undefined && config.overrides.length > 0
+      ? config.overrides
+      : manifestOverrides
+  }
+  return config?.overrides
+}
+
+export function completionPolicyAuthorityOf(
+  state: InternalEvidenceState,
+): CompletionPolicyAuthority {
+  const manager = state.source?.manager
+  if (hasConflict(state, 'resolutionPolicy')) return { status: 'conflict' }
+  if (manager === undefined || manager === 'lockgraph') {
+    const manifest = rootManifest(state)
+    const configs = state.pmConfigs
+    if (configs.length > 1) return { status: 'conflict' }
+    if (configs.length === 1) return { status: 'known', overrides: configs[0]!.overrides }
+    return manifest?.overrides === undefined
+      ? { status: 'unknown' }
+      : { status: 'known', overrides: manifest.overrides }
+  }
+
+  const manifest = rootManifest(state)
+  const manifestOverrides = manifest === undefined
+    ? undefined
+    : canonicalManifestOverrides(manifest, manager)
+  if (state.pmConfigs.some(config => config.manager !== manager)) {
+    return { status: 'conflict' }
+  }
+  const matchingConfigs = state.pmConfigs.filter(config => config.manager === manager)
+  if (state.source?.version !== undefined
+    && matchingConfigs.some(config => config.version !== state.source?.version)) {
+    return { status: 'conflict' }
+  }
+  const configOverrides = matchingConfigs.length === 1
+    ? matchingConfigs[0]!.overrides
+    : undefined
+  if (matchingConfigs.length > 1) return { status: 'conflict' }
+  const carrierOverrides = state.observedPolicyCarrier === undefined
+    ? undefined
+    : state.observedPolicyCarrier.overrides
+
+  if (manifestOverrides === undefined && configOverrides === undefined
+    && carrierOverrides === undefined) return { status: 'unknown' }
+
+  if (manager !== 'pnpm') {
+    const candidates = [manifestOverrides, configOverrides, carrierOverrides]
+      .filter((candidate): candidate is readonly OverrideConstraint[] => candidate !== undefined)
+    const authority = candidates[0]!
+    if (candidates.slice(1).some(candidate => !equalOverrides(authority, candidate, manager))) {
+      return { status: 'conflict' }
+    }
+    return { status: 'known', overrides: authority }
+  }
+
+  if (manifestOverrides === undefined && configOverrides === undefined
+    && carrierOverrides !== undefined) {
+    return { status: 'known', overrides: carrierOverrides }
+  }
+  const authority = authoritativePolicyOverridesOf(state)
+  if (authority === undefined) return { status: 'unknown' }
+  if (carrierOverrides !== undefined && !equalOverrides(authority, carrierOverrides, 'pnpm')) {
+    return { status: 'conflict' }
+  }
+  return { status: 'known', overrides: authority }
+}
+
+// === INTERNALS ==============================================================
 
 function higher<T extends string>(left: T, right: T, ranks: Record<T, number>): T {
   return ranks[right] > ranks[left] ? right : left
@@ -135,13 +312,6 @@ function artifactIdentified(graph: Graph, nodeId: string): boolean {
     && payload.resolution?.type !== 'unknown'
     && (payload.resolution !== undefined || payload.nativeResolution !== undefined)
 }
-
-// Object.hasOwn is Node 16.9+; the package floor is Node 14.18 and esbuild does
-// not polyfill runtime methods for target:node14, so use the prototype method.
-// Own-property semantics matter: a dependency named "toString" must not match
-// via the prototype chain the way `name in object` would.
-const hasOwn = (object: object, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(object, key)
 
 function declaredKind(manifest: Manifest, name: string): 'dep' | 'dev' | 'optional' | 'peer' | undefined {
   if (hasOwn(manifest.optionalDependencies ?? {}, name)) return 'optional'
@@ -513,93 +683,6 @@ function applyPolicyEvidence(
   profile.resolutionPolicy = 'authored'
 }
 
-export function authoritativePolicyOverridesOf(
-  state: InternalEvidenceState,
-): readonly OverrideConstraint[] | undefined {
-  const manager = state.source?.manager
-  if (manager === undefined || manager === 'lockgraph' || hasConflict(state, 'resolutionPolicy')) {
-    return undefined
-  }
-  const manifestOverrides = canonicalManifestOverrides(rootManifest(state), manager)
-  if (manager !== 'pnpm') return manifestOverrides
-  const generation = sourceGeneration(state)
-  const major = managerMajor(generation)
-  if (generation === undefined || major === undefined) return undefined
-  const config = state.pmConfigs.find(candidate => candidate.manager === 'pnpm'
-    && candidate.version === generation && candidate.surface === 'overrides'
-    && candidate.coverage === 'complete')
-  if (major <= 10) {
-    return config !== undefined && config.overrides.length > 0
-      ? config.overrides
-      : manifestOverrides
-  }
-  return config?.overrides
-}
-
-export type CompletionPolicyAuthority =
-  | Readonly<{ status: 'known'; overrides: readonly OverrideConstraint[] }>
-  | Readonly<{ status: 'unknown' | 'conflict' }>
-
-export function completionPolicyAuthorityOf(
-  state: InternalEvidenceState,
-): CompletionPolicyAuthority {
-  const manager = state.source?.manager
-  if (hasConflict(state, 'resolutionPolicy')) return { status: 'conflict' }
-  if (manager === undefined || manager === 'lockgraph') {
-    const manifest = rootManifest(state)
-    const configs = state.pmConfigs
-    if (configs.length > 1) return { status: 'conflict' }
-    if (configs.length === 1) return { status: 'known', overrides: configs[0]!.overrides }
-    return manifest?.overrides === undefined
-      ? { status: 'unknown' }
-      : { status: 'known', overrides: manifest.overrides }
-  }
-
-  const manifest = rootManifest(state)
-  const manifestOverrides = manifest === undefined
-    ? undefined
-    : canonicalManifestOverrides(manifest, manager)
-  if (state.pmConfigs.some(config => config.manager !== manager)) {
-    return { status: 'conflict' }
-  }
-  const matchingConfigs = state.pmConfigs.filter(config => config.manager === manager)
-  if (state.source?.version !== undefined
-    && matchingConfigs.some(config => config.version !== state.source?.version)) {
-    return { status: 'conflict' }
-  }
-  const configOverrides = matchingConfigs.length === 1
-    ? matchingConfigs[0]!.overrides
-    : undefined
-  if (matchingConfigs.length > 1) return { status: 'conflict' }
-  const carrierOverrides = state.observedPolicyCarrier === undefined
-    ? undefined
-    : state.observedPolicyCarrier.overrides
-
-  if (manifestOverrides === undefined && configOverrides === undefined
-    && carrierOverrides === undefined) return { status: 'unknown' }
-
-  if (manager !== 'pnpm') {
-    const candidates = [manifestOverrides, configOverrides, carrierOverrides]
-      .filter((candidate): candidate is readonly OverrideConstraint[] => candidate !== undefined)
-    const authority = candidates[0]!
-    if (candidates.slice(1).some(candidate => !equalOverrides(authority, candidate, manager))) {
-      return { status: 'conflict' }
-    }
-    return { status: 'known', overrides: authority }
-  }
-
-  if (manifestOverrides === undefined && configOverrides === undefined
-    && carrierOverrides !== undefined) {
-    return { status: 'known', overrides: carrierOverrides }
-  }
-  const authority = authoritativePolicyOverridesOf(state)
-  if (authority === undefined) return { status: 'unknown' }
-  if (carrierOverrides !== undefined && !equalOverrides(authority, carrierOverrides, 'pnpm')) {
-    return { status: 'conflict' }
-  }
-  return { status: 'known', overrides: authority }
-}
-
 function applyConflicts(profile: CompletenessProfile, state: InternalEvidenceState): void {
   for (const conflict of state.conflicts) {
     switch (conflict.dimension) {
@@ -630,13 +713,6 @@ function applyConflicts(profile: CompletenessProfile, state: InternalEvidenceSta
         break
     }
   }
-}
-
-interface EvidenceScopeDelta {
-  readonly nodes: boolean
-  readonly edges: boolean
-  readonly tarballs: boolean
-  readonly layout: boolean
 }
 
 function evidenceScopeDelta(graph: Graph, anchor: Graph | undefined): EvidenceScopeDelta | undefined {
@@ -699,11 +775,6 @@ function applyScopeDelta(
   }
 }
 
-const graphGapPattern = /(BAD_ENTRY|UNRESOLVED|RESOLVE_VIOLATION|MISSING_(?:ENTRY|NODE|SNAPSHOT|TARGET)|UNKNOWN_(?:ENTRY|SNAPSHOT)|AMBIGUOUS_(?:RESOLUTION|TARGET)|COLLISION|IRREDUCIBLE_LOSS)/
-const topologyGapPattern = /(WORKSPACE|IMPORTER|ROOT).*(?:MISSING|UNKNOWN|UNRESOLVED|COLLISION)/
-const artifactGapPattern = /(INTEGRITY_INCOMPLETE|RESOLUTION_UNKNOWN|MISSING_(?:RESOLUTION|INTEGRITY))/
-const peerGapPattern = /(PEER.*(?:UNSATISFIED|AMBIGUOUS|UNRESOLVED|COLLISION|ATTRIBUTION|MISSING)|WORKSPACE_PEER.*(?:GAP|COLLISION|MISSING))/
-
 function applyRetainedDiagnostics(profile: CompletenessProfile, diagnostics: readonly Diagnostic[]): void {
   for (const diagnostic of diagnostics) {
     if (diagnostic.severity === 'error' || graphGapPattern.test(diagnostic.code)) {
@@ -736,71 +807,4 @@ function containsOpaquePeerToken(value: string): boolean {
     index = end - 1
   }
   return false
-}
-
-/**
- * Computes canonical completeness from the supplied evidence. This is not a
- * conversion-readiness decision. Use `stringifyAssessed` or `convertAssessed`
- * before writing a target lockfile.
- */
-export function completenessOf(graph: Graph, context: CompletenessContext = {}): CompletenessResult {
-  const evidence: EvidenceContext = context.evidence ?? evidenceOf(graph)
-  const state = internalEvidenceOf(evidence)
-  const structural = structuralCoverageOf(graph)
-  const generation = sourceGeneration(state)
-  const capabilities = state.source === undefined
-    ? undefined
-    : sourceCapabilitiesOf(state.source.format, generation)
-  const profile: CompletenessProfile = capabilities === undefined
-    ? emptyProfile()
-    : { ...capabilities.floor }
-  const diagnostics = [...graph.diagnostics(), ...evidence.ledger.diagnostics]
-
-  profile.verification = 'graph-validated'
-  if (graph.layoutHints() !== undefined) {
-    profile.layout = higher(profile.layout, 'hints', layoutRank)
-  }
-  const hasUnknownArtifact = [...graph.nodes()].some(node => !artifactIdentified(graph, node.id))
-  if (hasUnknownArtifact) profile.artifacts = 'none'
-  const scopeDelta = evidenceScopeDelta(graph, state.anchorSnapshot ?? state.anchor)
-  if (scopeDelta !== undefined) {
-    diagnostics.push(scopeMismatchDiagnostic(scopeDelta))
-    applyScopeDelta(graph, profile, scopeDelta)
-  }
-
-  if (state.source?.format === 'pnpm-v5' && state.observedPolicyCarrier?.present === true) {
-    profile.resolutionPolicy = higher(profile.resolutionPolicy, 'normalized', policyRank)
-  }
-  if (state.source?.format === 'pnpm-v9' && scopeDelta === undefined
-    && ![...graph.nodes()].some(node => node.peerContext.some(containsOpaquePeerToken))
-    && !graph.diagnostics().some(diagnostic => diagnostic.severity === 'error'
-      || graphGapPattern.test(diagnostic.code))) {
-    profile.resolvedGraph = 'complete'
-    profile.edgeKinds = 'complete'
-  }
-
-  const repositoryPreserved = repositoryPreservedInGraph(graph, state)
-  if (repositoryPreserved && !hasConflict(state, 'projectTopology')) {
-    profile.projectTopology = 'complete'
-  }
-  if (repositoryPreserved && packageEdgesClassified(graph, state)
-    && !hasConflict(state, 'edgeKinds')) {
-    profile.edgeKinds = 'complete'
-  }
-  const packageMetadata = assessPackageMetadata(graph, state)
-  diagnostics.push(...packageMetadata.diagnostics)
-  if (packageMetadata.complete && scopeDelta?.nodes !== true && scopeDelta?.tarballs !== true) {
-    profile.packageMetadata = 'complete'
-  }
-  applyPolicyEvidence(profile, state, repositoryRootComplete(graph, state), diagnostics)
-
-  applyConflicts(profile, state)
-  applyRetainedDiagnostics(profile, graph.diagnostics())
-
-  return Object.freeze({
-    profile: Object.freeze(profile),
-    structural,
-    evidence,
-    diagnostics: Object.freeze(diagnostics),
-  })
 }
