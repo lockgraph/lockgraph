@@ -219,7 +219,7 @@ jobs:
       # must not install or run untrusted dependency code. It only publishes the
       # pre-built artifacts fetched above.
       - name: Publish coverage to Qlty
-        uses: qltysh/qlty-action/coverage@v1
+        uses: qltysh/qlty-action/coverage@v2
         with:
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: target/coverage/lcov.info
