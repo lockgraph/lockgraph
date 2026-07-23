@@ -13,6 +13,17 @@ exclude_patterns = [
 plugins = ["qlty"]
 file_patterns = ["**/_*.ts"]
 
+# Thresholds tuned to this codebase's idioms (fail-closed returns, format-dispatch
+# branching); file_complexity, duplication, boolean_logic, nesting keep defaults.
+[smells.return_statements]
+threshold = 10
+
+[smells.function_parameters]
+threshold = 8
+
+[smells.function_complexity]
+threshold = 30
+
 [[source]]
 name = "default"
 default = true
