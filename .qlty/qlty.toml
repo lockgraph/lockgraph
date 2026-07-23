@@ -4,6 +4,15 @@ exclude_patterns = [
   "src/test/resources/fixtures/**",
 ]
 
+# Underscore-prefixed modules are package-private plumbing: the format-family
+# cores (formats/_*.ts) and shared test helpers. Their complexity is intrinsic
+# and domain-bounded — decomposing them further would cross family boundaries,
+# which we value above a metric number. Exempt them from STRUCTURAL SMELLS only
+# (plugins = ["qlty"]); linters and security scanners still cover them.
+[[ignore]]
+plugins = ["qlty"]
+file_patterns = ["**/_*.ts"]
+
 [[source]]
 name = "default"
 default = true
