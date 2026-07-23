@@ -93,7 +93,7 @@
   "devDependencies": {
     "@antongolub/artel": "^0.4.0",
     "@size-limit/file": "^12.1.0",
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.1.1",
     "@types/pako": "^2.0.4",
     "@types/semver": "^7.7.1",
     "@vitest/coverage-v8": "^4.1.10",
