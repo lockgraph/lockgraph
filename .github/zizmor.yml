@@ -1,0 +1,9 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+# This repo pins actions by tag (@vN) and lets dependabot bump them, rather than
+# pinning by commit SHA. Accept ref-pinning so the `unpinned-uses` audit flags
+# only genuinely unpinned refs (e.g. @main), not the repo's deliberate tag policy.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        '*': ref-pin
