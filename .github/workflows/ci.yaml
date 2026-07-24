@@ -235,4 +235,5 @@ jobs:
           GIT_AUTHOR_EMAIL:   ${{ vars.GIT_AUTHOR_EMAIL }}
           GIT_COMMITTER_NAME: ${{ vars.GIT_COMMITTER_NAME }}
           GIT_COMMITTER_EMAIL: ${{ vars.GIT_COMMITTER_EMAIL }}
+          GIT_SIGN_KEY:       ${{ secrets.GIT_SIGN_KEY }}
         run: npx zx-semrel
