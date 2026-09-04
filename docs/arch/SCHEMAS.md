@@ -35,17 +35,44 @@ node_modules/.lockfile-<name>-<version>-<n>/node_modules/<name>
 ```
 
 **This is a placeholder, not an install path. npm has no such store, and a lock carrying
-one is not installable as-is.** It is emitted only under `strict: false`, and never
-silently: the same call raises `LAYOUT_PLACEMENT_RESYNTHESISED`, a
-`COMPLETENESS_OUTPUT_GRAPH_MISMATCH`, and an accepted `PROJECTION_LOSS`. Under `strict`
-(the default) the conversion is refused instead.
+one is not installable as-is.** How loudly it is reported depends on whether the emitting graph
+also fails the completeness comparison, which is not the same question as whether a path was
+invented. Measured on one stale-entry lock:
 
-The usual way to reach it is converting a lock whose entries are unreachable — a
-yarn-classic v1 lock read WITHOUT its manifest is the common case, because a v1 lock
-carries no root→direct edges, so every entry is an orphan until a manifest binds them.
-Supplying the root manifest through the enrich/project path, not through
-`ParseOptions.manifests` (which captures overrides, not edges), is what makes those nodes
-reachable and gives them real paths.
+```
+orphan bound through manifests    strict ACCEPTS   LAYOUT_PLACEMENT_RESYNTHESISED (info) only
+orphan left unbound               strict REFUSES   + COMPLETENESS_OUTPUT_GRAPH_MISMATCH (error)
+                                                   + PROJECTION_LOSS, IRREDUCIBLE_LOSS
+```
+
+So `strict` is not a reliable guard against this key: the better-formed input is the one that
+gets through. Callers who must not receive an uninstallable lock should scan the emitted
+`packages` keys for `node_modules/.lockfile-` rather than rely on strict mode.
+
+Reaching it at all takes one of two things, and the first is a caller error rather than a
+property of any lockfile:
+
+- **Mixing the public and `@internal` codec overloads.** `parse` and `stringify` each accept a
+  documented order and a pre-0.6 compatibility order. Pairing a modern `parse(input, format)`
+  with the target-first `stringify(format, graph)` passes a PUBLIC graph wrapper into the
+  internal serializer, which loses the internal graph and sidecar semantics and emits a flat
+  tree with every duplicate parked. Measured on one pnpm lock: that pairing yields 1,086 keys
+  with 161 parked and nothing nested, while the other three pairings all yield 4,558 keys,
+  4,443 nested and zero parked. Keep both halves of a call in the same generation.
+- **A duplicate whose only consumer is the root.** Everything a root depends on hoists to top
+  level by definition, so a second version whose consumer is the root has nowhere to nest.
+  npm's format cannot express it and parking is the honest answer.
+
+`npm-1` has no `packages` map and cannot park: it emits a nested `dependencies` tree and drops
+what it cannot place, reporting `PROJECTION_LOSS` per node, `COMPLETENESS_OUTPUT_GRAPH_MISMATCH`
+at severity `error`, and `IRREDUCIBLE_LOSS` under `strict`.
+
+Manifests decide the root's dependency EDGES, not merely its override declarations — with a
+declared root manifest a 750-node yarn-classic lock has root out-degree 1, without one the
+synthesised root claims 51 direct dependencies. Note that only the pre-0.6 argument order
+`parse(format, input, { manifests })` honours them: the documented `parse(input, format,
+{ manifests })` discards the option, and its output is byte-identical to passing no options.
+
 ## yarn
 
 `yarn-classic` and `yarn-berry-*` use different lockfile schemas. The
