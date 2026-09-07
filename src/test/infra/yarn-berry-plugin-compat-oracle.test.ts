@@ -435,7 +435,11 @@ function packageSubtree(lockfile: string, packageName: string): string {
   return blocks.join('\n\n')
 }
 
-describe.sequential('infra: Yarn Berry builtin-compat family oracle', () => {
+// `concurrent: false` rather than the removed `describe.sequential` (vitest 5 dropped
+// `sequential` from both the chain and SuiteOptions, leaving only `concurrent`).
+// Sequential is the default, but these cases each drive a real yarn binary against a
+// shared cache, so the intent is stated rather than inherited.
+describe('infra: Yarn Berry builtin-compat family oracle', { concurrent: false }, () => {
   for (const adapter of adapters) {
     for (const profile of compatCases) {
       it(`${adapter.native.alias} reproduces ${profile.name}@${profile.version} and accepts --immutable unchanged`, async () => {

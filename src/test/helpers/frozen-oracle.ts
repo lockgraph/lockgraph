@@ -153,6 +153,10 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     nativePnpmLockfileVersion: '9.0', nodeRange: '>=18.12',
   },
   {
+    family: 'pnpm', format: 'pnpm-v9', version: '12.3.4', alias: 'pm-pnpm-12', binName: 'pnpm',
+    runtime: 'native', nativePnpmLockfileVersion: '9.0', nodeRange: '>=18',
+  },
+  {
     family: 'bun', format: 'bun-text', version: '1.3.14', alias: 'bun', binName: 'bun',
     runtime: 'native', nativeBunLockfileVersion: 1,
   },

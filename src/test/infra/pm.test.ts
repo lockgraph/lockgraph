@@ -96,6 +96,10 @@ const MATRIX: PmEntry[] = [
     alias: 'pm-pnpm-10', binName: 'pnpm', expectedVersion: '10.34.5', runtime: 'node',
     nodeRange: '>=18.12',
   },
+  {
+    alias: 'pm-pnpm-12', binName: 'pnpm', expectedVersion: '12.3.4', runtime: 'native',
+    nodeRange: '>=18.*',
+  },
   { alias: 'bun', binName: 'bun', expectedVersion: '1.3.14', runtime: 'native' },
 ]
 

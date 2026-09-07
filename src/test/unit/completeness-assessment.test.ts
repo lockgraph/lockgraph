@@ -78,6 +78,25 @@ describe('targetProfileOf', () => {
       managerVersion: '2.9.4',
     }).capabilities.peerRepresentation).toBe('virtualized')
   })
+
+  it.each([
+    ['9.15.9', 'manifest'],
+    ['10.34.5', 'manifest'],
+    ['11.26.0', 'workspace-yaml'],
+    ['12.3.4', 'workspace-yaml'],
+  ] as const)('places pnpm %s overrides in %s', (managerVersion, location) => {
+    const profile = targetProfileOf({ format: 'pnpm-v9', managerVersion })
+
+    expect(profile.capabilities.overridesConfigLocation).toBe(location)
+    expect(profile.ambiguousCapabilities).not.toContain('overridesConfigLocation')
+  })
+
+  it('keeps an unversioned pnpm-v9 override carrier conservative and ambiguous', () => {
+    const profile = targetProfileOf({ format: 'pnpm-v9' })
+
+    expect(profile.capabilities.overridesConfigLocation).toBe('manifest')
+    expect(profile.ambiguousCapabilities).toContain('overridesConfigLocation')
+  })
 })
 
 describe('graph feature default-deny', () => {

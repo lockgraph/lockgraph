@@ -133,6 +133,12 @@ jobs:
           LOCKGRAPH_FROZEN_ORACLE_ADAPTERS: pm-pnpm-6
         run: npm run test:frozen:bookend
 
+      - name: pnpm 12.3.4 / pnpm-v9 positive + stale negative
+        timeout-minutes: 3
+        env:
+          LOCKGRAPH_FROZEN_ORACLE_ADAPTERS: pm-pnpm-12
+        run: npm run test:frozen:bookend
+
       - name: Bun 1.3.14 / bun-text positive + stale negative
         timeout-minutes: 3
         env:
