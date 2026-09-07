@@ -256,7 +256,7 @@ untrusted producer really ran the manager. Lockgraph's own CI claims are earned 
 executing the pinned binaries.
 
 The calibrated CI matrix covers npm 6–12, Yarn Classic 1.22.22, Yarn Berry 2.4.3
-through 4.17.1 (seven pinned generations), pnpm 6–10, and bun 1.3.14 + 1.4.0 — each
+through 4.17.1 (seven pinned generations), pnpm 6–10 plus 12, and bun 1.3.14 + 1.4.0 — each
 within its Node runtime range where one applies. The two bun pins are deliberate: one
 writes `lockfileVersion: 1` and the other `2`, and only 1.3.14 exercises the refusal of
 a `2`.

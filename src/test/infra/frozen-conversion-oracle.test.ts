@@ -274,6 +274,33 @@ describe('infra: frozen conversion native oracle', () => {
     expect(oracle.receipt!.configDigest).toMatch(/^sha256:[a-f0-9]{64}$/)
   }, 60_000)
 
+  const pnpm12 = FROZEN_ORACLE_MATRIX.find(entry => entry.alias === 'pm-pnpm-12')!
+  if (adapterSelected(pnpm12)) {
+    const runnable = runnableFor(pnpm12)
+    runnable.run(`pm-pnpm-12 reads overrides only from pnpm-workspace.yaml${runnable.suffix}`, () => {
+      const baseManifest = {
+        name: 'lockgraph-pnpm-12-overrides',
+        version: '1.0.0',
+        private: true,
+        packageManager: packageManager(pnpm12),
+        dependencies: { ms: '2.1.3' },
+      }
+      const manifestCarrier = createNativeLock(pnpm12, {
+        'package.json': `${JSON.stringify({
+          ...baseManifest,
+          pnpm: { overrides: { ms: '2.1.3' } },
+        }, null, 2)}\n`,
+      })
+      const workspaceCarrier = createNativeLock(pnpm12, {
+        'package.json': `${JSON.stringify(baseManifest, null, 2)}\n`,
+        'pnpm-workspace.yaml': 'overrides:\n  ms: 2.1.3\n',
+      })
+
+      expect(String(manifestCarrier['pnpm-lock.yaml'])).not.toMatch(/^overrides:/m)
+      expect(String(workspaceCarrier['pnpm-lock.yaml'])).toMatch(/^overrides:\n  ms: 2\.1\.3$/m)
+    }, 60_000)
+  }
+
   for (const alias of DENO_FORWARD_ORACLE_ALIASES) {
     const adapter = FROZEN_ORACLE_MATRIX.find(entry => entry.alias === alias)!
     const runnable = runnableFor(adapter)

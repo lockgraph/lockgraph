@@ -10,13 +10,13 @@
 
 | PM | semver range | Default? | How to opt in |
 |----|--------------|:--------:|---------------|
-| pnpm | `>=9`  | ✓ | pnpm 9 jumped lockfileVersion from 6.x to 9.0; both 9.x and 10.x default to `'9.0'` |
+| pnpm | `>=9`  | ✓ | pnpm 9 jumped lockfileVersion from 6.x to 9.0; 9.x, 10.x, 11.x and 12.x all default to `'9.0'` |
 
 ### Readers — PM semvers that *install* from this format
 
 | PM | semver range | Notes |
 |----|--------------|-------|
-| pnpm | `>=9`  | a writer must be its own reader; both pnpm 9.x and 10.x read and write `'9.0'` |
+| pnpm | `>=9`  | a writer must be its own reader; pnpm 9.x through 12.x read and write `'9.0'` |
 
 ## File
 
@@ -119,9 +119,26 @@ Compared to v6:
 - The leading slash in package ids was dropped (`foo@1.0.3` instead of
   `/foo@1.0.3`).
 - pnpm jumped lockfileVersion `6.x` → `9.0` directly. **There is no
-  v7 or v8 schema in the wild.** Both pnpm 9.x and pnpm 10.x default to
-  `'9.0'`; what differs between them is engine behaviour, not the
-  written lockfile schema.
+  v7 or v8 schema in the wild.** pnpm 9.x, 10.x, 11.x and 12.x all default to
+  `'9.0'`; what differs between them is engine behaviour, not the written
+  lockfile schema. Measured on 11.26.0 and 12.3.4: a project exercising
+  workspaces, an alias, a `workspace:` dependency, optional and peer deps with
+  `peerDependenciesMeta` produces a lock byte-identical to pnpm 10.34.5's — with
+  ONE exception, and it is a settings-source change rather than a schema change.
+- **Where `overrides` is declared moved, and the majors barely overlap.**
+  Measured, same project, same lock schema:
+
+  | pnpm | `package.json#pnpm.overrides` | `pnpm-workspace.yaml#overrides` |
+  |------|:----------------------------:|:-------------------------------:|
+  | 8, 9 | honoured | **ignored** |
+  | 10 | honoured | honoured |
+  | 11, 12 | **ignored** (warns) | honoured |
+
+  pnpm 11+ prints `The "pnpm" field in package.json is no longer read by pnpm`
+  and resolves as if the override were absent — the lock is well-formed and
+  simply pins the wrong version. **pnpm 10 is the only major that reads both**,
+  so no single declaration site serves the whole `'9.0'` range; a projection that
+  must target an unknown pnpm within it has to write both places or refuse.
 - The `packages` / `snapshots` split mirrors our internal model
   (package metadata vs peer-bound instance) — `packages` carries the
   identity-neutral tarball surface (`TarballKey` → `TarballPayload`),

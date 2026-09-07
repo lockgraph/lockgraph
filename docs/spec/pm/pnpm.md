@@ -35,7 +35,7 @@ the six family axes (see [`_common.md`](./_common.md) for the template).
 > `onlyBuiltDependencies`/`neverBuiltDependencies` to `allowBuilds` (v11); `pnpm
 > env` deprecated for `pnpm runtime` (v11); the global virtual store became the
 > default for `dlx`/global installs (v11). Defaults below are pnpm 10/11 unless
-> noted.
+> noted. The measured override-carrier overlap is tabulated in §4.
 
 ---
 
@@ -410,6 +410,18 @@ the model's peer-resolution borrows.
   [`settings`](https://pnpm.io/settings)). Pre-v11 these lived under
   `package.json#pnpm` / `.npmrc`.
 
+  The pinned producer measurements expose one intentional overlap at the
+  migration boundary:
+
+  | pnpm majors | `package.json#pnpm.overrides` | `pnpm-workspace.yaml#overrides` |
+  |---|---|---|
+  | 8–9 | honoured | ignored |
+  | 10 | honoured | honoured |
+  | 11–12 | ignored | honoured |
+
+  pnpm 10 is therefore the only measured major that accepts both carriers;
+  conversion to pnpm 11 or 12 must project overrides to the workspace YAML.
+
 - **`.npmrc` (auth only, modern).** pnpm reads npm-style `.npmrc` for credentials
   and registries: `<url>:_authToken`, `tokenHelper`, `ca`/`cert`/`key`, scope→
   registry routing. Auth-file precedence: project `<root>/.npmrc` → `<pnpm
@@ -655,7 +667,7 @@ flattening, nested-tree edge, tarball payload, patch, preamble, and integrity
 rules are recorded in both versioned format specs and
 [`docs/arch/CONVERT.md`](../../arch/CONVERT.md).
 
-## Producer behaviour measured against pnpm 9.4.0 / 10.34.5
+## Producer behaviour measured against pnpm 9.4.0 / 10.34.5 / 12.3.4
 
 - **`--frozen-lockfile` never writes.** Its exit 0 proves the producer *accepts*
   a lockfile and says nothing about whether the bytes are canonical. Proving

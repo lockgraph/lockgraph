@@ -110,6 +110,46 @@ describe('convertProject', () => {
     ]))
   })
 
+  it.each([
+    ['package.json#pnpm.overrides', '10.34.5', 'package.json'],
+    ['pnpm-workspace.yaml#overrides', '12.3.4', 'pnpm-workspace.yaml'],
+  ] as const)('projects synthesized %s authority to pnpm 12 workspace yaml', (
+    _label,
+    sourceVersion,
+    source,
+  ) => {
+    const input = fixture('simple', 'pnpm-v9.lock').replace(
+      "lockfileVersion: '9.0'\n",
+      "lockfileVersion: '9.0'\n\noverrides:\n  foo: 2.0.0\n",
+    )
+    const result = convertProject(input, {
+      from: 'pnpm-v9',
+      to: 'pnpm-v9',
+      sourceVersion,
+      targetVersion: '12.3.4',
+      manifestCoverage: 'complete',
+      manifests: repositoryManifests,
+      evidenceInputs: [{
+        kind: 'pm-config',
+        manager: 'pnpm',
+        version: sourceVersion,
+        source,
+        surface: 'overrides',
+        coverage: 'complete',
+        overrides: [{ package: 'foo', to: '2.0.0' }],
+      }, packageManifests],
+    })
+
+    expect(result.assessment.status).toBe('satisfied')
+    expect(result.companions).toEqual([{
+      path: 'pnpm-workspace.yaml',
+      op: 'set',
+      pointer: '/overrides',
+      value: { foo: '2.0.0' },
+    }])
+    expect(result.lockfile).toMatch(/overrides:\n  foo: 2\.0\.0/)
+  })
+
   it('returns neither artifact when package metadata is incomplete', () => {
     const result = convertProject(fixture('simple', 'npm-3.lock'), {
       from: 'npm-3',

@@ -61,6 +61,11 @@ describe('projectCompanionsOf', () => {
       { path: 'pnpm-workspace.yaml', op: 'set', pointer: '/overrides', value: { foo: '2.0.0' } },
     ],
     [
+      'pnpm 12',
+      { format: 'pnpm-v9' as const, managerVersion: '12.3.4' },
+      { path: 'pnpm-workspace.yaml', op: 'set', pointer: '/overrides', value: { foo: '2.0.0' } },
+    ],
+    [
       'bun',
       { format: 'bun-text' as const, managerVersion: '1.2.0' },
       { path: 'package.json', op: 'set', pointer: '/overrides', value: { foo: '2.0.0' } },
