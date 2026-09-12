@@ -121,7 +121,7 @@ const notApi = new Set(['lockgraph', 'npm', 'pnpm', 'yarn', 'bun', 'deno', 'fetc
   'config', 'url', 'authHeader', 'env', 'home', 'registry', 'files', 'manager', 'version',
   'registryFor', 'authHeaderFor', 'install', 'snapshot', 'policy', 'frozen',
   'dev', 'peer', 'dependencies', 'companions', 'set', 'unassessed', 'projectionDigest',
-  'compressionLevel'])
+  'compressionLevel', 'TypeError'])
 const shipped = new Set(Object.keys(await import(`${root}/dist/index.js`)))
 for (const m of new Set([...prose.matchAll(/`([A-Za-z][A-Za-z0-9]*)`/g)].map((x) => x[1]))) {
   if (notApi.has(m) || shipped.has(m)) continue

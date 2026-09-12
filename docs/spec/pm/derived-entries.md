@@ -283,4 +283,4 @@ both pinned Yarn binaries. The oracle requires:
 
 The public behavior spec records the evidence boundary. The implementation
 decision and graph invariants are in
-[ADR-0039](../decisions/0039-target-pm-compatibility-overlays.md).
+ADR-0039.

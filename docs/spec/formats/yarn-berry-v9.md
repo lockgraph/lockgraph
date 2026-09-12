@@ -90,7 +90,7 @@ nuance — all detailed under [Quirks](#quirks) below.
 Subsequent phases — modify, enrich, optimize — are read-side-only in
 this preview. Their normative rules are library behaviour, specified outside this document
 (modification / tree completion / enrich) and
-[ADR-0024](../decisions/0024-optimize-phase.md) (optimize: orphan GC).
+ADR-0024 (optimize: orphan GC).
 
 ## Schema sketch
 
@@ -117,7 +117,7 @@ flag survives conversions that the source format modelled it on:
 - **Enrich fills the gap for formats that drop the flag.** npm, bun, and
   yarn-classic discard `peerDependenciesMeta` on parse, so their edges reach
   yarn-berry without an `optional` attribute. The enrich pass (published
-  [ADR-0023](../decisions/0023-graph-modification-and-completion.md))
+  ADR-0023)
   walks each such peer edge and consults a **fill ladder**, setting
   `EdgeAttrs.optional = true` only when an authoritative source proves the peer
   optional. The pass is **monotone-additive** (it unions the flag, never clears

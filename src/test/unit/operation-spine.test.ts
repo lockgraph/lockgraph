@@ -177,6 +177,7 @@ describe('0.6 operation spine — public declaration', () => {
   it('exposes exactly the ratified root runtime facade', () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       'LockfileError',
+      'assertSource',
       'certifyFrozen',
       'check',
       'complete',
@@ -190,7 +191,9 @@ describe('0.6 operation spine — public declaration', () => {
       'liveRegistry',
       'lockgraphStore',
       'modify',
+      'overrideSource',
       'parse',
+      'parseSourceRule',
       'prepareFrozen',
       'refurbish',
       'removeUnreachable',

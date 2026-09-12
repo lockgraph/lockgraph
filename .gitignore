@@ -143,8 +143,6 @@ docs/spec/registry/*
 !docs/spec/registry/*.md
 !docs/spec/decisions/
 docs/spec/decisions/*
-!docs/spec/decisions/0038-conversion-completeness-model.md
-!docs/spec/decisions/0039-target-pm-compatibility-overlays.md
 
 # Internal interactions / per-project artel runtime
 .artel

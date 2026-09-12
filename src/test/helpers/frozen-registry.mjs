@@ -99,7 +99,12 @@ const fixtures = {
 
 const server = createServer((request, response) => {
   const base = `http://127.0.0.1:${server.address().port}`
-  const path = new URL(request.url, base).pathname
+  const requestedPath = new URL(request.url, base).pathname
+  // ADR-0040 source-override oracle: the target prefix serves the exact same
+  // package bytes as the registry root so frozen PMs validate rewritten locks.
+  const path = requestedPath.startsWith('/mirror/')
+    ? requestedPath.slice('/mirror'.length)
+    : requestedPath
   const packageName = path.slice(1)
   const fixture = fixtures[packageName]
   if (fixture !== undefined) {

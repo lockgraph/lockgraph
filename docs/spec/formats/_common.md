@@ -35,9 +35,9 @@ once precisely so it never drifts across the family.
 >
 > **Completion phases.** The *modify* / *enrich* / *optimize* phases moved
 > out of the conversion-era ADR-0016 to the published
-> [ADR-0023](../decisions/0023-graph-modification-and-completion.md)
+> ADR-0023
 > (modify + enrich) and
-> [ADR-0024](../decisions/0024-optimize-phase.md) (optimize); sibling
+> ADR-0024 (optimize); sibling
 > specs redirect there rather than re-deriving them.
 
 ### 1.1 The stringify entry point and the round-trip property
@@ -1274,7 +1274,7 @@ workspace) and are roots of the non-workspace subgraph. Cross-workspace
 permitted and do not strip the target of its workspace nature; only a
 *published* (registry / tarball / git) source depending on a workspace is
 rejected at seal — see published
-[ADR-0017](../decisions/0017-graph-seal-workspace-edges.md).
+ADR-0017.
 
 A `Lockfile` is the public alias for a sealed `Graph`. **Iteration order**
 is canonical and content-derived: collections iterate in lexicographic
@@ -1363,7 +1363,7 @@ binds an edge by looking the descriptor up in an index of entry keys.
 
 A manifest **override** (npm `overrides`, yarn `resolutions`, pnpm
 `pnpm.overrides` — the canonical PM-neutral form is specified in published
-[ADR-0025](../decisions/0025-manifest-overrides.md)) breaks that exact-match
+ADR-0025) breaks that exact-match
 join. When a dependency is forced, yarn **rewrites the entry key to the
 pinned descriptor** and drops the consumer's own range from the key. For a
 backstage-style `"csstype@npm:^3.1.3": "3.0.9"` resolution the entry becomes:
@@ -1388,7 +1388,7 @@ keyed `csstype@npm:^3.1.3`. Two further facts make a naive fix unsafe:
 yarn writes **no lock-borne resolutions** — the override declaration lives in
 `package.json` only. So the override map exists at parse time **iff the caller
 passed `manifests`** (the public `parse(format, input, { manifests })`
-F6-captures them per [ADR-0025](../decisions/0025-manifest-overrides.md) into
+F6-captures them per ADR-0025 into
 the canonical override form *before* the adapter parse, and threads the
 constraints into the edge resolver).
 
@@ -1406,7 +1406,7 @@ constraints into the edge resolver).
 
 > **Range defaulting & the GitHub-shorthand exception (#119).** A berry
 > descriptor without an explicit `<scheme>:` protocol is defaulted to the `npm:`
-> registry protocol (per [ADR-0016](../decisions/0016-yarn-berry-v9-completeness-contract.md) §B) — both
+> registry protocol (per ADR-0016 §B) — both
 > for the specIndex **key** built on parse and the edge `attrs.range`, so the two
 > stay aligned and a bare `^1.2.3` resolves. **Exception:** a **GitHub shorthand**
 > — `owner/repo` or `owner/repo#ref` — is **not** a bare npm range; yarn resolves
@@ -1450,7 +1450,7 @@ Rung 3 is **source-gated**: an `npm:`/bare descriptor may bind **only** a
 node whose canonical resolution is a registry **tarball**
 ([§4.4](#44-graph) source taxonomy; the four-case canonical resolution is
 specified in published
-[ADR-0014](../decisions/0014-canonical-recipe-input-normalisation.md) §4.F3
+ADR-0014 §4.F3
 — `tarball` / `git` / `directory` / `unknown`). A git-fork, directory-link,
 `unknown`-source, or resolution-less node is **invisible** to a registry
 range: a fork pinned at a satisfying version must never silently satisfy an

@@ -230,7 +230,7 @@ is the default** ([Install modes](https://yarnpkg.com/features/linkers)):
 
 `node-modules` and `pnpm` keep stock Node resolution; only `pnp` mutates
 it. The layout model in the project: [`docs/spec/04-layouts.md`](../04-layouts.md),
-[`docs/spec/decisions/0026-layout-attribution.md`](../decisions/0026-layout-attribution.md).
+ADR-0026.
 
 ### 2.3 The zip cache and zero-installs
 

@@ -1,0 +1,6 @@
+# yarn lockfile v1
+
+is-github@github:sindresorhus/is#v6.3.1:
+  version "6.3.1"
+  resolved "https://codeload.github.com/sindresorhus/is/tar.gz/47f49741eacf0a3678684738159a87c2011bb026"
+
