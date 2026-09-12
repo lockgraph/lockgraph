@@ -1,41 +1,41 @@
 // npm-1 adapter — npm `package-lock.json` lockfileVersion 1 (nested-tree shape).
 //
-// Standalone adapter per ADR-0021 §5: the npm-1
+// Standalone adapter: the npm-1
 // recursive `dependencies` tree shape is fundamentally different from the
 // flat `packages` block layout shared by npm-2/npm-3. Forcing a unified
 // pipeline rots both sides; this module owns its own parse / stringify
-// pipeline and reuses ONLY shape-compatible utilities from
+// pipeline and reuses ONLY shape-compatible utilities
 // `_npm-flat-types.ts` + `_npm-core.ts` (cmpStr, sortRecord, edgeTripleKey,
 // NPM_EDGE_RANGE_ATTR, NpmSidecar, derivePeerCandidates, pruneSidecar).
 //
 // Dependency direction (parallel to yarn-classic precedent):
-//   - this module imports from `_npm-flat-types.ts` (types + tiny utilities)
-//     and `_npm-core.ts` (cross-format peer derivation, sidecar pruning).
-//   - it does NOT call `parseFamily` / `stringifyFamily` — those are
-//     flat-shape specific.
-//   - `_npm-core.ts` does NOT import this module.
+// - this module imports from `_npm-flat-types.ts` (types + tiny utilities)
+// and `_npm-core.ts` (cross-format peer derivation, sidecar pruning).
+// - it does NOT call `parseFamily` / `stringifyFamily` — those are
+// flat-shape specific.
+// - `_npm-core.ts` does NOT import this module.
 //
-// §A pinning per ADR-0021 §A.npm-1:
-//   - top-level `lockfileVersion: 1` literal handshake; reject `packages`-
-//     shape inputs (npm-2/npm-3) with FORMAT_MISMATCH.
-//   - top-level `dependencies` recursive map; entries carry `version` +
-//     optional `resolved` / `integrity` / `dev` / `optional` / `bundled` /
-//     `requires` / nested `dependencies`.
-//   - JSON canonical 2-space indent, alphabetical sort, trailing `\n`.
+// §A pinning per -1:
+// - top-level `lockfileVersion: 1` literal handshake; reject `packages`-
+// shape inputs (npm-2/npm-3) with FORMAT_MISMATCH.
+// - top-level `dependencies` recursive map; entries carry `version` +
+// optional `resolved` / `integrity` / `dev` / `optional` / `bundled` /
+// `requires` / nested `dependencies`.
+// - JSON canonical 2-space indent, alphabetical sort, trailing `\n`.
 //
 // §B Lossy-but-acceptable (npm-1 specific):
-//   - `NPM_V1_PEER_DROPPED` — peer edges drop on emit (no on-disk slot).
-//   - `NPM_V1_PEER_VIRT_FLATTENED` — peer-virt NodeIds flatten on emit.
-//   - `NPM_V1_PATCH_DROPPED` — patch slot drops on emit (no `patch:` protocol).
-//   - `NPM_V1_WORKSPACES_UNSAFE` — workspace members omitted on emit.
+// - `NPM_V1_PEER_DROPPED` — peer edges drop on emit (no on-disk slot).
+// - `NPM_V1_PEER_VIRT_FLATTENED` — peer-virt NodeIds flatten on emit.
+// - `NPM_V1_PATCH_DROPPED` — patch slot drops on emit (no `patch:` protocol).
+// - `NPM_V1_WORKSPACES_UNSAFE` — workspace members omitted on emit.
 //
 // §C enrich:
-//   - peer-virt structurally absent (no on-disk peer block).
-//   - workspace concretisation from `manifests` only; `NPM_V1_NO_MANIFESTS`
-//     warning when manifests absent.
+// - peer-virt structurally absent (no on-disk peer block).
+// - workspace concretisation from `manifests` only; `NPM_V1_NO_MANIFESTS`
+// warning when manifests absent.
 //
-// §D optimize: prune unreachable from `graph.roots()` BFS — inherits
-// ADR-0016 §D verbatim via the same algorithm shape as `_npm-core.ts`.
+// §D optimize: prune unreachable from `graph.roots` BFS — inherits
+// verbatim via the same algorithm shape as `_npm-core.ts`.
 
 import {
   GraphError,
@@ -112,7 +112,7 @@ interface Npm1Entry {
   requires?: Record<string, string>
   dependencies?: Record<string, Npm1Entry>
   // npm v5/v6 may carry `peerDependencies` in newer fixtures; sidecar
-  // captures it but emit elides per ADR-0021 §A.npm-1.
+  // captures it but emit elides per -1.
   peerDependencies?: Record<string, string>
 }
 
@@ -619,7 +619,7 @@ function ensureSidecar(map: Map<string, NpmFlatSidecar>, id: string): NpmFlatSid
 
 function collectRequires(entry: Npm1Entry): Record<string, string> | undefined {
   if (entry.requires !== undefined) return entry.requires
-  // Fall back: legacy npm v5 fixtures sometimes encode declared deps via
+  // Fall back: legacy npm v5 fixtures sometimes encode declared deps
   // the nested `dependencies` block alone (with version pin as range).
   if (entry.dependencies !== undefined) {
     const out: Record<string, string> = {}
@@ -803,7 +803,7 @@ function reportNpm1WorkspaceDrop(context: Npm1StringifyContext, node: Node): voi
   recipeEmitDropped(
     node.id,
     'workspace',
-    'npm-1 has no workspace primitive (ADR-0021 §A.npm-1)',
+    'npm-1 has no workspace primitive (-1)',
     context.emitDiagnostic,
   )
 }
@@ -1042,10 +1042,10 @@ function buildEntry(
   // Resolved / from / integrity. npm v6 convention: git/github resolutions
   // live in `version` directly (`version: "git+https://..."`); direct tarball
   // URLs (`https://.../<tgz>`) live in `version` IFF the node's version was
-  // parsed as a URL (preserving the parse-time shape per ADR-0021 §A.npm-1);
+  // parsed as a URL (preserving the parse-time shape per -1);
   // otherwise the URL goes under `resolved`.
   const tarball = graph.tarballOf(node.id)
-  // ADR-0014 §4.F3 cross-format fallback: when PM-native `nativeResolution`
+  // cross-format fallback: when PM-native `nativeResolution`
   // is absent (cross-format input), derive from canonical.
   const native = tarball?.nativeResolution
   const resolutionStr = (native !== undefined && !isYarnBerryLocator(native) ? native : undefined)
@@ -1101,7 +1101,7 @@ function buildEntry(
   return entry
 }
 
-// ADR-0014 §4.F3 — project canonical resolution → npm-1 `resolved` URL.
+// project canonical resolution → npm-1 `resolved` URL.
 // Workspace canonical returns undefined (npm-1 predates workspaces).
 function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
   if (canonical === undefined) return undefined

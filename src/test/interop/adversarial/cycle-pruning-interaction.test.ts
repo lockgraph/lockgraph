@@ -7,7 +7,7 @@ import { graphSnapshot } from '../_snapshot.ts'
 import { parseBerryChecksum, type Integrity } from '../../../main/ts/recipe/integrity.ts'
 
 // This graph converts TO yarn-berry-v9, whose integrity field is the zip-cache
-// `checksum` — a berry-zip-origin digest (ADR-0031). Build one from the content
+// `checksum` — a berry-zip-origin digest. Build one from the content
 // hex so it survives the berry emit→reparse round-trip used below.
 const berryChecksum = (s: string): Integrity =>
   parseBerryChecksum(createHash('sha512').update(s).digest('hex')).integrity

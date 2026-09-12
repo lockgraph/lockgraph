@@ -257,7 +257,7 @@ describe('yarn-berry-v6 — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      // yarn-berry `checksum` is a zip-cache (berry-zip) digest — ADR-0031
+      // yarn-berry `checksum` is a zip-cache (berry-zip) digest —
       // only fills it from a berry-zip-origin hash, so set one here.
       m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: parseBerryChecksum(MODIFIED_HEX).integrity })
     })
@@ -267,7 +267,7 @@ describe('yarn-berry-v6 — modify', () => {
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(emitted).toContain(`checksum: ${MODIFIED_HEX}`)
     expect(emitted).not.toContain(`checksum: 8/${MODIFIED_HEX}`)
-    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    // round-trip parse re-derives canonical resolution.
     expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toEqual(parseBerryChecksum(MODIFIED_HEX).integrity)
   })
 

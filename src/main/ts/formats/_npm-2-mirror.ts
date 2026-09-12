@@ -1,6 +1,6 @@
 // _npm-2-mirror.ts — npm-2 dual-mode reconciliation + legacy mirror.
 //
-// npm-2-only logic split out of `_npm-core.ts` per ADR-0021 §5 mining
+// npm-2-only logic split out of `_npm-core.ts` per mining
 // strategy fix-up and cycle-break. The core (`_npm-core.ts`) handles
 // the flat `packages` block shared with npm-3; this module owns:
 //
@@ -20,7 +20,7 @@
 //   - `_npm-core.ts` does NOT import this module.
 //   - `npm-2.ts` thin entry wires the hook surface together.
 //
-// Mirror contract per ADR-0021 §A.npm-2 *Body field schedule (legacy mirror)*:
+// Mirror contract per -2 *Body field schedule (legacy mirror)*:
 //   - Bare-name keys at top level (no `node_modules/` prefix).
 //   - `version` is the resolved version (or `file:<wsPath>` for workspace members).
 //   - `resolved` / `integrity` populated for non-workspace nodes.
@@ -488,7 +488,7 @@ function buildLegacyNodeEntry(
   // and mirrors it in the legacy `dependencies` block too. The graph holds
   // the URL via the per-tarball `nativeResolution`; the npm-N parser sometimes
   // leaves it unset (URL lives only on the on-disk `resolved` slot). Recover via
-  // the npm-2 mirror sidecar when available. ADR-0014 §4.F3 cross-format
+  // the npm-2 mirror sidecar when available. cross-format
   // fallback: derive from canonical resolution as last resort.
   const sourceResolved = sidecarResolvedFor(ctx, node)
     ?? deriveLegacyResolvedFromCanonical(tarball?.resolution)

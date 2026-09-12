@@ -111,7 +111,7 @@ function canonicalMetadataValue(
 }
 
 /**
- * Project a registry `PackumentVersion` onto a graph `TarballPayload` (ADR-0023 §4.2).
+ * Project a registry `PackumentVersion` onto a graph `TarballPayload`.
  *
  * SINGLE SOURCE OF TRUTH for every "mint a node from the registry" path — completion
  * (`completeTransitives`'s `projectPackumentVersion`), `replaceVersion`, and

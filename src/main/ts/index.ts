@@ -1,4 +1,4 @@
-// Public surface — ADR-0014 §3.
+// Public surface —.
 // Terminal facade only: internal modules import lower-level authorities directly.
 
 import { configureGraphAccessors } from './graph.ts'

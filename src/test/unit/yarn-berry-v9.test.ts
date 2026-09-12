@@ -150,7 +150,7 @@ describe('yarn-berry-v9 — simple fixture', () => {
     expect([...g.roots()]).toEqual(['case-simple@0.0.0-use.local'])
   })
 
-  it('tarball entries carry canonical SRI integrity (ADR-0014 §4.F1)', () => {
+  it('tarball entries carry canonical SRI integrity ()', () => {
     const lodash = g.tarball({ name: 'lodash', version: '4.17.21' })
     expect(pickAlgorithm(lodash!.integrity!, 'sha512')).toBeDefined()
     expect(pickAlgorithm(g.tarball({ name: 'ms', version: '2.1.3' })!.integrity!, 'sha512')).toBeDefined()
@@ -538,11 +538,11 @@ describe('yarn-berry-v9 — patch extraction', () => {
   })
 })
 
-describe('yarn-berry-v9 — alias collision rejection (ADR-0010)', () => {
+describe('yarn-berry-v9 — alias collision rejection ()', () => {
 
   it('throws IRREDUCIBLE_LOSS on TarballKey collision (alias-style)', () => {
     // Two entries collapse onto `lodash@1.0.0` — once they have the same name+version, our keying
-    // can't tell them apart until ADR-0011.
+    // can't tell them apart until.
     const input =
       '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
       '"lodash@npm:1.0.0":\n  version: 1.0.0\n  resolution: "lodash@npm:1.0.0"\n\n' +
@@ -938,7 +938,7 @@ describe('yarn-berry-v9 — stringify', () => {
       peerDependencies: { react: '^18.2.0' },
       peerDependenciesMeta: { react: { optional: true } },
       dependenciesMeta: { lodash: { unplugged: true } },
-      // `conditions` is a SCALAR token in yarn-berry (corrected model, ADR-0018
+      // `conditions` is a SCALAR token in yarn-berry (corrected model,
       // §A.v5) — supplied as a string, emitted bare (NOT a structured block).
       conditions: 'os=linux & cpu=arm64',
     }
@@ -1082,7 +1082,7 @@ describe('yarn-berry-v9 — stringify', () => {
     // Cross-family input (pnpm-v9 → yarn-berry-v9) delivers bare semver
     // ranges on dep edges. Yarn-berry entry-spec grammar requires a
     // `<scheme>:` prefix; emit must synthesise `npm:` so reparse stays
-    // well-formed. ADR-0016 §B / ADR-0020 Phase C-ii unblock.
+    // well-formed. / Phase C-ii unblock.
     const builder = newBuilder()
     builder.addNode({
       id: 'app@1.0.0',
@@ -1148,8 +1148,8 @@ describe('yarn-berry-v9 — stringify', () => {
     // Cross-family input (pnpm-v9 → yarn-berry-v9) delivers a sentinel
     // `unresolved-<sha256>` patch token alongside a non-patch resolution
     // (pnpm hashes `<name>@<version>:<literalKey>`, yarn hashes the
-    // patch locator — ADR-0011). Yarn-berry cannot reconstruct a working
-    // `patch:` URL; per ADR-0014 §5 graceful-degradation rule emit
+    // patch locator —). Yarn-berry cannot reconstruct a working
+    // `patch:` URL; per graceful-degradation rule emit
     // `RECIPE_FEATURE_DROPPED (feature='patch')` and stringify the base
     // resolution without a patch directive.
     const SENTINEL = sentinelHashOfLocator('cross-family-test')
@@ -1190,7 +1190,7 @@ describe('yarn-berry-v9 — stringify', () => {
     // Canonical 128-hex sha512 (F2 byte-hashing) carries byte-identity but
     // no source-path info — yarn locators encode path + version params
     // which the hex alone cannot reconstruct. Without a `@patch:` envelope
-    // on `node.resolution`, per ADR-0014 §5 graceful-degradation rule emit
+    // on `node.resolution`, per graceful-degradation rule emit
     // `RECIPE_FEATURE_DROPPED (feature='patch')` and stringify the base
     // resolution without a patch directive — matches sentinel-only path.
     const CANONICAL_PATCH = 'a'.repeat(128)
@@ -1524,7 +1524,7 @@ describe('yarn-berry-v9 — modify', () => {
     const original = parseFixtureGraph('simple')
     const MODIFIED_HEX = createHash('sha512').update('modified-ms-integrity').digest('hex')
     const result = original.mutate(m => {
-      // yarn-berry `checksum` is a zip-cache (berry-zip) digest — ADR-0031
+      // yarn-berry `checksum` is a zip-cache (berry-zip) digest —
       // only fills it from a berry-zip-origin hash, so set one here.
       m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: parseBerryChecksum(MODIFIED_HEX).integrity })
     })
@@ -1533,7 +1533,7 @@ describe('yarn-berry-v9 — modify', () => {
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(emitted).toContain(`checksum: 10c0/${MODIFIED_HEX}`)
-    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    // round-trip parse re-derives canonical resolution.
     expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toEqual(parseBerryChecksum(MODIFIED_HEX).integrity)
     expect(result.applied).toEqual([
       { kind: 'tarball-set', subject: 'ms@2.1.3' },
@@ -1890,7 +1890,7 @@ describe('yarn-berry-v9 — enrich', () => {
         attrs: {
           range: 'workspace:packages/core',
           workspace: true,
-          // ADR-0014 §4.F4 — canonical workspaceRange sidecar populated
+          // canonical workspaceRange sidecar populated
           // alongside the workspace marker at parse-time.
           workspaceRange: { specifier: 'workspace:packages/core', resolvedVersion: '1.2.3' },
         },

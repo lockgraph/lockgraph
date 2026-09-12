@@ -123,9 +123,9 @@ describe('yarn-berry-v8 — parse fixtures', () => {
   // entry. The compound entry-key lists `<n>@npm:<ver>` before
   // `<n>@workspace:<path>` lexically; the resolution stays
   // `<n>@workspace:<path>`. Workspace identification must key off the
-  // resolution (canonical, per ADR-0014 §4.F3), not `specs[0].protocol`,
+  // resolution (canonical, per), not `specs[0].protocol`,
   // else the node loses its `workspacePath` и the seal rejects it under
-  // ADR-0017 (the source of any `workspace:^` incoming edge is now a
+  // (the source of any `workspace:^` incoming edge is now a
   // workspace node that doesn't look like one).
   it('treats a compound `@npm:<ver>, @workspace:<path>` entry as a workspace node', () => {
     const input =
@@ -193,7 +193,7 @@ describe('yarn-berry-v8 — parse fixtures', () => {
     expect(outs).toHaveLength(2)
     // Canonical edge has alias=undefined; aliased edge carries the
     // descriptor key as the alias slot. Iteration order is content-sorted
-    // (ADR-0007) — alias=undefined sorts before any string alias.
+    // alias=undefined sorts before any string alias.
     const aliases = outs.map(e => e.attrs?.alias)
     expect(aliases).toContain(undefined)
     expect(aliases).toContain('@babel/traverse--for-generate-function-map')
@@ -213,7 +213,7 @@ describe('yarn-berry-v8 — parse fixtures', () => {
   // the npm registry — `"@scope/pkg@1.14.1, @scope/pkg@workspace:packages/pkg"`.
   // The shared `parseSpec` tokenizer previously threw `PARSE_FAILED` on the
   // bare half (`bad entry-spec, no protocol colon: <raw>`). The fix
-  // synthesises `npm:` per ADR-0016 §B (matches `entryKeyRangeOf`'s default
+  // synthesises `npm:` per (matches `entryKeyRangeOf`'s default
   // for cross-family input), keeping the grammar uniform downstream without
   // throwing. Pin the behavior so the bare-name-version half parses cleanly
   // and the resulting node is identified as a workspace via its `resolution`.
@@ -370,7 +370,7 @@ describe('yarn-berry-v8 — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      // yarn-berry `checksum` is a zip-cache (berry-zip) digest — ADR-0031
+      // yarn-berry `checksum` is a zip-cache (berry-zip) digest —
       // only fills it from a berry-zip-origin hash, so set one here.
       m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: parseBerryChecksum(MODIFIED_HEX).integrity })
     })
@@ -379,7 +379,7 @@ describe('yarn-berry-v8 — modify', () => {
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(emitted).toContain(`checksum: 10c0/${MODIFIED_HEX}`)
-    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    // round-trip parse re-derives canonical resolution.
     expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toEqual(parseBerryChecksum(MODIFIED_HEX).integrity)
   })
 

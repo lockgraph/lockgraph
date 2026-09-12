@@ -2,7 +2,7 @@
 // and the `packages` inner blocks) and the `packages` entry itself by the
 // DECLARED name, while the tuple id slot carries the resolved
 // `<name>@<version>`. The declared name therefore has to ride the canonical
-// graph as `EdgeAttrs.alias` (ADR-0007) — it is not derivable from the target
+// graph as `EdgeAttrs.alias` — it is not derivable from the target
 // node. Fixtures under `resources/fixtures/alias/bun-1.3.14-*` are verbatim,
 // unedited output of the pinned `bun` 1.3.14 devDependency.
 

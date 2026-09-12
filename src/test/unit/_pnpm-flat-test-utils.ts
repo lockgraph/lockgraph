@@ -18,7 +18,7 @@ import {
 
 export { fixture, graphSnapshot, expectEmptyGraphDiff, templateRootOf }
 
-// 8-fixture matrix per ADR-0022 §A.pnpm-* acceptance gate.
+// 8-fixture matrix per -* acceptance gate.
 export const FIXTURES = [
   'simple',
   'peers-basic',
@@ -45,7 +45,7 @@ export interface PnpmFamilySpec {
   label: string
   /** Lockfile version literal (quoted string scalar). */
   lockfileVersion: '6.0' | '9.0'
-  /** Diagnostic prefix per ADR-0022. */
+  /** Diagnostic prefix per. */
   diagPrefix: 'PNPM_V6' | 'PNPM_V9'
   /** Fixture file extension (matches the version slug). */
   fixtureSuffix: 'pnpm-v6.lock' | 'pnpm-v9.lock'
@@ -57,7 +57,7 @@ export interface PnpmFamilySpec {
 
 export function parseFixtureGraph(spec: PnpmFamilySpec, name: FixtureName): Graph {
   // Thread workspaceRoot so the family-common patch-yarn fixture exercises
-  // canonical byte hashing (ADR-0014 §4.F2) rather than the sentinel
+  // canonical byte hashing rather than the sentinel
   // fallback. A workspaceRoot pointing at a fixture без `.yarn/patches/`
   // is a no-op for patch-free fixtures.
   return spec.adapter.parse(

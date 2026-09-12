@@ -119,21 +119,21 @@ function lossApplies(entry: LossEntry, context: ObservationContext): boolean {
     case 'workspace':
       return hasWorkspaceMembers(context.sourceGraph)
         && !workspaceMembersPreserved(context.sourceGraph, context.destinationGraph)
-    // ADR-0020 Phase C-i: distinct from `workspace` (full primitive drop,
+    // Phase C-i: distinct from `workspace` (full primitive drop,
     // npm-1 case). `workspace-rekey` fires when both PMs CAN encode the
     // workspace shape but disagree on the identity convention — yarn-berry's
     // `<name>@0.0.0-use.local` vs pnpm-v9's path-keyed `<path>@<version>`.
-    // `applies ≡ observed` (graph-shape loss, ADR-0020 §2 honesty principle):
+    // `applies ≡ observed` (graph-shape loss, honesty principle):
     // captured by source workspace nodes (workspacePath !== undefined,
     // includes empty-string root marker) missing by id in destination.
     case 'workspace-rekey':
       return hasWorkspaceRekey(context.sourceGraph, context.destinationGraph)
-    // ADR-0020 Phase C-iii (yb9 -> npm-3): canonical resolution type degrades
+    // Phase C-iii (yb9 -> npm-3): canonical resolution type degrades
     // from `tarball` (with registry URL) to `unknown` (with raw locator) when
     // the destination format cannot translate the source-PM-native locator
     // (yarn-berry's `<name>@npm:<version>`) into a registry URL. Per-node
     // tarball.resolution.type mismatch on at least one node. `applies ≡
-    // observed` (graph-shape loss, ADR-0020 §2 honesty principle).
+    // observed` (graph-shape loss, honesty principle).
     case 'resolved-url':
       return resolvedUrlDegrades(context.sourceGraph, context.destinationGraph)
     case 'deno-jsr':
@@ -317,7 +317,7 @@ function edgeKindMissing(source: Graph, destination: Graph): boolean {
 }
 
 // `tarballs` loss: any source tarball payload not deep-equal to its destination
-// counterpart (modulo `resolution`, per ADR-0014 §4.F3 attribution divergence).
+// counterpart (modulo `resolution`, per attribution divergence).
 function tarballPayloadDiverged(source: Graph, destination: Graph): boolean {
   const destTarballs = new Map(Array.from(destination.tarballs()))
   for (const [key, payload] of source.tarballs()) {
@@ -363,7 +363,7 @@ function hasWorkspaceRekey(source: Graph, destination: Graph): boolean {
 }
 
 // `resolved-url`: source has a canonically-typed tarball resolution
-// (`tarball` / `git` / `directory`, ADR-0014 §4.F3) that degrades to
+// (`tarball` / `git` / `directory`,) that degrades to
 // `unknown` (or vanishes) in destination because the cross-family stringifier
 // emits the PM-native locator verbatim into a `resolved:` field the
 // destination parser cannot recognise as a registry URL. Mirror nodes by id;

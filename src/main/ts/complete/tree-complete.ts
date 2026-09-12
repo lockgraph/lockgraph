@@ -1,4 +1,4 @@
-// ADR-0023 §4 — tree completion algorithm.
+// tree completion algorithm.
 //
 // The seed BOUNDS the frontier: with a seed supplied BFS starts from
 // `seed.recentlyAdded` only (cost O(changed-subtree) — the incremental
@@ -84,7 +84,7 @@ export interface CompletionOptions {
    *  forced target VERBATIM (and outranks reuse), so the completed closure
    *  honours the project's pins (frozen-acceptance). */
   overrides?:    readonly OverrideConstraint[]
-  /** Node-local acceptance constraints (ADR-0037). When set, a NEW transitive
+  /** Node-local acceptance constraints. When set, a NEW transitive
    *  node is the HIGHEST range-satisfying version passing EVERY constraint
    *  (`engines`, `license`); none passes → a recoverable `COMPLETION_NO_CANDIDATE`
    *  (edge left unwired, completion continues, caller decides skip/stop). Empty
@@ -96,7 +96,7 @@ export interface CompletionOptions {
    *  `NO_CANDIDATE`; `'accept'` skips the check. */
   onUnevaluable?: OnUnevaluable
   /** OPT-IN combinatorial budget for the bounded-backtracking DISCOVERY probe
-   *  (ADR-0037 v2). Absent (default) → v1 node-local behavior verbatim. When
+   * (v2). Absent (default) → v1 node-local behavior verbatim. When
    *  set AND a dep hits `NO_CANDIDATE`, the resolver searches (bounded by
    *  `maxCombinations`) for a LOWER version of the consumer whose closure is
    *  constraint-clean and attaches it to the diagnostic as a `suggestion` (the
@@ -594,14 +594,14 @@ function mintDependency(
   ), newId)
 }
 
-// ADR-0023 §7.5: `unresolved` carries every severity emitted by this call and
+// `unresolved` carries every severity emitted by this call and
 // the callback mirrors the same events.
 function emit(context: CompletionContext, diagnostic: Diagnostic): void {
   context.unresolved.push(diagnostic)
   if (context.onDiagnostic !== undefined) context.onDiagnostic(diagnostic)
 }
 
-// ADR-0023 §8.6: completion diagnostics also land on Graph.diagnostics() so
+// completion diagnostics also land on Graph.diagnostics() so
 // stringify-side adapters see them through the canonical read channel.
 function emitAndLand(context: CompletionContext, diagnostic: Diagnostic): void {
   emit(context, diagnostic)
@@ -681,7 +681,7 @@ function alreadyWired(
   return false
 }
 
-/** Map PackumentVersion → (TarballKeyInputs, TarballPayload) per ADR-0023 §4.2 table. */
+/** Map PackumentVersion → (TarballKeyInputs, TarballPayload) per table. */
 function projectPackumentVersion(pv: PackumentVersion): {
   inputs:  TarballKeyInputs
   payload: TarballPayload

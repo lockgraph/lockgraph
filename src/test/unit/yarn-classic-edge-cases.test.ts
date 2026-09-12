@@ -66,7 +66,7 @@ describe('yarn-classic — parse edge cases', () => {
     expect(check(lock)).toBe(true)
     expect(detect(lock)).toBe('yarn-classic')
     expect(() => parse(lock)).not.toThrow()
-    // ADR-0032 — `https://r/foo` is a NON-registry-host tarball, so `foo`
+    // `https://r/foo` is a NON-registry-host tarball, so `foo`
     // carries a `+src=` discriminator; address it by name.
     expect(parse(lock).byName('foo').length).toBe(1)
   })

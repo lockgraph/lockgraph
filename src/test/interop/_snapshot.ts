@@ -15,7 +15,7 @@ export function graphSnapshot(graph: Graph) {
         attrs: edge.attrs === undefined ? undefined : { ...edge.attrs },
       })),
     ).flat(),
-    // ADR-0031 — integrity is origin-scoped payload (a tarball SRI and a
+    // integrity is origin-scoped payload (a tarball SRI and a
     // yarn-berry zip digest are different artefacts), compared separately via
     // graphSubset's origin-aware `integrity` feature. It is NOT structural
     // identity, so exclude it here — a cross-origin-class conversion (e.g.
@@ -24,7 +24,7 @@ export function graphSnapshot(graph: Graph) {
       const { integrity: _integrity, ...rest } = payload
       return [key, rest] as const
     }),
-    // RECIPE_* diagnostics are emission-side observability events (ADR-0014 §5),
+    // RECIPE_* diagnostics are emission-side observability events,
     // not graph identity — exclude them from cross-format snapshot equality
     // so source/destination graphs compare on structural state only.
     diagnostics: graph.diagnostics()

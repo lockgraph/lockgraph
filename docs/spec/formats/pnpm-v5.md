@@ -243,7 +243,7 @@ the whole rendered list, so it names no package and can bear no peer edge, but i
 still discriminates one variant of a package from another. It is therefore
 carried as a single opaque context token: the node keeps its real version, its
 base identity still matches a peer reference naming `name@version`, and the seal
-exempts exactly this token from edge/context coherence (ADR-0030). Recovering the
+exempts exactly this token from edge/context coherence. Recovering the
 peer set from a digest is not possible — `md5` is one-way — though a candidate
 set can be *verified* by re-rendering and re-hashing it.
 

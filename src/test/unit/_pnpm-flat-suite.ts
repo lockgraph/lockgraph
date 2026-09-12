@@ -1,6 +1,6 @@
 // _pnpm-flat-suite.ts — shared describe-block registration for pnpm-family adapters.
 //
-// Resolves pnpm-v9 RESIDUE F3 per ADR-0022 §5 — extracts the
+// Resolves pnpm-v9 RESIDUE F3 per — extracts the
 // family-agnostic test harness mirror of `_npm-flat-suite.ts`. Per-version
 // delta tests stay in the individual `pnpm-v{6,9}.test.ts` files (v9
 // snapshots-block stability, v6 dependencies-collapsed shape, etc.).
@@ -129,7 +129,7 @@ export function describeParseFixturesCommon(spec: PnpmFamilySpec): void {
       expect(graph.getNode('@types/node@20.11.30')).toBeDefined()
     })
 
-    it('parses peer-virt keys into canonical NodeIds (ADR-0006)', () => {
+    it('parses peer-virt keys into canonical NodeIds ()', () => {
       const graph = parseFixtureGraph(spec, 'peers-basic')
       const peerVirtId = 'react-dom@18.2.0(react@18.2.0)'
       const node = graph.getNode(peerVirtId)
@@ -167,7 +167,7 @@ export function describeParseFixturesCommon(spec: PnpmFamilySpec): void {
       expect(wsDeps.length).toBeGreaterThan(0)
     })
 
-    it('parses overrides sidecar + canonical patch hash (ADR-0014 §4.F2)', () => {
+    it('parses overrides sidecar + canonical patch hash ()', () => {
       const graph = parseFixtureGraph(spec, 'patch-yarn')
       const lodash = graph.getNode('lodash@4.17.21')
       expect(lodash).toBeDefined()
@@ -239,7 +239,7 @@ export function describeStringifyCommon(spec: PnpmFamilySpec): void {
       expect(text).toMatch(/settings:\n  autoInstallPeers: (true|false)\n  excludeLinksFromLockfile: (true|false)/)
     })
 
-    it('roundtrips ADR-0006 canonical NodeId form for peer-virt instances', () => {
+    it('roundtrips  canonical NodeId form for peer-virt instances', () => {
       const original = parseFixtureGraph(spec, 'peers-multi')
       const emitted = spec.adapter.stringify(original)
       const reparsed = spec.adapter.parse(emitted)
@@ -308,7 +308,7 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
       })
       const reparsed = spec.adapter.parse(spec.adapter.stringify(result.graph))
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution
+      // round-trip parse re-derives canonical resolution
       // from the on-disk `resolution:` block (or by convention from
       // name@version when only `integrity:` is emitted).
       expect(canonicalDigest(reparsed.tarballOf('ms@2.1.3')!.integrity!)).toBe(MODIFIED_SRI)
@@ -342,7 +342,7 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
       expectEmptyGraphDiff(original.diff(reparsed))
     })
 
-    it(`setNode patch SURVIVES on emit via overrides block (ADR-0014 §4.F2)`, () => {
+    it(`setNode patch SURVIVES on emit via overrides block ()`, () => {
       const original = parseFixtureGraph(spec, 'simple')
       const patch = 'a'.repeat(128)
       const current = original.getNode('ms@2.1.3')!
@@ -381,7 +381,7 @@ export function describeModifyCommon(spec: PnpmFamilySpec): void {
 
 export function describeEnrichCommon(spec: PnpmFamilySpec): void {
   const { label, diagPrefix } = spec
-  describe(`${label} — enrich (§C, ADR-0006 reference impl)`, () => {
+  describe(`${label} — enrich (§C,  reference impl)`, () => {
     it('peer-virt FIRST-CLASS: parse reads peer-context from disk (dominant path)', () => {
       const graph = parseFixtureGraph(spec, 'peers-basic')
       const result = spec.adapter.enrich(graph)
@@ -492,7 +492,7 @@ export function describeOptimizeCommon(spec: PnpmFamilySpec): void {
 
 export function describeCanonicalNodeIdRoundtrip(spec: PnpmFamilySpec): void {
   const { label } = spec
-  describe(`${label} — ADR-0006 canonical NodeId form roundtrip`, () => {
+  describe(`${label} —  canonical NodeId form roundtrip`, () => {
     it('peer-virt NodeId roundtrips byte-stable через emit + reparse', () => {
       const graph = parseFixtureGraph(spec, 'peers-multi')
       const peerVirtNodes = Array.from(graph.nodes()).filter(n => n.peerContext.length > 0)

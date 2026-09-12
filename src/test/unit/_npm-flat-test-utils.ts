@@ -17,7 +17,7 @@ import {
 
 export { fixture, graphSnapshot, expectEmptyGraphDiff }
 
-// Phase §A working fixture set per ADR-0021 §"Acceptance gate — per-version".
+// Phase §A working fixture set per §"Acceptance gate — per-version".
 export const FIXTURES = [
   'bundled-deps',
   'deps-with-scopes',

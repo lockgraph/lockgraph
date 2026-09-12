@@ -371,7 +371,7 @@ its nearest ancestor importer, the same collapse
 [`resolveWorkspacePeerId`](#peer-virtualisation-in-snapshot-keys-node-identity)
 performs for workspace peers.
 
-What the model does with it follows the seal's rule (ADR-0017 amendment) that a
+What the model does with it follows the seal's rule that a
 workspace node accepts an incoming edge only from a workspace node, a **local**
 (`resolution: {type: directory}`) package, or a `peer` edge:
 
@@ -417,7 +417,7 @@ sub-directory collapse above is lossy in the emit direction.
 Census over 77 pnpm locks (70 scraped + the 6 real-world fixtures + generated):
 133 occurrences across 12 files — 32 local, 77 peer-bound, 23 unrepresentable,
 0 naming an unknown directory. The bound edge carries **no** `workspace: true`
-attribute: that flag pairs with `workspaceRange` (ADR-0014 §4.F4) and this
+attribute: that flag pairs with `workspaceRange` and this
 channel records only the resolved directory, never the range the consumer
 declared.
 

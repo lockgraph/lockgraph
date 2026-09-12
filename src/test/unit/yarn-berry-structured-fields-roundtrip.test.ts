@@ -9,10 +9,10 @@ import { stringify as npm3Stringify } from '../../main/ts/formats/npm-3.ts'
 // Task #89 — `format(parse(x))` must preserve THREE structured fields that a
 // field-level round-trip sweep proved were silently dropped on 100% of real
 // berry locks (a value-only sweep missed them):
-//   - `conditions:`         — a SCALAR gate (`os=darwin & cpu=arm64`), was
-//                             coerced as a SymlMap → undefined for a scalar.
-//   - `dependenciesMeta:`   — `{ pkg: { optional|built|… } }`, never captured.
-//   - `peerDependenciesMeta:` — `{ peer: { optional: true } }`, never captured.
+// - `conditions:` — a SCALAR gate (`os=darwin & cpu=arm64`), was
+// coerced as a SymlMap → undefined for a scalar.
+// - `dependenciesMeta:` — `{ pkg: { optional|built|… } }`, never captured.
+// - `peerDependenciesMeta:` — `{ peer: { optional: true } }`, never captured.
 //
 // `conditions` is emitted bare (yarn never quotes it, even with spaces/`&`/`|`);
 // `dependenciesMeta` round-trips via a verbatim per-node sidecar; and
@@ -169,7 +169,7 @@ __metadata:
     const { graph: g } = enrich(g0) // derives the react peer edge + folds optional
     const out = stringify(g)
 
-    // Confirm enrich actually materialised the optional peer edge (rung-0 from
+    // Confirm enrich actually materialised the optional peer edge (rung-0
     // the on-lock peerDependenciesMeta), so this is a genuine union, not a no-op.
     const some = Array.from(g.nodes()).find(n => n.name === 'some-pkg')!
     const peerEdges = g.out(some.id, 'peer')
@@ -263,8 +263,8 @@ __metadata:
 // and stringify rebuilds the `dependencies:` block from LIVE edges only, so the
 // ref vanished. These are NOT canonical graph edges (there is no target node) —
 // they are FORMAT-FIDELITY only, captured in a verbatim PM-native per-node
-// sidecar (the `Node.resolution` / `conditions` / `dependenciesMeta` precedent,
-// ADR-0013) and re-emitted into the correct inner-block, so same-format
+// sidecar (the `Node.resolution` / `conditions` / `dependenciesMeta`
+// precedent) and re-emitted into the correct inner-block, so same-format
 // round-trip is byte-faithful. Preservation must NOT silence the existing
 // MISSING-ENTRY (`YARN_BERRY_UNRESOLVED_DEP`) diagnostic — we keep informing AND
 // keep the bytes. Sibling repro: mui/material-ui@9291574.
@@ -516,7 +516,7 @@ __metadata:
   linkType: hard
 `
     const out = stringify(parse(src))
-    // Bare in, bare out — matches yarn's uniform `simpleStringPattern` rule.
+    // Bare, bare out — matches yarn's uniform `simpleStringPattern` rule.
     expect(out).toContain('  bin:\n    built: false\n    optional: true\n')
     expect(out).not.toContain('built: "false"')
     expect(out).not.toContain('optional: "true"')

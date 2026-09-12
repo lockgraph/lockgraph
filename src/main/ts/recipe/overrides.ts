@@ -1,24 +1,24 @@
-// ADR-0025 §3 — manifest override capture (recipe feature F6, pure primitive).
+// manifest override capture (recipe feature F6, pure primitive).
 //
 // Each package manager ships a manifest-level dependency-override mechanism
 // with its own grammar:
 //
-//   - npm   `overrides`        nested object; parent-path-scoped; `.` self-key;
-//                              `$name` parent-version back-refs.
-//   - yarn  `resolutions`      flat patterns: `pkg`, `parent/child`,
-//                              `**/child` deep-glob, `pkg@range`.
-//   - pnpm  `pnpm.overrides`   flat selectors: `foo`, `foo@2`, `a>b>c` chains,
-//                              leading-`>foo` transitive-only.
+// - npm `overrides` nested object; parent-path-scoped; `.` self-key;
+// `$name` parent-version back-refs.
+// - yarn `resolutions` flat patterns: `pkg`, `parent/child`,
+// `**/child` deep-glob, `pkg@range`.
+// - pnpm `pnpm.overrides` flat selectors: `foo`, `foo@2`, `a>b>c` chains,
+// leading-`>foo` transitive-only.
 //
 // `captureOverrides` normalizes a PM-native override block into BOTH the
-// canonical PM-neutral `OverrideConstraint[]` (load-bearing per ADR-0013) and
+// canonical PM-neutral `OverrideConstraint[]` (load-bearing) and
 // the verbatim `Manifest.native.*` block (attribution, for lossless same-PM
 // round-trip). The canonical superset is modelled on npm's nested form — the
 // only one that expresses parent-scoping — so pnpm `>`-chains and yarn flat
-// patterns derive from it (ADR-0025 §2).
+// patterns derive from it.
 //
 // This module is pure: no Graph traversal, no I/O. The single diagnostic it
-// surfaces (`RECIPE_OVERRIDE_NORMALISED`, info) is built by the factory in
+// surfaces (`RECIPE_OVERRIDE_NORMALISED`, info) is built by the factory
 // `recipe/diagnostics.ts` and pushed through the optional `onDiagnostic`
 // callback — matching the F1/F2/F4/F5 split convention (primitive stays math,
 // diagnostics live next door). The projection-time loss codes
@@ -45,14 +45,14 @@ export interface CapturedOverrides {
  * `@version` condition. The split uses the LAST `@` at depth 0 with index
  * `>= 1`, so a scoped name keeps its leading `@scope/` and only a genuine
  * `pkg@range` (or `@scope/pkg@range`) tail is peeled — the same idiom the
- * format adapters use for `<name>@<version>` keys (ADR-0006).
+ * format adapters use for `<name>@<version>` keys.
  *
  * Examples:
- *   `foo`               → { package: 'foo' }
- *   `foo@2`             → { package: 'foo', versionCondition: '2' }
- *   `@scope/pkg`        → { package: '@scope/pkg' }
- *   `@scope/pkg@^1`     → { package: '@scope/pkg', versionCondition: '^1' }
- *   `pkg@npm:^14.4.0`   → { package: 'pkg', versionCondition: 'npm:^14.4.0' }
+ * `foo` → { package: 'foo' }
+ * `foo@2` → { package: 'foo', versionCondition: '2' }
+ * `@scope/pkg` → { package: '@scope/pkg' }
+ * `@scope/pkg@^1` → { package: '@scope/pkg', versionCondition: '^1' }
+ * `pkg@npm:^14.4.0` → { package: 'pkg', versionCondition: 'npm:^14.4.0' }
  *
  * Override selectors carry no `(...)` peer suffix, but the depth guard is kept
  * for parity with the shared idiom and to stay robust to stray parentheses.
@@ -78,8 +78,8 @@ export function splitNameVersion(selector: string): {
 
 /**
  * Parse a PM-native override block into canonical + verbatim native form
- * (ADR-0025 §3). Pure function. Emits `RECIPE_OVERRIDE_NORMALISED` (info)
- * once per successful capture (ADR-0025 §6). A `block` that is null/undefined
+ * Pure function. Emits `RECIPE_OVERRIDE_NORMALISED` (info)
+ * once per successful capture. A `block` that is null/undefined
  * or not an object yields no canonical entries and no native payload (nothing
  * to attribute); the diagnostic is still emitted once for an empty-but-present
  * object so callers can observe "an overrides key existed and was processed".
@@ -121,7 +121,7 @@ export function captureOverrides(
   // first-match needs declaration order, which mergeOverrides' key-sort loses).
   // NON-ENUMERABLE: pure tie-break metadata, invisible to toEqual / JSON /
   // overrideKey, so constraints stay "compare-clean" (same intent as the
-  // constraint() factory omitting empty optionals).
+  // constraint factory omitting empty optionals).
   canonical.forEach((c, i) => {
     Object.defineProperty(c, 'origin', { value: pm, enumerable: false, configurable: true, writable: true })
     Object.defineProperty(c, 'captureIndex', { value: i, enumerable: false, configurable: true, writable: true })
@@ -133,11 +133,11 @@ export function captureOverrides(
 
 // === npm - nested object ====================================================
 //
-// `{ "foo": "1.0.0" }`                       → global override of foo
-// `{ "parent": { "foo": "1.0.0" } }`         → foo under parentPath ['parent']
-// `{ "foo": { ".": "1.0.0", "bar": "2" } }`  → foo (the `.` self-key) +
-//                                              bar under parentPath ['foo']
-// `{ "foo": "$baz" }`                        → to '$baz', selfRef: true
+// `{ "foo": "1.0.0" }` → global override of foo
+// `{ "parent": { "foo": "1.0.0" } }` → foo under parentPath ['parent']
+// `{ "foo": { ".": "1.0.0", "bar": "2" } }` → foo (the `.` self-key) +
+// bar under parentPath ['foo']
+// `{ "foo": "$baz" }` → to '$baz', selfRef: true
 // A `pkg@version` parent key (`{ "kerberos@2.1.1": { … } }`) is a version-
 // qualified scope: the path segment keeps the BARE package name (the `@version`
 // qualifier survives verbatim in `native.npmOverrides`; the canonical
@@ -189,13 +189,13 @@ function captureFlat(
 // yarn `resolutions` key grammar (slash-separated path; last segment is the
 // overridden package and may carry an `@range` version condition):
 //
-//   `foo`            → { foo }
-//   `parent/foo`     → { foo, parentPath: ['parent'] }
-//   `**/foo`         → { foo }                       (deep-glob — see below)
-//   `foo@^1`         → { foo, versionCondition: '^1' }
-//   `parent/foo@^1`  → { foo, parentPath: ['parent'], versionCondition: '^1' }
+// `foo` → { foo }
+// `parent/foo` → { foo, parentPath: ['parent'] }
+// `**/foo` → { foo } (deep-glob — see below)
+// `foo@^1` → { foo, versionCondition: '^1' }
+// `parent/foo@^1` → { foo, parentPath: ['parent'], versionCondition: '^1' }
 //
-// `**` is yarn's unbounded-depth glob — an irreducible tail (ADR-0025 §2). We
+// `**` is yarn's unbounded-depth glob — an irreducible tail. We
 // capture the overridden package and record NO parentPath for any-depth `**`
 // segments (a `**` ancestor is "any depth", which `parentPath` — an exact
 // chain — cannot express). The loss is reported at PROJECTION time, not here.
@@ -239,15 +239,15 @@ function splitYarnPathSegments(key: string): string[] {
 // pnpm `pnpm.overrides` key grammar (`>`-separated ancestor chain; last
 // segment is the overridden package; any segment may carry an `@version`):
 //
-//   `foo`         → { foo }
-//   `foo@2`       → { foo, versionCondition: '2' }
-//   `a>b`         → { b, parentPath: ['a'] }
-//   `a>b>c`       → { c, parentPath: ['a', 'b'] }
-//   `>foo`        → { foo }                  (leading-`>` transitive-only)
-//   `express@4>path-to-regexp`
-//                 → { path-to-regexp, parentPath: ['express'] }
+// `foo` → { foo }
+// `foo@2` → { foo, versionCondition: '2' }
+// `a>b` → { b, parentPath: ['a'] }
+// `a>b>c` → { c, parentPath: ['a', 'b'] }
+// `>foo` → { foo } (leading-`>` transitive-only)
+// `express@4>path-to-regexp`
+// → { path-to-regexp, parentPath: ['express'] }
 //
-// Leading-`>` ("transitive-only") is an irreducible tail (ADR-0025 §2): the
+// Leading-`>` ("transitive-only") is an irreducible tail: the
 // empty leading segment is dropped here; the lost transitive-only intent is
 // reported at projection. Ancestor segments keep only their BARE package name
 // (a `parent@version` qualifier survives in `native.pnpmOverrides`; the
@@ -271,7 +271,7 @@ function splitPnpmKey(key: string): {
 
 // Build one OverrideConstraint, omitting empty optional slots so the canonical
 // objects compare cleanly (no `parentPath: []` noise) and an npm `$name`
-// target is flagged `selfRef: true` (ADR-0025 §2 — the npm-only tail).
+// target is flagged `selfRef: true` (— the npm-only tail).
 function constraint(
   pkg: string,
   parentPath: string[],
@@ -303,7 +303,7 @@ function asStringRecord(block: object): Record<string, string> {
 
 /**
  * Project canonical override constraints into a target PM's native override
- * block (ADR-0025 §4) — the inverse of `captureOverrides`. npm returns a nested
+ * block — the inverse of `captureOverrides`. npm returns a nested
  * object; pnpm a flat `Record` keyed by `>`-separated ancestor selectors. The
  * adapter writes the block into its lockfile (npm `packages[""].overrides` /
  * pnpm top-level `overrides:`). yarn has no lockfile overrides target — callers

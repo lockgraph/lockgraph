@@ -1,4 +1,4 @@
-// ADR-0023 — complete/ public re-exports.
+// complete/ public re-exports.
 //
 // Tree completion BFS + find-up resolve + COMPLETION_* diagnostics.
 // Per ADR §8.1 directory layout.
@@ -29,7 +29,7 @@ export {
   type RejectedCandidate,
 } from './diagnostics.ts'
 
-// ADR-0037 — node-local acceptance constraints.
+// node-local acceptance constraints.
 export {
   constrainedCandidates,
   engines,
@@ -43,7 +43,7 @@ export {
   type Verdict,
 } from './constraints.ts'
 
-// ADR-0037 v2 — opt-in bounded-backtracking discovery.
+// Opt-in bounded-backtracking discovery.
 export {
   probeAlternativeParent,
   type BudgetCounter,

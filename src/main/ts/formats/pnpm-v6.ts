@@ -1,11 +1,11 @@
 // pnpm-v6 adapter — pnpm `pnpm-lock.yaml` lockfileVersion 6.0.
 //
 // Thin entry threading the `v6-collapsed-root` profile through
-// `_pnpm-flat-core.ts`. Per ADR-0022 §A.pnpm-v6 — second pnpm-family
+// `_pnpm-flat-core.ts`. Per -v6 — second pnpm-family
 // adapter, anchored on the pre-snapshots-split schema (single packages
 // block with inline transitives + dev flags).
 //
-// §A pinning per ADR-0022 §A.pnpm-v6:
+// §A pinning per -v6:
 //   - top-level `lockfileVersion: '6.0'` literal handshake (quoted string).
 //   - top-level `settings` always emitted.
 //   - top-level `dependencies` (collapsed single-importer) OR

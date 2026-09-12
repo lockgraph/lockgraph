@@ -22,7 +22,7 @@ describe('yarn-classic robustness — git-protocol resolved URLs', () => {
       '  version "0.0.0"\n' +
       '  resolved "git+ssh://git@github.com/example/from-git.git#0123456789abcdef0123456789abcdef01234567"\n'
     const g = parse('yarn-classic', lf)
-    // ADR-0032 — a git source carries a `+src=` discriminator; address by name.
+    // a git source carries a `+src=` discriminator; address by name.
     const id = g.byName('from-git')[0]!
     expect(g.getNode(id)).toBeDefined()
     expect(id).toContain('+src=')
@@ -37,7 +37,7 @@ describe('yarn-classic robustness — git-protocol resolved URLs', () => {
       '  version "1.0.0"\n' +
       '  resolved "git://github.com/frozeman/WebSocket-Node.git#deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"\n'
     const g = parse('yarn-classic', lf)
-    // ADR-0032 — a git source carries a `+src=` discriminator; address by name.
+    // a git source carries a `+src=` discriminator; address by name.
     const id = g.byName('ws')[0]!
     expect(g.tarballOf(id)?.nativeResolution).toMatch(/^git:\/\//)
     expect(g.tarballOf(id)?.resolution?.type).toBe('git')
@@ -115,8 +115,8 @@ describe('yarn-classic robustness — duplicate descriptors that should merge', 
     expect(out.match(/version "4\.3\.0"/g)).toHaveLength(1)
   })
 
-  it('two blocks at the same name@version from DIFFERENT sources become DISTINCT nodes (ADR-0032 #2b)', () => {
-    // Pre-ADR-0032 this collapsed onto one NodeId and threw IRREDUCIBLE_LOSS
+  it('two blocks at the same name@version from DIFFERENT sources become DISTINCT nodes ( #2b)', () => {
+    // Pre- this collapsed onto one NodeId and threw IRREDUCIBLE_LOSS
     // (data-loss prevention). Now the non-registry copy carries a `+src=`
     // discriminator, so the registry artefact and the example.com artefact are
     // genuinely DISTINCT nodes — the #2b collapse is resolved, not aborted.

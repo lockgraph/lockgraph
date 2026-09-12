@@ -1,5 +1,5 @@
-// ADR-0031 — integrity as a multi-hash carrier with origin tags
-// (amends ADR-0014 §4.F1).
+// integrity as a multi-hash carrier with origin tags
+// (amends).
 //
 // Graph-canonical integrity is `Integrity { hashes: Hash[] }`: every algorithm
 // present on disk and every member of a space-joined SRI is preserved verbatim,
@@ -20,7 +20,7 @@
 // Digests are stored as lowercase hex of the raw digest bytes; SRI base64 ↔ hex
 // translation happens only at the parse/emit boundary so every algorithm and
 // origin compares uniformly. Integrity is NOT part of NodeId / TarballKey
-// (ADR-0010/0011) — this carrier is `TarballPayload` data only.
+// (/0011) — this carrier is `TarballPayload` data only.
 
 export type HashOrigin =
   | 'sri'          // member of an SRI field (npm / pnpm / bun / yarn-classic integrity). Tarball digest.
@@ -169,7 +169,7 @@ const REGISTRY_TGZ_SHA1_FRAGMENT = /\.tgz#([0-9a-f]{40})$/i
  * from the resolved URL's `#<sha1>` fragment to `sha1-<base64>`. A fragment-only
  * yarn.lock (yarn 1.0–1.5) carries its checksum SOLELY there — that sha1 is the
  * only integrity fact, so it must be emitted, never dropped. The sha1 lives on
- * the resolution (per ADR-0031 / _common.md §3 it rides the resolved URL, not
+ * the resolution (per / _common.md §3 it rides the resolved URL, not
  * the integrity multiset); this promotion is emit-only, so yarn-classic's own
  * fragment round-trip stays byte-identical.
  */

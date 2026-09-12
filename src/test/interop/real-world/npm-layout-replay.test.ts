@@ -8,7 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const realWorld = (rel: string): string =>
   readFileSync(resolve(here, '../../resources/fixtures/real-world', rel), 'utf8')
 
-// ADR-0026 install-path replay. An un-mutated same-PM npm
+// install-path replay. An un-mutated same-PM npm
 // round-trip replays the parse-captured placement verbatim (skips the
 // re-hoisting BFS), so a real lock with deep nested-hoist:
 //   - re-stringifies WITHOUT IRREDUCIBLE_LOSS (the THROW manifestation),
@@ -16,7 +16,7 @@ const realWorld = (rel: string): string =>
 //     COLLAPSE manifestation),
 // modulo `{optional:true}` uninstalled-optional placeholders (non-nodes),
 // excluded from BOTH sides. Workspace symlinks (`{link:true}`) ARE now compared:
-// ADR-0027 §4 (WS-LINK) fixed the over-emit (previously a link per member) so the
+// (WS-LINK) fixed the over-emit (previously a link per member) so the
 // emitted link-set matches npm's — link iff referenced; an unreferenced
 // workspace member correctly gets none.
 // The comparison is the RESOLVED-node + link install-path key-set.
@@ -29,7 +29,7 @@ const installPathKeys = (pkgs: Record<string, unknown>): string[] =>
     })
     .sort()
 
-describe('npm install-path replay (ADR-0026)', () => {
+describe('npm install-path replay ()', () => {
   for (const dir of [
     'microsoft-vscode-main-ddd12d5', // THROW: deep-nested brace-expansion collision
     'socketio-socket.io-main-190572d', // COLLAPSE: same-(name,version) at multiple paths

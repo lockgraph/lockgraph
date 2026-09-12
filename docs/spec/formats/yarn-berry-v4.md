@@ -240,8 +240,7 @@ consumer still declaring `csstype: "npm:^3.1.3"` misses Rung 0. The pin can be
 **non-satisfying** (`3.0.9` ∉ `^3.1.3`) and can target a non-version
 (`patch:` / `portal:`), so the **override map** (Rung 2) is required — and
 since yarn writes no lock-borne resolutions, it exists only when the caller
-passes `manifests` (captured per published
-ADR-0025). Without `manifests`,
+passes `manifests` (captured at parse). Without `manifests`,
 Rung 3 recovers only the *satisfying* slice (source-gated to registry tarballs
 per [`_common.md` §5.3](./_common.md#53-the-source-awareness-invariant) — an
 `npm:` range never binds a git / directory / unknown node); a non-satisfying

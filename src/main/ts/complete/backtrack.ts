@@ -1,10 +1,10 @@
-// ADR-0037 v2 — bounded-backtracking DISCOVERY escalation.
+// Bounded-backtracking DISCOVERY escalation.
 //
 // When v1's node-local filter hits a cliff (a dependency of consumer P has NO
 // constraint-passing version in range) AND a `budget` is supplied, this searches
 // — bounded by `maxCombinations` — for a LOWER version of P whose OWN immediate
 // dependency closure is constraint-clean, and REPORTS it: the compatible version
-// plus the override that pins it. This is the exact ADR-0037 §5 cliff case
+// plus the override that pins it. This is the exact cliff case
 // (`foo@1.9→bar@^2` fails, `foo@1.4→bar@^1` clean).
 //
 // It is READ-ONLY — it never mutates the graph, so the emitted lock stays
@@ -25,7 +25,7 @@ import {
   type OnUnevaluable,
 } from './constraints.ts'
 
-/** Combinatorial search budget (ADR-0037 v2). Count-based ⇒ DETERMINISTIC
+/** Combinatorial search budget (v2). Count-based ⇒ DETERMINISTIC
  *  (unlike a wall-clock budget): same inputs + same cap → same result. */
 export interface CompletionBudget {
   /** Hard cap on alternative consumer-versions probed across the WHOLE pass (a

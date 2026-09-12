@@ -65,7 +65,7 @@ typings/
 
 # Output of 'npm pack'
 *.tgz
-# …except vendored test-fixture tarballs (ADR-0035 berry-checksum conformance)
+# …except vendored test-fixture tarballs (berry-checksum conformance)
 !src/test/resources/fixtures/tarballs/*.tgz
 src/test/resources/fixtures/_report.json
 

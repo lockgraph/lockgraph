@@ -10,7 +10,7 @@ import { detect, parse, stringify } from '../../main/ts/index.ts'
 // SAME `name@version` differing ONLY by a `::` bind modifier collapsed onto one
 // NodeId and threw IRREDUCIBLE_LOSS. The bind was silently dropped from identity
 // (and, for `__archiveUrl=`, swept into the derived registry URL while leaving
-// the host as registry.npmjs.org). ADR-0032 §"+src=" extension: the bind forks
+// the host as registry.npmjs.org). §"+src=" extension: the bind forks
 // the NodeId (like `+patch=`); `__archiveUrl=` forks via its non-registry host.
 
 const CK = (c: string) => `10c0/${c.repeat(128)}`
@@ -37,7 +37,7 @@ __metadata:
   linkType: hard
 `
 
-describe('recipe/resolution — yarn-berry `::` bind modifier (ADR-0032 +src= extension)', () => {
+describe('recipe/resolution — yarn-berry `::` bind modifier ( +src= extension)', () => {
   it('`::__archiveUrl=<enc>` → tarball canonical on the DECODED archive url, full bind suffix carried for identity', () => {
     const c = parseResolution(
       'string-width@npm:4.2.3::__archiveUrl=https%3A%2F%2Fnpm.corp.example.com%2Fstring-width%2F-%2Fstring-width-4.2.3.tgz',

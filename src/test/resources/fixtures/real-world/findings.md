@@ -110,7 +110,7 @@ shape (the underlying patch loss is already attributed via
   sibling and attributes the patch loss via `warnPatchDrop`.
 
 Source-side parse fix from the prior batch (workspace identification
-via `resolution` per ADR-0014 §4.F3 rather than `specs[0].protocol`)
+via `resolution` rather than `specs[0].protocol`)
 is retained.
 
 ## qiwi-mware-master-ed822d4/yarn.lock
@@ -138,7 +138,7 @@ is retained.
 
 13/13 conversions succeed (was 0/12). The shared yarn-berry entry-spec
 tokenizer now accepts a bare `<name>@<version>` half (no `<scheme>:`)
-and synthesises `npm:` per ADR-0016 §B — Yarn 4 emits this shape for
+and synthesises `npm:` — Yarn 4 emits this shape for
 the entry-key half of a workspace package also published to npm
 (`"@qiwi/mware-context@1.14.1, @qiwi/mware-context@workspace:packages/context"`).
 The `<bare>` half lexically precedes the `workspace:` half, so it
@@ -230,7 +230,7 @@ Per-fixture deltas:
   URL derivation now uses the locator's own name via soft-match
   `peelYarnBerryLocator`; bun-text patched-sibling dedup unblocks `fsevents@2.3.3`.
 - `qiwi-mware-master-ed822d4/yarn.lock`: 13/13 (was 0/12). yarn-berry entry-spec tokenizer now
-  accepts bare `<name>@<version>` (synthesises `npm:` per ADR-0016 §B), unblocking
+  accepts bare `<name>@<version>` (synthesises `npm:`), unblocking
   source parse across every target; downstream patched-sibling collapses closed by
   the same emit-side dedup applied to the other fixtures.
 - `qiwi-uniconfig-master-c5e7d5a/yarn.lock`: 13/13 (was 6/12 → 11/13 → 13/13). yarn-classic +
@@ -245,7 +245,7 @@ closed family-wide blockers without introducing new ADRs, RECIPE_* codes, or
 LossFeature arms:
 
 1. `src/main/ts/formats/_yarn-berry-core.ts` — `parseSpec` accepts a bare
-   `<name>@<version>` half and synthesises `npm:` per ADR-0016 §B (matches the
+   `<name>@<version>` half and synthesises `npm:` (matches the
    existing `entryKeyRangeOf` convention for cross-family inputs).
 2. `src/main/ts/recipe/resolution.ts` — `peelYarnBerryLocator` drops the strict
    `expectedName` match (npm-alias collapsed entries carry a different

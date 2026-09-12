@@ -126,7 +126,7 @@ describe('recipe/resolution — parse git case', () => {
 })
 
 describe('recipe/resolution — workspace shapes BYPASS the primitive', () => {
-  // Per ADR-0014 §4.F3 (narrowed to 4 cases): workspace identity is NOT part
+  // Per (narrowed to 4 cases): workspace identity is NOT part
   // of F3 canonical — it lives on `Node.workspacePath`. Adapters detect
   // workspace shape ahead of time and route around the primitive. When a
   // workspace-shaped string reaches the primitive defensively, it falls back
@@ -319,7 +319,7 @@ describe('recipe/resolution — yarn-classic parse populates canonical', () => {
   })
   it('codeload-tarball form → canonical git', () => {
     const g = parse('yarn-classic', fixture('git-github-tarball/yarn-classic.lock'))
-    // ADR-0032 — git source carries a `+src=` slot; address the node by id.
+    // git source carries a `+src=` slot; address the node by id.
     const id = g.byName('is-github').find(i => g.getNode(i)?.version === '6.3.1')!
     const payload = g.tarballOf(id)
     expect(payload?.resolution).toMatchObject({
@@ -364,7 +364,7 @@ describe('recipe/resolution — npm-3 parse populates canonical', () => {
   })
   it('git+ssh URL → canonical git', () => {
     const g = parse('npm-3', fixture('git-github-tarball/npm-3.lock'))
-    // ADR-0032 — git source carries a `+src=` slot; address the node by id.
+    // git source carries a `+src=` slot; address the node by id.
     const id = g.byName('@sindresorhus/is').find(i => g.getNode(i)?.version === '6.3.1')!
     const payload = g.tarballOf(id)
     expect(payload?.resolution).toMatchObject({
@@ -378,7 +378,7 @@ describe('recipe/resolution — npm-3 parse populates canonical', () => {
 // === Integration — cross-format conversion ==================================
 
 describe('recipe/resolution — convert yarn-berry-v9 → pnpm-v9 (registry tarball is integrity-anchored)', () => {
-  it('a registry tarball loses its pnpm resolution anchor when integrity is dropped (ADR-0031 cross-class)', async () => {
+  it('a registry tarball loses its pnpm resolution anchor when integrity is dropped ( cross-class)', async () => {
     const output = await convert(fixture('simple/yarn-berry-v9.lock'), { from: 'yarn-berry-v9', to: 'pnpm-v9', strict: false })
     const g = parse('pnpm-v9', output)
     const payload = g.tarball({ name: 'ms', version: '2.1.3' })
@@ -395,7 +395,7 @@ describe('recipe/resolution — convert npm-3 → yarn-berry-v9 preserves git ca
     const output = await convert(fixture('git-github-tarball/npm-3.lock'), { from: 'npm-3', to: 'yarn-berry-v9', strict: false })
     const g = parse('yarn-berry-v9', output)
     // The npm graph collapsed git aliases onto `@sindresorhus/is@6.3.1`.
-    // ADR-0032 — a git source carries a `+src=` slot on its NodeId/TarballKey,
+    // a git source carries a `+src=` slot on its NodeId/TarballKey,
     // so the bare `{ name, version }` key no longer addresses it; resolve via
     // the node id (tarballOf threads the node's source slot).
     const nodeId = g.byName('@sindresorhus/is').find(id => g.getNode(id)?.version === '6.3.1')!
@@ -488,7 +488,7 @@ describe('recipe/resolution — convert yarn-berry-v8 → bun-text drops URL and
       to:   'bun-text',
       strict: false,
     })
-    // ADR-0031: a yarn-berry checksum is a zip-cache digest, not a tarball SRI,
+    // a yarn-berry checksum is a zip-cache digest, not a tarball SRI,
     // so converting to bun-text OMITS integrity (never fabricates it); the URL
     // is likewise not emitted (positional slot).
     expect(output).not.toContain('registry.npmjs.org')

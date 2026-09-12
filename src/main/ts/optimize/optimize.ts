@@ -1,4 +1,4 @@
-// ADR-0024 — optimize phase: mark-and-sweep orphan GC (monotone-reductive).
+// optimize phase: mark-and-sweep orphan GC (monotone-reductive).
 //
 // Post-completion, pre-stringify sweep that removes unreachable nodes from
 // the roots/workspaces/preserve mark-set. Never adds nodes, edges, tarball
@@ -15,12 +15,12 @@ import type { ObserveOptions } from '../api/operation.ts'
 import { optimizeNodeRemoved, optimizeNoop, optimizeNoRoots } from './diagnostics.ts'
 
 export interface OptimizeOptions {
-  /** ADR-0023 §7.5 — stream diagnostics as they fire. */
+  /** — stream diagnostics as they fire. */
   onDiagnostic?: (d: Diagnostic) => void
   /**
    * Additional NodeIds the caller marks as roots (orchestrator-level
    * preservation; rare — workspaces are implicit roots and do not need
-   * this hook). Empty by default. Per ADR-0024 §3 / §4.1.
+   * this hook). Empty by default. Per / §4.1.
    */
   preserve?:     ReadonlySet<NodeId>
 }
@@ -28,7 +28,7 @@ export interface OptimizeOptions {
 export interface OptimizeResult {
   graph:      Graph
   /**
-   * Content-sorted (ADR-0007) NodeIds removed by this call. Empty iff the
+   * Content-sorted NodeIds removed by this call. Empty iff the
    * input was already optimal — in which case `unresolved` carries one
    * OPTIMIZE_NOOP record.
    */
@@ -48,7 +48,7 @@ export interface RemoveUnreachableResult {
 }
 
 /**
- * Optimize phase entry point. See ADR-0024 §4 for the normative algorithm
+ * Optimize phase entry point. See for the normative algorithm
  * (mark-and-sweep BFS) and §6 for the OPTIMIZE_* diagnostic taxonomy.
  *
  * Synchronous by §3.1. Idempotent by §7 item 4. Deterministic by §7 item 3
@@ -120,7 +120,7 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
 
   // BFS from the live seed via all edge kinds (§4.2 — peer edges count
   // too; removing a peer-only-referenced node violates peer-context
-  // coherence per ADR-0006). Plus a defensive peerContext walk — the
+  // coherence per). Plus a defensive peerContext walk — the
   // graph.ts:418-425 seal keeps peer-edges ↔ peerContext in lockstep so
   // out('peer') already covers it, but the explicit walk is defence-in-
   // depth per §4.2 should a future Mutator extension decouple them.
@@ -191,7 +191,7 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
     // keep an intermediate alive whose edges into a downstream unreachable
     // still need clearing before removeNode), then removeNode, then
     // removeTarball (if present), then emit the diagnostic on the same
-    // transaction so it lands on Graph.diagnostics() per §6.3 / ADR-0023
+    // transaction so it lands on Graph.diagnostics() per §6.3 /
     // §8.6.
     const nodeId       = node.id
     const tarballInputs = { name: node.name, version: node.version, patch: node.patch }
@@ -214,7 +214,7 @@ export function optimize(graph: Graph, options: OptimizeOptions = {}): OptimizeR
 
   // §4 noop epilogue. Land via mutate so the diagnostic appears on
   // Graph.diagnostics() — dual-channel symmetry with other phases per
-  // §6.3 / ADR-0023 §8.6.
+  // §6.3 /.
   if (removed.length === 0) {
     const noopDiag = optimizeNoop()
     next = next.mutate(m => { m.diagnostic(noopDiag) }).graph

@@ -1,7 +1,7 @@
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
 import { runIntraFamily } from '../intra-family/_runner.ts'
 
-// ADR-0020 Phase C-v: cross-family bun-text -> yarn-berry-v9 reverse contract.
+// Phase C-v: cross-family bun-text -> yarn-berry-v9 reverse contract.
 // Asymmetric reentrancy class; graph state fully preserved across the corpus
 // (bun-text source aligns with yarn-berry-v9 NodeId convention through the
 // member-ref `[<name>@workspace:<path>]` shape). `__metadata.version`

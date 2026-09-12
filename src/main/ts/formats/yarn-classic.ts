@@ -102,7 +102,7 @@ const CLASSIC_VERSION_FIELD_RE = /^ {2}version "(?:\\.|[^"])*"\s*$/
 // not a usable specifier and falls through to the unsupported-shape throw.
 const YARN_CLASSIC_LOCAL_SPEC_RE = /^(?:file|link|portal):(?!\/\/)\S/
 
-// ADR-0014 §4.F3 cross-format fallback: project canonical → yarn-classic
+// cross-format fallback: project canonical → yarn-classic
 // `resolved` URL when PM-native sidecar is absent. Workspace canonical
 // returns undefined (yarn-classic encodes workspaces as sentinel-version
 // entries, not via `resolved`).
@@ -166,7 +166,7 @@ interface YarnClassicEntry {
 }
 
 export interface YarnClassicParseOptions {
-  // Canonical override constraints (ADR-0025), threaded from the
+  // Canonical override constraints, threaded from the
   // public `parse()` after manifest capture through `ParseOptions.manifests`. yarn-classic
   // joins consumer ranges to entries by exact `<name>@<range>` key; a
   // `resolutions` pin rewrites that key, so the override map bridges the miss.
@@ -197,7 +197,7 @@ export interface YarnClassicManifest extends YarnClassicDependencyManifest {}
 
 export interface YarnClassicEnrichOptions {
   manifests?: Record<string, YarnClassicManifest>
-  // Canonical override constraints (ADR-0025), threaded from the same
+  // Canonical override constraints, threaded from the same
   // `captureManifestOverrides` the public `parse` runs. Lets root-edge synthesis
   // bind a `resolutions` pin whose forced version the declared range does NOT
   // satisfy to its node, the same way the parse-time edge resolver does.
@@ -642,7 +642,7 @@ function createClassicParseContext(options: YarnClassicParseOptions): ClassicPar
     unknownFields: new Set(),
     entryNodes: [],
     seenEntries: new Map(),
-    // Source-gated max-satisfying candidates by package name (ADR-0025).
+    // Source-gated max-satisfying candidates by package name.
     semverCandidatesByName: new Map(),
     options,
     globalDirectives: [],
@@ -1250,7 +1250,7 @@ export function quoteDepName(name: string): string {
     : name
 }
 
-// ADR-0014 §4.F3: yarn-classic stringify round-trips any URL-shaped PM-native
+// yarn-classic stringify round-trips any URL-shaped PM-native
 // resolution — the same shapes `parseResolution` accepts (incl. git+ssh / git:
 // / ssh: / scp-like `git@…`) — PLUS the relative `file:` / `link:` / `portal:`
 // local specifiers. The local specifier is re-emitted verbatim, which
@@ -1641,11 +1641,11 @@ function collectBlockEntries(
     .map(edge => {
       const dst = graph.getNode(edge.dst)
       if (dst === undefined || edge.attrs?.range === undefined) return undefined
-      // ADR-0014 §4.F4 — workspace edges: yarn-classic lacks `workspace:`
+      // workspace edges: yarn-classic lacks `workspace:`
       // protocol; drop the specifier and emit `resolvedVersion` (or fire
       // RECIPE_WORKSPACE_UNRESOLVED when no resolved version is available).
       // Empty pending specifier carried nothing to drop — gate via
-      // shouldEmitWorkspaceResolved per ADR-0014 §5:412.
+      // shouldEmitWorkspaceResolved per:412.
       if (isWorkspaceEdge(edge)) {
         const ws = workspaceRangeOfEdge(edge, dst)
         if (ws !== undefined) {

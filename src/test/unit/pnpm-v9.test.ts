@@ -277,8 +277,8 @@ describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)
     }
   })
 
-  it('#69: two bare-hex hashed-peer-set keys on one name@version stay DISTINCT (ADR-0030)', () => {
-    // Pre-ADR-0030 both `host@1.0.0(<hex>)` keys had their bare-hex dropped
+  it('#69: two bare-hex hashed-peer-set keys on one name@version stay DISTINCT ()', () => {
+    // Pre- both `host@1.0.0(<hex>)` keys had their bare-hex dropped
     // (mis-read as a patch) → collapsed onto one `host@1.0.0` NodeId. Now the
     // hash is KEPT: the two keys are two DISTINCT nodes, each with its own hash
     // token and its own `@scope/x` edge — no collapse, no shared-dep collision.
@@ -309,7 +309,7 @@ describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)
   it('#8b-C dedup: a patched + bare key collapsing on one NodeId wire a shared dep once', () => {
     // After #69 the bare-hex collapse path is gone; the `emittedEdges` dedup now
     // guards the remaining collapse — a LABELLED `patch_hash=` key (stripped to
-    // its bare NodeId, ADR-0014) colliding with the bare key for the same
+    // its bare NodeId,) colliding with the bare key for the same
     // name@version. Both walk `@scope/x`; without the dedup the second wire
     // trips the seal's `duplicate edge`.
     const hash = 'b'.repeat(64)
@@ -335,7 +335,7 @@ describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)
 
   it('#8b-C: a LABELLED `patch_hash=` segment is not mistaken for a peer and is replayed natively', () => {
     // `tool@1.0.0` is patched via a `patchedDependencies:` patch (labelled
-    // `patch_hash=<64hex>`) and referenced as a peer by `plugin`. ADR-0030
+    // `patch_hash=<64hex>`) and referenced as a peer by `plugin`.
     // does NOT touch the labelled-patch path: the segment is still dropped so
     // the patched node registers under its bare NodeId and the peer resolves
     // (else: seal `disagree with peerContext`). Gate 4 NEGATIVE — a labelled
@@ -373,9 +373,9 @@ describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)
     expect(stringify(parse(out))).toBe(out)
   })
 
-  it('#69 (ADR-0030): a BARE-HEX hashed peer-set token is KEPT as an opaque, non-edge-bearing peerContext discriminator (no longer dropped as a patch)', () => {
+  it('#69 (): a BARE-HEX hashed peer-set token is KEPT as an opaque, non-edge-bearing peerContext discriminator (no longer dropped as a patch)', () => {
     // Same shape as the labelled case above, but with a BARE-HEX digest — the
-    // pnpm-v9 hashed peer-set abbreviation (#69). Pre-ADR-0030 this collapsed
+    // pnpm-v9 hashed peer-set abbreviation (#69). Pre- this collapsed
     // onto bare `tool@1.0.0` (mis-read as a patch hash). Now it is KEPT: the
     // token rides in `tool`'s peerContext as an opaque discriminator, bearing
     // NO peer edge, and the seal exempts it from the edge↔context coherence
@@ -419,10 +419,10 @@ describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)
     expect(stringify(parse(out))).toBe(out)
   })
 
-  it('#69 (ADR-0030): two distinct bare-hex tokens on one `name@version` whose snapshot bodies diverge → 2 nodes, 0 violations, both keys round-trip', () => {
+  it('#69 (): two distinct bare-hex tokens on one `name@version` whose snapshot bodies diverge → 2 nodes, 0 violations, both keys round-trip', () => {
     // The core #69 regression. `lib@1.0.0` appears under TWO distinct bare-hex
     // tokens whose snapshot bodies fork on a transitive dep (`util@1.0.0` vs
-    // `util@2.0.0`). Pre-ADR-0030: both keys collapse onto one `lib@1.0.0`
+    // `util@2.0.0`). Pre-: both keys collapse onto one `lib@1.0.0`
     // node, the two divergent `util` dep edges collide in one slot → ≥1
     // LAYOUT_RESOLVE_VIOLATION. After: 2 distinct nodes, 0 violations, both
     // hashed keys reproduced byte-stably.
@@ -460,7 +460,7 @@ describe('pnpm-v9 — peer resolution (workspace-peer edge / dedup + patch-hash)
     expect(graph.out('app-a@1.0.0', 'dep').map(e => e.dst)).toEqual([`lib@1.0.0(${tokenA})`])
     expect(graph.out('app-b@1.0.0', 'dep').map(e => e.dst)).toEqual([`lib@1.0.0(${tokenB})`])
 
-    // ZERO violations on emit — the verifier (ADR-0029) is the oracle.
+    // ZERO violations on emit — the verifier is the oracle.
     const diags: Array<{ code: string }> = []
     const out = stringify(graph, { onDiagnostic: d => diags.push(d) })
     expect(diags.filter(d => d.code === 'LAYOUT_RESOLVE_VIOLATION')).toEqual([])

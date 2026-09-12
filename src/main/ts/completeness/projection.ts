@@ -603,7 +603,7 @@ function diagnosticLossClass(
     || code.endsWith('_UNRESOLVED_DEP')
     || code === 'PNPM_WORKSPACE_PEER_ATTR_MISSING'
     // A pnpm `snapshots`/inline `link:` slot the seal admits no dependency edge
-    // for (ADR-0017: a published package may not depend on a workspace member).
+    // for (: a published package may not depend on a workspace member).
     // The slot survives same-format emit as an unresolved-dependency
     // declaration; cross-format it drops, exactly as it did while these were
     // reported as `PNPM_UNRESOLVED_DEP` — same class, so strictness is

@@ -1,36 +1,36 @@
-// ADR-0014 §4.F4 — workspace specifier canonical recipe (pure-math primitive).
+// workspace specifier canonical recipe (pure-math primitive).
 //
 // Canonical form: a `{ specifier, resolvedVersion? }` pair held on
 // `Edge.attrs.workspaceRange` alongside the existing
-// `Edge.attrs.workspace: boolean` marker (ADR-0017). The pair captures
+// `Edge.attrs.workspace: boolean` marker. The pair captures
 // **both** halves needed for cross-format conversion:
 //
-//   - `specifier`        — verbatim PM-side range string (`workspace:^`,
-//                          `workspace:~`, `workspace:*`,
-//                          `workspace:<exact>`, or the empty string `''`
-//                          for parse-time pending state on adapters
-//                          lacking a workspace protocol).
-//   - `resolvedVersion`  — concrete version of the target workspace
-//                          member, populated at enrich-time when
-//                          manifests are available; may be `undefined`
-//                          in naïve / no-manifest mode.
+// - `specifier` — verbatim PM-side range string (`workspace:^`,
+// `workspace:~`, `workspace:*`,
+// `workspace:<exact>`, or the empty string `''`
+// for parse-time pending state on adapters
+// lacking a workspace protocol).
+// - `resolvedVersion` — concrete version of the target workspace
+// member, populated at enrich-time when
+// manifests are available; may be `undefined`
+// in naïve / no-manifest mode.
 //
-// Empty `specifier` is the **pending sentinel** distinct from
+// Empty `specifier` is the **pending sentinel** distinct
 // `undefined`: it signals that the source adapter never carried a
-// specifier on disk (npm-2/3 reconstruct workspace edges from
+// specifier on disk (npm-2/3 reconstruct workspace edges
 // `node_modules/<name>: {link:true, resolved:<wsPath>}` link entries,
 // which never carry a range expression).
 //
 // Stringify-time is the closure point:
-//   - target adapters WITH a workspace protocol re-emit `specifier`
-//     verbatim (synthesise `workspace:*` default when `specifier === ''`).
-//   - target adapters WITHOUT a workspace protocol drop the specifier
-//     and substitute `resolvedVersion` into the dep range, firing
-//     `RECIPE_WORKSPACE_RESOLVED` (info); when `resolvedVersion` is
-//     `undefined` they fire `RECIPE_WORKSPACE_UNRESOLVED` (warning).
-//   - target adapters supporting only the coarser `workspace:*` shape
-//     (bun-text) collapse richer specifiers to `workspace:*` and fire
-//     `RECIPE_WORKSPACE_COLLAPSED` (info).
+// - target adapters WITH a workspace protocol re-emit `specifier`
+// verbatim (synthesise `workspace:*` default when `specifier === ''`).
+// - target adapters WITHOUT a workspace protocol drop the specifier
+// and substitute `resolvedVersion` into the dep range, firing
+// `RECIPE_WORKSPACE_RESOLVED` (info); when `resolvedVersion` is
+// `undefined` they fire `RECIPE_WORKSPACE_UNRESOLVED` (warning).
+// - target adapters supporting only the coarser `workspace:*` shape
+// (bun-text) collapse richer specifiers to `workspace:*` and fire
+// `RECIPE_WORKSPACE_COLLAPSED` (info).
 //
 // This module is pure-math: no Diagnostic imports, no Graph traversal.
 // The diagnostic factories live in `recipe/diagnostics.ts` per the
@@ -111,13 +111,13 @@ export function isCanonical(value: unknown): value is WorkspaceRange {
  * v5/v6/v9).
  *
  * - When `specifier` is non-empty AND already `workspace:`-prefixed,
- *   re-emit verbatim.
+ * re-emit verbatim.
  * - When `specifier === ''` (pending state from an npm-2/3 source),
- *   synthesise `workspace:*` as the default. No diagnostic — the empty
- *   specifier carried no preference to preserve.
+ * synthesise `workspace:*` as the default. No diagnostic — the empty
+ * specifier carried no preference to preserve.
  * - When `specifier` is non-empty but lacks the `workspace:` prefix
- *   (defensive — shouldn't happen on well-formed input), pass through
- *   verbatim.
+ * (defensive — shouldn't happen on well-formed input), pass through
+ * verbatim.
  */
 export function stringifyForWorkspaceProtocol(range: WorkspaceRange): string {
   if (range.specifier === '') return 'workspace:*'
@@ -158,7 +158,7 @@ export function bunTextWouldCollapse(specifier: string): boolean {
 }
 
 /**
- * Centralised workspace-edge predicate per ADR-0014 §4.F4 — gate F4
+ * Centralised workspace-edge predicate per — gate F4
  * helpers on the explicit edge marker, not destination shape. Adapter
  * parse / enrich is responsible for setting `attrs.workspace = true`
  * on every edge whose target is a workspace member; F4 stringify and
@@ -171,7 +171,7 @@ export function isWorkspaceEdge(edge: {
 }
 
 /**
- * Gate predicate for `RECIPE_WORKSPACE_RESOLVED` emit per ADR-0014 §5:412
+ * Gate predicate for `RECIPE_WORKSPACE_RESOLVED` emit:412
  * — "once per edge when source `specifier` is dropped on emit". An edge
  * whose source-side `specifier` was empty (pending sentinel from npm-2/3
  * link-form parse, or cross-format conversion landing pending state)
@@ -192,14 +192,14 @@ export function shouldEmitWorkspaceResolved(range: WorkspaceRange | undefined): 
  * is the primary carrier.
  *
  * Resolution order:
- *   1. Honour explicit `edge.attrs.workspaceRange` if present (the
- *      canonical carrier).
- *   2. Synthesise from `edge.attrs.range` (verbatim source-side
- *      specifier) + `dst.version` (best-effort resolvedVersion). The
- *      empty string `''` is the pending sentinel when no source-side
- *      specifier exists. This fallback exists for compatibility with
- *      legacy / partially-wired call paths; new adapter wiring should
- *      populate the sidecar explicitly.
+ * 1. Honour explicit `edge.attrs.workspaceRange` if present (the
+ * canonical carrier).
+ * 2. Synthesise from `edge.attrs.range` (verbatim source-side
+ * specifier) + `dst.version` (best-effort resolvedVersion). The
+ * empty string `''` is the pending sentinel when no source-side
+ * specifier exists. This fallback exists for compatibility with
+ * legacy / partially-wired call paths; new adapter wiring should
+ * populate the sidecar explicitly.
  */
 export function workspaceRangeOfEdge(
   edge: { attrs?: { range?: string; workspace?: boolean; workspaceRange?: WorkspaceRange } },

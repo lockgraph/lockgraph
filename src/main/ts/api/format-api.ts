@@ -400,7 +400,7 @@ function parseResolved(
 
 // === OVERRIDES AND STRINGIFY DISPATCH =======================================
 
-/** Map a FormatId to its override grammar family (ADR-0025 §6 capture). */
+/** Map a FormatId to its override grammar family (capture). */
 export function packageManagerFamilyOf(format: FormatId): OverridePM {
   if (format.startsWith('yarn')) return 'yarn'
   if (format.startsWith('pnpm')) return 'pnpm'
@@ -719,7 +719,7 @@ function snapshotTarballs(graph: Graph, projection: TargetProjection): readonly 
     // A payload whose only content was a target-dropped structural-expected metadata
     // field (a completed node carrying only `engines`) projects to `{}`; the target
     // reparse emits no tarball entry for such a node, so omit it for a symmetric
-    // snapshot — an empty payload carries no canonical fact (ADR-0038 §8, CASE-A).
+    // snapshot — an empty payload carries no canonical fact (CASE-A).
     return Object.keys(projected).length === 0 ? [] : [[key, stableValue(projected)] as const]
   })
     .sort(([left], [right]) => left.localeCompare(right))

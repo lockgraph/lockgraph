@@ -378,7 +378,7 @@ export function stringifyFamily(
     const canonicalEntry = buildWorkspaceMemberEntry(graph, node, sidecar, config, emitDiagnostic)
     const pathState = sidecar?.packageEntriesByPath?.get(path)
     packages[path] = buildPackageEntryAtPath(canonicalEntry, pathState, node.id)
-    // WS-LINK (ADR-0027 §4): emit the top-level node_modules/<name> symlink for a
+    // WS-LINK: emit the top-level node_modules/<name> symlink for a
     // workspace member UNLESS it is `extraneous` — npm omits the link for a member
     // present on disk but absent from the install graph (an extraneous member would
     // otherwise emit one extra top-level link beyond npm's set). The
@@ -486,7 +486,7 @@ export function enrichFamily(
   const workspaceEdgesToMark: Edge[] = []
 
   // Pass 1: peer derivation for diagnostic surfacing only. The graph-side
-  // peer edge is NOT added (per ADR-0021 §C.npm-* peer-flat outcome).
+  // peer edge is NOT added (per -* peer-flat outcome).
   for (const node of graph.nodes()) {
     const nodeSide = sidecar?.nodes.get(node.id)
     const rawPeers = nodeSide?.peerDependencies
@@ -682,13 +682,13 @@ function parseJson(input: string, config: NpmFamilyConfig): NpmLockfile {
 
 function addNpmRootNode(context: NpmParseContext): void {
   const { builder, config, idToEntry, lf, pathToId, rootEntry, rootId, rootName, rootVersion } = context
-  // npm's `packages[""]` (the project root, a workspace node per ADR-0017)
+  // npm's `packages[""]` (the project root, a workspace node per)
   // legitimately omits `name` and/or `version` for private / unpublished
   // roots — the dominant shape for apps and monorepo roots (some omit both;
   // some carry a name but no version).
   // Synthesize the missing pieces rather than refusing to parse: name falls
   // back to npm's own root key `.`; version to the unpublished sentinel
-  // `0.0.0` (cf. yarn-berry's `0.0.0-use.local`, ADR-0017). A diagnostic
+  // `0.0.0` (cf. yarn-berry's `0.0.0-use.local`,). A diagnostic
   // records the synthesis so the round-trip stays auditable. Workspace
   // MEMBERS (below) keep the strict name/version requirement.
   if (rootEntry.version === undefined && lf.version === undefined) {
@@ -825,7 +825,7 @@ function addInstalledPackageNodes(context: NpmParseContext): void {
     if (version === undefined) {
       throw parseFailed(config, `entry ${JSON.stringify(path)} missing version`)
     }
-    // ADR-0032 — fold the `+src=` non-registry discriminator into the NodeId so a
+    // fold the `+src=` non-registry discriminator into the NodeId so a
     // git `is@6.3.1` cannot collapse onto a registry `is@6.3.1`.
     const source = sourceDiscriminatorOfNpmEntry(entry)
     const resolvedPatch = config.hooks?.resolvePatch?.({
@@ -857,7 +857,7 @@ function addInstalledPackageNodes(context: NpmParseContext): void {
         peerContext: [],
       }
       if (patch !== undefined) node.patch = patch
-      // ADR-0032 — carry the slot on the Node so the seal re-derives the id.
+      // carry the slot on the Node so the seal re-derives the id.
       if (source !== undefined) node.source = source
       builder.addNode(node)
       if (entry.integrity !== undefined || hasTarballPayload(entry)) {
@@ -925,7 +925,7 @@ function addNpmPackageEdges(context: NpmParseContext): void {
     if (entry.dev === true) nodeSide.dev = true
     if (entry.optional === true) nodeSide.optional = true
     if (entry.peer === true) nodeSide.peer = true
-    // WS-LINK (ADR-0027 §4): capture npm's `extraneous` flag so a workspace
+    // WS-LINK: capture npm's `extraneous` flag so a workspace
     // member that npm did NOT link (present on disk, absent from the install
     // graph) re-emits without a top-level link on replay.
     if (entry.extraneous === true) nodeSide.extraneous = true
@@ -1215,7 +1215,7 @@ function hasTarballPayload(entry: NpmEntry): boolean {
     || entry.resolved !== undefined
 }
 
-// ADR-0032 — the `+src=` discriminator for an npm entry's NON-REGISTRY source.
+// the `+src=` discriminator for an npm entry's NON-REGISTRY source.
 // npm keys an install entry's node by `<name>@<version>` (the resolution URL is
 // only the `resolved:` field), so a registry `is@6.3.1` and a git `is@6.3.1`
 // would collapse onto one NodeId. Derived from the same `resolved`-URL
@@ -1261,7 +1261,7 @@ function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnos
   if (Array.isArray(entry.bundleDependencies)) {
     payload.bundledDependencies = entry.bundleDependencies.slice()
   }
-  // ADR-0014 §4.F3 — canonical resolution from npm `resolved` URL.
+  // canonical resolution from npm `resolved` URL.
   if (typeof entry.resolved === 'string' && !entry.link) {
     const canonical = parseResolutionRecipe(entry.resolved, { sourceKind: 'npm-resolved' })
     // A local directory may use `file:`, `link:`, or `portal:` spelling.
@@ -1535,7 +1535,7 @@ export function collectManifestBlocks(
     // fall back to dst.name (canonical descriptor).
     const declaredName = edge.attrs?.alias ?? sidecar?.edgeDeclaredNames.get(edgeKey) ?? dst.name
 
-    // ADR-0014 §4.F4 — workspace edges: npm lacks the `workspace:` protocol
+    // workspace edges: npm lacks the `workspace:` protocol
     // entirely (link entries carry workspace identity; the dep range itself
     // is a concrete version). When the source carried a non-empty workspace
     // specifier, fire RECIPE_WORKSPACE_RESOLVED; when no resolvedVersion is
@@ -1676,7 +1676,7 @@ function deriveInstallPathsForStringify(
   // `pkg@1.0.0`). Node-flat sources (npm-2 / npm-3 / npm-4) carry sidecar
   // install paths that have already filled every position above, so this
   // BFS is a no-op for them.
-  // ADR-0026 replay vs generate. When every resolved node carries a
+  // replay vs generate. When every resolved node carries a
   // parse-captured install path (an un-mutated same-PM npm round-trip), the
   // seeded placement IS npm's own authoritative, valid, collision-free tree —
   // SKIP the re-hoisting BFS entirely. The BFS re-derives synthetic nested
@@ -1706,7 +1706,7 @@ function deriveInstallPathsForStringify(
       addPlacement(node.id, fallbackInstallPathForNode(node, pathToId))
       drainBfsQueue()
     }
-    // ADR-0026 §Diagnostics — the emitted tree is a re-synthesized valid
+    // the emitted tree is a re-synthesized valid
     // projection, not a byte/structure copy of any original (cross-PM input or
     // post-mutate). Surface it so byte-divergence is attributed, not silent.
     onDiagnostic?.({
@@ -1964,7 +1964,7 @@ function buildManifestPlacementEntry(
   return body
 }
 
-// ADR-0014 §4.F3 — project canonical resolution → npm `resolved` URL for
+// project canonical resolution → npm `resolved` URL for
 // cross-format fallback. Workspace canonical returns undefined (npm encodes
 // workspaces via link entries, not via `resolved`).
 function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {

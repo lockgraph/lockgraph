@@ -216,7 +216,7 @@ describe('yarn-berry-v10 — stringify emits onDiagnostic callback contract', ()
   it('relays onDiagnostic to the supplied callback (clean berry round-trip is silent)', () => {
     const graph = parseV10(synthesiseFromV9('simple'))
     const diagnostics: Diagnostic[] = []
-    // ADR-0031 removed the sri→cachekey "integrity translated" emit: a berry
+    // removed the sri→cachekey "integrity translated" emit: a berry
     // checksum is a `berry-zip` digest carried verbatim across berry versions,
     // so a clean berry→berry round-trip produces NO integrity diagnostic. Verify
     // the callback is wired (no throw) and that the dead code never fires.

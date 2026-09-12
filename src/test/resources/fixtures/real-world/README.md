@@ -70,7 +70,7 @@ L1 `Manifest` model). Directory handle is `<space>-<repo>-<branch>-<sha7>`; the
 lockfile is byte-identical to that commit, re-fetched from
 `raw.githubusercontent.com` at the `<sha7>` commit. **Nested workspace-member
 `package.json` (and `pnpm-workspace.yaml`) are fetched preserving the repo's
-folder hierarchy** so the manifest model (ADR-0025) gets the full per-workspace
+folder hierarchy** so the manifest model gets the full per-workspace
 tree, not just the root — a nested package that is itself a workspace root can
 carry its own `overrides`.
 
@@ -90,7 +90,7 @@ carry its own `overrides`.
 | `oven-sh-bun-main-3a79bd7` | `https://github.com/oven-sh/bun` | `main` | `bun` | `resolutions`: 3 |
 | `honojs-hono-main-2cbeadd` | `https://github.com/honojs/hono` | `main` | `bun` | — |
 
-The override declarations feed the ADR-0025 capture path: pnpm `overrides:` and
+The override declarations feed the manifest-capture path: pnpm `overrides:` and
 npm `packages[""].overrides` round-trip through the lock (captured on parse);
 yarn-style `resolutions` (angular, bun) live only in `package.json` and surface
 via `ParseOptions.manifests` + `overridesOf(graph)` (A2).

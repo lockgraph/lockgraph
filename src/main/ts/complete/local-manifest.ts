@@ -5,7 +5,7 @@
 // `peerDependenciesMeta[peer].optional` that the source PM did not model on the
 // graph (npm / bun / yarn-classic drop the optional flag on parse). Offline,
 // deterministic, and consulted ONLY when the caller supplies `workspaceRoot`
-// (ADR-0008 monotone-additive; Anton's Option-1 offline-first posture).
+// (monotone-additive; Anton's Option-1 offline-first posture).
 //
 // The authoritative source is the parent manifest (spec/02-graph.md:269 — the
 // `peerDependenciesMeta` value originates in the parent package's own

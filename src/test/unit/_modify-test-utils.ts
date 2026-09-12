@@ -26,7 +26,7 @@ export interface AddPackageOpts {
   peerContext?:   NodeId[]
   workspacePath?: string
   patch?:         string
-  source?:        string                  // ADR-0032 +src= discriminator (non-registry node)
+  source?:        string                  //  +src= discriminator (non-registry node)
   resolution?:    ResolutionCanonical      // overrides the tarball-derived resolution
   integrity?:     string
   tarball?:       string

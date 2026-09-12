@@ -1,5 +1,5 @@
-// ADR-0034 enrich phase / `refurbish` — install-completeness for the berry
-// `checksum`. The recompute (ADR-0035) is exercised against vendored tarballs.
+// enrich phase / `refurbish` — install-completeness for the berry
+// `checksum`. The recompute is exercised against vendored tarballs.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -60,7 +60,7 @@ const multiDirTgz = (): Buffer => gzipSync(Buffer.concat([
   Buffer.alloc(1024),
 ]))
 
-describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
+describe('enrich/refurbish ( + )', () => {
   it('recomputes a missing berry checksum from the tarball (STORE)', async () => {
     const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
     const r = await refurbish(graph, 'yarn-berry-v8', sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }))
@@ -339,7 +339,7 @@ describe('enrich/refurbish (ADR-0034 + ADR-0035)', () => {
 
   it('fills a bare-era v6 lock from opts.cacheKey (mixed cacheKey 8 — qiwi/mware path)', async () => {
     // The real driving case: yarn 3.8 pins `__metadata.cacheKey: 8` with BARE
-    // checksums. Given that cacheKey, ADR-0035 reproduces the `mixed` digest
+    // checksums. Given that cacheKey, reproduces the `mixed` digest
     // byte-exact (pako). The fill carries the cacheKey-8 value and leaves the
     // bare-vs-prefix rendering to the v6 format (`checksumPrefix: false`) — so a
     // fill never forces a foreign `8/` prefix into the bare lock.

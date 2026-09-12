@@ -670,7 +670,7 @@ describe('bun-text — optimize (§D prune unreachable + idempotence)', () => {
 
 // === Top-level fidelity blocks (overrides / trusted / patched) ==============
 //
-// ADR-0025 §3 carrier + audit-fix write path. bun's `overrides` is the
+// carrier + audit-fix write path. bun's `overrides` is the
 // npm/bun analog of yarn `resolutions` — the mechanism an audit-fix uses to
 // force a transitive vulnerable dep onto a safe version. These blocks were
 // silently dropped on round-trip before this slice; the tests below pin the

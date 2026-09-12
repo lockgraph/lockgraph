@@ -530,7 +530,7 @@ describe('yarn-classic — stringify', () => {
     expectEmptyGraphDiff(original.diff(reparsed))
   })
 
-  // ADR-0020 §8.1: stringify on a zero-node graph must emit a §A header that
+  // stringify on a zero-node graph must emit a §A header that
   // the strict parser accepts; the round-trip must yield an empty graph with
   // no spurious diagnostics.
   it('emits §A header on the empty graph and round-trips to zero nodes', () => {
@@ -748,7 +748,7 @@ describe('yarn-classic — modify', () => {
     const reparsed = parse(stringify(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution.
+    // round-trip parse re-derives canonical resolution.
     expect(canonicalDigest(reparsed.tarballOf('ms@2.1.3')!.integrity!)).toBe(MODIFIED_SRI)
     expect(result.applied).toEqual([
       { kind: 'tarball-set', subject: 'ms@2.1.3' },
@@ -931,7 +931,7 @@ describe('yarn-classic — enrich', () => {
     ])
   })
 
-  // ADR-0019 §C item (b): "distinguish workspace-member entries from such
+  // item (b): "distinguish workspace-member entries from such
   // external lookalikes". Without setting `workspacePath` on member nodes,
   // downstream emit (yarn-berry stringify) cannot tell members apart from
   // external nodes that happen to share the `0.0.0-use.local` version literal,

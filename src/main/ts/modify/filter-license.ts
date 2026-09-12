@@ -1,4 +1,4 @@
-// ADR-0023 §3.2 — `filterLicense`.
+// `filterLicense`.
 //
 // Walk every reachable node; read `tarballOf(node.id)?.license`.
 // Apply allow / deny predicates.

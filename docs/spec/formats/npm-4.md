@@ -85,7 +85,7 @@ Inherits [`npm-3`](./npm-3.md), with native per-node patches added.
 The two patch hashes have deliberately different meanings:
 
 - npm's `patched.integrity` is the SHA-512 SRI of the **raw patch file bytes**;
-- `Node.patch` is the project's ADR-0014 F2 identity over **F5-normalized
+- `Node.patch` is the project's F2 identity over **F5-normalized
   bytes** (UTF-8 BOM removed and CRLF normalized to LF).
 
 When `parse` receives `workspaceRoot`, the adapter reads the confined

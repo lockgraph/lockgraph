@@ -1,11 +1,11 @@
-// ADR-0023 §3.2 — `removeDependency`.
+// `removeDependency`.
 //
 // 1. `removeEdge(consumer, target, kind)`.
 // 2. GC: if `target` now has zero incoming edges, recursively
 //    `removeNode(target)` + repeat for its previous out-edges.
 //    Workspace nodes are NEVER removed by GC.
 //
-// Note: per ADR-0023 §4 / B5, modifiers MAY leave orphans for the optimize
+// Note: per / B5, modifiers MAY leave orphans for the optimize
 // phase to collect. removeDependency is the exception that performs its
 // own GC — this is the §3.2 step 2 semantics, and the recursive sweep
 // is bounded by the subgraph reachable from the removed edge's tail.
@@ -99,9 +99,9 @@ export async function removeDependency(
 /**
  * If `nodeId` is orphaned (no incoming edges) AND not a workspace, remove it
  * along with its outgoing edges, then recurse into each previous out-edge
- * target. Per ADR-0023 §3.2 / removeDependency step 2.
+ * target. Per / removeDependency step 2.
  *
- * ADR-0023 §8.6: MODIFY_NODE_REMOVED diagnostics land on Graph.diagnostics()
+ * MODIFY_NODE_REMOVED diagnostics land on Graph.diagnostics()
  * via Mutator.diagnostic so stringify-side adapters consulting graph-level
  * state see the same record the per-call streaming hook does.
  */
@@ -122,7 +122,7 @@ function gcOrphans(
   const outTargets = graph.out(nodeId).map(e => e.dst)
 
   // removeNode cleans up this node's own out-edges, so we don't pre-remove
-  // them. Peer-coherence (ADR-0017): if this node sits in another node's
+  // them. Peer-coherence: if this node sits in another node's
   // peerContext, its incoming peer edges count as incoming edges, so the
   // graph.in(nodeId).length > 0 guard above already refuses to remove it.
 

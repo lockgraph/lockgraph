@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — replaceVersion acceptance gate.
+// replaceVersion acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
@@ -277,7 +277,7 @@ describe('modify/replaceVersion', () => {
     expect(second.replaced.length).toBe(0)
   })
 
-  // ADR-0023 §8.6 — MODIFY_* diagnostics also land on Graph.diagnostics()
+  // MODIFY_* diagnostics also land on Graph.diagnostics()
   // so stringify-side adapters see them via the canonical read channel.
   it('§8.6 — MODIFY_NODE_REPLACED lands on Graph.diagnostics() (merge branch)', async () => {
     const graph = graphOf(builder => {

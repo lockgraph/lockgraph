@@ -39,7 +39,7 @@ export function yarnBerryBuiltinCompatIdentityOfResolution(
   })
 }
 
-/** Exact Yarn fsevents compatibility resolution assembled from an ADR-0039 row. */
+/** Exact Yarn fsevents compatibility resolution assembled from an row. */
 export function yarnBerryFseventsCompatResolution(
   version = '2.3.3',
   locatorHash = 'df0bf1',

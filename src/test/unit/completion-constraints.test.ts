@@ -1,4 +1,4 @@
-// ADR-0037 — completion constraints: node-local acceptance filter.
+// completion constraints: node-local acceptance filter.
 
 import { describe, expect, it } from 'vitest'
 import semver from 'semver'
@@ -399,7 +399,7 @@ describe('complete/constraints — frozen-clean parity', () => {
   })
 })
 
-// ADR-0037 v2 — opt-in bounded-backtracking DISCOVERY. Read-only: finds a lower
+// Opt-in bounded-backtracking DISCOVERY. Read-only: finds a lower
 // consumer version that clears a cliff and suggests the override; never mutates
 // the emitted lock.
 describe('complete/constraints — bounded-backtracking discovery (v2)', () => {

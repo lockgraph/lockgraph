@@ -179,7 +179,7 @@ describe('recipe/workspace — workspaceRangeOfEdge', () => {
   })
 
   it('returns undefined when edge.attrs.workspace !== true (not a workspace edge)', () => {
-    // ADR-0014 §4.F4 — FIXIT-2: predicate is the explicit edge marker,
+    // FIXIT-2: predicate is the explicit edge marker,
     // not dst.workspacePath. Edges landing on workspace nodes without the
     // marker are NOT eligible for F4 translation.
     const edge = { attrs: { range: 'workspace:^' } }
@@ -482,7 +482,7 @@ describe('recipe/workspace — yarn-berry-v9 → bun-text fires RECIPE_WORKSPACE
 })
 
 describe('recipe/workspace — yarn-berry-v9 → npm-1 fires RECIPE_FEATURE_DROPPED (workspace)', () => {
-  it('npm-1 drops workspace concept entirely per ADR-0021 §A', async () => {
+  it('npm-1 drops workspace concept entirely per ', async () => {
     const diags: Diagnostic[] = []
     await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',

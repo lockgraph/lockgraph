@@ -229,8 +229,7 @@ is the default** ([Install modes](https://yarnpkg.com/features/linkers)):
 | **`pnpm`** | `node_modules/.store` with one folder per dep, hardlinked from a global content-addressable store (default `~/.yarn/berry/index`), then **symlinked** into each consumer's `node_modules` | yes (symlink farm) | stock (via symlinks) | "middle ground": isolation of pnpm with broader compat than PnP; symlinks/hardlinks can confuse some tools |
 
 `node-modules` and `pnpm` keep stock Node resolution; only `pnp` mutates
-it. The layout model in the project: [`docs/spec/04-layouts.md`](../04-layouts.md),
-ADR-0026.
+it. The layout model in the project: [`docs/spec/04-layouts.md`](../04-layouts.md).
 
 ### 2.3 The zip cache and zero-installs
 

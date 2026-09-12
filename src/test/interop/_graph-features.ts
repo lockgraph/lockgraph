@@ -6,8 +6,8 @@ import type { PreservedFeature } from './_matrix.ts'
 
 function stripVolatile(payload: TarballPayload | undefined): TarballPayload | undefined {
   if (payload === undefined) return undefined
-  // ADR-0014 §4.F3 resolution is host-attribution (diverges by adapter), and
-  // ADR-0031 integrity is origin-scoped (compared by the dedicated origin-aware
+  // resolution is host-attribution (diverges by adapter), and
+  // integrity is origin-scoped (compared by the dedicated origin-aware
   // `integrity` feature). Exclude BOTH from the structural payload deep-equal so
   // `tarballs` keeps verifying engines/os/cpu/license/bin/bundledDeps fidelity
   // even across a cross-origin-class conversion that legitimately drops integrity.
@@ -15,7 +15,7 @@ function stripVolatile(payload: TarballPayload | undefined): TarballPayload | un
   // format-scoped companion of the berry-zip integrity, so it legitimately
   // diverges (v4 `2` ↔ v8 `10c0`) or vanishes (berry → npm) across conversions;
   // exclude it for the same reason as integrity. `nativeResolution` is the
-  // ADR-0013 PM-native verbatim sidecar — host-attribution that diverges by
+  // PM-native verbatim sidecar — host-attribution that diverges by
   // adapter (berry locator vs yarn-classic URL vs pnpm tarball URL), so exclude
   // it for the same reason as `resolution`.
   const { resolution: _resolution, integrity: _integrity, berryChecksumCacheKey: _ck, nativeResolution: _native, ...rest } = payload
@@ -121,7 +121,7 @@ export function graphSubset(
         }
         break
       case 'integrity':
-        // ADR-0031 — origin-aware multiset comparison. Within an origin class
+        // origin-aware multiset comparison. Within an origin class
         // (tarball-scoped vs berry-zip) the digests must match exactly; a
         // fabricated berry checksum (a tarball sha512 mislabelled berry-zip) is
         // NOT equivalent. Cross-origin-class conversions (SRI-family ↔ berry)
@@ -135,7 +135,7 @@ export function graphSubset(
         }
         break
       case 'resolved-url':
-        // ADR-0014 §4.F3 — PM-native `nativeResolution` is sidecar attribution
+        // PM-native `nativeResolution` is sidecar attribution
         // (yarn-berry locator vs yarn-classic URL vs pnpm tarball URL, all
         // shape-different by design). Preservation across formats is at the
         // canonical level: both source and destination must carry resolution
@@ -156,7 +156,7 @@ export function graphSubset(
         break
       case 'tarballs':
         for (const [key, payload] of needle.tarballs()) {
-          // ADR-0014 §4.F3 — canonical resolution URL is attribution per
+          // canonical resolution URL is attribution per
           // hosting host (identity drops host for `(name, version)` tuple).
           // Different source/target adapters produce different canonical
           // URLs by convention (e.g. yarn-berry uses npmjs default, yarn-

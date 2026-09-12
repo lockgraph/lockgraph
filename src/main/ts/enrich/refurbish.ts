@@ -1,10 +1,10 @@
-// ADR-0034 — enrich phase, install-completeness entry (`refurbish`).
+// enrich phase, install-completeness entry (`refurbish`).
 //
 // Post-completion, pre-optimize, monotone-additive: fills the install-required
 // fields a freshly-bumped node lacks so the round-tripped lockfile installs
 // without `yarn install`. v1's net-new fill is the yarn-berry `checksum`: for a
 // node with no `berry-zip` digest, recompute one from the npm tarball bytes
-// (ADR-0035 — the pure-JS `pako` port for STORE + mixed cacheKey 7/8/9, the
+// (— the pure-JS `pako` port for STORE + mixed cacheKey 7/8/9, the
 // optional `@yarnpkg/libzip` for cacheKey 10, each vetted by `calibrate`), else
 // defer with a diagnostic. Never overwrites a present field; never fabricates.
 
@@ -49,7 +49,7 @@ export interface RefurbishSources {
   readonly yarnBerryChecksums?: YarnBerryChecksumSource
 }
 
-/** Supplies what refurbish needs to fill a berry `checksum` (ADR-0034 §3).
+/** Supplies what refurbish needs to fill a berry `checksum`.
  *
  * @deprecated Pass {@link RefurbishSources} so npm tarballs and Yarn cache
  * checksum evidence cannot be conflated.
@@ -82,7 +82,7 @@ function normalizeRefurbishSources(
 }
 
 export interface RefurbishOptions {
-  /** Stream diagnostics as they fire (ADR-0024 §3). */
+  /** Stream diagnostics as they fire. */
   onDiagnostic?: (d: Diagnostic) => void
   /** Bound the fill to these NodeIds (the modifier's recently-changed set);
    *  absent ⇒ scan every non-workspace node. */
@@ -626,7 +626,7 @@ export async function refurbish(
     format,
     opts.cacheKeyInference ?? 'format-default',
   )
-  // ADR-0035 byte-reproduces the `checksum` with the pinned pure-JS `pako` port for
+  // byte-reproduces the `checksum` with the pinned pure-JS `pako` port for
   // STORE (`cN0`, any era) and `mixed` at cacheKey VERSION 7/8/9 (yarn 2.4 / 3.1–3.8
   // legacy match-hash; yarn-4 RC window / lockfile v7 nodejs-compatible hash —
   // `berryCacheKeyReproducible`).
@@ -667,7 +667,7 @@ export async function refurbish(
   // reproduces only the bare repack → wrong digest — and a SENTINEL
   // `@patch:…!builtin` (fsevents) refuses setTarball outright); a
   // non-`reproducible` era/compression defers (bare-era v4–v7 or a non-STORE
-  // cacheKey — not byte-reproducible in v1, ADR-0035 §6). yarn recomputes a
+  // cacheKey — not byte-reproducible in v1,). yarn recomputes a
   // patch's / bare-era / DEFLATE checksum on install.
   // A caller-supplied `yarnBerryChecksums` oracle can hand us yarn's OWN digest
   // for a cacheKey we CAN'T byte-reproduce — the security-preserving path for a

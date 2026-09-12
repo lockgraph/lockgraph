@@ -1,4 +1,4 @@
-// Shared intra-family contract runner per ADR-0020 §2 — iterates pinned
+// Shared intra-family contract runner per — iterates pinned
 // `fixtureSubset` для each contract, invokes the dispatcher's `convert()`,
 // derives the observed contract through `_observe.activeContract()`, и
 // asserts declared = observed. Reentrancy semantics:

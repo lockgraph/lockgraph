@@ -1,11 +1,11 @@
-// ADR-0023 §3.2 — `addDependency`.
+// `addDependency`.
 //
 // Declare a new outgoing edge from a consumer (workspace or non-workspace
 // node) to a named dependency at a given range; the post-modifier graph
 // hands off to completion for the new node's transitive closure.
 //
 // B2: `kind` admissible values: 'dep' | 'dev' | 'optional'. 'peer' / 'bundled'
-// throw INVALID_INPUT with cross-ref to ADR-0023 §10.
+// throw INVALID_INPUT with cross-ref to.
 
 import {
   serializeNodeId,
@@ -49,7 +49,7 @@ export async function addDependency(
   if (!VALID_KINDS.has(kind)) {
     throw new LockfileError({
       code:    'INVALID_INPUT',
-      message: `addDependency: kind ${kind} unsupported; ADR-0023 v1 admits 'dep' | 'dev' | 'optional' (see §10)`,
+      message: `addDependency: kind ${kind} unsupported;  v1 admits 'dep' | 'dev' | 'optional' (see §10)`,
     })
   }
 
@@ -68,7 +68,7 @@ export async function addDependency(
     })
   }
 
-  // §3.2 step 2 — find-up first. `kind` threaded for ADR-0023 §5.1 signature
+  // §3.2 step 2 — find-up first. `kind` threaded for signature
   // parity; v1 find-up body is kind-agnostic but the parameter is reserved.
   const existingId = resolveFindUp(graph, parentId, name, range, kind)
   if (existingId !== undefined) {
@@ -86,7 +86,7 @@ export async function addDependency(
     const rewireDiag = modifyEdgeRewired({ src: parentId, dst: existingId, kind })
     const result = graph.mutate(m => {
       m.addEdge(parentId, existingId, kind, { range })
-      // ADR-0023 §8.6: emit on Graph.diagnostics() via Mutator.diagnostic.
+      // emit on Graph.diagnostics() via Mutator.diagnostic.
       m.diagnostic(rewireDiag)
     })
     emit(rewireDiag)

@@ -58,7 +58,7 @@ import { readInstalledManifest, type InstalledManifestMeta } from '../complete/l
 // Yarn-berry entry-spec grammar requires `<scheme>:` on every spec
 // (`parseSpec` throws PARSE_FAILED otherwise). Cross-family inputs
 // (pnpm-v9 bare semver ranges) lack the scheme — synthesize `npm:` so
-// reparse stays well-formed. Per ADR-0016 §B `npm:` is the default
+// reparse stays well-formed. Per `npm:` is the default
 // protocol for registry packages.
 const PROTOCOL_RE = /^[A-Za-z][A-Za-z0-9+\-.]*:/
 
@@ -124,7 +124,7 @@ const DEFAULT_CACHEKEY_V8_V9 = '10c0'
 
 export interface YarnBerryFamilyParseOptions {
   workspaceRoot?: string
-  // ADR-0025 canonical override constraints, threaded from the public
+  // canonical override constraints, threaded from the public
   // `parse()` after manifest capture through `ParseOptions.manifests`. yarn writes NO
   // lock-borne resolutions, so a `resolutions` pin that rewrote an entry key to a
   // possibly-NON-satisfying descriptor (csstype `^3.1.3` → `3.0.9`) can only be
@@ -171,7 +171,7 @@ export interface YarnBerryFamilySidecar {
   peerDependencies?: Map<string, Record<string, string>>
   // `conditions:` is a SCALAR token in yarn-berry (e.g. `os=darwin & cpu=arm64`),
   // NOT a structured map — captured verbatim per node so it round-trips byte-
-  // faithfully (corrects ADR-0018 §A.v5, which mis-modelled it as a SymlMap).
+  // faithfully (corrects, which mis-modelled it as a SymlMap).
   conditions?: Map<string, string>
   // `dependenciesMeta:` ({ pkg: { optional|built|… } }) captured as a verbatim
   // per-node block. Round-trip-fidelity only; cross-format EdgeAttrs modelling
@@ -231,7 +231,7 @@ export interface YarnBerryConditionsFeatureQuery {
 // (its emit block, its dep-name, its exact on-disk range string) is captured here
 // and re-emitted into the same inner-block on stringify, so a SAME-FORMAT
 // round-trip is byte-faithful — exactly the role `Node.resolution` plays as a
-// verbatim PM-native sidecar (ADR-0013 / graph.ts §"Cross-format artefact
+// verbatim PM-native sidecar (graph.ts §"Cross-format artefact
 // metadata" `resolution?: string`). A cross-PM convert (yarn-berry → npm/pnpm/
 // bun) does NOT carry these: the carrier lives only in this berry adapter's
 // per-graph WeakMap, which no other adapter reads.
@@ -860,11 +860,11 @@ export function nameFromResolutionLocator(resolution: string): string | undefine
 // Workspace-spec discriminator: returns the workspace-protocol spec body
 // (path or range marker) for an entry IFF the entry represents a workspace
 // member. The canonical signal is the `resolution` field (`<n>@workspace:<path>`,
-// per ADR-0014 §4.F3 — workspace identity is per-format and lives on
+// per — workspace identity is per-format and lives on
 // `Node.workspacePath`); compound entries (e.g. `<n>@npm:<ver>, <n>@workspace:<path>`)
 // may list an `npm:` alias ahead of the `workspace:` spec lexically, so
 // keying off `specs[0].protocol` misclassifies the entry as non-workspace
-// and breaks ADR-0017 seal (`workspace node has incoming edges` because
+// and breaks seal (`workspace node has incoming edges` because
 // the source workspace lost its `workspacePath`). Order of precedence:
 //
 // 1. parse `resolution` if present and prefixed with `<n>@workspace:`
@@ -1513,7 +1513,7 @@ function extractPatchFingerprint(
     return unresolvedPatch(nodeId, locator, 'patch file is unavailable at parse time')
   }
 
-  // ADR-0014 §4.F5 — apply CRLF / BOM byte normalization before the sha512 fingerprint; emit `RECIPE_PATCH_NORMALISED` (info) when ≥ 1
+  // apply CRLF / BOM byte normalization before the sha512 fingerprint; emit `RECIPE_PATCH_NORMALISED` (info) when ≥ 1
   // byte changed so cross-platform CRLF rewrites surface in diagnostics.
   // Combined helper avoids a second normalization scan inside canonicalHashOfBytes.
   const { hash: patch, normalised: didNormalise } = patchHashAndNormalizeBytes(bytes)
@@ -1592,7 +1592,7 @@ function stringRecordOfBlock(block: SymlMap | undefined): Record<string, string>
  * Post-seal mutation: mark `workspace: true` on every edge whose range
  * carries the `workspace:` protocol AND whose target is a workspace
  * member; populate the canonical `attrs.workspaceRange` sidecar per
- * ADR-0014 §4.F4. Called from parseFamily so the public parse() surface
+ * Called from parseFamily so the public parse() surface
  * delivers F4-ready edges without requiring an explicit enrich step.
  */
 function markWorkspaceEdgesAtParse(graph: Graph): Graph {
@@ -2623,7 +2623,7 @@ function entryOfNode(
   }
 
   // yarn-berry's on-disk format has a single `dependencies:` block per entry —
-  // no separate `devDependencies` OR `optionalDependencies` block. ADR-0019 §C
+  // no separate `devDependencies` OR `optionalDependencies` block.
   // derives `dev` edges at the workspace root from manifests; `optional` deps
   // fold in too and carry their optional-ness via `dependenciesMeta.<name>.optional`
   // below (spec/formats/_common.md §1.4 — a real berry lock NEVER writes a
@@ -2687,7 +2687,7 @@ function entryOfNode(
   // `( | )` groups) — emitted verbatim, NOT as a structured block. The captured
   // scalar wins; a string node-field hint is the hand-built fallback. The syml
   // writer would quote it (spaces/`&`), so `stringifyFamily` post-unquotes the
-  // `conditions:` lines to match yarn's bare emit (corrects ADR-0018 §A.v5).
+  // `conditions:` lines to match yarn's bare emit (corrects).
   const conditions = effectiveConditionsOfNode(graph, node, payload)
   if (conditions !== undefined) {
     if (config.conditionsAllowed) {
@@ -2767,7 +2767,7 @@ function resolutionOfNode(
       return native
     }
     // Local-artefact locator-disambiguator path: the patch slot is a sentinel
-    // keyed off the locator string (parse-side disambiguation per ADR-0011),
+    // keyed off the locator string (parse-side disambiguation per),
     // not a real patch. It covers `link:` / `portal:` references and a
     // `::locator=`-qualified `file:` local-tarball alias. The
     // verbatim resolution carries the locator + `::locator=` qualifier intact,
@@ -2779,11 +2779,11 @@ function resolutionOfNode(
     // is available on the Graph. Two cases collapse here:
     //   - Sentinel `unresolved-<sha256>`: input is per-PM (pnpm hashes
     //     `<name>@<version>:<literalKey>`; yarn hashes the locator
-    //     verbatim — ADR-0011), so the byte-identity is unrecoverable.
+    // verbatim —), so the byte-identity is unrecoverable.
     //   - Canonical 128-hex sha512 (F2): byte-identity exists, but yarn
     //     locators encode source-path + version params, which the canonical
     //     hex carries no path info to reconstruct.
-    // Either way, per ADR-0014 §5 graceful-degradation precedent, emit
+    // Either way, per graceful-degradation precedent, emit
     // `RECIPE_FEATURE_DROPPED (feature='patch')` and fall through to emit
     // the base resolution without a patch directive.
     emitDropped(
@@ -2798,7 +2798,7 @@ function resolutionOfNode(
   // PM-native sidecar wins for same-format round-trip; cross-format input
   // delivers a foreign shape (URL / pnpm `link:`), which yarn-berry passes
   // through verbatim. Re-parse populates the canonical from the verbatim
-  // string per ADR-0014 §4.F3, so identity survives the conversion even
+  // string per, so identity survives the conversion even
   // when the source-side adapter's sidecar leaks through.
   //
   // CANONICAL-NATIVE RECOMPOSE (load-bearing): a canonical npm-registry node
@@ -2997,7 +2997,7 @@ function checksumOfPayload(
     )
     return undefined
   }
-  // Precedence (ADR-0031 round-trip):
+  // Precedence (round-trip):
   //   1. A per-node cacheKey captured at parse (`payload.berryChecksumCacheKey`)
   //      is reproduced verbatim for EVERY generation — this is what keeps a
   //      yarn-2.0 v4 `2/<hex>` round-tripping (v4 has checksumPrefix=false yet
@@ -3022,7 +3022,7 @@ function extraBlockOfNode(node: Node, field: string): SymlMap | undefined {
 
 // Scalar `conditions` node-field hint (hand-built test nodes / cross-format
 // stamping). `conditions:` is a SCALAR in yarn-berry, so only a string value is
-// honoured; an object value is ignored (the corrected model — ADR-0018 §A.v5).
+// honoured; an object value is ignored (the corrected model —).
 function scalarConditionsHintOfNode(node: Node): string | undefined {
   const raw = (node as unknown as Record<string, unknown>)['conditions']
   return typeof raw === 'string' ? raw : undefined
@@ -3714,7 +3714,7 @@ function entryKeyRangeOf(range: string): string {
 // monorepo). Without disambiguation they collapse onto one NodeId and
 // trip IRREDUCIBLE_LOSS. We treat the locator+qualifier as a sentinel-
 // patch discriminator: the patch slot is the only NodeId-affecting carrier
-// in the ADR-0006/0011 schema, and the sentinel grammar
+// in the /0011 schema, and the sentinel grammar
 // (`unresolved-<sha256>`) accepts arbitrary discriminators while keeping
 // validatePatchToken intact. The Node.resolution carries the verbatim
 // locator string for lossless round-trip.
@@ -3824,7 +3824,7 @@ function isDerivedWorkspaceRange(range: string | undefined): boolean {
 }
 
 /**
- * F4 yarn-berry attribution rule (ADR-0014 §4.F4): given an eligible
+ * F4 yarn-berry attribution rule: given an eligible
  * source edge + workspace-member destination, derive the `{ workspace:
  * true, workspaceRange }` attrs payload. yarn-berry takes the verbatim
  * `workspace:<spec>` range from disk as the source-side specifier;

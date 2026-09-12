@@ -33,12 +33,9 @@ once precisely so it never drifts across the family.
 > [§3](#3-integrity-model) (integrity), and
 > [§4](#4-reserved-vocabulary) (reserved vocabulary).
 >
-> **Completion phases.** The *modify* / *enrich* / *optimize* phases moved
-> out of the conversion-era ADR-0016 to the published
-> ADR-0023
-> (modify + enrich) and
-> ADR-0024 (optimize); sibling
-> specs redirect there rather than re-deriving them.
+> **Completion phases.** The *modify* / *enrich* / *optimize* phases are
+> specified apart from conversion — modify with enrich, optimize on its own —
+> and sibling specs defer to that specification rather than re-deriving it.
 
 ### 1.1 The stringify entry point and the round-trip property
 
@@ -158,7 +155,7 @@ nuances the earlier draft got wrong (#117):
 #### 1.4.1 `linkType` / `languageName` derivation (#95)
 
 `linkType` and `languageName` are not graph facts — they are **derived on
-emit** from the node's resolution (the emitter owns the dispatch; ADR-0010).
+emit** from the node's resolution (the emitter owns the dispatch).
 Both mirror yarn's own fetcher dispatch (`yarnpkg-core`), validated
 byte-for-byte against the real-world berry corpus (babel, backstage,
 storybook, yarnpkg-berry).
@@ -662,7 +659,7 @@ graph-level facts its parser currently extracts.
 string with ordered disambiguator slots. The unsuffixed form remains
 canonical for the common case; slots appear only when an adapter supplies
 a slot value. The full grammar (and the second slot, `+src=` for
-non-registry sources per ADR-0032) is in [§4.3](#43-tarballkey). This
+non-registry sources) is in [§4.3](#43-tarballkey). This
 section specifies the `+patch=` slot:
 
 - For **file-backed** patches, the `+patch=` value is the **sha512 of the
@@ -744,7 +741,7 @@ recipe.)
 > is a hash *of* and how to verify it, the multi-hash case, and the
 > equivalence rule. It is the single source of truth that every per-PM
 > format spec defers to (each PM's "Integrity" subsection points here). It
-> records the model settled by ADR-0031, amending ADR-0014 §4.F1. Where this
+> records the settled integrity model. Where this
 > prose and any implementation disagree, **this prose wins** and the
 > implementation has a defect — report the drift.
 
@@ -1112,8 +1109,8 @@ whitespace, no empty parens. `id` is a pure function of `(name, version,
 peerContext)` **and the [TarballKey](#43-tarballkey) disambiguator slots**
 (`+patch=`, `+src=`): the NodeId is the slotted TarballKey followed by the
 peer-context block, so two instances that share `name@version` and
-`peerContext` but differ on a slot (a patched copy; a non-registry **source**
-per ADR-0032) are distinct NodeIds. Slots precede the `(...)` block:
+`peerContext` but differ on a slot (a patched copy; a non-registry
+**source**) are distinct NodeIds. Slots precede the `(...)` block:
 `<name>@<version>[+patch=…][+src=…](<peerContext>)?`.
 
 Formats that flatten peer-virtualization (`npm-*`, `yarn-classic`) cannot
@@ -1143,7 +1140,7 @@ plus ordered disambiguator slots.
 ```
 TarballKey      := <name>@<version> ( '+' <slot-name> '=' <slot-value> )*
 
-slot-name       := 'patch' | 'src'         # ADR-gated; sorted alphabetically (`patch` < `src`)
+slot-name       := 'patch' | 'src'         # closed set; sorted alphabetically (`patch` < `src`)
 slot-value      := canonical-token | sentinel-token | src-token
 canonical-token := for `+patch=`, sha512 of the canonical recipe input
                    bytes — 128 lower-case hex chars; never empty, never
@@ -1156,12 +1153,12 @@ src-token       := exactly 16 lower-case hex chars (sha256 prefix)  # `+src=` on
 **`+patch=`** ([§2](#2-patch-slot--tarballkey-sentinel)) — the patch
 fingerprint; `Node.patch` is its per-node carrier.
 
-**`+src=`** (ADR-0032) — a **source discriminator** for NON-REGISTRY
+**`+src=`** — a **source discriminator** for NON-REGISTRY
 sources, so the same `name@version` installed from genuinely different code
 (a registry copy AND a git fork; two non-registry hosts) does **not**
 collapse onto one node. `Node.source` is its per-node carrier. The value is
 the 16-hex prefix of `sha256` over the F3-canonical source string
-(`ResolutionCanonical`, ADR-0014 §4.F3), populated **only** for the
+(`ResolutionCanonical`), populated **only** for the
 well-defined non-registry classes — everything else stays **BARE** (no
 slot), so the ~99% registry majority's keys are byte-identical to a
 slot-less world and the lockfile emit is unchanged (emit re-keys from entry
@@ -1273,8 +1270,7 @@ workspace) and are roots of the non-workspace subgraph. Cross-workspace
 `dep` / `dev` / `optional` / `peer` edges between workspace nodes are
 permitted and do not strip the target of its workspace nature; only a
 *published* (registry / tarball / git) source depending on a workspace is
-rejected at seal — see published
-ADR-0017.
+rejected at seal.
 
 A `Lockfile` is the public alias for a sealed `Graph`. **Iteration order**
 is canonical and content-derived: collections iterate in lexicographic
@@ -1362,8 +1358,7 @@ that resolve to it (`"csstype@npm:^3.1.3":` / `"csstype@^3.1.3":`). Parse
 binds an edge by looking the descriptor up in an index of entry keys.
 
 A manifest **override** (npm `overrides`, yarn `resolutions`, pnpm
-`pnpm.overrides` — the canonical PM-neutral form is specified in published
-ADR-0025) breaks that exact-match
+`pnpm.overrides`) breaks that exact-match
 join. When a dependency is forced, yarn **rewrites the entry key to the
 pinned descriptor** and drops the consumer's own range from the key. For a
 backstage-style `"csstype@npm:^3.1.3": "3.0.9"` resolution the entry becomes:
@@ -1388,7 +1383,7 @@ keyed `csstype@npm:^3.1.3`. Two further facts make a naive fix unsafe:
 yarn writes **no lock-borne resolutions** — the override declaration lives in
 `package.json` only. So the override map exists at parse time **iff the caller
 passed `manifests`** (the public `parse(format, input, { manifests })`
-F6-captures them per ADR-0025 into
+F6-captures them into
 the canonical override form *before* the adapter parse, and threads the
 constraints into the edge resolver).
 
@@ -1406,7 +1401,7 @@ constraints into the edge resolver).
 
 > **Range defaulting & the GitHub-shorthand exception (#119).** A berry
 > descriptor without an explicit `<scheme>:` protocol is defaulted to the `npm:`
-> registry protocol (per ADR-0016 §B) — both
+> registry protocol — both
 > for the specIndex **key** built on parse and the edge `attrs.range`, so the two
 > stay aligned and a bare `^1.2.3` resolves. **Exception:** a **GitHub shorthand**
 > — `owner/repo` or `owner/repo#ref` — is **not** a bare npm range; yarn resolves
@@ -1449,9 +1444,7 @@ miss — it never drops an edge, so the shrink-only invariant still holds.
 Rung 3 is **source-gated**: an `npm:`/bare descriptor may bind **only** a
 node whose canonical resolution is a registry **tarball**
 ([§4.4](#44-graph) source taxonomy; the four-case canonical resolution is
-specified in published
-ADR-0014 §4.F3
-— `tarball` / `git` / `directory` / `unknown`). A git-fork, directory-link,
+`tarball` / `git` / `directory` / `unknown`). A git-fork, directory-link,
 `unknown`-source, or resolution-less node is **invisible** to a registry
 range: a fork pinned at a satisfying version must never silently satisfy an
 `npm:` descriptor, because the bytes are not the registry artefact the range

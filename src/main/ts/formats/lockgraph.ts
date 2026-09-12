@@ -41,7 +41,7 @@
 //                rides the N row is the `#<sha1>` of a yarn-classic
 //                `<canonical-url>#<sha1>` native: it is split into a trailing
 //                `u`-member of the integrity column so the URL itself recomposes
-//                from the R row. The berry checksum-cache-key (ADR-0031) likewise
+// from the R row. The berry checksum-cache-key likewise
 //                rides the integrity column, folded into its `berry-zip`
 //                z-member as `z<cacheKey>/<algo>-<digest>`. A canonical
 //                {type:'tarball'} payload resolution is omitted and recomposed
@@ -841,7 +841,7 @@ function assemblePayload(
   if (native !== undefined) p.nativeResolution = native
   if (pn.integrity !== undefined) p.integrity = pn.integrity
   // The berry checksum-cache-key folded into the integrity column's z-member
-  // (ADR-0031) reattaches here as `berryChecksumCacheKey` (no separate F slot).
+  // reattaches here as `berryChecksumCacheKey` (no separate F slot).
   if (pn.cacheKey !== undefined) p.berryChecksumCacheKey = pn.cacheKey
   return p as TarballPayload
 }
@@ -860,7 +860,7 @@ export function check(input: string): boolean {
 // === Internal helpers =======================================================
 
 // Mirrors graph.ts `tarballKeyInputsOfNode` — capture EVERY slot carrier on the
-// node so the re-derived TarballKey is byte-exact. ADR-0032 added `source` (the
+// node so the re-derived TarballKey is byte-exact. added `source` (the
 // `+src=` slot) beside `patch`; both must be threaded or non-registry nodes
 // sharing `name@version` collapse to one key.
 function tarballKeyInputsOf(node: Node): TarballKeyInputs {
@@ -899,7 +899,7 @@ function isRegionHeader(line: string, letter: string): boolean {
 // emit (`…, patch, source, workspacePath`). `Graph.diff`'s `nodeEqual` is
 // `JSON.stringify`-based and therefore KEY-ORDER-SENSITIVE, so matching the
 // adapters' order makes `g.diff(parse(serialize(g)))` empty for graphs produced
-// by ANY of this library's parsers. ADR-0032 places `source` AFTER `patch` and
+// by ANY of this library's parsers. places `source` AFTER `patch` and
 // BEFORE `workspacePath`. (The PM-native `resolution` sidecar no longer lives on
 // the Node — it moved to TarballPayload.nativeResolution, assembled in the
 // reattach phase.)
@@ -1054,7 +1054,7 @@ export function registrySourceOf(node: Node, payload: TarballPayload | undefined
 // self-delimiting within the tab-bounded column. A bare `-` means NO integrity.
 //
 // The `berry-zip` member (marker `z`) optionally carries the yarn-berry checksum
-// CACHE-KEY prefix (ADR-0031) folded into the member itself:
+// CACHE-KEY prefix folded into the member itself:
 // `z<cacheKey>/<algo>-<digest>` (e.g. `z10c0/sha512-<hex>`). The cacheKey is
 // literally that checksum's `<cacheKey>/` prefix, so it belongs on the z-member
 // rather than a separate F slot. A cacheKey (`10c0`/`8`/`2`) contains no `/` and
@@ -1099,7 +1099,7 @@ export function encodeIntegrityColumn(integrity: Integrity | undefined, fragment
         message: `lockgraph: unknown integrity hash origin '${h.origin}' (no marker in {s,z,r,c,u})`,
       })
     }
-    // The berry checksum's `<cacheKey>/` prefix (ADR-0031) folds INTO its own
+    // The berry checksum's `<cacheKey>/` prefix folds INTO its own
     // z-member: the cacheKey is literally that hash's prefix, so it belongs on
     // the `berry-zip` member rather than a separate F slot. Emit
     // `z<cacheKey>/<algo>-<digest>` when a cacheKey is present; bare `z<algo>-<digest>`

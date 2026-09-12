@@ -1,4 +1,4 @@
-// COMPLETION_* diagnostic codes — ADR-0023 §7.2.
+// COMPLETION_* diagnostic codes —.
 //
 // Tree-completion BFS emits these to communicate which nodes were
 // added, which edges were wired via find-up reuse, and which gaps the
@@ -21,7 +21,7 @@ export interface CompletionDiagnostic extends Diagnostic {
 }
 
 /** One rejected candidate on a `COMPLETION_NO_CANDIDATE` diagnostic's `data`.
- *  A LOAD-BEARING consumer-attribution contract (ADR-0037): `by` names the
+ * A LOAD-BEARING consumer-attribution contract: `by` names the
  *  constraint kind that rejected the version, `reason` is its human message —
  *  together they let a remediation report say WHY a fix was skipped
  *  (e.g. "no version in range satisfies engines.node >=18"). */
@@ -100,7 +100,7 @@ export function completionNoCandidate(
   rejected: readonly RejectedCandidate[],
   extra?: {
     /** A lower version of the CONSUMER whose closure IS constraint-clean, found
-     *  by the bounded backtracking probe (ADR-0037 v2). The durable fix. */
+     * by the bounded backtracking probe (v2). The durable fix. */
     suggestion?: { consumer: string; version: string; range: string }
     /** The probe hit the combinatorial budget before finding a fix. */
     budgetExhausted?: boolean

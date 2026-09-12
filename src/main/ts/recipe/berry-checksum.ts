@@ -1,4 +1,4 @@
-// ADR-0035 — Yarn-berry `checksum` computation (zero-dependency recompute).
+// Yarn-berry `checksum` computation (zero-dependency recompute).
 //
 // Reproduces yarn's lockfile `checksum` digest = `sha512(cache.zip)` from the
 // npm tarball, with NO `@yarnpkg/*` runtime dependency — only Node built-ins
@@ -16,7 +16,7 @@
 //     these three generations is pako's match-finding hash (spec/formats/_common.md
 //     §1.7 checksum matrix):
 //       – cacheKey 7/8 (yarn 2.4 / 3.1–3.8): pako's LEGACY hash (`legacyHash:true`),
-//         proven over real cache archives (ADR-0035 §7).
+// proven over real cache archives.
 //       – cacheKey 9  (yarn 4.0.0-rc.27…4.0.0 — the Yarn-4 RC window, lockfile v7):
 //         pako's "nodejs-compatible" hash (`legacyHash:false`) — verified byte-exact
 //         over the real v7 cache archive.
@@ -33,7 +33,7 @@
 // CALIBRATES which one a lock used against a discriminating sibling checksum.
 //
 // The container is emitted with libzip's exact conventions, proven byte-
-// identical to yarn's own output (ADR-0035 §1.3): entries under
+// identical to yarn's own output: entries under
 // `node_modules/<ident>/`, fixed SAFE_TIME mtime, mode `0644` (files) / `0755`
 // (dirs & exec), version-made-by `0x033F`; per-entry version-needed + gp-flag +
 // method follow STORE (`10`/`0`/`0`) or DEFLATE (`20`/`2`/`8`); no extra field,

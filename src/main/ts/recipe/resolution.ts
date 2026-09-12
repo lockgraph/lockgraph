@@ -1,18 +1,18 @@
-// ADR-0014 §4.F3 — resolution URL canonical recipe (pure-math primitive).
+// resolution URL canonical recipe (pure-math primitive).
 //
 // Canonical form on Graph: typed discriminated union (4 cases) held on
 // `TarballPayload.resolution`. Each adapter parses its PM-native source
 // shape (yarn-berry locator, yarn-classic URL, npm `resolved` URL, pnpm
-// `resolution.tarball` URL, etc.) into one of the 4 canonical cases via
-// `parse()`. Each adapter projects the canonical form back to its target
+// `resolution.tarball` URL, etc.) into one of the 4 canonical cases
+// `parse`. Each adapter projects the canonical form back to its target
 // emit shape via the per-target `stringifyFor*` helpers.
 //
 // Workspace identity is NOT part of F3 canonical: workspace members are
-// stored on `Node.workspacePath` (per-format, per ADR-0017) and adapters
+// stored on `Node.workspacePath` (per-format) and adapters
 // MUST detect workspace shape ahead of time and skip the primitive. The
 // full workspace specifier story lives in §4.F4.
 //
-// The `unknown` case is the escape hatch per ADR-0013: exotic PM-native
+// The `unknown` case is the escape hatch: exotic PM-native
 // shapes round-trip verbatim through `raw`. Identity comparisons against
 // `unknown` MUST NOT collapse two entries by shape alone.
 //
@@ -44,8 +44,8 @@ export interface ParseOptions {
   /** Node name — used by yarn-berry `npm:` alias spec to derive the registry URL. */
   name?:         string
   /** Registry base for a yarn-berry `npm:` locator's synthesised tarball URL
-   *  (the locator carries none). Adapters pass a config- or lock-inferred base
-   *  for custom registries; defaults to {@link DEFAULT_NPM_REGISTRY}. */
+   * (the locator carries none). Adapters pass a config- or lock-inferred base
+   * for custom registries; defaults to {@link DEFAULT_NPM_REGISTRY}. */
   registry?:     string
 }
 
@@ -55,13 +55,13 @@ const SHA_FRAG_RE = /^[0-9a-f]{7,64}$/i
 // The public npm registry — the default base for synthesising a yarn-berry
 // `npm:` locator's tarball URL. The locator carries no URL: yarn resolves it
 // against `.yarnrc.yml`'s `npmRegistryServer` at fetch time, which is NOT in the
-// lockfile. A caller with a config- or lock-inferred base overrides it via
+// lockfile. A caller with a config- or lock-inferred base overrides it
 // `ParseOptions.registry`; this is only the fallback (no trailing slash).
 export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org'
 
 // A yarn-classic registry-tarball `resolved` may glue the tarball sha1 on as a
 // `#<40-hex>` fragment (yarn 1.0–1.5's inline checksum form). That fragment is
-// yarn syntax: npm / pnpm / bun emit a clean `.tgz` and carry the sha1 in
+// yarn syntax: npm / pnpm / bun emit a clean `.tgz` and carry the sha1
 // `integrity` instead. Strip ONLY a fragment fused to a `.tgz` so a git
 // `…#<40-hex-commit>` resolution — whose sha IS its identity — is never touched.
 const REGISTRY_TGZ_SHA1_FRAGMENT = /(\.tgz)#[0-9a-f]{40}$/i
@@ -78,14 +78,14 @@ const BITBUCKET_HOST = 'bitbucket.org'
 /**
  * Parse a source-form resolution string → canonical 4-case union.
  * Returns `{ type: 'unknown', raw }` for any shape this primitive cannot
- * canonicalize. Adapters use `emitUnknownResolution` from
+ * canonicalize. Adapters use `emitUnknownResolution`
  * `recipe/diagnostics.ts` to surface the RECIPE_RESOLUTION_UNKNOWN
- * diagnostic per ADR-0014 §5.
+ * diagnostic.
  *
  * Workspace inputs (e.g. yarn-berry `<n>@workspace:<path>`, pnpm `link:`,
  * importer paths) are the caller's responsibility: detect at the adapter
  * boundary and route to `Node.workspacePath` before invoking this
- * primitive — workspace is not part of F3 canonical per ADR-0014 §4.F3.
+ * primitive — workspace is not part of F3 canonical.
  */
 export function parse(raw: string, options: ParseOptions = {}): ResolutionCanonical {
   // yarn-berry locator: peel `<name>@<protocol>:<spec>` first so subsequent
@@ -131,13 +131,13 @@ export function parse(raw: string, options: ParseOptions = {}): ResolutionCanoni
 function parseInner(protocol: string, spec: string, raw: string, options: ParseOptions): ResolutionCanonical {
   switch (protocol) {
     case 'npm': {
-      // yarn-berry `<n>@npm:<ver>` — registry tarball; URL derived by
-      // convention from the npmjs default registry per ADR-0014 §4.F3
+      // yarn-berry `<n>@npm:<ver>` — registry tarball; URL derived
+      // convention from the npmjs default registry
       // (host is attribution; identity drops the host for the
       // (name, version) tuple). `npm:<n2>@<ver>` (alias) collapses to
       // `<n2>` as the underlying name.
       //
-      // BIND MODIFIERS (ADR-0032 §"+src=" extension): a yarn-berry npm
+      // BIND MODIFIERS (§"+src=" extension): a yarn-berry npm
       // locator may carry a `::<key>=<value>&…` bind suffix that pins the
       // exact fetch (private-registry mirror archives, integrity pins, etc.).
       // The bind MUST NOT sweep into the derived version (it would corrupt
@@ -169,7 +169,7 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
       return { type: 'unknown', raw }
     case 'workspace':
     case 'link':
-      // Workspace shapes are NOT part of F3 canonical per ADR-0014 §4.F3 —
+      // Workspace shapes are NOT part of F3 canonical per —
       // adapters MUST detect and route to `Node.workspacePath` before
       // invoking this primitive. Returning `unknown` is a defensive
       // fall-through: adapters that respect the contract never reach here.
@@ -435,13 +435,13 @@ export function isUnknown(can: ResolutionCanonical): can is { type: 'unknown'; r
   return can.type === 'unknown'
 }
 
-// === Source discriminator (ADR-0032 "+src= slot") ===========================
+// === Source discriminator ("+src= slot") ===========================
 
 // The default public npm-registry hosts. A `tarball` canonical pointing at one
 // of these is the content-addressed registry artefact for `(name, version)` —
 // the same bytes for everyone — so it is the BARE majority that carries NO
 // `+src=` slot (ZERO registry blast radius). Both are the SAME default registry:
-// `registry.npmjs.org` is npm's; `registry.yarnpkg.com` is yarn's CDN mirror of
+// `registry.npmjs.org` is npm's; `registry.yarnpkg.com` is yarn's CDN mirror
 // it (yarn-classic's default `resolved` host) — neither is a distinct source.
 // Any OTHER tarball host (private registry, GitHub release `.tgz`, a CDN, a
 // codeload that did not canonicalize to git) can legitimately serve different
@@ -463,7 +463,7 @@ function hostOfTarballUrl(url: string): string | undefined {
 }
 
 /**
- * ADR-0032 — the `+src=` NodeId/TarballKey slot value for a node's
+ * the `+src=` NodeId/TarballKey slot value for a node's
  * `ResolutionCanonical`, or `undefined` when the node is a default-registry
  * tarball (the ~99% majority, which stays BARE so registry NodeIds never
  * change). The slot disambiguates the #2b collapse: the same `name@version`
@@ -474,14 +474,14 @@ function hostOfTarballUrl(url: string): string | undefined {
  * string (NUL-separated), populated ONLY for the WELL-DEFINED non-registry
  * source classes:
  *
- *   - `git`                       → `git\0<url>\0<sha>`        (slot)
- *   - `tarball` (non-registry)    → `tarball\0<host>`         (slot)
- *   - `tarball` (with `::` bind)  → `tarball\0<host>\0bind=…` (slot)
- *   - `tarball` (default registry)→ undefined                 (bare)
- *   - `directory`                 → undefined                 (bare)
- *   - `unknown`                   → undefined                 (bare)
+ * - `git` → `git\0<url>\0<sha>` (slot)
+ * - `tarball` (non-registry) → `tarball\0<host>` (slot)
+ * - `tarball` (with `::` bind) → `tarball\0<host>\0bind=…` (slot)
+ * - `tarball` (default registry)→ undefined (bare)
+ * - `directory` → undefined (bare)
+ * - `unknown` → undefined (bare)
  *
- * The `tarball` BIND slot (ADR-0032 §"+src=" extension) forks two entries that
+ * The `tarball` BIND slot (§"+src=" extension) forks two entries that
  * share the same `(name, version, host)` but differ by a yarn-berry `::` bind
  * modifier (`version=`, `hash=`, `__archiveUrl=`, plus any residual
  * `&locator=`/`&hash=` qualifiers). An `__archiveUrl=` pin sets the canonical
@@ -489,21 +489,21 @@ function hostOfTarballUrl(url: string): string | undefined {
  * bare registry entry even when the archive resolves to the default-registry
  * host, and forks a sibling archive that differs only by a residual qualifier.
  *
- * `directory` and `unknown` stay BARE deliberately (ADR-0032 §"bare classes"):
+ * `directory` and `unknown` stay BARE deliberately (§"bare classes"):
  *
- *   - `directory` — its `path` is a consumer-relative filesystem string with no
- *     well-defined cross-PM canonical source identity; the adapters that CAN
- *     collide on a directory locator already disambiguate via the sentinel-patch
- *     `::locator=` slot (`_yarn-berry-core.isLocalLocatorDisambiguatedResolution`).
- *   - `unknown` — the F3 escape hatch (ADR-0013): its `raw` is a PM-native shape
- *     the primitive could NOT canonicalize, so it has NO well-defined source
- *     string. Folding it into identity is also UNSAFE for round-trips: a lossy
- *     cross-PM emit can turn a registry package's clean `tarball` canonical into
- *     an `unknown` raw on re-parse (e.g. a yarn-berry `name@npm:ver` locator
- *     written verbatim into npm's `resolved:` field, which `npm-resolved` parse
- *     cannot peel), so an `unknown`-derived slot would appear on ONE side of a
- *     convert but not the other and spuriously fork the node. A `patch:` locator
- *     also canonicalizes to `unknown` — its identity is already F2's `+patch=`.
+ * - `directory` — its `path` is a consumer-relative filesystem string with no
+ * well-defined cross-PM canonical source identity; the adapters that CAN
+ * collide on a directory locator already disambiguate via the sentinel-patch
+ * `::locator=` slot (`_yarn-berry-core.isLocalLocatorDisambiguatedResolution`).
+ * `unknown` — the F3 escape hatch: its `raw` is a PM-native shape
+ * the primitive could NOT canonicalize, so it has NO well-defined source
+ * string. Folding it into identity is also UNSAFE for round-trips: a lossy
+ * cross-PM emit can turn a registry package's clean `tarball` canonical into
+ * an `unknown` raw on re-parse (e.g. a yarn-berry `name@npm:ver` locator
+ * written verbatim into npm's `resolved:` field, which `npm-resolved` parse
+ * cannot peel), so an `unknown`-derived slot would appear on ONE side of a
+ * convert but not the other and spuriously fork the node. A `patch:` locator
+ * also canonicalizes to `unknown` — its identity is already F2's `+patch=`.
  *
  * The `hostingProvider` attribution hint is NEVER folded into the source string
  * — identity drops it, exactly as the canonical URL/sha already do (two git refs
@@ -555,8 +555,8 @@ export interface YarnBerryStringifyHints {
 }
 
 /**
- * Project canonical → yarn-berry locator string `<n>@<protocol>:<spec>` per
- * ADR-0014 §4.F3 stringify table. The result is suitable for the entry's
+ * Project canonical → yarn-berry locator string `<n>@<protocol>:<spec>`
+ * stringify table. The result is suitable for the entry's
  * `resolution:` field. Workspace members are emitted via the adapter's own
  * `Node.workspacePath` projection, not through this primitive.
  */
@@ -586,7 +586,7 @@ export interface YarnClassicStringifyHints {
 }
 
 /**
- * Project canonical → yarn-classic `resolved` URL per ADR-0014 §4.F3.
+ * Project canonical → yarn-classic `resolved` URL.
  * Workspace members emit via sentinel-version entries; not this path.
  */
 export function stringifyForYarnClassic(can: ResolutionCanonical, hints: YarnClassicStringifyHints = {}): string | undefined {
@@ -609,7 +609,7 @@ export function stringifyForYarnClassic(can: ResolutionCanonical, hints: YarnCla
 }
 
 /**
- * Project canonical → npm `resolved` URL per ADR-0014 §4.F3.
+ * Project canonical → npm `resolved` URL.
  * Workspace members emit via link entries through packages/<p>; not this path.
  */
 // True when `s` is a yarn-berry locator (`<name>@<protocol>:<spec>` or a `::`
@@ -645,7 +645,7 @@ export interface PnpmStringifyOutput {
 }
 
 /**
- * Project canonical → pnpm `resolution:` block fields per ADR-0014 §4.F3.
+ * Project canonical → pnpm `resolution:` block fields.
  * Workspace members emit via `importers/<p>:` blocks; not this path.
  */
 export function stringifyForPnpm(can: ResolutionCanonical): PnpmStringifyOutput | undefined {

@@ -1,4 +1,4 @@
-// ADR-0023 §8.2 — `modify()` orchestrator + ModifyResult discriminated union.
+// `modify()` orchestrator + ModifyResult discriminated union.
 //
 // Smoke-tests that `modify(graph, primitive, opts)` dispatches on
 // `primitive.kind` to the per-primitive impl and that the returned

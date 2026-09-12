@@ -22,7 +22,7 @@ function rt(g: Graph): { text1: string; g2: Graph } {
 }
 
 // Build a graph with a root workspace + one registry node carrying a given
-// payload. The PM-native `resolution` sidecar (ADR-0013) now rides the
+// payload. The PM-native `resolution` sidecar now rides the
 // per-tarball payload as `nativeResolution`.
 function single(name: string, version: string, payload: TarballPayload, resolution?: string): Graph {
   const b = newBuilder()

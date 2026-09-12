@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — filterLicense acceptance gate.
+// filterLicense acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { filterLicense } from '../../main/ts/modify/filter-license.ts'
@@ -81,7 +81,7 @@ describe('modify/filterLicense', () => {
     expect(result.unresolved).toEqual([])
   })
 
-  // ADR-0023 §8.6 — MODIFY_LICENSE_* lands on Graph.diagnostics().
+  // MODIFY_LICENSE_* lands on Graph.diagnostics().
   it('§8.6 — MODIFY_LICENSE_FLAGGED lands on Graph.diagnostics()', async () => {
     const graph = graphOf(builder => {
       const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })

@@ -1,11 +1,11 @@
-// ADR-0037 — completion constraints: a NODE-LOCAL acceptance filter.
+// completion constraints: a NODE-LOCAL acceptance filter.
 //
 // A NEW transitive node is selected as the HIGHEST range-satisfying version
 // whose OWN metadata passes every constraint. Pluggable function seam
 // (`Condition.evaluate(ctx) → Verdict`, sync or async); built-in `engines` +
 // `license` factories. No cross-node coupling, no backtracking (PMs do not
 // backtrack version selection on engines — a backtracker would emit a lock no
-// PM produces; see ADR-0037 / spec/bindings/constraints-api.md).
+// PM produces; see / spec/bindings/constraints-api.md).
 
 import semver from 'semver'
 import type { Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
@@ -188,7 +188,7 @@ export async function selectConstrained(
 /**
  * Passing candidates for `name@range`, HIGHEST-first, each already mint-ready
  * (libc-backfilled) — the on-demand alternative stream the bounded-backtracking
- * escalation walks (ADR-0037 v2). Reuses the exact same enumeration + evaluation
+ * escalation walks (v2). Reuses the exact same enumeration + evaluation
  * as `selectConstrained`, lazily: a consumer that only pulls the first item pays
  * for one, exactly as v1 does.
  */

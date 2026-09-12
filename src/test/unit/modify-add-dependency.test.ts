@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — addDependency acceptance gate.
+// addDependency acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { LockfileError } from '../../main/ts/api/errors.ts'
@@ -138,7 +138,7 @@ describe('modify/addDependency', () => {
     expect(second.added).toEqual([])
   })
 
-  // ADR-0023 §8.6 — MODIFY_NODE_ADDED lands on Graph.diagnostics().
+  // MODIFY_NODE_ADDED lands on Graph.diagnostics().
   it('§8.6 — MODIFY_NODE_ADDED lands on Graph.diagnostics()', async () => {
     const graph = graphOf(builder => {
       addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })

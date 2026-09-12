@@ -1,11 +1,11 @@
-// ADR-0023 §3.2 — `applyPatch`.
+// `applyPatch`.
 //
 // Wire `Node.patch` for every node matching a spec; canonical bytes via
-// ADR-0014 §4.F5 normalization. Sentinel-keyed source nodes are refused
+// normalization. Sentinel-keyed source nodes are refused
 // at the modifier floor (B1 / F5): the modifier detects the sentinel
 // BEFORE invoking the Mutator and emits MODIFY_SENTINEL_REFUSED.
 //
-// ADR-0023 §7.4 / §9.2: when F5 normalization rewrites ≥ 1 byte of the
+// / §9.2: when F5 normalization rewrites ≥ 1 byte of the
 // patch input, fire RECIPE_PATCH_NORMALISED (info, recipe-layer code)
 // once per applyPatch call. Both that and MODIFY_PATCH_APPLIED land on
 // Graph.diagnostics() via Mutator.diagnostic (§8.6 emission path).
@@ -46,7 +46,7 @@ export interface ApplyPatchResult {
  * Apply patch bytes to every node matching `spec`. Returns a graph where
  * each matched node has been re-keyed with the `+patch=<sha512-hex>` slot.
  *
- * Sentinel-keyed source nodes are refused per ADR-0023 §3.3 / B1 — the
+ * Sentinel-keyed source nodes are refused per / B1 — the
  * Mutator would throw LockfileError({code:'IRREDUCIBLE_LOSS'}) on
  * setTarball, so we pre-detect and emit MODIFY_SENTINEL_REFUSED.
  *
@@ -95,7 +95,7 @@ export async function applyPatch(
       continue
     }
 
-    // Compute new NodeId with patch slot. Per ADR-0011 the patch slot is on the
+    // Compute new NodeId with patch slot. Per the patch slot is on the
     // tarball-key, not the peer-context bracket — serializeNodeId handles both.
     const newId = serializeNodeId(node.name, node.version, node.peerContext, hash)
     if (newId === node.id) {
@@ -138,7 +138,7 @@ export async function applyPatch(
     emit(appliedDiag)
   }
 
-  // ADR-0023 §7.4 / §9.2: RECIPE_PATCH_NORMALISED fires once per applyPatch
+  // / §9.2: RECIPE_PATCH_NORMALISED fires once per applyPatch
   // invocation when F5 normalization altered ≥ 1 byte (CRLF→LF / BOM strip).
   // LF-only input passes through unchanged — no emit. The byte event is
   // call-level, but we subject it to the first patched NodeId so adapters

@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — find-up resolve unit suite.
+// find-up resolve unit suite.
 
 import { describe, expect, it } from 'vitest'
 import { ancestorsOf, resolveFindUp } from '../../main/ts/complete/find-up.ts'

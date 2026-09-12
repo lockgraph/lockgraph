@@ -1,6 +1,6 @@
 // pnpm-v5 adapter — pnpm `pnpm-lock.yaml` lockfileVersion 5.4.
 //
-// Standalone-fit per ADR-0022 §5: v5 (decimal `5.4`
+// Standalone-fit: v5 (decimal `5.4`
 // handshake, `specifiers` + bare-version `dependencies`,
 // `/<name>/<version>` slash-separator packages keys, underscore peer-
 // context syntax) is fundamentally different from the flat-core v6/v9
@@ -10,7 +10,7 @@
 // own parse / stringify / enrich / optimize pipeline.
 //
 // Dependency direction (parallel to npm-1 / yarn-classic standalone
-// precedents): this module imports YAML primitives from
+// precedents): this module imports YAML primitives
 // `_pnpm-yaml.ts`, graph types from `../graph.ts`, AND family-internal
 // pnpm helpers from `_pnpm-flat-core.ts` (peer-candidate derivation,
 // sidecar pruning, workspace path math, micro-utils). It does NOT
@@ -18,53 +18,52 @@
 // specific. `_pnpm-yaml.ts` and `_pnpm-flat-core.ts` do NOT import
 // this module — dependency is one-way (v5 → family infra).
 //
-// §A pinning per ADR-0022 §A.pnpm-v5:
-//   - top-level `lockfileVersion: 5.<digit>` decimal scalar
-//     (NOT quoted). Parse rejects v6/v9 (quoted) and other PM
-//     families via `FORMAT_MISMATCH`. Emit canonicalizes to `5.4`.
-//   - NO `settings` block (v5 predates the pnpm settings table).
-//     Graphs carrying settings via cross-version composition trigger
-//     a `PNPM_V5_SETTINGS_DROPPED` warning on emit.
-//   - top-level `overrides:` block (pnpm 6–7) — captured verbatim + re-emitted
-//     after `lockfileVersion`. pnpm frozen-compares it against config
-//     (`getOutdatedLockfileSetting` deep-equality), so an override-using project
-//     needs the block to stay `--frozen-lockfile`-clean. `patch:` entries
-//     round-trip verbatim but are not compiled (v5 has no patch slot per §B).
-//   - top-level layout — `specifiers` + `dependencies` blocks
-//     (single-importer collapsed-root) OR `importers` block
-//     (multi-importer workspaces). Mutually exclusive on emit;
-//     `PNPM_V5_DUAL_TOP_LEVEL_DRIFT` warning on parse if both present.
-//   - `dependencies.<name>` shape — bare version string, optionally
-//     peer-context-suffixed: `<name>: <version>_<peer>@<peer-version>`.
-//   - `packages` block — slash-separator keys `/<name>/<version>`
-//     (vs v6/v9's `<name>@<version>`). Peer-context renders as
-//     underscore suffix `/<name>/<version>_<peer>@<peer-version>`;
-//     multi-peer concatenated alphabetically. Parse uses the
-//     right-to-left peel grammar per ADR-0022 §A.pnpm-v5.
-//   - Inline transitives via `dependencies:` block in packages
-//     entries (same shape as v6).
-//   - `dev: false|true` per-entry flag (same as v6).
-//   - NO `snapshots` block (v9-only).
+// §A pinning per -v5:
+// - top-level `lockfileVersion: 5.<digit>` decimal scalar
+// (NOT quoted). Parse rejects v6/v9 (quoted) and other PM
+// families via `FORMAT_MISMATCH`. Emit canonicalizes to `5.4`.
+// - NO `settings` block (v5 predates the pnpm settings table).
+// Graphs carrying settings via cross-version composition trigger
+// a `PNPM_V5_SETTINGS_DROPPED` warning on emit.
+// - top-level `overrides:` block (pnpm 6–7) — captured verbatim + re-emitted
+// after `lockfileVersion`. pnpm frozen-compares it against config
+// (`getOutdatedLockfileSetting` deep-equality), so an override-using project
+// needs the block to stay `--frozen-lockfile`-clean. `patch:` entries
+// round-trip verbatim but are not compiled (v5 has no patch slot per §B).
+// - top-level layout — `specifiers` + `dependencies` blocks
+// (single-importer collapsed-root) OR `importers` block
+// (multi-importer workspaces). Mutually exclusive on emit;
+// `PNPM_V5_DUAL_TOP_LEVEL_DRIFT` warning on parse if both present.
+// - `dependencies.<name>` shape — bare version string, optionally
+// peer-context-suffixed: `<name>: <version>_<peer>@<peer-version>`.
+// - `packages` block — slash-separator keys `/<name>/<version>`
+// (vs v6/v9's `<name>@<version>`). Peer-context renders as
+// underscore suffix `/<name>/<version>_<peer>@<peer-version>`;
+// multi-peer concatenated alphabetically. Parse uses the
+// right-to-left peel grammar per -v5.
+// - Inline transitives via `dependencies:` block in packages
+// entries (same shape as v6).
+// - `dev: false|true` per-entry flag (same as v6).
+// - NO `snapshots` block (v9-only).
 //
 // §B Lossy-but-acceptable (pnpm-v5 specific):
-//   - `RECIPE_FEATURE_DROPPED` (feature='patch') — patch slot drops on
-//     emit because v5 has no on-disk `patch:` protocol slot, per
-//     ADR-0014 §5 canonical loss code.
-//   - `PNPM_V5_SETTINGS_DROPPED` — sidecar `settings` block dropped
-//     when present (v5 schema has no settings).
-//   - `PNPM_V5_DUAL_TOP_LEVEL_DRIFT` — both `specifiers`/`dependencies`
-//     AND `importers` present on parse (hand-edit drift); `importers`
-//     wins.
+// - `RECIPE_FEATURE_DROPPED` (feature='patch') — patch slot drops on
+// emit because v5 has no on-disk `patch:` protocol slot,
+// canonical loss code.
+// - `PNPM_V5_SETTINGS_DROPPED` — sidecar `settings` block dropped
+// when present (v5 schema has no settings).
+// - `PNPM_V5_DUAL_TOP_LEVEL_DRIFT` — both `specifiers`/`dependencies`
+// AND `importers` present on parse (hand-edit drift); `importers`
+// wins.
 //
 // §C enrich:
-//   - peer-virt FIRST-CLASS per ADR-0006 — parse reads peer-context
-//     from the underscore-suffixed packages key (dominant path).
-//   - peer-virt three-branch derivation (1 / ≥2 / 0 candidates) as
-//     fallback when on-disk peer-context is incomplete.
-//   - workspace concretisation from `importers` + manifest input.
+// peer-virt FIRST-CLASS per — parse reads peer-context
+// from the underscore-suffixed packages key (dominant path).
+// - peer-virt three-branch derivation (1 / ≥2 / 0 candidates) as
+// fallback when on-disk peer-context is incomplete.
+// - workspace concretisation from `importers` + manifest input.
 //
-// §D optimize: prune unreachable from `graph.roots()` BFS — verbatim
-// ADR-0016 §D.
+// §D optimize: prune unreachable from `graph.roots` BFS — verbatim
 
 import {
   GraphError,
@@ -126,7 +125,7 @@ const V5_LOCKFILE_VERSION_CANONICAL = 5.4
 
 // Accepted on-disk literals (parsed back as bare strings by `_pnpm-yaml.ts`'s
 // reader, which never coerces scalars to numbers). The 5.0 → 5.4 minor-bump
-// range is collapsed to canonical `5.4` on emit per ADR-0022 §A.pnpm-v5.
+// range is collapsed to canonical `5.4` on emit per -v5.
 const V5_LOCKFILE_VERSION_ACCEPTED = new Set(['5.0', '5.1', '5.2', '5.3', '5.4'])
 
 const TOP_LEVEL_ORDER: readonly string[] = [
@@ -142,7 +141,7 @@ const TOP_LEVEL_ORDER: readonly string[] = [
 
 const TOP_LEVEL_SECTION_KEYS: readonly string[] = ['importers', 'packages']
 
-// Per ADR-0022 §A.pnpm-v5. The peer tail is `<version>_<peers>`, and `+` is
+// Per -v5. The peer tail is `<version>_<peers>`, and `+` is
 // overloaded inside `<peers>`: it joins one peer to the next AND stands in for
 // the `/` of a scoped peer name. Measured over 98 tails in the scraped corpus —
 // `_@babel+core@7.18.13` (scoped, 92 of them) beside `_debug@4.3.4+webpack@5.74.0`
@@ -153,17 +152,17 @@ const TOP_LEVEL_SECTION_KEYS: readonly string[] = ['importers', 'packages']
 // peeling from the right on `_` would split those in half.
 const PEER_TAIL_SEPARATOR = '_'
 
-// ADR-0028 INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
+// INV-RESOLVE (pnpm v5) — the resolution-graph verifier, mirroring the
 // v6/v9 `assertResolveValid` (`_pnpm-flat-core.ts`) over v5's standalone layout:
 //
-//   - consumer hop (`c` is the root or a workspace importer): `importers[path]`
-//     `dependencies`/`devDependencies`/`optionalDependencies` (bare-string
-//     values), or — single-importer collapsed-root — the top-level `out`
-//     blocks. (The parallel `specifiers` map is the DESCRIPTOR, not a resolved
-//     ref, so it is not resolved here.)
-//   - package hop (`c` is a resolved package): the INLINE
-//     `packages[key(c)].dependencies`/`optionalDependencies` (v5 has no
-//     `snapshots:` block) — bare-string values.
+// - consumer hop (`c` is the root or a workspace importer): `importers[path]`
+// `dependencies`/`devDependencies`/`optionalDependencies` (bare-string
+// values), or — single-importer collapsed-root — the top-level `out`
+// blocks. (The parallel `specifiers` map is the DESCRIPTOR, not a resolved
+// ref, so it is not resolved here.)
+// - package hop (`c` is a resolved package): the INLINE
+// `packages[key(c)].dependencies`/`optionalDependencies` (v5 has no
+// `snapshots:` block) — bare-string values.
 //
 // Resolution uses v5's own oracle (`resolveDependencyTarget` /
 // `resolveAliasedDependencyTarget`) over the emitted packages-key NodeId set.
@@ -180,9 +179,9 @@ export interface PnpmV5ParseOptions {}
 export interface PnpmV5StringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
-  /** Caller-declared overrides (ADR-0025 §4) overlaid onto the captured
-   *  lock-borne `overrides:` block (caller wins per key). pnpm 6–7 read this
-   *  top-level block and frozen-compare it against config. */
+  /** Caller-declared overrides overlaid onto the captured
+   * lock-borne `overrides:` block (caller wins per key). pnpm 6–7 read this
+   * top-level block and frozen-compare it against config. */
   overrides?: OverrideConstraint[]
 }
 
@@ -222,9 +221,9 @@ interface PnpmV5NodeSidecar {
   dev?: boolean
   optional?: boolean
   /** Verbatim workspace `link:` dependency slots keyed `${kind}\0${targetNodeId}`
-   *  → { declared slot name, raw `link:<dir>` locator }. Neither is derivable
-   *  from the target node: a pnpm lock names importer members by DIRECTORY, and
-   *  a sub-directory publish collapses onto its ancestor importer. */
+   * → { declared slot name, raw `link:<dir>` locator }. Neither is derivable
+   * from the target node: a pnpm lock names importer members by DIRECTORY, and
+   * a sub-directory publish collapses onto its ancestor importer. */
   workspaceLinkDependencies?: Map<string, { slot: string; value: string }>
 }
 
@@ -261,8 +260,8 @@ interface PnpmV5ParseContext {
   seenIds: Set<string>
   idByPackagesKey: Map<string, string>
   /** NodeIds whose `packages` entry carries `resolution: {directory}` — pnpm
-   *  `file:`-protocol LOCAL packages, whose edges into workspace members the
-   *  seal admits (ADR-0017 amendment) where a published package's do not. */
+   * `file:`-protocol LOCAL packages, whose edges into workspace members the
+   * seal admits (amendment) where a published package's do not. */
   directoryNodes: Set<string>
 }
 
@@ -890,12 +889,12 @@ function addPnpmV5WorkspaceLinkDependency(
       code: 'PNPM_WORKSPACE_LINK_EDGE_DROPPED',
       severity: 'warning',
       subject: srcId,
-      message: `pnpm-v5: ${srcId} dep ${depName}@${rawValue} is workspace member ${targetId} with no peer binding (v5 hashes every peer set); the model carries no edge for it and the slot is kept verbatim (ADR-0017)`,
+      message: `pnpm-v5: ${srcId} dep ${depName}@${rawValue} is workspace member ${targetId} with no peer binding (v5 hashes every peer set); the model carries no edge for it and the slot is kept verbatim ()`,
       data: declaration,
     })
     return
   }
-  // No `workspace: true` — that flag pairs with `workspaceRange` (ADR-0014
+  // No `workspace: true` — that flag pairs with `workspaceRange` (
   // §4.F4), and this channel records only the resolved directory.
   if (!tryAddPnpmV5Edge(context.builder, srcId, targetId, kind, { range: rawValue })) return
   const nodeSc = context.sidecar.nodes.get(srcId)
@@ -918,7 +917,7 @@ function addResolvedPeerEdges(
     // A hashed peer set names no package: the producer replaced the whole
     // rendered list with one md5 token, so there is nothing to resolve and no
     // edge to mint. It stays in the peerContext as an identity discriminator,
-    // and the seal exempts it from edge/context coherence (ADR-0030).
+    // and the seal exempts it from edge/context coherence.
     if (peer.version === '' && isHashedPeerSetToken(peer.name)) continue
     const peerNodeId = resolvePeerTargetById(seenIds, peer.name, peer.version)
     if (peerNodeId === undefined) {
@@ -1141,7 +1140,7 @@ function validatePnpmV5ResolvedEdge(
     message:
       `INV-RESOLVE violated: ${consumer.id} resolves ${JSON.stringify(seg)} to ` +
       `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
-      `expected ${dst.id} (pnpm-v5 encoding defect — ADR-0028 INV-RESOLVE)`,
+      `expected ${dst.id} (pnpm-v5 encoding defect —  INV-RESOLVE)`,
   })
 }
 
@@ -1202,10 +1201,10 @@ function derivePnpmResolutionFromCanonical(
 }
 
 /** The peer tail exactly as pnpm 6 builds it in `createPeersFolderSuffix`:
- *  each peer rendered `<name with its first `/` as `+`>@<version>`, the list
- *  sorted and joined with `+`, and one leading `_` for the whole tail. A tail
- *  over 32 characters is md5-hashed by the producer, which we cannot reproduce
- *  from a canonical context — see the hashed-context note in the v5 spec. */
+ * each peer rendered `<name with its first `/` as `+`>@<version>`, the list
+ * sorted and joined with `+`, and one leading `_` for the whole tail. A tail
+ * over 32 characters is md5-hashed by the producer, which we cannot reproduce
+ * from a canonical context — see the hashed-context note in the v5 spec. */
 function peerTailForNode(node: Node): string {
   if (node.peerContext.length === 0) return ''
   const rendered = node.peerContext
@@ -1227,7 +1226,7 @@ function nodeIdToDependencyValue(node: Node): string {
   return `${node.version}${peerTailForNode(node)}`
 }
 
-// ADR-0028 INV-RESOLVE — the (slot-key, slot-value) pair for one dependency
+// INV-RESOLVE — the (slot-key, slot-value) pair for one dependency
 // edge in a v5 `dependencies` / `specifiers` / inline-transitive block. A
 // plain dep is `<dst.name>: <version>[_<peer>@v]` (pnpm-v5's bare encoding);
 // an npm-aliased dep (`edge.attrs.alias` set) keys by the alias descriptor and
@@ -1270,7 +1269,7 @@ function buildImporterEntry(
     const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}\0${edge.attrs?.alias ?? ''}`
     const edgeSc = sidecar?.importerEdges.get(edgeKey)
 
-    // ADR-0028 INV-RESOLVE — key both `specifiers` and the dep block by the
+    // INV-RESOLVE — key both `specifiers` and the dep block by the
     // DESCRIPTOR segment (alias when set, else the package name) and emit the
     // CANONICAL `<name>@<version>` dep value for an alias. pnpm-v5 keys both
     // maps by the descriptor (`react-is-cjs:` in both), so an npm-aliased dep
@@ -1356,7 +1355,7 @@ function buildPackageEntry(
 ): YamlMap {
   const entry: YamlMap = {}
   const tarball = graph.tarballOf(representative.id)
-  // ADR-0014 §4.F3 — see pnpm-flat-core for the field semantics. Suppress
+  // see pnpm-flat-core for the field semantics. Suppress
   // registry-default URLs (pnpm's implicit convention) and emit verbatim
   // URL only for non-registry shapes.
   const nativeResolution = tarball?.nativeResolution
@@ -1418,7 +1417,7 @@ function buildPackageEntry(
     }
     if (dst.id === sidecar?.rootId) continue
     const block = blocks[edge.kind]!
-    // ADR-0028 INV-RESOLVE — alias slot keying + canonical value (see
+    // INV-RESOLVE — alias slot keying + canonical value (see
     // buildImporterEntry / aliasedDependencySlot).
     const slot = aliasedDependencySlot(edge, dst)
     block[slot.key] = slot.value
@@ -1678,22 +1677,22 @@ function addEdgeTolerant(
 }
 
 /**
- * Right-to-left peel grammar per ADR-0022 §A.pnpm-v5. Given
+ * Right-to-left peel grammar per -v5. Given
  * `<version>[_<peer>@<v>…]`, peel `_<peerName>@<peerVersion>` segments
  * from the tail while PEER_TAIL_RE matches; returns the bare version
  * (unconsumed remainder) and peers in canonical order. Returns undefined
  * for an empty input or fully-consumed remainder (no base version
  * left).
  *
- * v5-scoped-peer-grammar edge per ADR-0022 stub: scoped peers containing
+ * Scoped-peer-grammar edge per stub: scoped peers containing
  * underscores in path segments are theoretically ambiguous. PEER_TAIL_RE
  * handles the common scoped-peer shape
  * `@scope/name@version` correctly.
  */
 /** Split a v5 peer tail on its overloaded `+`. A segment opening with `@` and
- *  carrying no second `@` is a scope, so it takes the following segment as its
- *  name half; a segment with no `@` at all is semver build metadata belonging to
- *  the version before it. Everything else starts a new peer. */
+ * carrying no second `@` is a scope, so it takes the following segment as its
+ * name half; a segment with no `@` at all is semver build metadata belonging to
+ * the version before it. Everything else starts a new peer. */
 function splitPeerTail(tail: string): PeerEntry[] | undefined {
   const joined: string[] = []
   for (const segment of tail.split('+')) {
@@ -1716,7 +1715,7 @@ function splitPeerTail(tail: string): PeerEntry[] | undefined {
 }
 
 /** Render one peer-context entry. A hashed peer set is carried as a single
- *  bare token with no version, so it must not pick up a trailing `@`. */
+ * bare token with no version, so it must not pick up a trailing `@`. */
 function renderPeerContextEntry(p: PeerEntry): string {
   return p.version === '' ? p.name : `${p.name}@${p.version}`
 }
@@ -1734,7 +1733,7 @@ export function peelPeerTail(input: string): { version: string; peers: PeerEntry
   // so the node keeps its real version and its base identity still matches a
   // peer reference naming `name@version`. The digest is not reversible into
   // entries, so no peer edge is minted for it — the seal exempts exactly this
-  // token from edge/context coherence (ADR-0030).
+  // token from edge/context coherence.
   if (!tail.includes('@')) return { version, peers: [{ name: tail, version: '' }] }
   const peers = splitPeerTail(tail)
   if (peers === undefined) return undefined
