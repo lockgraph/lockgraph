@@ -87,7 +87,6 @@ import { nodeVersionOf } from './_node-id.ts'
 import { optimizeUnreachable } from './_optimize.ts'
 import { emitDropped as patchEmitDropped } from '../recipe/diagnostics.ts'
 import {
-  DEFAULT_NPM_REGISTRY,
   stringifyForPnpm,
   stripRegistrySha1Fragment,
   type ResolutionCanonical,
@@ -174,7 +173,10 @@ const PNPM_V5_PACKAGE_BLOCKS = ['dependencies', 'optionalDependencies'] as const
 
 // === TYPES ==================================================================
 
-export interface PnpmV5ParseOptions {}
+export interface PnpmV5ParseOptions {
+  registryFor?: (packageName: string) => string | undefined
+  onDiagnostic?: (diagnostic: Diagnostic) => void
+}
 
 export interface PnpmV5StringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -252,6 +254,7 @@ interface PnpmV5Sidecar {
 }
 
 interface PnpmV5ParseContext {
+  options: PnpmV5ParseOptions
   yaml: YamlMap
   builder: ReturnType<typeof newBuilder>
   diagnostics: Diagnostic[]
@@ -356,11 +359,11 @@ export function check(input: string): boolean {
   return /^\s*lockfileVersion\s*:\s*5\.\d+\s*(?:#.*)?$/m.test(input)
 }
 
-export function parse(input: string, _options: PnpmV5ParseOptions = {}): Graph {
+export function parse(input: string, options: PnpmV5ParseOptions = {}): Graph {
   const normalized = normalizeLineEndings(input)
   const yaml = readYaml(normalized)
   assertPnpmV5Version(normalized, yaml)
-  const context = createPnpmV5ParseContext(yaml)
+  const context = createPnpmV5ParseContext(yaml, options)
   addPnpmV5PackageNodes(context)
   const importers = collectPnpmV5Importers(context)
   addPnpmV5ImporterNodes(context, importers)
@@ -469,7 +472,7 @@ function assertPnpmV5Version(normalized: string, yaml: YamlMap): void {
   }
 }
 
-function createPnpmV5ParseContext(yaml: YamlMap): PnpmV5ParseContext {
+function createPnpmV5ParseContext(yaml: YamlMap, options: PnpmV5ParseOptions): PnpmV5ParseContext {
   const sidecar: PnpmV5Sidecar = {
     rootId: '', importerPaths: [], importerByPath: new Map(),
     importerSpecifiers: new Map(), nodes: new Map(), importerEdges: new Map(),
@@ -479,6 +482,7 @@ function createPnpmV5ParseContext(yaml: YamlMap): PnpmV5ParseContext {
     sidecar.overrides = { ...(yaml.overrides as Record<string, string>) }
   }
   return {
+    options,
     yaml,
     builder: newBuilder(),
     diagnostics: [],
@@ -783,7 +787,11 @@ function addPackageNode(
   }
   sidecar.nodes.set(nodeId, nodeSc)
 
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics, {
+    name,
+    version,
+    registry: context.options.registryFor?.(name),
+  }) ?? {}
   if (nodeSc.peerDependencies !== undefined) {
     payload.peerDependencies = { ...nodeSc.peerDependencies }
   }
@@ -1181,10 +1189,6 @@ function assertResolveValid(
 
 // === Serialize helpers ======================================================
 
-function tailOfName(name: string): string {
-  return name.startsWith('@') ? name.split('/').slice(1).join('/') : name
-}
-
 function derivePnpmResolutionFromCanonical(
   canonical: ResolutionCanonical | undefined,
 ): { tarball?: string; directory?: string } | undefined {
@@ -1355,22 +1359,20 @@ function buildPackageEntry(
 ): YamlMap {
   const entry: YamlMap = {}
   const tarball = graph.tarballOf(representative.id)
-  // see pnpm-flat-core for the field semantics. Suppress
-  // registry-default URLs (pnpm's implicit convention) and emit verbatim
-  // URL only for non-registry shapes.
+  // See pnpm-flat-core for the field semantics. An explicit canonical tarball
+  // URL remains explicit; only the `registry` variant uses pnpm's implicit
+  // integrity-only spelling.
   const nativeResolution = tarball?.nativeResolution
   const nativeIsPnpmUrl = nativeResolution !== undefined
     && (nativeResolution.startsWith('http://')
       || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
-  const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
-    && tarball.resolution.url === `${DEFAULT_NPM_REGISTRY}/${representative.name}/-/${tailOfName(representative.name)}-${representative.version}.tgz`
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
     const integ = emitSriForRegistry(tarball.integrity, nativeResolution)
     if (integ !== undefined) resolution.integrity = integ
     if (nativeIsPnpmUrl) resolution.tarball = stripRegistrySha1Fragment(nativeResolution!)
-    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) resolution.tarball = derivedPnpm.tarball
+    else if (derivedPnpm?.tarball !== undefined) resolution.tarball = derivedPnpm.tarball
     else if (derivedPnpm?.directory !== undefined) {
       resolution.directory = derivedPnpm.directory
       resolution.type = 'directory'
@@ -1378,7 +1380,7 @@ function buildPackageEntry(
     if (Object.keys(resolution).length > 0) entry.resolution = flowMap(resolution)
   } else if (nativeIsPnpmUrl) {
     entry.resolution = flowMap({ tarball: nativeResolution! })
-  } else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+  } else if (derivedPnpm?.tarball !== undefined) {
     entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
   } else if (derivedPnpm?.directory !== undefined) {
     entry.resolution = flowMap({ directory: derivedPnpm.directory, type: 'directory' })

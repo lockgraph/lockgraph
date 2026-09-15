@@ -401,7 +401,9 @@ describe('0.6 operation spine — modify', () => {
       integrity: {
         hashes: [{ algorithm: 'sha512', digest: 'ef'.repeat(64), origin: 'sri' }],
       },
-      tarball: 'https://registry.example/pkg/-/pkg-2.0.0.tgz',
+      // Funding/license projection is under test here; use the bare public
+      // registry class so this fixture does not also invent a +src identity.
+      tarball: 'https://registry.npmjs.org/pkg/-/pkg-2.0.0.tgz',
       funding: { url: 'https://example.test/fund' },
       license: 'MIT',
     }

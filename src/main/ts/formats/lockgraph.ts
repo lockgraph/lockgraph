@@ -1030,6 +1030,8 @@ export function registrySourceOf(node: Node, payload: TarballPayload | undefined
   const res = payload?.resolution as ResolutionCanonical | undefined
   if (res === undefined) return { type: 'npm', url: NONE }
   switch (res.type) {
+    case 'registry':
+      return { type: 'npm', url: NONE }
     case 'tarball': {
       const base = npmRegistryBaseOf(res.url, node.name, node.version)
       if (base !== undefined) return { type: 'npm', url: base }
@@ -1498,7 +1500,7 @@ function parseNativeResolutionSlot(slots: DecodedSlot[], tarballKey: TarballKey)
   return slot.value
 }
 
-// Reconstruct the canonical resolution union (4-case) from its `resolution.*`
+// Reconstruct the canonical resolution union (5-case) from its `resolution.*`
 // slots. The case is read off `resolution.type`; remaining leaves are strings.
 function rebuildResolution(slots: DecodedSlot[], tarballKey: TarballKey): ResolutionCanonical {
   const rec: Record<string, string> = {}

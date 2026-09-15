@@ -3607,6 +3607,34 @@ const withNativeBerryWorkspaceBoundary = (
   }
 }
 
+// npm and yarn-classic carry an absolute registry URL in the lock. A Berry
+// `npm:` locator deliberately does not: without caller registry/cwd, its
+// reparse is the weaker `{type: 'registry'}` fact. ADR-0041 makes that loss
+// visible instead of reconstructing a fictional public URL.
+const withUndeterminedBerryRegistryBoundary = (
+  contract: ConversionContract,
+): ConversionContract => {
+  if (
+    contract.unsupportedReason !== undefined
+    || !contract.to.startsWith('yarn-berry-')
+    || !(contract.from.startsWith('npm-') || contract.from === 'yarn-classic')
+  ) return contract
+
+  const loss: LossEntry = {
+    feature: 'resolved-url',
+    diagnostic: `INTEROP_${fromCode(contract.from)}_TO_${fromCode(contract.to)}_RESOLVED_URL_DROPPED`,
+    severity: 'warning',
+    rationale: `${contract.from} records an absolute tarball URL, while ${contract.to} records only an npm locator; without explicit registry or cwd the destination truthfully reparses as an undetermined registry host`,
+  }
+  return {
+    ...contract,
+    preserved: contract.preserved.filter(feature => feature !== 'resolved-url'),
+    lost: contract.lost.some(entry => entry.feature === 'resolved-url')
+      ? contract.lost
+      : [...contract.lost, loss],
+  }
+}
+
 // integrity is origin-scoped: a tarball SRI (npm / pnpm / bun /
 // yarn-classic) and a yarn-berry zip-cache `checksum` are digests of DIFFERENT
 // artefacts. A conversion that crosses the berry ↔ non-berry boundary cannot
@@ -3695,6 +3723,7 @@ export const CONTRACTS: ConversionContract[] = [
   ...BUN_GENERATION_PAIRS,
 ]
   .map(withNativeBerryWorkspaceBoundary)
+  .map(withUndeterminedBerryRegistryBoundary)
   .map(contract =>
     crossesOriginClass(contract.from, contract.to)
       ? { ...contract, preserved: contract.preserved.filter(f => f !== 'integrity') }

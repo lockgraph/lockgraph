@@ -17,21 +17,19 @@ describe('interop adversarial §8.5 — CRLF normalisation', () => {
     expect(result.lockfile).toContain('\r\n')
     // Cross-format identity is the origin-aware `graphSubset` (the classic→berry
     // graph-identity feature set), NOT byte-identical `graphSnapshot` equality:
-    // makes the registry `resolution` URL host attribution
-    // (yarn-classic emits `registry.yarnpkg.com`; yarn-berry recomposes the
-    // canonical `registry.npmjs.org` from the `<name>@npm:<version>` locator) and
-    // the PM-native `nativeResolution` sidecar adapter-specific — so a registry
-    // tarball legitimately changes URL host + sheds its classic URL sidecar across
-    // the convert while node / edge / canonical-resolution-type identity holds.
+    // makes the registry `resolution` URL host attribution and the PM-native
+    // `nativeResolution` sidecar adapter-specific. Berry's npm locator records
+    // no host, so ADR-0041 reparses it as `{type:'registry'}` rather than
+    // fabricating `registry.npmjs.org`.
     // `integrity` is excluded for the same reason `graphSnapshot` excluded it
     // (: a tarball SRI and a berry zip digest are different artefacts, so
     // a cross-origin classic→berry convert does not carry the source digest).
-    // `integrity` is the SINGLE legitimate exclusion (above); every other feature
-    // is asserted so a registry-host change is the only divergence this allows.
+    // Integrity and the explicitly declared resolved-url carrier loss are the
+    // only exclusions; every other feature remains asserted.
     expect(graphSubset(
       result.sourceGraph,
       result.destinationGraph,
-      ['nodes', 'edges', 'edge-kinds', 'resolved-url', 'tarballs', 'workspace-membership', 'patch-slots', 'peer-virt', 'conditions'],
+      ['nodes', 'edges', 'edge-kinds', 'tarballs', 'workspace-membership', 'patch-slots', 'peer-virt', 'conditions'],
     )).toBe(true)
   })
 })

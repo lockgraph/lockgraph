@@ -375,6 +375,7 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
       strict: false,
+      registry: 'https://registry.npmjs.org',
     })
     const g0 = parse('yarn-classic', yarnText)
     const g = yarnClassic.enrich(g0, undefined, {
@@ -442,6 +443,7 @@ describe('recipe/workspace — yarn-berry-v9 → yarn-classic fires RECIPE_WORKS
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
       strict: false,
+      registry: 'https://registry.npmjs.org',
       onDiagnostic: d => diags.push(d),
     })
     const resolved = diags.filter(d => d.code === 'RECIPE_WORKSPACE_RESOLVED')

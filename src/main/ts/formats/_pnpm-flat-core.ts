@@ -66,8 +66,8 @@ import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
-  DEFAULT_NPM_REGISTRY,
   parse as parseResolutionRecipe,
+  registryTarballUrl,
   stringifyForPnpm,
   stripRegistrySha1Fragment,
   type ResolutionCanonical,
@@ -168,6 +168,7 @@ export interface PnpmFamilyParseOptions {
    * sentinel computed from the locator string.
    */
   workspaceRoot?: string
+  registryFor?: (packageName: string) => string | undefined
 }
 
 export interface PnpmFamilyStringifyOptions {
@@ -599,6 +600,7 @@ export function optimizeFamily(
 type PnpmGraphBuilder = ReturnType<typeof newBuilder>
 
 interface PnpmParseContext {
+  readonly options: PnpmFamilyParseOptions
   readonly shape: PnpmLayoutShape
   readonly yaml: YamlMap
   readonly builder: PnpmGraphBuilder
@@ -640,6 +642,7 @@ function createPnpmParseContext(
 
   const sidecar = capturePnpmParseSidecar(yaml, shape)
   return {
+    options,
     shape,
     yaml,
     builder: newBuilder(),
@@ -824,7 +827,7 @@ function addPnpmSnapshotPackageNodes(context: PnpmParseContext): void {
       })
       continue
     }
-    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, context.options.registryFor, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
     recordDirectoryResolution(context, nodeId, pkgEntry)
     const nodeSidecar = sidecar.nodes.get(nodeId)
     if (nodeSidecar !== undefined) nodeSidecar.snapshotKey = snapshotKey
@@ -982,7 +985,7 @@ function addPnpmInlinePackageNodes(context: PnpmParseContext): void {
     seenIds.add(nodeId)
     idByPackagesKey.set(pkgKey, nodeId)
     const pkgEntry = packagesMap[pkgKey]!
-    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, context.options.registryFor, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
     recordDirectoryResolution(context, nodeId, pkgEntry)
     if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
       const nodeSidecar = sidecar.nodes.get(nodeId)
@@ -1296,8 +1299,15 @@ function pnpmPackagePayload(
   nodeId: string,
   diagnostics: Diagnostic[],
   nodeSc: PnpmNodeSidecar,
+  name: string,
+  version: string,
+  registryFor?: (packageName: string) => string | undefined,
 ): TarballPayload {
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics, {
+    name,
+    version,
+    registry: registryFor?.(name),
+  }) ?? {}
   if (nodeSc.peerDependencies !== undefined) {
     payload.peerDependencies = { ...nodeSc.peerDependencies }
   }
@@ -1317,12 +1327,13 @@ function addPackageNode(
   nodeId: string,
   pkgEntry: unknown,
   diagnostics: Diagnostic[],
+  registryFor?: (packageName: string) => string | undefined,
   patch?: string,
 ): void {
   builder.addNode(pnpmPackageNode(name, version, peerContext, nodeId, patch))
   const nodeSc = pnpmNodeSidecar(pkgEntry)
   sidecar.nodes.set(nodeId, nodeSc)
-  const payload = pnpmPackagePayload(pkgEntry, nodeId, diagnostics, nodeSc)
+  const payload = pnpmPackagePayload(pkgEntry, nodeId, diagnostics, nodeSc, name, version, registryFor)
   if (Object.keys(payload).length > 0) {
     builder.setTarball({ name, version, patch }, payload)
   }
@@ -2465,15 +2476,6 @@ function packagesKeyForNode(
   return applyPackagesKeyPrefix(bare + suffix, shape.packagesKeyShape)
 }
 
-// Recognise the pnpm-default registry URL convention for a (name, version).
-// pnpm treats `https://registry.npmjs.org/<n>/-/<tail>-<v>.tgz` as the
-// implicit canonical for a `resolution: {integrity: …}`-only entry; emitting
-// it back would diverge from pnpm-native output, so the stringify side
-// suppresses the URL field when it matches the convention.
-function isNpmRegistryDefault(url: string, name: string, version: string): boolean {
-  return url === deriveRegistryTarballFromSubject(`${name}@${version}`)
-}
-
 // project canonical resolution to pnpm `resolution:` block
 // shape for cross-format fallback. Workspace canonical is encoded elsewhere
 // (importers/ block); returns undefined here.
@@ -2741,14 +2743,12 @@ function writePackageResolution(context: PackageEntryContext): void {
   const nativeIsPnpmUrl = nativeResolution !== undefined
     && (nativeResolution.startsWith('http://') || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
-  const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
-    && isNpmRegistryDefault(tarball.resolution.url, representative.name, representative.version)
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
     const sri = emitSriForRegistry(tarball.integrity, nativeResolution)
     if (sri !== undefined) resolution.integrity = sri
     if (nativeIsPnpmUrl) resolution.tarball = stripRegistrySha1Fragment(nativeResolution!)
-    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+    else if (derivedPnpm?.tarball !== undefined) {
       resolution.tarball = derivedPnpm.tarball
     } else if (derivedPnpm?.directory !== undefined) {
       resolution.directory = derivedPnpm.directory
@@ -2758,7 +2758,7 @@ function writePackageResolution(context: PackageEntryContext): void {
     return
   }
   if (nativeIsPnpmUrl) entry.resolution = flowMap({ tarball: nativeResolution! })
-  else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+  else if (derivedPnpm?.tarball !== undefined) {
     entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
   } else if (derivedPnpm?.directory !== undefined) {
     entry.resolution = flowMap({ directory: derivedPnpm.directory, type: 'directory' })
@@ -3539,6 +3539,7 @@ export function tarballPayloadOf(
   entry: unknown,
   subject: string,
   diagnostics: Diagnostic[],
+  registry?: Readonly<{ name: string; version: string; registry?: string }>,
 ): TarballPayload | undefined {
   if (!isPlainObject(entry)) return undefined
   const payload: TarballPayload = {}
@@ -3569,8 +3570,13 @@ export function tarballPayloadOf(
       // Per pnpm row: `{integrity: …}` shape implies a registry
       // tarball; URL is derived by convention from name@version (the subject
       // is `<name>@<version>` per the pnpm packages-block key form).
-      const derived = deriveRegistryTarballFromSubject(subject)
-      if (derived !== undefined) payload.resolution = { type: 'tarball', url: derived }
+      if (registry !== undefined) {
+        payload.resolution = registry.registry === undefined
+          ? { type: 'registry' }
+          : { type: 'tarball', url: registryTarballUrl(registry.name, registry.version, registry.registry) }
+      } else {
+        payload.resolution = { type: 'registry' }
+      }
     }
   }
   if (isPlainObject(entry.engines)) {
@@ -3982,20 +3988,4 @@ function buildPeerContext(
     return wsId ?? `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`
   })
   return [...contextPeers, ...opaquePeers].sort()
-}
-
-// Derive a registry tarball URL from a `<name>@<version>` subject (pnpm
-// packages-block key form). Strips peer-virt parens before parsing the
-// `<name>@<version>` head so peer-virt sibling NodeIds project onto the
-// shared base TarballKey URL.
-function deriveRegistryTarballFromSubject(subject: string): string | undefined {
-  const base = stripPeerContextFromNodeId(subject)
-  const atIdx = base.lastIndexOf('@')
-  if (atIdx <= 0) return undefined
-  const name    = base.slice(0, atIdx)
-  const version = base.slice(atIdx + 1)
-  if (name === '' || version === '') return undefined
-  const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
-  if (tail === '') return undefined
-  return `${DEFAULT_NPM_REGISTRY}/${name}/-/${tail}-${version}.tgz`
 }

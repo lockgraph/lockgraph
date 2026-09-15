@@ -58,6 +58,7 @@ export interface Integrity {
 export type HostingProvider = 'github' | 'gitlab' | 'bitbucket'
 
 export type Resolution =
+  | Readonly<{ kind: 'registry'; bind?: string }>
   | Readonly<{
       kind: 'tarball'
       url: string

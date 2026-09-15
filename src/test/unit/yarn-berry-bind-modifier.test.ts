@@ -41,7 +41,7 @@ describe('recipe/resolution — yarn-berry `::` bind modifier ( +src= extension)
   it('`::__archiveUrl=<enc>` → tarball canonical on the DECODED archive url, full bind suffix carried for identity', () => {
     const c = parseResolution(
       'string-width@npm:4.2.3::__archiveUrl=https%3A%2F%2Fnpm.corp.example.com%2Fstring-width%2F-%2Fstring-width-4.2.3.tgz',
-      { sourceKind: 'yarn-berry-locator', name: 'string-width' },
+      { sourceKind: 'yarn-berry-locator' },
     )
     expect(c).toEqual({
       type: 'tarball',
@@ -54,27 +54,27 @@ describe('recipe/resolution — yarn-berry `::` bind modifier ( +src= extension)
     })
   })
 
-  it('a plain `::version=` bind → registry url (clean version) + `bind` field', () => {
+  // Forward guard on a bind shape yarn does not currently write on `npm:`.
+  // Measured over the berry corpus: every one of the 236 `npm:` locators
+  // carrying a `::` bind carries `__archiveUrl`, and nothing else; the
+  // `version=…&hash=…` spelling below is borrowed from `patch:`, which is
+  // where it really occurs (1,503 locators). The path is still worth pinning:
+  // an unrecognised bind must fork the NodeId rather than be dropped, which is
+  // the published-.62 collapse this file regresses.
+  it('an unrecognised `::` bind → undetermined registry + `bind` field', () => {
     const c = parseResolution(
       'string-width@npm:4.2.3::version=4.2.3&hash=abcdef',
-      { sourceKind: 'yarn-berry-locator', name: 'string-width' },
+      { sourceKind: 'yarn-berry-locator' },
     )
     expect(c).toEqual({
-      type: 'tarball',
-      url: 'https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz',
+      type: 'registry',
       bind: 'version=4.2.3&hash=abcdef',
     })
   })
 
-  it('no bind → unchanged bare registry tarball (the 99% path)', () => {
-    const c = parseResolution('string-width@npm:4.2.3', {
-      sourceKind: 'yarn-berry-locator',
-      name: 'string-width',
-    })
-    expect(c).toEqual({
-      type: 'tarball',
-      url: 'https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz',
-    })
+  it('no bind → bare undetermined registry (the 99% path)', () => {
+    const c = parseResolution('string-width@npm:4.2.3', { sourceKind: 'yarn-berry-locator' })
+    expect(c).toEqual({ type: 'registry' })
   })
 
   it('source discriminator: registry tarball is BARE; archive-url and bind-bearing tarballs FORK', () => {

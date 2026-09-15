@@ -403,7 +403,10 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     })
     const reparsed = parse(stringify(result.graph))
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: sri(MODIFIED_SRI) })
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({
+      integrity: sri(MODIFIED_SRI),
+      resolution: { type: 'registry' },
+    })
   })
 
   it('roundtrips replaceNode (version bump)', () => {
@@ -1179,8 +1182,10 @@ describe('enrich', () => {
         packages: { mypkg: ['mypkg@2.0.0', '', {}, ''] },
       }),
     )
-    // Precondition: no tarball, so the replacement guard does NOT skip.
-    expect(graph.tarball({ name: 'mypkg', version: '2.0.0' })).toBeUndefined()
+    // Precondition: only the weak undetermined-registry marker exists, so the
+    // replacement guard does NOT treat it as artifact evidence.
+    expect(graph.tarball({ name: 'mypkg', version: '2.0.0' })?.resolution)
+      .toEqual({ type: 'registry' })
     const result = enrich(graph, {
       manifests: {
         '': { name: 'root' },

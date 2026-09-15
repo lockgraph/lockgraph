@@ -92,7 +92,8 @@ function registryRangeOf(range: string): string | undefined {
  * Gates (all mandatory — the ladder must stay safe regardless of the #91 work):
  *   1. range must be `npm:`/bare — any other protocol → `{ kind: 'none' }`
  *      (those resolve through the exact-match + patch/link rungs, never here);
- *   2. only `sourceType === 'tarball'` candidates are eligible — a git /
+ *   2. only registry-class (`tarball` or undetermined `registry`) candidates
+ *      are eligible — a git /
  *      directory / unknown / absent-source node is invisible to this match;
  *   3. only candidates with a `semver.valid` version that `satisfies(range)`
  *      survive; the MAX-satisfying version wins.
@@ -112,7 +113,7 @@ export function semverResolve(range: string, candidates: readonly SemverCandidat
   const semverRange = registryRangeOf(range)
   if (semverRange === undefined) return { kind: 'none' }
 
-  const eligible = candidates.filter(c => c.sourceType === 'tarball')
+  const eligible = candidates.filter(isRegistryCandidate)
   if (eligible.length === 0) return { kind: 'none' }
 
   // Structural short-circuit: a single registry sibling is unambiguous — bind it
@@ -159,7 +160,8 @@ export function semverResolve(range: string, candidates: readonly SemverCandidat
  *   2. the inner token must NOT be a valid semver range — a real range is Rung
  *      3's domain, so `semver.validRange(tag) !== null` → `{ kind: 'none' }`
  *      (this primitive owns only the genuine-tag residue Rung 3 declined);
- *   3. only `sourceType === 'tarball'` candidates are eligible — a tag must
+ *   3. only registry-class (`tarball` or undetermined `registry`) candidates
+ *      are eligible — a tag must
  *      never bind a git / directory / unknown / absent-source node (same #91
  *      gate as Rung 3);
  *   4. 0 eligible → `{ kind: 'none' }`; exactly 1 → `{ kind: 'bound' }` (the one
@@ -179,7 +181,7 @@ export function distTagResolve(range: string, candidates: readonly SemverCandida
   // residue (`*` is a valid range, so it never reaches here).
   if (semver.validRange(tag) !== null) return { kind: 'none' }
 
-  const eligible = candidates.filter(c => c.sourceType === 'tarball')
+  const eligible = candidates.filter(isRegistryCandidate)
   if (eligible.length === 0) return { kind: 'none' }
   if (eligible.length === 1) return { kind: 'bound', id: eligible[0]!.id }
 
@@ -201,15 +203,19 @@ export function distTagResolve(range: string, candidates: readonly SemverCandida
  * single-version case. ≥2 siblings → ambiguous (the catalog could name any, and
  * we cannot tell which without the external map) → caller diagnoses + drops.
  *
- * Gates mirror Rung 3.5: tarball-source candidates only; 0 → none, 1 → bound,
+ * Gates mirror Rung 3.5: registry-class candidates only; 0 → none, 1 → bound,
  * ≥2 → ambiguous. `candidates` need not be pre-filtered or pre-sorted.
  */
 export function catalogResolve(range: string, candidates: readonly SemverCandidate[]): SemverResolveResult {
   if (!range.startsWith('catalog:')) return { kind: 'none' }
-  const eligible = candidates.filter(c => c.sourceType === 'tarball')
+  const eligible = candidates.filter(isRegistryCandidate)
   if (eligible.length === 0) return { kind: 'none' }
   if (eligible.length === 1) return { kind: 'bound', id: eligible[0]!.id }
   return { kind: 'ambiguous', candidateIds: eligible.map(c => c.id).sort(cmpStr) }
+}
+
+function isRegistryCandidate(candidate: SemverCandidate): boolean {
+  return candidate.sourceType === 'tarball' || candidate.sourceType === 'registry'
 }
 
 // === OVERRIDE RESOLUTION ====================================================

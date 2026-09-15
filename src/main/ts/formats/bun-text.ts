@@ -33,6 +33,7 @@ import {
   type EdgeKind,
   type Graph,
   type Node,
+  type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
@@ -64,6 +65,7 @@ import {
   unresolvedDependencyData,
 } from '../recipe/unresolved-dependency.ts'
 import type { OverrideConstraint } from '../graph.ts'
+import { registryTarballUrl } from '../recipe/resolution.ts'
 
 // === CONSTANTS ==============================================================
 
@@ -90,7 +92,9 @@ export interface BunTextGeneration {
 export const BUN_TEXT_V1: BunTextGeneration = { lockfileVersion: 1 }
 export const BUN_TEXT_V2: BunTextGeneration = { lockfileVersion: 2 }
 
-export interface BunTextParseOptions {}
+export interface BunTextParseOptions {
+  registryFor?: (packageName: string) => string | undefined
+}
 
 export interface BunTextStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -179,6 +183,7 @@ interface BunTextPackageEntry {
 }
 
 interface BunTextParseContext {
+  readonly options: BunTextParseOptions
   readonly builder: ReturnType<typeof newBuilder>
   readonly diagnostics: Diagnostic[]
   readonly workspaces: Record<string, BunTextWorkspaceManifest>
@@ -322,11 +327,11 @@ export function check(input: string, generation: BunTextGeneration = BUN_TEXT_V1
 
 export function parse(
   input: string,
-  _options: BunTextParseOptions = {},
+  options: BunTextParseOptions = {},
   generation: BunTextGeneration = BUN_TEXT_V1,
 ): Graph {
   const lf = parseBunLockfile(input, generation)
-  const context = createBunParseContext(lf)
+  const context = createBunParseContext(lf, options)
 
   // --- Pass 1: register all packages entries as graph nodes ----------------
   //
@@ -410,7 +415,7 @@ function parseBunLockfile(input: string, generation: BunTextGeneration): BunText
   return lf
 }
 
-function createBunParseContext(lf: BunTextLockfile): BunTextParseContext {
+function createBunParseContext(lf: BunTextLockfile, options: BunTextParseOptions): BunTextParseContext {
   const builder = newBuilder()
   const diagnostics: Diagnostic[] = []
   const nodeSidecar = new Map<string, BunTextNodeSidecar>()
@@ -436,6 +441,7 @@ function createBunParseContext(lf: BunTextLockfile): BunTextParseContext {
   const seenNodeIds = new Set<string>([rootId])
   const entriesByKey = new Map<string, BunTextPackageEntry>()
   return {
+    options,
     builder,
     diagnostics,
     workspaces,
@@ -712,7 +718,7 @@ function registerRegularPackageEntry(
       version,
       peerContext: [],
     })
-    setBunTarball(context, name, version, nodeId, integrity)
+    setBunTarball(context, name, version, nodeId, integrity, raw[1] === '')
   }
   context.nodeSidecar.set(nodeId, { inner, packagesKey })
   context.entriesByKey.set(packagesKey, { id: nodeId, inner, integrity })
@@ -724,14 +730,26 @@ function setBunTarball(
   version: string,
   nodeId: string,
   integrity: string | undefined,
+  isRegistry: boolean,
 ): void {
-  if (integrity === undefined) return
-  const parsed = parseSri(integrity, 'sri')
-  if (isEmptyIntegrity(parsed)) {
-    context.diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
-  } else {
-    context.builder.setTarball({ name, version }, { integrity: parsed })
+  if (!isRegistry && integrity === undefined) return
+  const registry = context.options.registryFor?.(name)
+  const payload: TarballPayload = isRegistry
+    ? {
+        resolution: registry === undefined
+          ? { type: 'registry' }
+          : { type: 'tarball', url: registryTarballUrl(name, version, registry) },
+      }
+    : {}
+  if (integrity !== undefined) {
+    const parsed = parseSri(integrity, 'sri')
+    if (isEmptyIntegrity(parsed)) {
+      context.diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
+    } else {
+      payload.integrity = parsed
+    }
   }
+  context.builder.setTarball({ name, version }, payload)
 }
 
 export function stringify(
@@ -887,7 +905,8 @@ export function enrich(
     const member = memberByName.get(node.name)
     if (member === undefined) continue
     if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
-    if (graph.tarball({ name: node.name, version: node.version }) !== undefined) continue
+    const payload = graph.tarball({ name: node.name, version: node.version })
+    if (payload !== undefined && Object.keys(payload).some(key => key !== 'resolution')) continue
     memberReplacements.push({ ...node, workspacePath: member.path })
   }
 
@@ -1640,7 +1659,7 @@ function reportResolutionDrop(
   if (warned.has(node.id)) return
   const canonical = graph.tarballOf(node.id)?.resolution
   if (canonical === undefined) return
-  if (canonical.type === 'tarball') return
+  if (canonical.type === 'tarball' || canonical.type === 'registry') return
   if (canonical.type === 'unknown' && node.patch !== undefined) return
   warned.add(node.id)
   recipeEmitDropped(

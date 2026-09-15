@@ -204,6 +204,22 @@ describe('yarn-classic — minted resolved URL: yarn-1 host + #<sha1> fragment (
     expect(lockfile).toContain(`resolved "${mirror}/ms/-/ms-2.1.3.tgz#${sha1}"`)
   })
 
+  it('preserves a known private canonical URL when no native sidecar exists', () => {
+    const mirror = 'https://nexus.corp/repository/npm'
+    const b = newBuilder(); addMinted(b, mirror)
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+    expect(lockfile).toContain(`resolved "${mirror}/ms/-/ms-2.1.3.tgz#${sha1}"`)
+    expect(lockfile).not.toContain('registry.yarnpkg.com')
+  })
+
+  it('does not replace a known private canonical URL with an inferred public base', () => {
+    const mirror = 'https://nexus.corp/repository/npm'
+    const b = newBuilder(); addNativeSibling(b, 'https://registry.yarnpkg.com'); addMinted(b, mirror)
+    const { lockfile } = stringifyWithDiagnostics(b.seal())
+    expect(lockfile).toContain(`resolved "${mirror}/ms/-/ms-2.1.3.tgz#${sha1}"`)
+    expect(lockfile).not.toContain('registry.yarnpkg.com/ms/-/ms-2.1.3.tgz')
+  })
+
   it('routes PER-SCOPE — a minted @scope pkg keeps its scope registry, NOT the global majority (@scope:registry)', () => {
     // The lock's MAJORITY is the public registry (unscoped `chalk`), but `@mycorp` is pinned
     // to a private one. A blind majority-rehost would drag `@mycorp/new` onto the public
@@ -636,16 +652,13 @@ describe('yarn-classic — stringify', () => {
   // above). The fix relaxes the peel to a SOFT match — the locator's parsed
   // name passes through to URL derivation, so the npm-alias case resolves to a
   // proper registry tarball URL.
-  it('parseResolution: soft name match — npm-alias locator derives registry URL despite options.name mismatch', () => {
+  it('parseResolution: soft name match — npm-alias locator remains registry-class despite options.name mismatch', () => {
     const canonical = parseResolution('string-width@npm:4.2.3', {
       sourceKind: 'yarn-berry-locator',
       name: 'string-width-cjs',
     })
 
-    expect(canonical).toEqual({
-      type: 'tarball',
-      url:  'https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz',
-    })
+    expect(canonical).toEqual({ type: 'registry' })
   })
 })
 

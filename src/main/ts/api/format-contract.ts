@@ -50,6 +50,8 @@ export function isDenoFormat(format: string): format is DenoFormatId {
 export interface ParseOptions extends ObserveOptions {
   /** Discovery start for project-relative lock semantics. */
   cwd?: string
+  /** Explicit registry authority for npm-class entries with no lock-borne URL. */
+  registry?: string
   /** Structured policy authority; manifests belong to graph operations. */
   sources?: Pick<OperationSources, 'policy'>
   /**

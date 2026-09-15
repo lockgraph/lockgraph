@@ -25,8 +25,9 @@ export type NodeId = string
 export type TarballKey = string
 export type Patch = string
 /** — the `+src=` slot value: 16 lowercase-hex chars (sha256 prefix
- * the F3-canonical source string), or `undefined` for the bare default-registry
- * / directory majority. Derived by `recipe/resolution.sourceDiscriminatorOf`. */
+ * the F3-canonical source string), or `undefined` for an undetermined/default
+ * registry and the bare directory majority. Derived by
+ * `recipe/resolution.sourceDiscriminatorOf`. */
 export type SourceDiscriminator = string
 export interface TarballKeyInput {
   name:    string
@@ -102,8 +103,8 @@ export interface TarballPayload {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
   // typed canonical resolution. Distinct
   // `nativeResolution` (PM-native verbatim string sidecar): this
-  // carrier holds the 4-case discriminated union (tarball | git | directory |
-  // unknown) populated at adapter parse via `recipe/resolution.parse`.
+  // carrier holds the 5-case discriminated union (registry | tarball | git |
+  // directory | unknown) populated at adapter parse via `recipe/resolution.parse`.
   // Adapter stringify projects back to PM-native via `recipe/resolution.stringifyFor*`.
   resolution?:          ResolutionCanonical
   // PM-native verbatim resolution string sidecar. Captured at

@@ -57,6 +57,7 @@ export interface ParseDispatchContext {
   readonly workspaceRoot?: string
   readonly overrides?: OverrideConstraint[]
   readonly manifests?: Readonly<Record<string, Manifest>>
+  readonly registryFor?: (packageName: string) => string | undefined
 }
 
 export type StringifyDispatchContext = StringifyOptions & {
@@ -91,6 +92,7 @@ const yarnBerryAdapter = (
   parse: (input, context) => adapter.parse(input, {
     workspaceRoot: context.workspaceRoot,
     overrides: context.overrides,
+    registryFor: context.registryFor,
   }),
   stringify: (graph, context) => adapter.stringify(graph, {
     lineEnding: context.lineEnding,
@@ -103,7 +105,10 @@ const npmFlatAdapter = (
   adapter: Pick<typeof npm2, 'check' | 'parse' | 'stringify'>,
 ): FormatAdapter => ({
   check: adapter.check,
-  parse: (input, context) => adapter.parse(input, { workspaceRoot: context.workspaceRoot }),
+  parse: (input, context) => adapter.parse(input, {
+    workspaceRoot: context.workspaceRoot,
+    registryFor: context.registryFor,
+  }),
   stringify: (graph, context) => adapter.stringify(graph, {
     lineEnding: context.lineEnding,
     onDiagnostic: context.onDiagnostic,
@@ -116,7 +121,10 @@ const pnpmFlatAdapter = (
   profile: 'v6-collapsed-root' | 'v9-importers-snapshots',
 ): FormatAdapter => ({
   check: adapter.check,
-  parse: (input, context) => adapter.parse(input, { workspaceRoot: context.workspaceRoot }),
+  parse: (input, context) => adapter.parse(input, {
+    workspaceRoot: context.workspaceRoot,
+    registryFor: context.registryFor,
+  }),
   stringify: (graph, context) => context.pnpmWorkspacePeerProjection === undefined
     ? adapter.stringify(graph, {
         lineEnding: context.lineEnding,
@@ -214,7 +222,10 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
   'yarn-berry-v10': yarnBerryAdapter(yarnBerryV10),
   'yarn-classic': {
     check: yarnClassic.check,
-    parse: (input, context) => yarnClassic.parse(input, { overrides: context.overrides }),
+    parse: (input, context) => yarnClassic.parse(input, {
+      overrides: context.overrides,
+      registryFor: context.registryFor,
+    }),
     stringify: (graph, context) => yarnClassic.stringify(graph, {
       lineEnding: context.lineEnding,
       onDiagnostic: context.onDiagnostic,
@@ -222,7 +233,7 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
   },
   'npm-1': {
     check: npm1.check,
-    parse: input => npm1.parse(input),
+    parse: (input, context) => npm1.parse(input, { registryFor: context.registryFor }),
     stringify: (graph, context) => npm1.stringify(graph, {
       lineEnding: context.lineEnding,
       onDiagnostic: context.onDiagnostic,
@@ -233,7 +244,7 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
   'npm-4': npmFlatAdapter(npm4),
   'pnpm-v5': {
     check: pnpmV5.check,
-    parse: input => pnpmV5.parse(input),
+    parse: (input, context) => pnpmV5.parse(input, { registryFor: context.registryFor }),
     stringify: (graph, context) => pnpmV5.stringify(
       graph,
       {
@@ -248,7 +259,7 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
   'pnpm-v9': pnpmFlatAdapter(pnpmV9, 'v9-importers-snapshots'),
   'bun-text': {
     check: bunText.check,
-    parse: input => bunText.parse(input),
+    parse: (input, context) => bunText.parse(input, { registryFor: context.registryFor }),
     stringify: (graph, context) => bunText.stringify(graph, {
       lineEnding: context.lineEnding,
       onDiagnostic: context.onDiagnostic,
@@ -257,7 +268,7 @@ export const FORMAT_REGISTRY: Readonly<Record<FormatId, FormatAdapter>> = {
   },
   'bun-text-v2': {
     check: bunTextV2.check,
-    parse: input => bunTextV2.parse(input),
+    parse: (input, context) => bunTextV2.parse(input, { registryFor: context.registryFor }),
     stringify: (graph, context) => bunTextV2.stringify(graph, {
       lineEnding: context.lineEnding,
       onDiagnostic: context.onDiagnostic,
@@ -353,7 +364,10 @@ function denoAdapter(
 ): FormatAdapter {
   return {
     check: adapter.check,
-    parse: (input, context) => adapter.parse(input, { manifests: context.manifests }),
+    parse: (input, context) => adapter.parse(input, {
+      manifests: context.manifests,
+      registryFor: context.registryFor,
+    }),
     stringify: (graph, context) => adapter.stringify(graph, {
       lineEnding: context.lineEnding,
       onDiagnostic: context.onDiagnostic,

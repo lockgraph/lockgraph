@@ -35,6 +35,60 @@ describe('registry/config — resolveRegistry', () => {
     expect(c.registryFor('lodash')).toBe(DEFAULT_REGISTRY)
     expect(c.registryFor('@scope/x')).toBe(DEFAULT_REGISTRY)
     expect(c.tokenFor(DEFAULT_REGISTRY)).toBeUndefined()
+    expect(c.declaredRegistryFor('lodash')).toBeUndefined()
+  })
+
+  it('separates a declared registry from the public fallback', () => {
+    const c = resolve({ '.npmrc': '@acme:registry=https://scope.example.com/\n' })
+    expect(c.declaredRegistryFor('@acme/widget')).toBe('https://scope.example.com')
+    expect(c.declaredRegistryFor('lodash')).toBeUndefined()
+    expect(c.registryFor('lodash')).toBe(DEFAULT_REGISTRY)
+  })
+
+  it('reads Bun registry routing from bunfig.toml', () => {
+    const c = resolve({
+      'bunfig.toml': 'install.registry = {\n  url = "https://bun.example.com/",\n  token = "$BUN_TOKEN"\n}\n\n[install.scopes]\nacme = "https://scope.example.com/"\n',
+    }, { config: 'bun', env: { BUN_TOKEN: 'secret' } })
+    expect(c.declaredRegistryFor('lodash')).toBe('https://bun.example.com')
+    expect(c.declaredRegistryFor('@acme/widget')).toBe('https://scope.example.com')
+    expect(c.tokenFor('https://bun.example.com/lodash')).toBe('secret')
+  })
+
+  it('gives Bun environment routing priority over bunfig.toml and .npmrc', () => {
+    const c = resolve({
+      'bunfig.toml': '[install]\nregistry = "https://bunfig.example.com/"\n',
+      '.npmrc': 'registry=https://npmrc.example.com/\n',
+    }, { config: 'bun', env: { BUN_CONFIG_REGISTRY: 'https://env.example.com/' } })
+    expect(c.declaredRegistryFor('lodash')).toBe('https://env.example.com')
+  })
+
+  it('gives Bun project/global bunfig routing priority over project .npmrc', () => {
+    const home = mkdir({ '.bunfig.toml': '[install]\nregistry = "https://global-bunfig.example.com/"\n' })
+    const c = resolveRegistry(mkdir({
+      '.npmrc': 'registry=https://project-npmrc.example.com/\n',
+    }), { config: 'bun', home, env: {} })
+    expect(c.declaredRegistryFor('lodash')).toBe('https://global-bunfig.example.com')
+  })
+
+  it('reads Bun global config from XDG_CONFIG_HOME when declared', () => {
+    const home = mkdir({ '.bunfig.toml': '[install]\nregistry = "https://home.example.com/"\n' })
+    const xdg = mkdir({ '.bunfig.toml': '[install]\nregistry = "https://xdg.example.com/"\n' })
+    const c = resolveRegistry(mkdir({}), {
+      config: 'bun',
+      home,
+      env: { XDG_CONFIG_HOME: xdg },
+    })
+    expect(c.declaredRegistryFor('lodash')).toBe('https://xdg.example.com')
+  })
+
+  it('still reads Bun global npmrc from home when XDG_CONFIG_HOME is declared', () => {
+    const home = mkdir({ '.npmrc': 'registry=https://home-npmrc.example.com/\n' })
+    const c = resolveRegistry(mkdir({}), {
+      config: 'bun',
+      home,
+      env: { XDG_CONFIG_HOME: mkdir({}) },
+    })
+    expect(c.declaredRegistryFor('lodash')).toBe('https://home-npmrc.example.com')
   })
 
   it('routes a scope to its registry — .npmrc `@scope:registry` and yarn `npmScopes`', () => {

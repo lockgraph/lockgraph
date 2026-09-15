@@ -67,10 +67,7 @@ describe('yarn-berry file: local-tarball alias disambiguation (Bug #76)', () => 
     expect(g.tarballOf(patched[0]!.id)?.nativeResolution).toBe(
       'demo@file:.lib/demo.tgz#.lib/demo.tgz::hash=abc123&locator=root%40workspace%3A.')
     expect(g.tarballOf(unpatched[0]!.id)?.nativeResolution).toBeUndefined()
-    expect(g.tarballOf(unpatched[0]!.id)?.resolution).toEqual({
-      type: 'tarball',
-      url:  'https://registry.npmjs.org/demo/-/demo-1.0.0.tgz',
-    })
+    expect(g.tarballOf(unpatched[0]!.id)?.resolution).toEqual({ type: 'registry' })
 
     // Distinct TarballKeys: the two checksums land on separate payloads keyed
     // off the sentinel patch, so the differing integrity no longer fights over

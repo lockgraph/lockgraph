@@ -169,9 +169,15 @@ what a locator rewrite can reach, and what a check of a package's origin can pro
 
 A package whose row says "none", or whose optional locator is absent, resolves through the package
 manager's configuration — `.npmrc`, `.yarnrc.yml` (`npmRegistryServer`), `bunfig.toml` — and nothing
-in the lock records which registry that is. The canonical graph does not fill the gap: when the
-registry is unknown, a tarball URL is DERIVED from the public default, so a locator read back from
-the model is a projection rather than evidence of provenance.
+in the lock records which registry that is. Measured with pnpm 10 against a `.npmrc` naming a
+mirror: the package is fetched from the mirror and the lock records only its integrity, byte-identical
+to a lock made against the public registry.
+
+Such a package parses to `{ kind: 'registry' }` — a registry package whose host is undetermined. No
+public default is substituted, so a host read back from the model is always one the lock, the caller
+or the project's configuration actually named. Supply it with `parse`'s `registry` option, or with
+`cwd` so the project's own configuration is read; without either, a target that cannot express an
+undetermined host omits the locator, and yarn-classic — whose format requires one — refuses.
 
 Entries with no remote source of their own — bundled inside a parent archive, a workspace link or
 member directory, a `file:`, `link:` or directory resolution — have no locator by nature. On the npm

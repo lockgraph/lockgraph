@@ -124,6 +124,7 @@ const DEFAULT_CACHEKEY_V8_V9 = '10c0'
 
 export interface YarnBerryFamilyParseOptions {
   workspaceRoot?: string
+  registryFor?: (packageName: string) => string | undefined
   // canonical override constraints, threaded from the public
   // `parse()` after manifest capture through `ParseOptions.manifests`. yarn writes NO
   // lock-borne resolutions, so a `resolutions` pin that rewrote an entry key to a
@@ -1041,7 +1042,11 @@ function parseYarnBerryNodeIdentity(
   const effectivePatch = rawPatchResult?.patch ?? localLocatorPatch
   const workspaceSpec = workspaceSpecOfEntry(resolution, specs, first)
   const canonicalResolution = resolution !== undefined && workspaceSpec === undefined
-    ? parseResolutionRecipe(resolution, { sourceKind: 'yarn-berry-locator', name: authoritativeName })
+    ? parseResolutionRecipe(resolution, {
+        sourceKind: 'yarn-berry-locator',
+        name: authoritativeName,
+        registry: context.options.registryFor?.(authoritativeName),
+      })
     : undefined
   const effectiveSource = effectivePatch === undefined && canonicalResolution !== undefined
     ? sourceDiscriminatorOf(canonicalResolution)

@@ -220,6 +220,7 @@ export interface NpmFamilyHooks {
 
 export interface NpmFamilyParseOptions {
   workspaceRoot?: string
+  registryFor?: (packageName: string) => string | undefined
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 

@@ -341,7 +341,10 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
       const reparsed = adapter.parse(adapter.stringify(result.graph))
 
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: sri(MODIFIED_SRI) })
+      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({
+        integrity: sri(MODIFIED_SRI),
+        resolution: { type: 'registry' },
+      })
       expect(result.applied).toEqual([
         { kind: 'tarball-set', subject: 'ms@2.1.3' },
       ])

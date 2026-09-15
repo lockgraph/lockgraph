@@ -35,9 +35,11 @@ import {
   pickTarballSha512,
   tarballHashes,
 } from '../recipe/integrity.ts'
+import { registryTarballUrl } from '../recipe/resolution.ts'
 
 export interface DenoParseOptions {
   manifests?: Readonly<Record<string, Manifest>>
+  registryFor?: (packageName: string) => string | undefined
 }
 
 export interface DenoStringifyOptions {
@@ -115,6 +117,7 @@ interface DenoSidecar {
 }
 
 interface DenoParseContext {
+  readonly registryFor?: (packageName: string) => string | undefined
   readonly builder: ReturnType<typeof newBuilder>
   readonly layout: DenoLayout
   readonly diagnostics: Diagnostic[]
@@ -336,7 +339,7 @@ export function parseVersion(
   const layout = parseLayout(input, expectedVersion)
   validateNonNpmIntegrity(layout)
   validateSpecifierValueShape(layout)
-  const context = createParseContext(layout, options.manifests?.[''])
+  const context = createParseContext(layout, options.manifests?.[''], options.registryFor)
   registerNpmNodes(context)
   addNpmEdges(context)
   addRootSpecifierEdges(context)
@@ -806,15 +809,17 @@ function buildNpmEntry(
         + `deno.lock cannot carry any other algorithm`,
     )
   }
-  if (payload.resolution?.type !== 'tarball') {
+  if (payload.resolution?.type !== 'tarball' && payload.resolution?.type !== 'registry') {
     throw emitFailure(`npm ${nativeId} lacks tarball resolution evidence`)
   }
 
   const entry: DenoNpmPackageEntry = { integrity }
   if (targetVersion === '5') {
-    const defaultUrl = defaultNpmTarballUrl(node.name, node.version)
-    if (previous?.tarball !== undefined || payload.resolution.url !== defaultUrl) {
-      entry.tarball = payload.resolution.url
+    if (payload.resolution.type === 'tarball') {
+      const defaultUrl = defaultNpmTarballUrl(node.name, node.version)
+      if (previous?.tarball !== undefined || payload.resolution.url !== defaultUrl) {
+        entry.tarball = payload.resolution.url
+      }
     }
     if (payload.os !== undefined) entry.os = [...payload.os]
     if (payload.cpu !== undefined) entry.cpu = [...payload.cpu]
@@ -1168,8 +1173,10 @@ function orphanedSectionDiagnostics(
 function createParseContext(
   layout: DenoLayout,
   rootManifest: Manifest | undefined,
+  registryFor?: (packageName: string) => string | undefined,
 ): DenoParseContext {
   return {
+    registryFor,
     builder: newBuilder(),
     layout,
     diagnostics: orphanedSectionDiagnostics(
@@ -1342,9 +1349,13 @@ function recordTarball(
   nativeId: string,
   entry: DenoNpmPackageEntry,
 ): void {
-  const tarball = entry.tarball ?? defaultNpmTarballUrl(node.name, node.version)
+  const registry = context.registryFor?.(node.name)
   const payload: TarballPayload = {
-    resolution: { type: 'tarball', url: tarball },
+    resolution: entry.tarball !== undefined
+      ? { type: 'tarball', url: entry.tarball }
+      : registry === undefined
+        ? { type: 'registry' }
+        : { type: 'tarball', url: registryTarballUrl(node.name, node.version, registry) },
   }
   if (entry.tarball !== undefined) payload.nativeResolution = entry.tarball
   if (entry.integrity !== undefined) {

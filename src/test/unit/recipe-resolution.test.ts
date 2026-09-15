@@ -34,19 +34,13 @@ describe('recipe/resolution — parse tarball case', () => {
     )
     expect(c).toEqual({ type: 'tarball', url: 'https://registry.yarnpkg.com/ms/-/ms-2.1.3.tgz' })
   })
-  it('yarn-berry `<n>@npm:<ver>` locator → tarball with npmjs default URL', () => {
+  it('yarn-berry `<n>@npm:<ver>` locator → undetermined registry without authority', () => {
     const c = parseResolution('ms@npm:2.1.3', { sourceKind: 'yarn-berry-locator', name: 'ms' })
-    expect(c).toEqual({
-      type: 'tarball',
-      url:  'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
-    })
+    expect(c).toEqual({ type: 'registry' })
   })
   it('yarn-berry scoped alias `<n>@npm:<scope/pkg>@<ver>` derives URL on aliased package', () => {
     const c = parseResolution('debug-alias@npm:debug@4.3.4', { sourceKind: 'yarn-berry-locator', name: 'debug-alias' })
-    expect(c).toEqual({
-      type: 'tarball',
-      url:  'https://registry.npmjs.org/debug/-/debug-4.3.4.tgz',
-    })
+    expect(c).toEqual({ type: 'registry' })
   })
 })
 
@@ -331,13 +325,10 @@ describe('recipe/resolution — yarn-classic parse populates canonical', () => {
 })
 
 describe('recipe/resolution — yarn-berry-v9 parse populates canonical', () => {
-  it('npm: locator → canonical tarball (npmjs default URL)', () => {
+  it('npm: locator → canonical undetermined registry', () => {
     const g = parse('yarn-berry-v9', fixture('simple/yarn-berry-v9.lock'))
     const payload = g.tarball({ name: 'ms', version: '2.1.3' })
-    expect(payload?.resolution).toEqual({
-      type: 'tarball',
-      url:  'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz',
-    })
+    expect(payload?.resolution).toEqual({ type: 'registry' })
   })
   it('workspace member: no tarball entry (workspace canonical not stored on payload)', () => {
     const g = parse('yarn-berry-v9', fixture('simple/yarn-berry-v9.lock'))
@@ -346,10 +337,10 @@ describe('recipe/resolution — yarn-berry-v9 parse populates canonical', () => 
 })
 
 describe('recipe/resolution — pnpm-v9 parse populates canonical', () => {
-  it('registry tarball with integrity → canonical tarball', () => {
+  it('implicit registry with integrity → canonical undetermined registry', () => {
     const g = parse('pnpm-v9', fixture('simple/pnpm-v9.lock'))
     const payload = g.tarball({ name: 'ms', version: '2.1.3' })
-    expect(payload?.resolution?.type).toBe('tarball')
+    expect(payload?.resolution?.type).toBe('registry')
   })
 })
 

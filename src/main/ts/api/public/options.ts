@@ -39,6 +39,7 @@ export function internalEnrichSources(
 export function internalProjectionOptions(value: ProjectionOptions): InternalProjectionOptions {
   return {
     target: value.target,
+    ...(value.registry === undefined ? {} : { registry: value.registry }),
     ...(value.sources === undefined ? {} : { sources: internalSources(value.sources) }),
     ...(value.cwd === undefined ? {} : { cwd: value.cwd }),
     ...(value.guards === undefined
@@ -51,4 +52,3 @@ export function internalProjectionOptions(value: ProjectionOptions): InternalPro
       : { onDiagnostic: internalObserver(value.onDiagnostic) }),
   }
 }
-

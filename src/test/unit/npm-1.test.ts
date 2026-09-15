@@ -983,12 +983,12 @@ describe('enrich', () => {
           requires: { 'pkg-a': '0.0.0' },
         },
         // member `pkg-a` as a top-level sibling with NO resolved/integrity →
-        // no tarball payload. host resolves `pkg-a` against this sibling scope.
+        // only an undetermined-registry marker. host resolves it against this sibling scope.
         'pkg-a': { version: '0.0.0' },
       },
     })
     const graph = parse(lock)
-    expect(graph.tarballOf('pkg-a@0.0.0')).toBeUndefined()
+    expect(graph.tarballOf('pkg-a@0.0.0')?.resolution).toEqual({ type: 'registry' })
     // Parse wired a host→pkg-a dep edge.
     expect(graph.out('host@1.0.0', 'dep').some(e => e.dst === 'pkg-a@0.0.0')).toBe(true)
     const result = enrich(graph, {

@@ -253,6 +253,7 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
       from: 'pnpm-v9',
       to:   'yarn-classic',
       strict: false,
+      registry: 'https://registry.npmjs.org',
       workspaceRoot: templateDir('patch-yarn'),
       onDiagnostic: d => diagnostics.push(d),
     })

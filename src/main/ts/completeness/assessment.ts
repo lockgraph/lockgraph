@@ -140,6 +140,13 @@ const featureEvaluators: Record<GraphFeature, FeatureEvaluator> = {
     [],
     nonRegistryTargets.has(target.format),
   ),
+  'resolution:registry': (_graph, target) => capabilityRequirement(
+    'resolution:registry',
+    'artifacts',
+    target,
+    [],
+    target.format !== 'yarn-classic',
+  ),
   'resolution:tarball': (_graph, target) => capabilityRequirement(
     'resolution:tarball',
     'artifacts',

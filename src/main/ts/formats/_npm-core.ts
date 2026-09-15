@@ -62,6 +62,7 @@ import { patchNormalizedDiagnostic } from '../recipe/diagnostics.ts'
 import {
   isYarnBerryLocator,
   parse as parseResolutionRecipe,
+  registryTarballUrl,
   sourceDiscriminatorOf,
   stringifyForNpm,
   stripRegistrySha1Fragment,
@@ -860,10 +861,10 @@ function addInstalledPackageNodes(context: NpmParseContext): void {
       // carry the slot on the Node so the seal re-derives the id.
       if (source !== undefined) node.source = source
       builder.addNode(node)
-      if (entry.integrity !== undefined || hasTarballPayload(entry)) {
+      if (entry.inBundle !== true || entry.integrity !== undefined || hasTarballPayload(entry)) {
         builder.setTarball(
           { name: tailName, version, patch, source },
-          tarballPayloadOf(entry, id, diagnostics),
+          tarballPayloadOf(entry, id, diagnostics, tailName, version, options.registryFor),
         )
       }
     } else if (manifestNodeIds.has(id)) {
@@ -885,7 +886,7 @@ function addInstalledPackageNodes(context: NpmParseContext): void {
       idToEntry.set(id, merged)
       builder.setTarball(
         { name: tailName, version, patch, source },
-        tarballPayloadOf(merged, id, diagnostics),
+        tarballPayloadOf(merged, id, diagnostics, tailName, version, options.registryFor),
       )
     }
   }
@@ -1227,7 +1228,14 @@ function sourceDiscriminatorOfNpmEntry(entry: NpmEntry): string | undefined {
   return sourceDiscriminatorOf(parseResolutionRecipe(entry.resolved, { sourceKind: 'npm-resolved' }))
 }
 
-function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnostic[]): TarballPayload {
+function tarballPayloadOf(
+  entry: NpmEntry,
+  subject: string,
+  diagnostics: Diagnostic[],
+  name: string,
+  version: string,
+  registryFor?: (packageName: string) => string | undefined,
+): TarballPayload {
   const payload: TarballPayload = {}
   if (entry.integrity !== undefined) {
     const integrity = parseSri(entry.integrity, 'sri')
@@ -1274,6 +1282,11 @@ function tarballPayloadOf(entry: NpmEntry, subject: string, diagnostics: Diagnos
       diagnostics.push(unknownResolutionDiagnostic(subject, entry.resolved))
     }
     payload.resolution = canonical
+  } else if (!entry.link && entry.inBundle !== true) {
+    const registry = registryFor?.(name)
+    payload.resolution = registry === undefined
+      ? { type: 'registry' }
+      : { type: 'tarball', url: registryTarballUrl(name, version, registry) }
   }
   return payload
 }

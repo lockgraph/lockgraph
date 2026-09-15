@@ -141,8 +141,9 @@ describe(' — #2b repro: registry vs git at the SAME name@version', () => {
     const slotted = ids.find(id => id !== 'is@1.0.0')
     expect(bare).toBe('is@1.0.0')                              // registry BARE
     expect(slotted).toMatch(/^is@1\.0\.0\+src=[0-9a-f]{16}$/)  // git +src=
-    // Their canonical resolutions differ (tarball vs git) — different artefacts.
-    expect(g.tarballOf(bare!)?.resolution?.type).toBe('tarball')
+    // Their canonical resolutions differ (undetermined registry vs git) —
+    // different artefacts without inventing a registry host.
+    expect(g.tarballOf(bare!)?.resolution?.type).toBe('registry')
     expect(g.tarballOf(slotted!)?.resolution?.type).toBe('git')
   })
 
@@ -285,10 +286,11 @@ describe(' — yarn-classic → yarn-berry synthesis emits VALID source-forked l
     expect(ids).toHaveLength(2)
     expect(ids).toContain('lib@1.0.0')
     expect(ids.some(id => id.startsWith('lib@1.0.0+src='))).toBe(true)
-    // the two nodes carry distinct canonical tarball hosts
+    // The bare sibling remains registry-class without a fabricated host; the
+    // fork retains its explicit private tarball URL.
     const bare = reparsed.tarballOf('lib@1.0.0')
     const forked = reparsed.tarballOf(ids.find(id => id.includes('+src='))!)
-    expect(bare?.resolution).toMatchObject({ type: 'tarball', url: 'https://registry.npmjs.org/lib/-/lib-1.0.0.tgz' })
+    expect(bare?.resolution).toEqual({ type: 'registry' })
     expect(forked?.resolution).toMatchObject({ type: 'tarball', url: 'https://nexus.corp/repo/lib/-/lib-1.0.0.tgz' })
   })
 })

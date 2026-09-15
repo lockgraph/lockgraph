@@ -42,6 +42,7 @@ import {
 import { distTagResolve, overrideTargetFor, semverResolve, type SemverCandidate } from '../recipe/descriptor-resolve.ts'
 import {
   parse as parseResolutionRecipe,
+  registryTarballUrl,
   sourceDiscriminatorOf,
   stringifyForYarnClassic,
   type ResolutionCanonical,
@@ -106,11 +107,18 @@ const YARN_CLASSIC_LOCAL_SPEC_RE = /^(?:file|link|portal):(?!\/\/)\S/
 // `resolved` URL when PM-native sidecar is absent. Workspace canonical
 // returns undefined (yarn-classic encodes workspaces as sentinel-version
 // entries, not via `resolved`).
-// yarn 1 writes a registry package's `resolved` host from its configured registry,
-// not the packument's `dist.tarball` host. Synthesized nodes therefore rehost the
-// tarball to the registry base inferred from native entries, preserving private
-// mirrors, and use yarn 1's default only when no registry sibling exists.
+// yarn 1 writes a public-registry package's `resolved` host from its configured
+// registry, not the public packument's `dist.tarball` host. Synthesized PUBLIC
+// nodes therefore rehost the tarball to the registry base inferred from native
+// entries, preserving private mirrors, and use yarn 1's default only when no
+// registry sibling exists. A canonical URL already rooted at a non-public
+// registry is authoritative and must never be replaced by this fallback.
 const DEFAULT_YARN_CLASSIC_REGISTRY = 'https://registry.yarnpkg.com'
+
+const DEFAULT_PUBLIC_REGISTRY_HOSTS = new Set([
+  'registry.npmjs.org',
+  'registry.yarnpkg.com',
+])
 
 const REGISTRY_TARBALL_TAIL = /\/(?:@[^/]+\/)?[^/]+\/-\/[^/]+\.tgz(?:#.*)?$/
 
@@ -166,6 +174,7 @@ interface YarnClassicEntry {
 }
 
 export interface YarnClassicParseOptions {
+  registryFor?: (packageName: string) => string | undefined
   // Canonical override constraints, threaded from the
   // public `parse()` after manifest capture through `ParseOptions.manifests`. yarn-classic
   // joins consumer ranges to entries by exact `<name>@<range>` key; a
@@ -1271,6 +1280,23 @@ export function registryBaseOf(url: string): string | undefined {
   return m !== null ? url.slice(0, m.index) : undefined
 }
 
+/** Whether a conventional registry tarball is rooted directly at one of the
+ * two interchangeable public npm/yarn registry hosts. A path-prefixed mirror,
+ * custom port, or any other host is private/custom authority and is preserved. */
+function isDefaultPublicRegistryTarball(url: string): boolean {
+  const base = registryBaseOf(url)
+  if (base === undefined) return false
+  try {
+    const parsed = new URL(base)
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+      && parsed.port === ''
+      && (parsed.pathname === '' || parsed.pathname === '/')
+      && DEFAULT_PUBLIC_REGISTRY_HOSTS.has(parsed.hostname.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
 /** A package's scope key for registry routing: `@mycorp` for `@mycorp/pkg`, `''` (default)
  *  for an unscoped name — mirrors yarn 1's `@scope:registry` config axis. */
 export function scopeOf(name: string): string {
@@ -1312,8 +1338,19 @@ export function inferRegistryBases(graph: Graph): (name: string) => string {
 export function projectCanonicalResolution(
   canonical: ResolutionCanonical | undefined,
   registryBase?: string,
+  subject?: { name: string; version: string },
 ): ResolutionCanonical | undefined {
+  if (canonical?.type === 'registry' && registryBase !== undefined && subject !== undefined) {
+    return {
+      type: 'tarball',
+      url: registryTarballUrl(subject.name, subject.version, registryBase),
+    }
+  }
   if (canonical?.type !== 'tarball' || registryBase === undefined) return canonical
+  // Registry inference/config may translate npmjs ↔ yarnpkg, or route a public
+  // packument URL onto an explicitly configured mirror. It must not overwrite a
+  // canonical private-registry URL: that URL is already positive authority.
+  if (!isDefaultPublicRegistryTarball(canonical.url)) return canonical
   const m = REGISTRY_TARBALL_TAIL.exec(canonical.url)
   return m === null
     ? canonical
@@ -1333,7 +1370,7 @@ export function projectedCanonicalResolutions(
     const payload = graph.tarballOf(node.id)
     if (payload?.nativeResolution !== undefined || payload?.resolution === undefined) continue
     const registryBase = options.registryFor?.(node.name) ?? inferBase(node.name)
-    const resolution = projectCanonicalResolution(payload.resolution, registryBase)
+    const resolution = projectCanonicalResolution(payload.resolution, registryBase, node)
     if (resolution !== payload.resolution && resolution !== undefined) {
       projected.set(toTarballKey(node), resolution)
     }
@@ -1380,8 +1417,9 @@ export function projectedCanonicalIntegrities(
     const payload = graph.tarballOf(node.id)
     if (payload?.nativeResolution !== undefined || payload?.integrity === undefined) continue
     const registryBase = options.registryFor?.(node.name) ?? inferBase(node.name)
+    const canonical = projectCanonicalResolution(payload.resolution, registryBase, node)
     const resolved = deriveResolvedFromCanonical(
-      payload.resolution,
+      canonical,
       payload.integrity,
       registryBase,
     )
@@ -1494,8 +1532,21 @@ function appendClassicResolutionFields(
 ): void {
   const payload = context.graph.tarballOf(node.id)
   const native = formatResolution(payload?.nativeResolution)
+  // An undetermined registry may be materialized only from caller/config
+  // authority. Lock-sibling inference is valid for rehosting an already-known
+  // tarball, but it must never turn the `registry` sentinel into a host claim.
+  const registryBase = payload?.resolution?.type === 'registry'
+    ? context.options.registryFor?.(node.name)
+    : context.registryBaseFor(node.name)
+  if (native === undefined && payload?.resolution?.type === 'registry' && registryBase === undefined) {
+    throw new LockfileError({
+      code: 'INVALID_INPUT',
+      message: `yarn-classic: cannot emit ${node.id} because its registry is undetermined; parse with options.registry or options.cwd`,
+    })
+  }
+  const canonical = projectCanonicalResolution(payload?.resolution, registryBase, node)
   const resolved = native
-    ?? deriveResolvedFromCanonical(payload?.resolution, payload?.integrity, context.registryBaseFor(node.name))
+    ?? deriveResolvedFromCanonical(canonical, payload?.integrity, registryBase)
   if (resolved !== undefined) lines.push(`  resolved "${escapeQuoted(resolved)}"`)
   // Minted entries only: the sha1 the derived `resolved` fragment carries is not repeated
   // in the SRI (`integrityBesideFragment`). The verbatim-sidecar path keeps the multiset

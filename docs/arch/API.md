@@ -91,9 +91,19 @@ workspace and override material from the project, controlled by `cwd` and
 |---|---|---|---|---|
 | `input` | `string` | yes | | Lockfile text. |
 | `format` | `FormatId` | no | detected | Source format. |
-| `options.cwd` | `string` | no | `process.cwd()` | Discovery start for workspace and policy material. |
+| `options.cwd` | `string` | no | `process.cwd()` | Discovery start for workspace and policy material, and for the registry the project's own configuration declares. |
+| `options.registry` | `string` | no | | The registry a lock does not record. Absolute `http(s)`, no query, fragment or credentials. |
 | `options.sources.policy` | `PmConfigEvidence` | no | discovered | Package-manager configuration evidence. |
 | `options.onDiagnostic` | `DiagnosticObserver` | no | | Non-fatal findings, in emission order. |
+
+**An unrecorded registry stays unknown.** npm and yarn-classic write an absolute URL for every
+entry; pnpm and deno write one only for a non-default registry, and yarn berry and bun write none —
+for those the registry lives in `.npmrc`, `.yarnrc.yml` or `bunfig.toml`, which the lock does not
+carry. Such a package parses to `{ kind: 'registry' }` — a registry package whose host is
+undetermined — and no public default is substituted. Pass `registry`, or `cwd` so the project's own
+configuration can be read, to determine it. A target that cannot express an undetermined host says
+so: npm omits `resolved`, pnpm keeps the integrity-only spelling, berry writes the plain `npm:`
+locator, and yarn-classic refuses, naming the package and the two options.
 
 **Returns** `Graph`.
 

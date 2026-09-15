@@ -3,7 +3,7 @@ schema 1.0
 generatedAt 2026-01-01T00:00:00Z
 generator lockgraph
 R 4
-npm	https://registry.npmjs.org
+npm	-
 unknown	fsevents@patch:fsevents@npm%3A2.3.3#optional!builtin<compat/fsevents>::version=2.3.3&hash=df0bf1
 unknown	typescript@patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5
 workspace	-
@@ -2826,119 +2826,1033 @@ E 1788
 1016	1015	dep	^21.1.1
 1024	564	dep	^3.1.11
 1024	565	dep	^1.1.0
-F 115
+F 1029
 0	bin.prettier=./bin/prettier.cjs
-12	peerDependencies.@babel/core=^7.0.0
-21	bin.parser=./bin/babel-parser.js
-22	bin.parser=./bin/babel-parser.js
-23	peerDependencies.@babel/core=^7.0.0-0
-24	peerDependencies.@babel/core=^7.0.0-0
-25	peerDependencies.@babel/core=^7.0.0-0
-26	peerDependencies.@babel/core=^7.0.0-0
-27	peerDependencies.@babel/core=^7.0.0-0
-28	peerDependencies.@babel/core=^7.0.0-0
-29	peerDependencies.@babel/core=^7.0.0-0
-30	peerDependencies.@babel/core=^7.0.0-0
-31	peerDependencies.@babel/core=^7.0.0-0
-32	peerDependencies.@babel/core=^7.0.0-0
-33	peerDependencies.@babel/core=^7.0.0-0
-34	peerDependencies.@babel/core=^7.0.0-0
-35	peerDependencies.@babel/core=^7.0.0-0
-36	peerDependencies.@babel/core=^7.0.0-0
-37	peerDependencies.@babel/core=^7.0.0-0
-38	peerDependencies.@babel/core=^7.0.0-0
-39	peerDependencies.@babel/core=^7.0.0-0
-95	peerDependencies.@cspell/dict-css=^4.1.1	peerDependencies.@cspell/dict-html=^4.0.15	peerDependencies.@cspell/dict-html-symbol-entities=^4.0.5	peerDependencies.@cspell/dict-typescript=^3.2.3
-151	peerDependencies.eslint=^6.0.0 || ^7.0.0 || >=8.0.0
-156	peerDependencies.eslint=^10.0.0	peerDependenciesMeta.eslint.optional=true
-174	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true
-183	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true
-196	peerDependencies.keyv=^5.6.0
-200	peerDependencies.@emnapi/core=^1.7.1	peerDependencies.@emnapi/runtime=^1.7.1
-268	peerDependencies.prettier=^3.1.0 || ^4.0.0-alpha	bin.prettier-next=dist/bin.js
-272	peerDependencies.proxy-agent=>=8.0.1	peerDependenciesMeta.proxy-agent.optional=true	bin.browsers=lib/main-cli.js
-279	peerDependencies.eslint=^9.0.0 || ^10.0.0
-304	peerDependencies.@typescript-eslint/parser=^8.60.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-305	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-306	peerDependencies.typescript=>=4.8.4 <6.1.0
-308	peerDependencies.typescript=>=4.8.4 <6.1.0
-309	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-311	peerDependencies.typescript=>=4.8.4 <6.1.0
-312	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-338	peerDependencies.acorn=^6.0.0 || ^7.0.0 || ^8.0.0
-339	bin.acorn=bin/acorn
-341	peerDependencies.@angular/compiler=>=21.0.7 || >= 21.2.0-0
-362	peerDependencies.@babel/core=^7.11.0 || ^8.0.0-0
-365	peerDependencies.@babel/core=^7.0.0 || ^8.0.0-0
-366	peerDependencies.@babel/core=^7.11.0 || ^8.0.0-beta.1
-372	bin.baseline-browser-mapping=dist/cli.cjs
-378	peerDependencies.browserslist=*	bin.browserslist-to-esbuild=cli/index.js
-379	bin.browserslist=cli.js
-385	peerDependencies.monocart-coverage-reports=^2	peerDependenciesMeta.monocart-coverage-reports.optional=true	bin.c8=bin/c8.js
-405	peerDependencies.devtools-protocol=*
-428	bin.cross-env=dist/bin/cross-env.js	bin.cross-env-shell=dist/bin/cross-env-shell.js
-433	bin.cspell-gitignore=bin.mjs
-435	bin.cspell-grammar=bin.mjs
-438	peerDependencies.@cspell/cspell-types=10.0.0
-439	bin.cspell=bin.mjs	bin.cspell-esm=bin.mjs
-442	peerDependenciesMeta.supports-color.optional=true
-444	peerDependencies.babel-plugin-macros=^3.1.0	peerDependenciesMeta.babel-plugin-macros.optional=true
-459	bin.editorconfig=bin/editorconfig
-472	bin.esbuild-visualizer=dist/bin/cli.js
-473	bin.esbuild=bin/esbuild
-479	peerDependencies.eslint=>=6.0.0
-480	peerDependencies.eslint=>=7.0.0	bin.eslint-config-prettier=bin/cli.js
-482	peerDependencies.eslint=^9.0.0 || ^10.0.0
-483	peerDependencies.eslint=>=8
-484	peerDependencies.@typescript-eslint/eslint-plugin=^8.0.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.jest=*	peerDependencies.typescript=>=4.8.4 <7.0.0	peerDependenciesMeta.@typescript-eslint/eslint-plugin.optional=true	peerDependenciesMeta.jest.optional=true	peerDependenciesMeta.typescript.optional=true
-485	peerDependencies.eslint=>=8.57.1	peerDependencies.ts-declaration-location=^1.0.6	peerDependencies.typescript=>=5.0.0	peerDependenciesMeta.ts-declaration-location.optional=true	peerDependenciesMeta.typescript.optional=true
-486	peerDependencies.eslint=>=9.38.0
-487	peerDependencies.eslint=>=5.0.0
-488	peerDependencies.eslint=>=9.38.0
-493	peerDependencies.jiti=*	peerDependenciesMeta.jiti.optional=true	bin.eslint=bin/eslint.js
-497	bin.esparse=./bin/esparse.js	bin.esvalidate=./bin/esvalidate.js
-519	peerDependencies.picomatch=^3 || ^4	peerDependenciesMeta.picomatch.optional=true
-537	bin.formatly=bin/index.mjs
+1	resolution.type=registry
+2	resolution.type=registry
+3	resolution.type=registry
+4	resolution.type=registry
+5	resolution.type=registry
+6	resolution.type=registry
+7	resolution.type=registry
+8	resolution.type=registry
+9	resolution.type=registry
+10	resolution.type=registry
+11	resolution.type=registry
+12	peerDependencies.@babel/core=^7.0.0	resolution.type=registry
+13	resolution.type=registry
+14	resolution.type=registry
+15	resolution.type=registry
+16	resolution.type=registry
+17	resolution.type=registry
+18	resolution.type=registry
+19	resolution.type=registry
+20	resolution.type=registry
+21	bin.parser=./bin/babel-parser.js	resolution.type=registry
+22	bin.parser=./bin/babel-parser.js	resolution.type=registry
+23	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+24	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+25	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+26	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+27	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+28	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+29	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+30	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+31	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+32	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+33	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+34	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+35	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+36	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+37	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+38	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+39	peerDependencies.@babel/core=^7.0.0-0	resolution.type=registry
+40	resolution.type=registry
+41	resolution.type=registry
+42	resolution.type=registry
+43	resolution.type=registry
+44	resolution.type=registry
+45	resolution.type=registry
+46	resolution.type=registry
+47	resolution.type=registry
+48	resolution.type=registry
+49	resolution.type=registry
+50	resolution.type=registry
+51	resolution.type=registry
+52	resolution.type=registry
+53	resolution.type=registry
+54	resolution.type=registry
+55	resolution.type=registry
+56	resolution.type=registry
+57	resolution.type=registry
+58	resolution.type=registry
+59	resolution.type=registry
+60	resolution.type=registry
+61	resolution.type=registry
+62	resolution.type=registry
+63	resolution.type=registry
+64	resolution.type=registry
+65	resolution.type=registry
+66	resolution.type=registry
+67	resolution.type=registry
+68	resolution.type=registry
+69	resolution.type=registry
+70	resolution.type=registry
+71	resolution.type=registry
+72	resolution.type=registry
+73	resolution.type=registry
+74	resolution.type=registry
+75	resolution.type=registry
+76	resolution.type=registry
+77	resolution.type=registry
+78	resolution.type=registry
+79	resolution.type=registry
+80	resolution.type=registry
+81	resolution.type=registry
+82	resolution.type=registry
+83	resolution.type=registry
+84	resolution.type=registry
+85	resolution.type=registry
+86	resolution.type=registry
+87	resolution.type=registry
+88	resolution.type=registry
+89	resolution.type=registry
+90	resolution.type=registry
+91	resolution.type=registry
+92	resolution.type=registry
+93	resolution.type=registry
+94	resolution.type=registry
+95	peerDependencies.@cspell/dict-css=^4.1.1	peerDependencies.@cspell/dict-html=^4.0.15	peerDependencies.@cspell/dict-html-symbol-entities=^4.0.5	peerDependencies.@cspell/dict-typescript=^3.2.3	resolution.type=registry
+96	resolution.type=registry
+97	resolution.type=registry
+98	resolution.type=registry
+99	resolution.type=registry
+100	resolution.type=registry
+101	resolution.type=registry
+102	resolution.type=registry
+103	resolution.type=registry
+104	resolution.type=registry
+105	resolution.type=registry
+106	resolution.type=registry
+107	resolution.type=registry
+108	resolution.type=registry
+109	resolution.type=registry
+110	resolution.type=registry
+111	resolution.type=registry
+112	resolution.type=registry
+113	resolution.type=registry
+114	resolution.type=registry
+115	resolution.type=registry
+116	resolution.type=registry
+117	resolution.type=registry
+118	resolution.type=registry
+119	resolution.type=registry
+120	resolution.type=registry
+121	resolution.type=registry
+122	resolution.type=registry
+123	resolution.type=registry
+124	resolution.type=registry
+125	resolution.type=registry
+126	resolution.type=registry
+127	resolution.type=registry
+128	resolution.type=registry
+129	resolution.type=registry
+130	resolution.type=registry
+131	resolution.type=registry
+132	resolution.type=registry
+133	resolution.type=registry
+134	resolution.type=registry
+135	resolution.type=registry
+136	resolution.type=registry
+137	resolution.type=registry
+138	resolution.type=registry
+139	resolution.type=registry
+140	resolution.type=registry
+141	resolution.type=registry
+142	resolution.type=registry
+143	resolution.type=registry
+144	resolution.type=registry
+145	resolution.type=registry
+146	resolution.type=registry
+147	resolution.type=registry
+148	resolution.type=registry
+149	resolution.type=registry
+150	resolution.type=registry
+151	peerDependencies.eslint=^6.0.0 || ^7.0.0 || >=8.0.0	resolution.type=registry
+152	resolution.type=registry
+153	resolution.type=registry
+154	resolution.type=registry
+155	resolution.type=registry
+156	peerDependencies.eslint=^10.0.0	peerDependenciesMeta.eslint.optional=true	resolution.type=registry
+157	resolution.type=registry
+158	resolution.type=registry
+159	resolution.type=registry
+160	resolution.type=registry
+161	resolution.type=registry
+162	resolution.type=registry
+163	resolution.type=registry
+164	resolution.type=registry
+165	resolution.type=registry
+166	resolution.type=registry
+167	resolution.type=registry
+168	resolution.type=registry
+169	resolution.type=registry
+170	resolution.type=registry
+171	resolution.type=registry
+172	resolution.type=registry
+173	resolution.type=registry
+174	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true	resolution.type=registry
+175	resolution.type=registry
+176	resolution.type=registry
+177	resolution.type=registry
+178	resolution.type=registry
+179	resolution.type=registry
+180	resolution.type=registry
+181	resolution.type=registry
+182	resolution.type=registry
+183	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true	resolution.type=registry
+184	resolution.type=registry
+185	resolution.type=registry
+186	resolution.type=registry
+187	resolution.type=registry
+188	resolution.type=registry
+189	resolution.type=registry
+190	resolution.type=registry
+191	resolution.type=registry
+192	resolution.type=registry
+193	resolution.type=registry
+194	resolution.type=registry
+195	resolution.type=registry
+196	peerDependencies.keyv=^5.6.0	resolution.type=registry
+197	resolution.type=registry
+198	resolution.type=registry
+199	resolution.type=registry
+200	peerDependencies.@emnapi/core=^1.7.1	peerDependencies.@emnapi/runtime=^1.7.1	resolution.type=registry
+201	resolution.type=registry
+202	resolution.type=registry
+203	resolution.type=registry
+204	resolution.type=registry
+205	resolution.type=registry
+206	resolution.type=registry
+207	resolution.type=registry
+208	resolution.type=registry
+209	resolution.type=registry
+210	resolution.type=registry
+211	resolution.type=registry
+212	resolution.type=registry
+213	resolution.type=registry
+214	resolution.type=registry
+215	resolution.type=registry
+216	resolution.type=registry
+217	resolution.type=registry
+218	resolution.type=registry
+219	resolution.type=registry
+220	resolution.type=registry
+221	resolution.type=registry
+222	resolution.type=registry
+223	resolution.type=registry
+224	resolution.type=registry
+225	resolution.type=registry
+226	resolution.type=registry
+227	resolution.type=registry
+228	resolution.type=registry
+229	resolution.type=registry
+230	resolution.type=registry
+231	resolution.type=registry
+232	resolution.type=registry
+233	resolution.type=registry
+234	resolution.type=registry
+235	resolution.type=registry
+236	resolution.type=registry
+237	resolution.type=registry
+238	resolution.type=registry
+239	resolution.type=registry
+240	resolution.type=registry
+241	resolution.type=registry
+242	resolution.type=registry
+243	resolution.type=registry
+244	resolution.type=registry
+245	resolution.type=registry
+246	resolution.type=registry
+247	resolution.type=registry
+248	resolution.type=registry
+249	resolution.type=registry
+250	resolution.type=registry
+251	resolution.type=registry
+252	resolution.type=registry
+253	resolution.type=registry
+254	resolution.type=registry
+255	resolution.type=registry
+256	resolution.type=registry
+257	resolution.type=registry
+258	resolution.type=registry
+259	resolution.type=registry
+260	resolution.type=registry
+261	resolution.type=registry
+262	resolution.type=registry
+263	resolution.type=registry
+264	resolution.type=registry
+265	resolution.type=registry
+266	resolution.type=registry
+267	resolution.type=registry
+268	peerDependencies.prettier=^3.1.0 || ^4.0.0-alpha	bin.prettier-next=dist/bin.js	resolution.type=registry
+269	resolution.type=registry
+270	resolution.type=registry
+271	resolution.type=registry
+272	peerDependencies.proxy-agent=>=8.0.1	peerDependenciesMeta.proxy-agent.optional=true	bin.browsers=lib/main-cli.js	resolution.type=registry
+273	resolution.type=registry
+274	resolution.type=registry
+275	resolution.type=registry
+276	resolution.type=registry
+277	resolution.type=registry
+278	resolution.type=registry
+279	peerDependencies.eslint=^9.0.0 || ^10.0.0	resolution.type=registry
+280	resolution.type=registry
+281	resolution.type=registry
+282	resolution.type=registry
+283	resolution.type=registry
+284	resolution.type=registry
+285	resolution.type=registry
+286	resolution.type=registry
+287	resolution.type=registry
+288	resolution.type=registry
+289	resolution.type=registry
+290	resolution.type=registry
+291	resolution.type=registry
+292	resolution.type=registry
+293	resolution.type=registry
+294	resolution.type=registry
+295	resolution.type=registry
+296	resolution.type=registry
+297	resolution.type=registry
+298	resolution.type=registry
+299	resolution.type=registry
+300	resolution.type=registry
+301	resolution.type=registry
+302	resolution.type=registry
+303	resolution.type=registry
+304	peerDependencies.@typescript-eslint/parser=^8.60.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+305	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+306	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+307	resolution.type=registry
+308	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+309	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+310	resolution.type=registry
+311	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+312	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+313	resolution.type=registry
+314	resolution.type=registry
+315	resolution.type=registry
+316	resolution.type=registry
+317	resolution.type=registry
+318	resolution.type=registry
+319	resolution.type=registry
+320	resolution.type=registry
+321	resolution.type=registry
+322	resolution.type=registry
+323	resolution.type=registry
+324	resolution.type=registry
+325	resolution.type=registry
+326	resolution.type=registry
+327	resolution.type=registry
+328	resolution.type=registry
+329	resolution.type=registry
+330	resolution.type=registry
+331	resolution.type=registry
+332	resolution.type=registry
+333	resolution.type=registry
+334	resolution.type=registry
+335	resolution.type=registry
+336	resolution.type=registry
+337	resolution.type=registry
+338	peerDependencies.acorn=^6.0.0 || ^7.0.0 || ^8.0.0	resolution.type=registry
+339	bin.acorn=bin/acorn	resolution.type=registry
+340	resolution.type=registry
+341	peerDependencies.@angular/compiler=>=21.0.7 || >= 21.2.0-0	resolution.type=registry
+342	resolution.type=registry
+343	resolution.type=registry
+344	resolution.type=registry
+345	resolution.type=registry
+346	resolution.type=registry
+347	resolution.type=registry
+348	resolution.type=registry
+349	resolution.type=registry
+350	resolution.type=registry
+351	resolution.type=registry
+352	resolution.type=registry
+353	resolution.type=registry
+354	resolution.type=registry
+355	resolution.type=registry
+356	resolution.type=registry
+357	resolution.type=registry
+358	resolution.type=registry
+359	resolution.type=registry
+360	resolution.type=registry
+361	resolution.type=registry
+362	peerDependencies.@babel/core=^7.11.0 || ^8.0.0-0	resolution.type=registry
+363	resolution.type=registry
+364	resolution.type=registry
+365	peerDependencies.@babel/core=^7.0.0 || ^8.0.0-0	resolution.type=registry
+366	peerDependencies.@babel/core=^7.11.0 || ^8.0.0-beta.1	resolution.type=registry
+367	resolution.type=registry
+368	resolution.type=registry
+369	resolution.type=registry
+370	resolution.type=registry
+371	resolution.type=registry
+372	bin.baseline-browser-mapping=dist/cli.cjs	resolution.type=registry
+373	resolution.type=registry
+374	resolution.type=registry
+375	resolution.type=registry
+376	resolution.type=registry
+377	resolution.type=registry
+378	peerDependencies.browserslist=*	bin.browserslist-to-esbuild=cli/index.js	resolution.type=registry
+379	bin.browserslist=cli.js	resolution.type=registry
+380	resolution.type=registry
+381	resolution.type=registry
+382	resolution.type=registry
+383	resolution.type=registry
+384	resolution.type=registry
+385	peerDependencies.monocart-coverage-reports=^2	peerDependenciesMeta.monocart-coverage-reports.optional=true	bin.c8=bin/c8.js	resolution.type=registry
+386	resolution.type=registry
+387	resolution.type=registry
+388	resolution.type=registry
+389	resolution.type=registry
+390	resolution.type=registry
+391	resolution.type=registry
+392	resolution.type=registry
+393	resolution.type=registry
+394	resolution.type=registry
+395	resolution.type=registry
+396	resolution.type=registry
+397	resolution.type=registry
+398	resolution.type=registry
+399	resolution.type=registry
+400	resolution.type=registry
+401	resolution.type=registry
+402	resolution.type=registry
+403	resolution.type=registry
+404	resolution.type=registry
+405	peerDependencies.devtools-protocol=*	resolution.type=registry
+406	resolution.type=registry
+407	resolution.type=registry
+408	resolution.type=registry
+409	resolution.type=registry
+410	resolution.type=registry
+411	resolution.type=registry
+412	resolution.type=registry
+413	resolution.type=registry
+414	resolution.type=registry
+415	resolution.type=registry
+416	resolution.type=registry
+417	resolution.type=registry
+418	resolution.type=registry
+419	resolution.type=registry
+420	resolution.type=registry
+421	resolution.type=registry
+422	resolution.type=registry
+423	resolution.type=registry
+424	resolution.type=registry
+425	resolution.type=registry
+426	resolution.type=registry
+427	resolution.type=registry
+428	bin.cross-env=dist/bin/cross-env.js	bin.cross-env-shell=dist/bin/cross-env-shell.js	resolution.type=registry
+429	resolution.type=registry
+430	resolution.type=registry
+431	resolution.type=registry
+432	resolution.type=registry
+433	bin.cspell-gitignore=bin.mjs	resolution.type=registry
+434	resolution.type=registry
+435	bin.cspell-grammar=bin.mjs	resolution.type=registry
+436	resolution.type=registry
+437	resolution.type=registry
+438	peerDependencies.@cspell/cspell-types=10.0.0	resolution.type=registry
+439	bin.cspell=bin.mjs	bin.cspell-esm=bin.mjs	resolution.type=registry
+440	resolution.type=registry
+441	resolution.type=registry
+442	peerDependenciesMeta.supports-color.optional=true	resolution.type=registry
+443	resolution.type=registry
+444	peerDependencies.babel-plugin-macros=^3.1.0	peerDependenciesMeta.babel-plugin-macros.optional=true	resolution.type=registry
+445	resolution.type=registry
+446	resolution.type=registry
+447	resolution.type=registry
+448	resolution.type=registry
+449	resolution.type=registry
+450	resolution.type=registry
+451	resolution.type=registry
+452	resolution.type=registry
+453	resolution.type=registry
+454	resolution.type=registry
+455	resolution.type=registry
+456	resolution.type=registry
+457	resolution.type=registry
+458	resolution.type=registry
+459	bin.editorconfig=bin/editorconfig	resolution.type=registry
+460	resolution.type=registry
+461	resolution.type=registry
+462	resolution.type=registry
+463	resolution.type=registry
+464	resolution.type=registry
+465	resolution.type=registry
+466	resolution.type=registry
+467	resolution.type=registry
+468	resolution.type=registry
+469	resolution.type=registry
+470	resolution.type=registry
+471	resolution.type=registry
+472	bin.esbuild-visualizer=dist/bin/cli.js	resolution.type=registry
+473	bin.esbuild=bin/esbuild	resolution.type=registry
+474	resolution.type=registry
+475	resolution.type=registry
+476	resolution.type=registry
+477	resolution.type=registry
+478	resolution.type=registry
+479	peerDependencies.eslint=>=6.0.0	resolution.type=registry
+480	peerDependencies.eslint=>=7.0.0	bin.eslint-config-prettier=bin/cli.js	resolution.type=registry
+481	resolution.type=registry
+482	peerDependencies.eslint=^9.0.0 || ^10.0.0	resolution.type=registry
+483	peerDependencies.eslint=>=8	resolution.type=registry
+484	peerDependencies.@typescript-eslint/eslint-plugin=^8.0.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.jest=*	peerDependencies.typescript=>=4.8.4 <7.0.0	peerDependenciesMeta.@typescript-eslint/eslint-plugin.optional=true	peerDependenciesMeta.jest.optional=true	peerDependenciesMeta.typescript.optional=true	resolution.type=registry
+485	peerDependencies.eslint=>=8.57.1	peerDependencies.ts-declaration-location=^1.0.6	peerDependencies.typescript=>=5.0.0	peerDependenciesMeta.ts-declaration-location.optional=true	peerDependenciesMeta.typescript.optional=true	resolution.type=registry
+486	peerDependencies.eslint=>=9.38.0	resolution.type=registry
+487	peerDependencies.eslint=>=5.0.0	resolution.type=registry
+488	peerDependencies.eslint=>=9.38.0	resolution.type=registry
+489	resolution.type=registry
+490	resolution.type=registry
+491	resolution.type=registry
+492	resolution.type=registry
+493	peerDependencies.jiti=*	peerDependenciesMeta.jiti.optional=true	bin.eslint=bin/eslint.js	resolution.type=registry
+494	resolution.type=registry
+495	resolution.type=registry
+496	resolution.type=registry
+497	bin.esparse=./bin/esparse.js	bin.esvalidate=./bin/esvalidate.js	resolution.type=registry
+498	resolution.type=registry
+499	resolution.type=registry
+500	resolution.type=registry
+501	resolution.type=registry
+502	resolution.type=registry
+503	resolution.type=registry
+504	resolution.type=registry
+505	resolution.type=registry
+506	resolution.type=registry
+507	resolution.type=registry
+508	resolution.type=registry
+509	resolution.type=registry
+510	resolution.type=registry
+511	resolution.type=registry
+512	resolution.type=registry
+513	resolution.type=registry
+514	resolution.type=registry
+515	resolution.type=registry
+516	resolution.type=registry
+517	resolution.type=registry
+518	resolution.type=registry
+519	peerDependencies.picomatch=^3 || ^4	peerDependenciesMeta.picomatch.optional=true	resolution.type=registry
+520	resolution.type=registry
+521	resolution.type=registry
+522	resolution.type=registry
+523	resolution.type=registry
+524	resolution.type=registry
+525	resolution.type=registry
+526	resolution.type=registry
+527	resolution.type=registry
+528	resolution.type=registry
+529	resolution.type=registry
+530	resolution.type=registry
+531	resolution.type=registry
+532	resolution.type=registry
+533	resolution.type=registry
+534	resolution.type=registry
+535	resolution.type=registry
+536	resolution.type=registry
+537	bin.formatly=bin/index.mjs	resolution.type=registry
+538	resolution.type=registry
+539	resolution.type=registry
 540	resolution.raw=fsevents@patch:fsevents@npm%3A2.3.3#optional!builtin<compat/fsevents>::version=2.3.3&hash=df0bf1	resolution.type=unknown	nativeResolution=fsevents@patch:fsevents@npm%3A2.3.3#optional!builtin<compat/fsevents>::version=2.3.3&hash=df0bf1
-556	bin.glob=dist/esm/bin.mjs
-585	bin.import-local-fixture=fixtures/cli.js
-603	bin.is-docker=cli.js
-604	bin.is-docker=cli.js
-612	bin.is-inside-container=cli.js
-638	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true	bin.jest=./bin/jest.js
-639	peerDependencies.@types/node=*	peerDependencies.esbuild-register=>=3.4.0	peerDependencies.ts-node=>=9.0.0	peerDependenciesMeta.@types/node.optional=true	peerDependenciesMeta.esbuild-register.optional=true	peerDependenciesMeta.ts-node.optional=true
-646	peerDependencies.jest=^27.5.0 || ^28.0.0 || ^29.0.0|| ^30.0.0
-650	peerDependencies.jest-resolve=*	peerDependenciesMeta.jest-resolve.optional=true
-661	peerDependencies.jest=^30.0.0
-664	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true	bin.jest=./bin/jest.js
-665	bin.jiti=lib/jiti-cli.mjs
-668	bin.js-yaml=bin/js-yaml.js
-669	bin.js-yaml=bin/js-yaml.js
-671	bin.jsesc=bin/jsesc
-679	bin.json5=lib/cli.js
-681	bin.katex=cli.js
-684	bin.knip=bin/knip.js	bin.knip-bun=bin/knip-bun.js
-772	bin.nanoid=bin/nanoid.cjs
-773	bin.napi-postinstall=lib/cli.js
-776	bin.node-gyp=bin/node-gyp.js
-780	bin.nopt=bin/nopt.js
-783	bin.npm-run-all=bin/npm-run-all/index.js	bin.npm-run-all2=bin/npm-run-all/index.js	bin.run-p=bin/run-p/index.js	bin.run-s=bin/run-s/index.js
-817	bin.pidtree=bin/pidtree.js
-824	peerDependencies.postcss=^8.3.5
-826	peerDependencies.postcss=^8.4.29
-832	bin.prettier=bin/prettier.cjs
-842	bin.puppeteer=lib/puppeteer/node/cli.js
-851	bin.regexp-tree=bin/regexp-tree
-853	bin.regjsparser=bin/parser
-863	peerDependencies.rollup=^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0
-870	bin.semver=bin/semver.js
-871	bin.semver=bin/semver.js
-946	peerDependencies.typescript=>=4.8.4
-956	bin.tsc=bin/tsc	bin.tsserver=bin/tsserver
+541	resolution.type=registry
+542	resolution.type=registry
+543	resolution.type=registry
+544	resolution.type=registry
+545	resolution.type=registry
+546	resolution.type=registry
+547	resolution.type=registry
+548	resolution.type=registry
+549	resolution.type=registry
+550	resolution.type=registry
+551	resolution.type=registry
+552	resolution.type=registry
+553	resolution.type=registry
+554	resolution.type=registry
+555	resolution.type=registry
+556	bin.glob=dist/esm/bin.mjs	resolution.type=registry
+557	resolution.type=registry
+558	resolution.type=registry
+559	resolution.type=registry
+560	resolution.type=registry
+561	resolution.type=registry
+562	resolution.type=registry
+563	resolution.type=registry
+564	resolution.type=registry
+565	resolution.type=registry
+566	resolution.type=registry
+567	resolution.type=registry
+568	resolution.type=registry
+569	resolution.type=registry
+570	resolution.type=registry
+571	resolution.type=registry
+572	resolution.type=registry
+573	resolution.type=registry
+574	resolution.type=registry
+575	resolution.type=registry
+576	resolution.type=registry
+577	resolution.type=registry
+578	resolution.type=registry
+579	resolution.type=registry
+580	resolution.type=registry
+581	resolution.type=registry
+582	resolution.type=registry
+583	resolution.type=registry
+584	resolution.type=registry
+585	bin.import-local-fixture=fixtures/cli.js	resolution.type=registry
+586	resolution.type=registry
+587	resolution.type=registry
+588	resolution.type=registry
+589	resolution.type=registry
+590	resolution.type=registry
+591	resolution.type=registry
+592	resolution.type=registry
+593	resolution.type=registry
+594	resolution.type=registry
+595	resolution.type=registry
+596	resolution.type=registry
+597	resolution.type=registry
+598	resolution.type=registry
+599	resolution.type=registry
+600	resolution.type=registry
+601	resolution.type=registry
+602	resolution.type=registry
+603	bin.is-docker=cli.js	resolution.type=registry
+604	bin.is-docker=cli.js	resolution.type=registry
+605	resolution.type=registry
+606	resolution.type=registry
+607	resolution.type=registry
+608	resolution.type=registry
+609	resolution.type=registry
+610	resolution.type=registry
+611	resolution.type=registry
+612	bin.is-inside-container=cli.js	resolution.type=registry
+613	resolution.type=registry
+614	resolution.type=registry
+615	resolution.type=registry
+616	resolution.type=registry
+617	resolution.type=registry
+618	resolution.type=registry
+619	resolution.type=registry
+620	resolution.type=registry
+621	resolution.type=registry
+622	resolution.type=registry
+623	resolution.type=registry
+624	resolution.type=registry
+625	resolution.type=registry
+626	resolution.type=registry
+627	resolution.type=registry
+628	resolution.type=registry
+629	resolution.type=registry
+630	resolution.type=registry
+631	resolution.type=registry
+632	resolution.type=registry
+633	resolution.type=registry
+634	resolution.type=registry
+635	resolution.type=registry
+636	resolution.type=registry
+637	resolution.type=registry
+638	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true	bin.jest=./bin/jest.js	resolution.type=registry
+639	peerDependencies.@types/node=*	peerDependencies.esbuild-register=>=3.4.0	peerDependencies.ts-node=>=9.0.0	peerDependenciesMeta.@types/node.optional=true	peerDependenciesMeta.esbuild-register.optional=true	peerDependenciesMeta.ts-node.optional=true	resolution.type=registry
+640	resolution.type=registry
+641	resolution.type=registry
+642	resolution.type=registry
+643	resolution.type=registry
+644	resolution.type=registry
+645	resolution.type=registry
+646	peerDependencies.jest=^27.5.0 || ^28.0.0 || ^29.0.0|| ^30.0.0	resolution.type=registry
+647	resolution.type=registry
+648	resolution.type=registry
+649	resolution.type=registry
+650	peerDependencies.jest-resolve=*	peerDependenciesMeta.jest-resolve.optional=true	resolution.type=registry
+651	resolution.type=registry
+652	resolution.type=registry
+653	resolution.type=registry
+654	resolution.type=registry
+655	resolution.type=registry
+656	resolution.type=registry
+657	resolution.type=registry
+658	resolution.type=registry
+659	resolution.type=registry
+660	resolution.type=registry
+661	peerDependencies.jest=^30.0.0	resolution.type=registry
+662	resolution.type=registry
+663	resolution.type=registry
+664	peerDependencies.node-notifier=^8.0.1 || ^9.0.0 || ^10.0.0	peerDependenciesMeta.node-notifier.optional=true	bin.jest=./bin/jest.js	resolution.type=registry
+665	bin.jiti=lib/jiti-cli.mjs	resolution.type=registry
+666	resolution.type=registry
+667	resolution.type=registry
+668	bin.js-yaml=bin/js-yaml.js	resolution.type=registry
+669	bin.js-yaml=bin/js-yaml.js	resolution.type=registry
+670	resolution.type=registry
+671	bin.jsesc=bin/jsesc	resolution.type=registry
+672	resolution.type=registry
+673	resolution.type=registry
+674	resolution.type=registry
+675	resolution.type=registry
+676	resolution.type=registry
+677	resolution.type=registry
+678	resolution.type=registry
+679	bin.json5=lib/cli.js	resolution.type=registry
+680	resolution.type=registry
+681	bin.katex=cli.js	resolution.type=registry
+682	resolution.type=registry
+683	resolution.type=registry
+684	bin.knip=bin/knip.js	bin.knip-bun=bin/knip-bun.js	resolution.type=registry
+685	resolution.type=registry
+686	resolution.type=registry
+687	resolution.type=registry
+688	resolution.type=registry
+689	resolution.type=registry
+690	resolution.type=registry
+691	resolution.type=registry
+692	resolution.type=registry
+693	resolution.type=registry
+694	resolution.type=registry
+695	resolution.type=registry
+696	resolution.type=registry
+697	resolution.type=registry
+698	resolution.type=registry
+699	resolution.type=registry
+700	resolution.type=registry
+701	resolution.type=registry
+702	resolution.type=registry
+703	resolution.type=registry
+704	resolution.type=registry
+705	resolution.type=registry
+706	resolution.type=registry
+707	resolution.type=registry
+708	resolution.type=registry
+709	resolution.type=registry
+710	resolution.type=registry
+711	resolution.type=registry
+712	resolution.type=registry
+713	resolution.type=registry
+714	resolution.type=registry
+715	resolution.type=registry
+716	resolution.type=registry
+717	resolution.type=registry
+718	resolution.type=registry
+719	resolution.type=registry
+720	resolution.type=registry
+721	resolution.type=registry
+722	resolution.type=registry
+723	resolution.type=registry
+724	resolution.type=registry
+725	resolution.type=registry
+726	resolution.type=registry
+727	resolution.type=registry
+728	resolution.type=registry
+729	resolution.type=registry
+730	resolution.type=registry
+731	resolution.type=registry
+732	resolution.type=registry
+733	resolution.type=registry
+734	resolution.type=registry
+735	resolution.type=registry
+736	resolution.type=registry
+737	resolution.type=registry
+738	resolution.type=registry
+739	resolution.type=registry
+740	resolution.type=registry
+741	resolution.type=registry
+742	resolution.type=registry
+743	resolution.type=registry
+744	resolution.type=registry
+745	resolution.type=registry
+746	resolution.type=registry
+747	resolution.type=registry
+748	resolution.type=registry
+749	resolution.type=registry
+750	resolution.type=registry
+751	resolution.type=registry
+752	resolution.type=registry
+753	resolution.type=registry
+754	resolution.type=registry
+755	resolution.type=registry
+756	resolution.type=registry
+757	resolution.type=registry
+758	resolution.type=registry
+759	resolution.type=registry
+760	resolution.type=registry
+761	resolution.type=registry
+762	resolution.type=registry
+763	resolution.type=registry
+764	resolution.type=registry
+765	resolution.type=registry
+766	resolution.type=registry
+767	resolution.type=registry
+768	resolution.type=registry
+769	resolution.type=registry
+770	resolution.type=registry
+771	resolution.type=registry
+772	bin.nanoid=bin/nanoid.cjs	resolution.type=registry
+773	bin.napi-postinstall=lib/cli.js	resolution.type=registry
+774	resolution.type=registry
+775	resolution.type=registry
+776	bin.node-gyp=bin/node-gyp.js	resolution.type=registry
+777	resolution.type=registry
+778	resolution.type=registry
+779	resolution.type=registry
+780	bin.nopt=bin/nopt.js	resolution.type=registry
+781	resolution.type=registry
+782	resolution.type=registry
+783	bin.npm-run-all=bin/npm-run-all/index.js	bin.npm-run-all2=bin/npm-run-all/index.js	bin.run-p=bin/run-p/index.js	bin.run-s=bin/run-s/index.js	resolution.type=registry
+784	resolution.type=registry
+785	resolution.type=registry
+786	resolution.type=registry
+787	resolution.type=registry
+788	resolution.type=registry
+789	resolution.type=registry
+790	resolution.type=registry
+791	resolution.type=registry
+792	resolution.type=registry
+793	resolution.type=registry
+794	resolution.type=registry
+795	resolution.type=registry
+796	resolution.type=registry
+797	resolution.type=registry
+798	resolution.type=registry
+799	resolution.type=registry
+800	resolution.type=registry
+801	resolution.type=registry
+802	resolution.type=registry
+803	resolution.type=registry
+804	resolution.type=registry
+805	resolution.type=registry
+806	resolution.type=registry
+807	resolution.type=registry
+808	resolution.type=registry
+809	resolution.type=registry
+810	resolution.type=registry
+811	resolution.type=registry
+812	resolution.type=registry
+813	resolution.type=registry
+814	resolution.type=registry
+815	resolution.type=registry
+816	resolution.type=registry
+817	bin.pidtree=bin/pidtree.js	resolution.type=registry
+818	resolution.type=registry
+819	resolution.type=registry
+820	resolution.type=registry
+821	resolution.type=registry
+822	resolution.type=registry
+823	resolution.type=registry
+824	peerDependencies.postcss=^8.3.5	resolution.type=registry
+825	resolution.type=registry
+826	peerDependencies.postcss=^8.4.29	resolution.type=registry
+827	resolution.type=registry
+828	resolution.type=registry
+829	resolution.type=registry
+830	resolution.type=registry
+831	resolution.type=registry
+832	bin.prettier=bin/prettier.cjs	resolution.type=registry
+833	resolution.type=registry
+834	resolution.type=registry
+835	resolution.type=registry
+836	resolution.type=registry
+837	resolution.type=registry
+838	resolution.type=registry
+839	resolution.type=registry
+840	resolution.type=registry
+841	resolution.type=registry
+842	bin.puppeteer=lib/puppeteer/node/cli.js	resolution.type=registry
+843	resolution.type=registry
+844	resolution.type=registry
+845	resolution.type=registry
+846	resolution.type=registry
+847	resolution.type=registry
+848	resolution.type=registry
+849	resolution.type=registry
+850	resolution.type=registry
+851	bin.regexp-tree=bin/regexp-tree	resolution.type=registry
+852	resolution.type=registry
+853	bin.regjsparser=bin/parser	resolution.type=registry
+854	resolution.type=registry
+855	resolution.type=registry
+856	resolution.type=registry
+857	resolution.type=registry
+858	resolution.type=registry
+859	resolution.type=registry
+860	resolution.type=registry
+861	resolution.type=registry
+862	resolution.type=registry
+863	peerDependencies.rollup=^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0	resolution.type=registry
+864	resolution.type=registry
+865	resolution.type=registry
+866	resolution.type=registry
+867	resolution.type=registry
+868	resolution.type=registry
+869	resolution.type=registry
+870	bin.semver=bin/semver.js	resolution.type=registry
+871	bin.semver=bin/semver.js	resolution.type=registry
+872	resolution.type=registry
+873	resolution.type=registry
+874	resolution.type=registry
+875	resolution.type=registry
+876	resolution.type=registry
+877	resolution.type=registry
+878	resolution.type=registry
+879	resolution.type=registry
+880	resolution.type=registry
+881	resolution.type=registry
+882	resolution.type=registry
+883	resolution.type=registry
+884	resolution.type=registry
+885	resolution.type=registry
+886	resolution.type=registry
+887	resolution.type=registry
+888	resolution.type=registry
+889	resolution.type=registry
+890	resolution.type=registry
+891	resolution.type=registry
+892	resolution.type=registry
+893	resolution.type=registry
+894	resolution.type=registry
+895	resolution.type=registry
+896	resolution.type=registry
+897	resolution.type=registry
+898	resolution.type=registry
+899	resolution.type=registry
+900	resolution.type=registry
+901	resolution.type=registry
+902	resolution.type=registry
+903	resolution.type=registry
+904	resolution.type=registry
+905	resolution.type=registry
+906	resolution.type=registry
+907	resolution.type=registry
+908	resolution.type=registry
+909	resolution.type=registry
+910	resolution.type=registry
+911	resolution.type=registry
+912	resolution.type=registry
+913	resolution.type=registry
+914	resolution.type=registry
+915	resolution.type=registry
+916	resolution.type=registry
+917	resolution.type=registry
+918	resolution.type=registry
+919	resolution.type=registry
+920	resolution.type=registry
+921	resolution.type=registry
+922	resolution.type=registry
+923	resolution.type=registry
+924	resolution.type=registry
+925	resolution.type=registry
+926	resolution.type=registry
+927	resolution.type=registry
+928	resolution.type=registry
+929	resolution.type=registry
+930	resolution.type=registry
+931	resolution.type=registry
+932	resolution.type=registry
+933	resolution.type=registry
+934	resolution.type=registry
+935	resolution.type=registry
+936	resolution.type=registry
+937	resolution.type=registry
+938	resolution.type=registry
+939	resolution.type=registry
+940	resolution.type=registry
+941	resolution.type=registry
+942	resolution.type=registry
+943	resolution.type=registry
+944	resolution.type=registry
+945	resolution.type=registry
+946	peerDependencies.typescript=>=4.8.4	resolution.type=registry
+947	resolution.type=registry
+948	resolution.type=registry
+949	resolution.type=registry
+950	resolution.type=registry
+951	resolution.type=registry
+952	resolution.type=registry
+953	resolution.type=registry
+954	resolution.type=registry
+955	resolution.type=registry
+956	bin.tsc=bin/tsc	bin.tsserver=bin/tsserver	resolution.type=registry
 957	bin.tsc=bin/tsc	bin.tsserver=bin/tsserver	resolution.raw=typescript@patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5	resolution.type=unknown	nativeResolution=typescript@patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5
-979	peerDependencies.browserslist=>= 4.21.0	bin.update-browserslist-db=cli.js
-995	bin.node-which=./bin/node-which
-996	bin.node-which=bin/which.js
-997	bin.node-which=bin/which.js
-1004	peerDependencies.bufferutil=^4.0.1	peerDependencies.utf-8-validate=>=5.0.2	peerDependenciesMeta.bufferutil.optional=true	peerDependenciesMeta.utf-8-validate.optional=true
-1014	bin.yaml=bin.mjs
+958	resolution.type=registry
+959	resolution.type=registry
+960	resolution.type=registry
+961	resolution.type=registry
+962	resolution.type=registry
+963	resolution.type=registry
+964	resolution.type=registry
+965	resolution.type=registry
+966	resolution.type=registry
+967	resolution.type=registry
+968	resolution.type=registry
+969	resolution.type=registry
+970	resolution.type=registry
+971	resolution.type=registry
+972	resolution.type=registry
+973	resolution.type=registry
+974	resolution.type=registry
+975	resolution.type=registry
+976	resolution.type=registry
+977	resolution.type=registry
+978	resolution.type=registry
+979	peerDependencies.browserslist=>= 4.21.0	bin.update-browserslist-db=cli.js	resolution.type=registry
+980	resolution.type=registry
+981	resolution.type=registry
+982	resolution.type=registry
+983	resolution.type=registry
+984	resolution.type=registry
+985	resolution.type=registry
+986	resolution.type=registry
+987	resolution.type=registry
+988	resolution.type=registry
+989	resolution.type=registry
+990	resolution.type=registry
+991	resolution.type=registry
+992	resolution.type=registry
+993	resolution.type=registry
+994	resolution.type=registry
+995	bin.node-which=./bin/node-which	resolution.type=registry
+996	bin.node-which=bin/which.js	resolution.type=registry
+997	bin.node-which=bin/which.js	resolution.type=registry
+998	resolution.type=registry
+999	resolution.type=registry
+1000	resolution.type=registry
+1001	resolution.type=registry
+1002	resolution.type=registry
+1003	resolution.type=registry
+1004	peerDependencies.bufferutil=^4.0.1	peerDependencies.utf-8-validate=>=5.0.2	peerDependenciesMeta.bufferutil.optional=true	peerDependenciesMeta.utf-8-validate.optional=true	resolution.type=registry
+1005	resolution.type=registry
+1006	resolution.type=registry
+1007	resolution.type=registry
+1008	resolution.type=registry
+1009	resolution.type=registry
+1010	resolution.type=registry
+1011	resolution.type=registry
+1012	resolution.type=registry
+1013	resolution.type=registry
+1014	bin.yaml=bin.mjs	resolution.type=registry
+1015	resolution.type=registry
+1016	resolution.type=registry
+1017	resolution.type=registry
+1018	resolution.type=registry
+1019	resolution.type=registry
+1020	resolution.type=registry
+1021	resolution.type=registry
+1022	resolution.type=registry
+1023	resolution.type=registry
+1024	resolution.type=registry
+1025	resolution.type=registry
+1026	resolution.type=registry
+1027	resolution.type=registry
+1028	resolution.type=registry

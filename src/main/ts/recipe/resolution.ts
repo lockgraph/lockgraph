@@ -1,9 +1,9 @@
 // resolution URL canonical recipe (pure-math primitive).
 //
-// Canonical form on Graph: typed discriminated union (4 cases) held on
+// Canonical form on Graph: typed discriminated union (5 cases) held on
 // `TarballPayload.resolution`. Each adapter parses its PM-native source
 // shape (yarn-berry locator, yarn-classic URL, npm `resolved` URL, pnpm
-// `resolution.tarball` URL, etc.) into one of the 4 canonical cases
+// `resolution.tarball` URL, etc.) into one of the 5 canonical cases
 // `parse`. Each adapter projects the canonical form back to its target
 // emit shape via the per-target `stringifyFor*` helpers.
 //
@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto'
 export type HostingProvider = 'github' | 'gitlab' | 'bitbucket'
 
 export type ResolutionCanonical =
+  | { type: 'registry';  bind?: string }
   | { type: 'tarball';   url:  string; hostingProvider?: HostingProvider; bind?: string }
   | { type: 'git';       url:  string; sha: string; hostingProvider?: HostingProvider }
   | { type: 'directory'; path: string }
@@ -43,20 +44,17 @@ export interface ParseOptions {
     | 'pnpm-tarball'          // `resolution.tarball` URL
   /** Node name — used by yarn-berry `npm:` alias spec to derive the registry URL. */
   name?:         string
-  /** Registry base for a yarn-berry `npm:` locator's synthesised tarball URL
-   * (the locator carries none). Adapters pass a config- or lock-inferred base
-   * for custom registries; defaults to {@link DEFAULT_NPM_REGISTRY}. */
+  /** Registry base for a yarn-berry `npm:` locator's synthesised tarball URL.
+   * The locator carries none: absent means the registry is undetermined. */
   registry?:     string
 }
 
 const HEX40_RE  = /^[0-9a-f]{40}$/i
 const SHA_FRAG_RE = /^[0-9a-f]{7,64}$/i
 
-// The public npm registry — the default base for synthesising a yarn-berry
-// `npm:` locator's tarball URL. The locator carries no URL: yarn resolves it
-// against `.yarnrc.yml`'s `npmRegistryServer` at fetch time, which is NOT in the
-// lockfile. A caller with a config- or lock-inferred base overrides it
-// `ParseOptions.registry`; this is only the fallback (no trailing slash).
+// The public npm registry. Adapters use it only when the lockfile or caller
+// actually supplied that fact; an omitted registry is represented by the
+// canonical `registry` case instead of silently defaulting to this URL.
 export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org'
 
 // A yarn-classic registry-tarball `resolved` may glue the tarball sha1 on as a
@@ -76,7 +74,7 @@ const GITLAB_HOST   = 'gitlab.com'
 const BITBUCKET_HOST = 'bitbucket.org'
 
 /**
- * Parse a source-form resolution string → canonical 4-case union.
+ * Parse a source-form resolution string → canonical 5-case union.
  * Returns `{ type: 'unknown', raw }` for any shape this primitive cannot
  * canonicalize. Adapters use `emitUnknownResolution`
  * `recipe/diagnostics.ts` to surface the RECIPE_RESOLUTION_UNKNOWN
@@ -154,9 +152,13 @@ function parseInner(protocol: string, spec: string, raw: string, options: ParseO
         if (archiveUrl !== undefined) {
           return { type: 'tarball', url: archiveUrl, bind: bindSuffix }
         }
-        return { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry ?? DEFAULT_NPM_REGISTRY), bind: bindSuffix }
+        return options.registry === undefined
+          ? { type: 'registry', bind: bindSuffix }
+          : { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry), bind: bindSuffix }
       }
-      return { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry ?? DEFAULT_NPM_REGISTRY) }
+      return options.registry === undefined
+        ? { type: 'registry' }
+        : { type: 'tarball', url: deriveRegistryUrl(options.name, version, options.registry) }
     }
     case 'portal':
       return { type: 'directory', path: normalizeDirectoryPath(spec) }
@@ -226,6 +228,11 @@ function registryUrlOf(name: string, version: string, registry: string): string 
   // `pkg` (not `@scope/pkg`); the scope appears only in the path segment.
   const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
   return `${registry}/${name}/-/${tail}-${version}.tgz`
+}
+
+/** Derive the conventional npm registry tarball URL from declared routing. */
+export function registryTarballUrl(name: string, version: string, registry: string): string {
+  return registryUrlOf(name, version, registry.replace(/\/+$/, ''))
 }
 
 function parseUrlOrFallback(raw: string): ResolutionCanonical {
@@ -417,6 +424,9 @@ export function isCanonical(value: unknown): value is ResolutionCanonical {
   if (value === null || typeof value !== 'object') return false
   const v = value as { type?: unknown }
   switch (v.type) {
+    case 'registry':
+      return (value as { bind?: unknown }).bind === undefined
+        || typeof (value as { bind?: unknown }).bind === 'string'
     case 'tarball':
       return typeof (value as { url?: unknown }).url === 'string'
     case 'git':
@@ -464,9 +474,9 @@ function hostOfTarballUrl(url: string): string | undefined {
 
 /**
  * the `+src=` NodeId/TarballKey slot value for a node's
- * `ResolutionCanonical`, or `undefined` when the node is a default-registry
- * tarball (the ~99% majority, which stays BARE so registry NodeIds never
- * change). The slot disambiguates the #2b collapse: the same `name@version`
+ * `ResolutionCanonical`, or `undefined` when the node is an undetermined or
+ * default-registry tarball (the ~99% majority, which stays BARE so registry
+ * NodeIds never change). The slot disambiguates the #2b collapse: the same `name@version`
  * from DIFFERENT non-registry sources (a registry copy AND a git fork; two
  * private-registry hosts) would otherwise share ONE NodeId and lose data.
  *
@@ -478,6 +488,7 @@ function hostOfTarballUrl(url: string): string | undefined {
  * - `tarball` (non-registry) → `tarball\0<host>` (slot)
  * - `tarball` (with `::` bind) → `tarball\0<host>\0bind=…` (slot)
  * - `tarball` (default registry)→ undefined (bare)
+ * - `registry` (host undetermined) → undefined (bare; bound variants fork)
  * - `directory` → undefined (bare)
  * - `unknown` → undefined (bare)
  *
@@ -521,6 +532,8 @@ export function sourceDiscriminatorOf(resolution: ResolutionCanonical): string |
 // is independently testable and the ADR can cite it.
 function canonicalSourceStringOf(resolution: ResolutionCanonical): string | undefined {
   switch (resolution.type) {
+    case 'registry':
+      return resolution.bind === undefined ? undefined : `registry\0bind=${resolution.bind}`
     case 'git':
       return `git\0${resolution.url}\0${resolution.sha}`
     case 'tarball': {
@@ -562,6 +575,8 @@ export interface YarnBerryStringifyHints {
  */
 export function stringifyForYarnBerry(can: ResolutionCanonical, hints: YarnBerryStringifyHints): string {
   switch (can.type) {
+    case 'registry':
+      return `${hints.name}@npm:${hints.version}${can.bind === undefined ? '' : `::${can.bind}`}`
     case 'tarball':
       return `${hints.name}@npm:${hints.version}`
     case 'git':
@@ -591,6 +606,8 @@ export interface YarnClassicStringifyHints {
  */
 export function stringifyForYarnClassic(can: ResolutionCanonical, hints: YarnClassicStringifyHints = {}): string | undefined {
   switch (can.type) {
+    case 'registry':
+      return undefined
     case 'tarball':
       return hints.sha1Fragment !== undefined ? `${can.url}#${hints.sha1Fragment}` : can.url
     case 'git':
@@ -623,6 +640,8 @@ export function isYarnBerryLocator(s: string): boolean {
 
 export function stringifyForNpm(can: ResolutionCanonical): string | undefined {
   switch (can.type) {
+    case 'registry':
+      return undefined
     case 'tarball':
       return can.url
     case 'git':
@@ -650,6 +669,8 @@ export interface PnpmStringifyOutput {
  */
 export function stringifyForPnpm(can: ResolutionCanonical): PnpmStringifyOutput | undefined {
   switch (can.type) {
+    case 'registry':
+      return undefined
     case 'tarball':
       return { tarball: can.url }
     case 'git':

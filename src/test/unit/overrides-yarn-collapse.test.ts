@@ -51,7 +51,9 @@ const mixedOverrideGraph = (withTarball: boolean) => {
     b.setTarball({ name: 'new-dep', version: '2.0.0' }, {
       resolution: {
         type: 'tarball',
-        url: 'https://registry.example/new-dep/-/new-dep-2.0.0.tgz',
+        // This fixture exercises override-key collapse, not non-registry
+        // source identity; keep it on the bare public-registry class.
+        url: 'https://registry.npmjs.org/new-dep/-/new-dep-2.0.0.tgz',
       },
     })
   }

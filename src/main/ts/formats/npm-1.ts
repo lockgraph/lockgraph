@@ -72,6 +72,7 @@ import { emitDropped as patchEmitDropped, emitDropped as recipeEmitDropped } fro
 import {
   isYarnBerryLocator,
   parse as parseResolutionRecipe,
+  registryTarballUrl,
   sourceDiscriminatorOf,
   stringifyForNpm,
   stripRegistrySha1Fragment,
@@ -84,7 +85,9 @@ import {
 
 // === TYPES ==================================================================
 
-export interface Npm1ParseOptions {}
+export interface Npm1ParseOptions {
+  registryFor?: (packageName: string) => string | undefined
+}
 
 export interface Npm1StringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -126,6 +129,7 @@ interface Npm1Lockfile {
 }
 
 interface Npm1ParseContext {
+  readonly options: Npm1ParseOptions
   readonly lf: Npm1Lockfile
   readonly builder: ReturnType<typeof newBuilder>
   readonly diagnostics: Diagnostic[]
@@ -231,10 +235,10 @@ export function check(input: string): boolean {
   return true
 }
 
-export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
+export function parse(input: string, options: Npm1ParseOptions = {}): Graph {
   const lf = parseJson(input)
   assertNpm1Shape(lf)
-  const context = createNpm1ParseContext(lf)
+  const context = createNpm1ParseContext(lf, options)
   addNpm1TreeNodes(context, { deps: lf.dependencies, parentPath: '', inheritedDev: false, inheritedOptional: false })
   addNpm1RootEdges(context)
   normalizeNpm1InstallPaths(context)
@@ -314,7 +318,7 @@ function assertNpm1Shape(lf: Npm1Lockfile): void {
   }
 }
 
-function createNpm1ParseContext(lf: Npm1Lockfile): Npm1ParseContext {
+function createNpm1ParseContext(lf: Npm1Lockfile, options: Npm1ParseOptions): Npm1ParseContext {
   const builder = newBuilder()
   const rootName = lf.name ?? ''
   const rootVersion = lf.version ?? '0.0.0'
@@ -327,6 +331,7 @@ function createNpm1ParseContext(lf: Npm1Lockfile): Npm1ParseContext {
     workspacePath: '',
   })
   return {
+    options,
     lf,
     builder,
     diagnostics: [],
@@ -439,7 +444,7 @@ function addNpm1EntryNode(
   }
   if (identity.source !== undefined) node.source = identity.source
   context.builder.addNode(node)
-  const payload = npm1TarballPayload(context, entry, identity)
+  const payload = npm1TarballPayload(context, entry, identity, declaredName)
   if (Object.keys(payload).length > 0) {
     context.builder.setTarball(
       { name: declaredName, version: identity.version, source: identity.source },
@@ -452,13 +457,22 @@ function npm1TarballPayload(
   context: Npm1ParseContext,
   entry: Npm1Entry,
   identity: Npm1EntryIdentity,
+  name: string,
 ): TarballPayload {
   const payload: TarballPayload = {}
   if (entry.integrity !== undefined) {
     const integrity = parseSri(entry.integrity, 'sri')
     if (!isEmptyIntegrity(integrity)) payload.integrity = integrity
   }
-  if (identity.resolved === undefined) return payload
+  if (identity.resolved === undefined) {
+    if (entry.bundled !== true) {
+      const registry = context.options.registryFor?.(name)
+      payload.resolution = registry === undefined
+        ? { type: 'registry' }
+        : { type: 'tarball', url: registryTarballUrl(name, identity.version, registry) }
+    }
+    return payload
+  }
   payload.nativeResolution = identity.resolved
   const canonical = parseResolutionRecipe(identity.resolved, { sourceKind: 'npm-resolved' })
   if (canonical.type === 'unknown') {
@@ -1298,7 +1312,8 @@ function planExistingNpm1Members(
     const member = memberByName.get(node.name)
     if (member === undefined) continue
     if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
-    if (graph.tarballOf(node.id) !== undefined) continue
+    const payload = graph.tarballOf(node.id)
+    if (payload !== undefined && Object.keys(payload).some(key => key !== 'resolution')) continue
     plan.memberNodeReplacements.push({ ...node, workspacePath: member.path })
   }
 }

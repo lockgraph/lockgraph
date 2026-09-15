@@ -26,6 +26,7 @@ import {
 /** Public parse policy; adapter-only context stays internal. */
 export interface ParseOptions extends ObserveOptions {
   readonly cwd?: string
+  readonly registry?: string
   readonly sources?: Pick<OperationSources, 'policy'>
 }
 
@@ -75,6 +76,7 @@ export function parse(
   try {
     const parsed = parseInternal(a, b as FormatId | undefined, {
       ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options?.registry === undefined ? {} : { registry: options.registry }),
       ...(options?.sources?.policy === undefined
         ? {}
         : { sources: { policy: internalPmConfig(options.sources.policy) } }),
