@@ -82,7 +82,7 @@ export function loadRealWorldFixtures(): RealWorldFixture[] {
       .map(entry => entry.name)
       // `package.json` / `pnpm-workspace.yaml` are manifest/workspace-config
       // inputs, not lockfiles — fixtures now ship them alongside the lock for
-      // manifest-aware work (ADR-0025). The cross-family probe detects +
+      // manifest-aware work. The cross-family probe detects +
       // converts LOCKFILES only; skip these non-lockfile top-level files.
       // (Nested workspace-member manifests live in subdirs, which this
       // top-level-only walk never visits.)

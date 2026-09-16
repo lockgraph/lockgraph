@@ -145,7 +145,7 @@ export function hydrateMetadata(
 
     const resolutionType = payload?.resolution?.type
     if (variants.some(node => node.source !== undefined)
-      || (resolutionType !== undefined && resolutionType !== 'tarball')) {
+      || (resolutionType !== undefined && resolutionType !== 'tarball' && resolutionType !== 'registry')) {
       apply(inputs, undefined, [sourceUnsupported(
         key,
         'non-registry package metadata requires explicit source-specific manifest evidence',

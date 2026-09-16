@@ -3,7 +3,7 @@ schema 1.0
 generatedAt 2026-01-01T00:00:00Z
 generator lockgraph
 R 2
-npm	https://registry.npmjs.org
+npm	-
 workspace	-
 N 696
 .	0.0.0	r1	-	ws=
@@ -1836,475 +1836,681 @@ E 1133
 693	621	dep	4.2.3
 693	690	dep	5.0.8
 693	692	dep	21.1.1
-F 471
-1	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0
-2	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0
-3	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0
-5	engines.node=>=6.9.0
-6	engines.node=>=6.9.0
-7	engines.node=>=6.9.0
-8	engines.node=>=6.0.0	bin=true
-9	engines.node=>=6.9.0
-10	engines.node=>=18
-11	bin=true
-12	engines.node=>=18	peerDependencies.conventional-commits-filter=^5.0.0	peerDependencies.conventional-commits-parser=^6.4.0	peerDependenciesMeta.conventional-commits-filter.optional=true	peerDependenciesMeta.conventional-commits-parser.optional=true
-13	engines.node=>=20.19.0
-14	engines.node=>=20.19.0	peerDependencies.@csstools/css-parser-algorithms=^4.0.0	peerDependencies.@csstools/css-tokenizer=^4.0.0
-15	engines.node=>=20.19.0	peerDependencies.@csstools/css-parser-algorithms=^4.0.0	peerDependencies.@csstools/css-tokenizer=^4.0.0
-16	engines.node=>=20.19.0	peerDependencies.@csstools/css-tokenizer=^4.0.0
-17	peerDependencies.css-tree=^3.2.1	peerDependenciesMeta.css-tree.optional=true
-18	engines.node=>=20.19.0
-22	cpu.0=ppc64	os.0=aix	engines.node=>=18
-23	cpu.0=arm64	os.0=android	engines.node=>=18
-24	cpu.0=arm	os.0=android	engines.node=>=18
-25	cpu.0=x64	os.0=android	engines.node=>=18
-26	cpu.0=arm64	os.0=darwin	engines.node=>=18
-27	cpu.0=x64	os.0=darwin	engines.node=>=18
-28	cpu.0=arm64	os.0=freebsd	engines.node=>=18
-29	cpu.0=x64	os.0=freebsd	engines.node=>=18
-30	cpu.0=arm64	os.0=linux	engines.node=>=18
-31	cpu.0=arm	os.0=linux	engines.node=>=18
-32	cpu.0=ia32	os.0=linux	engines.node=>=18
-33	cpu.0=loong64	os.0=linux	engines.node=>=18
-34	cpu.0=mips64el	os.0=linux	engines.node=>=18
-35	cpu.0=ppc64	os.0=linux	engines.node=>=18
-36	cpu.0=riscv64	os.0=linux	engines.node=>=18
-37	cpu.0=s390x	os.0=linux	engines.node=>=18
-38	cpu.0=x64	os.0=linux	engines.node=>=18
-39	cpu.0=arm64	os.0=netbsd	engines.node=>=18
-40	cpu.0=x64	os.0=netbsd	engines.node=>=18
-41	cpu.0=arm64	os.0=openbsd	engines.node=>=18
-42	cpu.0=x64	os.0=openbsd	engines.node=>=18
-43	cpu.0=arm64	os.0=openharmony	engines.node=>=18
-44	cpu.0=x64	os.0=sunos	engines.node=>=18
-45	cpu.0=arm64	os.0=win32	engines.node=>=18
-46	cpu.0=ia32	os.0=win32	engines.node=>=18
-47	cpu.0=x64	os.0=win32	engines.node=>=18
-48	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	peerDependencies.eslint=^6.0.0 || ^7.0.0 || >=8.0.0
-49	engines.node=^12.0.0 || ^14.0.0 || >=16.0.0
-50	engines.node=^20.19.0 || ^22.13.0 || >=24
-51	engines.node=^20.19.0 || ^22.13.0 || >=24
-52	engines.node=^20.19.0 || ^22.13.0 || >=24
-53	engines.node=^20.19.0 || ^22.13.0 || >=24
-54	engines.node=^20.19.0 || ^22.13.0 || >=24
-55	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	peerDependencies.@noble/hashes=^1.8.0 || ^2.0.0	peerDependenciesMeta.@noble/hashes.optional=true
-56	engines.node=>=18.18.0
-57	engines.node=>=18.18.0
-58	engines.node=>=12.22
-59	engines.node=>=18.18
-60	engines.node=>=18.18
-63	engines.node=>=6.0.0
-68	peerDependencies.@emnapi/core=^1.7.1	peerDependencies.@emnapi/runtime=^1.7.1
-71	cpu.0=arm64	os.0=android	engines.node=>= 10.0.0
-72	cpu.0=arm64	os.0=darwin	engines.node=>= 10.0.0
-73	cpu.0=x64	os.0=darwin	engines.node=>= 10.0.0
-74	cpu.0=x64	os.0=freebsd	engines.node=>= 10.0.0
-75	cpu.0=arm	os.0=linux	libc.0=glibc	engines.node=>= 10.0.0
-76	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=>= 10.0.0
-77	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=>= 10.0.0
-78	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=>= 10.0.0
-79	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=>= 10.0.0
-80	cpu.0=arm64	os.0=win32	engines.node=>= 10.0.0
-81	cpu.0=ia32	os.0=win32	engines.node=>= 10.0.0
-82	cpu.0=x64	os.0=win32	engines.node=>= 10.0.0
-83	engines.node=>= 10.0.0
-84	engines.node=>=22.12.0	peerDependencies.proxy-agent=>=8.0.1	peerDependenciesMeta.proxy-agent.optional=true	bin=true
-85	cpu.0=arm64	os.0=android	engines.node=^20.19.0 || >=22.12.0
-86	cpu.0=arm64	os.0=darwin	engines.node=^20.19.0 || >=22.12.0
-87	cpu.0=x64	os.0=darwin	engines.node=^20.19.0 || >=22.12.0
-88	cpu.0=x64	os.0=freebsd	engines.node=^20.19.0 || >=22.12.0
-89	cpu.0=arm	os.0=linux	engines.node=^20.19.0 || >=22.12.0
-90	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0
-91	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=^20.19.0 || >=22.12.0
-92	cpu.0=ppc64	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0
-93	cpu.0=s390x	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0
-94	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0
-95	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=^20.19.0 || >=22.12.0
-96	cpu.0=arm64	os.0=openharmony	engines.node=^20.19.0 || >=22.12.0
-97	cpu.0=wasm32	engines.node=^20.19.0 || >=22.12.0
-98	cpu.0=arm64	os.0=win32	engines.node=^20.19.0 || >=22.12.0
-99	cpu.0=x64	os.0=win32	engines.node=^20.19.0 || >=22.12.0
-101	engines.node=>=20.19.0	peerDependencies.rollup=>=4.0.0	peerDependenciesMeta.rollup.optional=true
-102	engines.node=>=16.0.0 || 14 >= 14.17	peerDependencies.rollup=^2.68.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true
-103	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true
-104	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true
-105	engines.node=>=14.0.0	peerDependencies.rollup=^2.78.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true
-106	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true
-107	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true
-108	cpu.0=arm	os.0=android
-109	cpu.0=arm64	os.0=android
-110	cpu.0=arm64	os.0=darwin
-111	cpu.0=x64	os.0=darwin
-112	cpu.0=arm64	os.0=freebsd
-113	cpu.0=x64	os.0=freebsd
-114	cpu.0=arm	os.0=linux	libc.0=glibc
-115	cpu.0=arm	os.0=linux	libc.0=musl
-116	cpu.0=arm64	os.0=linux	libc.0=glibc
-117	cpu.0=arm64	os.0=linux	libc.0=musl
-118	cpu.0=loong64	os.0=linux	libc.0=glibc
-119	cpu.0=loong64	os.0=linux	libc.0=musl
-120	cpu.0=ppc64	os.0=linux	libc.0=glibc
-121	cpu.0=ppc64	os.0=linux	libc.0=musl
-122	cpu.0=riscv64	os.0=linux	libc.0=glibc
-123	cpu.0=riscv64	os.0=linux	libc.0=musl
-124	cpu.0=s390x	os.0=linux	libc.0=glibc
-125	cpu.0=x64	os.0=linux	libc.0=glibc
-126	cpu.0=x64	os.0=linux	libc.0=musl
-127	cpu.0=x64	os.0=openbsd
-128	cpu.0=arm64	os.0=openharmony
-129	cpu.0=arm64	os.0=win32
-130	cpu.0=ia32	os.0=win32
-131	cpu.0=x64	os.0=win32
-132	cpu.0=x64	os.0=win32
-133	engines.node=>=18
-134	engines.node=>=18
-135	engines.node=>=18
-137	cpu.0=arm64	os.0=darwin	engines.node=>=10
-138	cpu.0=x64	os.0=darwin	engines.node=>=10
-139	cpu.0=arm	os.0=linux	engines.node=>=10
-140	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=>=10
-141	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=>=10
-142	cpu.0=ppc64	os.0=linux	libc.0=glibc	engines.node=>=10
-143	cpu.0=s390x	os.0=linux	libc.0=glibc	engines.node=>=10
-144	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=>=10
-145	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=>=10
-146	cpu.0=arm64	os.0=win32	engines.node=>=10
-147	cpu.0=ia32	os.0=win32	engines.node=>=10
-148	cpu.0=x64	os.0=win32	engines.node=>=10
-149	engines.node=>=10	peerDependencies.@swc/helpers=>=0.5.17	peerDependenciesMeta.@swc/helpers.optional=true
-166	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.@typescript-eslint/parser=^8.59.4	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-167	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-168	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-169	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-170	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-171	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-172	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-173	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-174	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-175	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-176	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-177	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-178	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-179	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-180	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-181	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-182	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-183	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0
-184	cpu.0=arm	os.0=android
-185	cpu.0=arm64	os.0=android
-186	cpu.0=arm64	os.0=darwin
-187	cpu.0=x64	os.0=darwin
-188	cpu.0=x64	os.0=freebsd
-189	cpu.0=arm	os.0=linux
-190	cpu.0=arm	os.0=linux
-191	cpu.0=arm64	os.0=linux	libc.0=glibc
-192	cpu.0=arm64	os.0=linux	libc.0=musl
-193	cpu.0=ppc64	os.0=linux	libc.0=glibc
-194	cpu.0=riscv64	os.0=linux	libc.0=glibc
-195	cpu.0=riscv64	os.0=linux	libc.0=musl
-196	cpu.0=s390x	os.0=linux	libc.0=glibc
-197	cpu.0=x64	os.0=linux	libc.0=glibc
-198	cpu.0=x64	os.0=linux	libc.0=musl
-199	cpu.0=wasm32	engines.node=>=14.0.0
-200	cpu.0=arm64	os.0=win32
-201	cpu.0=ia32	os.0=win32
-202	cpu.0=x64	os.0=win32
-203	engines.node=^20.19.0 || >=22.12.0	peerDependencies.vite=^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0	peerDependencies.vue=^3.2.25
-204	peerDependencies.@vitest/browser=4.1.7	peerDependencies.vitest=4.1.7	peerDependenciesMeta.@vitest/browser.optional=true
-205	engines.node=>=18	peerDependencies.@typescript-eslint/eslint-plugin=*	peerDependencies.eslint=>=8.57.0	peerDependencies.typescript=>=5.0.0	peerDependencies.vitest=*	peerDependenciesMeta.@typescript-eslint/eslint-plugin.optional=true	peerDependenciesMeta.typescript.optional=true	peerDependenciesMeta.vitest.optional=true
-207	peerDependencies.msw=^2.4.9	peerDependencies.vite=^6.0.0 || ^7.0.0 || ^8.0.0	peerDependenciesMeta.msw.optional=true	peerDependenciesMeta.vite.optional=true
-213	engines.node=>= 0.12.0
-216	peerDependencies.acorn=^6.0.0 || ^7.0.0 || ^8.0.0
-217	engines.node=>=0.4.0	bin=true
-218	engines.node=>=0.4.0	bin=true
-222	engines.node=>=6
-223	engines.node=>=18
-224	engines.node=>=8
-225	engines.node=>=12
-226	engines.node=>=12
-227	engines.node=>=8
-228	engines.node=>=12
-229	engines.node=>=12
-238	engines.node=>= 10.0.0
-240	engines.node=18 || 20 || >=22
-242	engines.bare=>=1.7.0
-243	engines.bare=>=1.6.0
-247	engines.node=>=14.16
-249	engines.node=18 || 20 || >=22
-250	engines.node=18 || 20 || >=22
-251	engines.node=>=8
-252	engines.node=>= 0.8
-253	engines.node=>= 0.8
-254	engines.node=>= 0.4
-255	engines.node=>=6
-256	engines.node=>=14.16
-257	engines.node=>=18
-258	engines.node=>=12
-259	engines.node=>=10
-260	engines.node=^12.17.0 || ^14.13 || >=16.0.0
-261	engines.node=^12.17.0 || ^14.13 || >=16.0.0
-263	engines.node=>= 20.19.0
-264	engines.node=>=20.19.0 <22.0.0 || >=22.12.0	peerDependencies.devtools-protocol=*
-265	engines.node=>=10
-266	engines.node=>=18
-267	engines.node=>=20
-268	engines.node=^12.20.0 || ^14.13.1 || >=16.0.0
-269	engines.node=>=12
-270	engines.node=>=7.0.0
-272	engines.node=>= 12.0.0
-275	engines.node=>= 0.6
-276	engines.node=>= 0.8.0
-279	engines.node=>= 0.6
-280	engines.node=>=18
-281	engines.node=>=18
-282	engines.node=>=18	bin=true
-283	engines.node=>=18	bin=true
-284	engines.node=>=18
-285	engines.node=>=18	bin=true
-288	engines.node=>=14	peerDependencies.typescript=>=4.9.5	peerDependenciesMeta.typescript.optional=true
-289	engines.node=>= 8
-290	engines.node=^10 || ^12.20.0 || ^14.13.0 || >=15.0.0
-291	engines.node=>=4	bin=true
-293	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0
-294	peerDependencies.supports-color=*	peerDependenciesMeta.supports-color.optional=true
-295	engines.node=>=6.0	peerDependencies.supports-color=*	peerDependenciesMeta.supports-color.optional=true
-296	engines.node=>=6.0	peerDependencies.supports-color=*	peerDependenciesMeta.supports-color.optional=true
-298	engines.node=>=4.0.0
-300	engines.node=>=0.10.0
-301	engines.node=>= 0.4
-302	engines.node=>=0.10	bin=true
-303	engines.node=>=8
-307	engines.node=>=8
-313	engines.node=>=8.6
-314	engines.node=>=0.12
-315	engines.node=>=20.19.0
-316	engines.node=>=6
-317	engines.node=>=18
-319	engines.node=>= 0.4
-320	engines.node=>= 0.4
-323	deprecated=Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.	peerDependencies.esbuild=*
-324	engines.node=>=18	bin=true
-325	engines.node=>=6
-326	engines.node=>=10
-327	engines.node=^12.20.0 || ^14.18.0 || >=16.0.0	peerDependencies.unrs-resolver=^1.0.0	peerDependenciesMeta.unrs-resolver.optional=true
-328	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.@typescript-eslint/utils=^8.56.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.eslint-import-resolver-node=*	peerDependenciesMeta.@typescript-eslint/utils.optional=true	peerDependenciesMeta.eslint-import-resolver-node.optional=true
-329	engines.node=^20.19.0 || ^22.13.0 || >=24
-330	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0
-331	engines.node=^20.19.0 || ^22.13.0 || >=24
-332	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependencies.jiti=*	peerDependenciesMeta.jiti.optional=true	bin=true
-333	engines.node=^20.19.0 || ^22.13.0 || >=24
-334	engines.node=>=0.10
-335	engines.node=>=4.0
-336	engines.node=>=4.0
-339	engines.node=>=0.10.0
-341	engines.node=>=10
-342	engines.node=>=12.0.0
-349	engines.node=>=12.0.0	peerDependencies.picomatch=^3 || ^4	peerDependenciesMeta.picomatch.optional=true
-351	engines.node=>=16.0.0
-353	engines.node=>=8
-354	engines.node=>=10
-355	engines.node=>=16
-357	os.0=darwin	engines.node=^8.16.0 || ^10.6.0 || >=11.0.0
-360	engines.node=6.* || 8.* || >= 10.*
-361	engines.node=>=18
-362	engines.node=>=18
-363	engines.node=>= 0.4
-364	engines.node=>=10
-367	engines.node=>=10.13.0
-368	engines.node=18 || 20 || >=22
-370	engines.node=>=0.4.7	bin=true
-371	engines.node=>=8
-373	engines.node=>= 0.4
-374	engines.node=>= 0.4
-375	engines.node=>= 0.4
-377	engines.node=>= 0.4
-378	engines.node=^18.17.0 || >=20.5.0
-379	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0
-381	engines.node=>=10.17.0
-382	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0
-383	engines.node=>= 4
-384	engines.node=>= 4
-387	engines.node=>=6
-389	engines.node=>=0.8.19
-393	engines.node=>= 0.4
-394	engines.node=>= 0.4
-395	engines.node=>=8	bin=true
-397	engines.node=>=0.10.0
-398	engines.node=>=8
-399	engines.node=>=18
-400	engines.node=>=18
-401	engines.node=>=0.10.0
-403	engines.node=>=0.12.0
-404	engines.node=>=8
-405	engines.node=^12.20.0 || ^14.13.1 || >=16.0.0
-409	engines.node=>= 0.4
-410	engines.node=>=8
-411	engines.node=>=8
-414	engines.node=>=16
-415	engines.node=>=8
-416	engines.node=>=10
-417	engines.node=>=8
-421	bin=true
-422	engines.node=^20.19.0 || ^22.13.0 || >=24.0.0	peerDependencies.canvas=^3.0.0	peerDependenciesMeta.canvas.optional=true
-425	engines.node=^18.17.0 || >=20.5.0
-432	engines.node=>= 0.8.0
-434	cpu.0=arm64	os.0=android	engines.node=>= 12.0.0
-435	cpu.0=arm64	os.0=darwin	engines.node=>= 12.0.0
-436	cpu.0=x64	os.0=darwin	engines.node=>= 12.0.0
-437	cpu.0=x64	os.0=freebsd	engines.node=>= 12.0.0
-438	cpu.0=arm	os.0=linux	engines.node=>= 12.0.0
-439	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=>= 12.0.0
-440	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=>= 12.0.0
-441	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=>= 12.0.0
-442	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=>= 12.0.0
-443	cpu.0=arm64	os.0=win32	engines.node=>= 12.0.0
-444	cpu.0=x64	os.0=win32	engines.node=>= 12.0.0
-445	engines.node=>= 12.0.0
-447	engines.node=>=22.22.1	bin=true
-448	engines.node=>=22.13.0
-449	engines.node=>= 12.13.0
-450	engines.node=>=10
-453	engines.node=>=18
-454	engines.node=14 || >=16.14
-455	engines.node=20 || >=22
-456	engines.node=20 || >=22
-459	engines.node=>=10
-461	engines.node=>= 18	bin=true
-462	engines.node=>= 18	bin=true
-464	engines.node=>= 0.10.0
-465	engines.node=>=18
-468	engines.node=>=8.6
-469	engines.node=>= 0.6
-470	engines.node=>= 0.6
-471	engines.node=>= 0.6
-472	engines.node=>=6
-473	engines.node=>=18
-474	engines.node=18 || 20 || >=22
-475	engines.node=18 || 20 || >=22
-478	engines.node=>=16 || 14 >=14.17
-483	engines.node=^10 || ^12 || ^13.7 || ^14 || >=15.0.1	bin=true
-484	engines.node=^12.20.0 || ^14.18.0 || >=16.0.0	bin=true
-486	engines.node=>= 0.6
-489	engines.node=^18.17.0 || >=20.5.0
-490	engines.node=^18.17.0 || >=20.5.0
-491	engines.node=^20.5.0 || >=22.0.0	engines.npm=>= 10	bin=true
-492	engines.node=>=8
-493	engines.node=>=0.10.0
-495	engines.node=>= 0.8
-497	engines.node=>=6
-498	engines.node=>=18
-499	engines.node=>= 0.8.0
-500	engines.node=>=10
-501	engines.node=>=10
-521	engines.node=>=6
-522	engines.node=>=8
-524	engines.node=>=8
-526	engines.node=>=8
-528	engines.node=18 || 20 || >=22
-532	engines.node=>=8.6
-533	engines.node=>=12
-534	engines.node=>=12
-535	engines.node=>=12
-536	engines.node=>=0.10	bin=true
-537	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0
-538	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0
-539	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0
-540	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0
-541	peerDependencies.postcss=^8.0.0
-542	engines.node=>=4
-543	engines.node=>=4
-545	engines.node=^10 || ^12 || >=14
-546	engines.node=>= 0.8.0
-547	engines.node=>=14	bin=true
-548	engines.node=>=20
-550	engines.node=>=0.4.0
-565	engines.node=>=6
-566	engines.node=>=22.12.0
-567	engines.node=>=22.12.0	bin=true
-569	engines.node=>= 0.6
-570	bin=true
-571	engines.node=^18.17.0 || >=20.5.0
-573	engines.node=>= 20.19.0
-575	engines.node=>=0.10.0
-576	engines.node=>=0.10.0
-577	engines.node=>=0.10.0
-578	engines.node=>=4
-580	engines.node=>= 0.4	bin=true
-581	bin=true
-582	engines.node=>=18
-584	engines.node=20 || >=22	bin=true
-585	engines.node=^20.19.0 || >=22.12.0	bin=true
-586	engines.node=>=20	peerDependencies.rollup=^3.29.4 || ^4	peerDependencies.typescript=^4.5 || ^5.0 || ^6.0
-587	engines.node=>=14.18.0	peerDependencies.esbuild=>=0.18.0	peerDependencies.rollup=^1.20.0 || ^2.0.0 || ^3.0.0 || ^4.0.0
-588	peerDependencies.rollup=^1.20.0 || ^2.0.0 || ^3.0.0 || ^4.0.0
-589	engines.node=>=18.0.0	engines.npm=>=8.0.0	bin=true
-592	engines.node=>=20.19.0	bin=true
-593	engines.node=>=v12.22.7
-594	engines.node=>=10	bin=true
-595	engines.node=>=10	bin=true
-597	engines.node=>= 14	bin=true
-598	engines.node=>= 0.4
-600	engines.node=>=8
-601	engines.node=>=8
-605	engines.node=>=14
-606	bin=true
-607	engines.node=>=18
-608	engines.node=>=20
-609	engines.node=>=0.10.0
-610	engines.node=>=0.10.0
-615	engines.node=>=12.0.0
-619	engines.node=>=0.6.19
-621	engines.node=>=8
-622	engines.node=>=12
-623	engines.node=>=18
-624	engines.node=>=20
-626	engines.node=>=8
-627	engines.node=>=12
-628	engines.node=>=12
-629	engines.node=>=6
-630	engines.node=>=0.10.0
-631	engines.node=>=8
-632	engines.node=>= 0.4
-638	engines.node=>=18
-639	engines.node=>=18
-640	engines.node=>=12.0.0
-641	engines.node=>=14.0.0
-643	bin=true
-644	engines.node=>=8.0
-645	engines.node=>=4
-647	engines.node=>=16
-648	engines.node=>=20
-649	engines.node=>=18.12	peerDependencies.typescript=>=4.8.4
-651	engines.node=>= 0.8.0
-652	engines.node=>=12.20
-654	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0
-655	engines.node=>=14.17	bin=true
-656	engines.node=>=0.8.0	bin=true
-658	engines.node=>=20.18.1
-659	engines.node=>=18.12.0
-665	engines.node=>= 0.8
-666	engines.node=^20.19.0 || >=22.12.0	peerDependencies.@types/node=^20.19.0 || >=22.12.0	peerDependencies.@vitejs/devtools=^0.1.18	peerDependencies.esbuild=^0.27.0 || ^0.28.0	peerDependencies.jiti=>=1.21.0	peerDependencies.less=^4.0.0	peerDependencies.sass=^1.70.0	peerDependencies.sass-embedded=^1.70.0	peerDependencies.stylus=>=0.54.8	peerDependencies.sugarss=^5.0.0	peerDependencies.terser=^5.16.0	peerDependencies.tsx=^4.8.1	peerDependencies.yaml=^2.4.2	peerDependenciesMeta.@types/node.optional=true	peerDependenciesMeta.@vitejs/devtools.optional=true	peerDependenciesMeta.esbuild.optional=true	peerDependenciesMeta.jiti.optional=true	peerDependenciesMeta.less.optional=true	peerDependenciesMeta.sass.optional=true	peerDependenciesMeta.sass-embedded.optional=true	peerDependenciesMeta.stylus.optional=true	peerDependenciesMeta.sugarss.optional=true	peerDependenciesMeta.terser.optional=true	peerDependenciesMeta.tsx.optional=true	peerDependenciesMeta.yaml.optional=true	bin=true
-667	engines.node=^20.0.0 || ^22.0.0 || >=24.0.0	peerDependencies.@edge-runtime/vm=*	peerDependencies.@opentelemetry/api=^1.9.0	peerDependencies.@types/node=^20.0.0 || ^22.0.0 || >=24.0.0	peerDependencies.@vitest/browser-playwright=4.1.7	peerDependencies.@vitest/browser-preview=4.1.7	peerDependencies.@vitest/browser-webdriverio=4.1.7	peerDependencies.@vitest/coverage-istanbul=4.1.7	peerDependencies.@vitest/coverage-v8=4.1.7	peerDependencies.@vitest/ui=4.1.7	peerDependencies.happy-dom=*	peerDependencies.jsdom=*	peerDependencies.vite=^6.0.0 || ^7.0.0 || ^8.0.0	peerDependenciesMeta.@edge-runtime/vm.optional=true	peerDependenciesMeta.@opentelemetry/api.optional=true	peerDependenciesMeta.@types/node.optional=true	peerDependenciesMeta.@vitest/browser-playwright.optional=true	peerDependenciesMeta.@vitest/browser-preview.optional=true	peerDependenciesMeta.@vitest/browser-webdriverio.optional=true	peerDependenciesMeta.@vitest/coverage-istanbul.optional=true	peerDependenciesMeta.@vitest/coverage-v8.optional=true	peerDependenciesMeta.@vitest/ui.optional=true	peerDependenciesMeta.happy-dom.optional=true	peerDependenciesMeta.jsdom.optional=true	bin=true
-668	engines.node=>=0.10.0
-669	engines.node=>=18
-670	engines.node=20 || >=22
-672	engines.node=>=20
-673	engines.node=>=20
-674	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0
-675	engines.node=>= 8	bin=true
-676	engines.node=^18.17.0 || >=20.5.0	bin=true
-677	engines.node=>=8	bin=true
-678	engines.node=>=12
-679	engines.node=>= 10.0.0
-680	engines.node=>=0.10.0
-682	engines.node=>=20
-683	engines.node=>=10
-684	engines.node=>=12
-685	engines.node=>=18
-687	engines.node=>=10.0.0	peerDependencies.bufferutil=^4.0.1	peerDependencies.utf-8-validate=>=5.0.2	peerDependenciesMeta.bufferutil.optional=true	peerDependenciesMeta.utf-8-validate.optional=true
-688	engines.node=>=18
-690	engines.node=>=10
-691	engines.node=>= 14.6	bin=true
-692	engines.node=>=12
-693	engines.node=>=12
-694	engines.node=>=10
+F 677
+1	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	resolution.type=registry
+2	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	resolution.type=registry
+3	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	resolution.type=registry
+4	resolution.type=registry
+5	engines.node=>=6.9.0	resolution.type=registry
+6	engines.node=>=6.9.0	resolution.type=registry
+7	engines.node=>=6.9.0	resolution.type=registry
+8	engines.node=>=6.0.0	bin=true	resolution.type=registry
+9	engines.node=>=6.9.0	resolution.type=registry
+10	engines.node=>=18	resolution.type=registry
+11	bin=true	resolution.type=registry
+12	engines.node=>=18	peerDependencies.conventional-commits-filter=^5.0.0	peerDependencies.conventional-commits-parser=^6.4.0	peerDependenciesMeta.conventional-commits-filter.optional=true	peerDependenciesMeta.conventional-commits-parser.optional=true	resolution.type=registry
+13	engines.node=>=20.19.0	resolution.type=registry
+14	engines.node=>=20.19.0	peerDependencies.@csstools/css-parser-algorithms=^4.0.0	peerDependencies.@csstools/css-tokenizer=^4.0.0	resolution.type=registry
+15	engines.node=>=20.19.0	peerDependencies.@csstools/css-parser-algorithms=^4.0.0	peerDependencies.@csstools/css-tokenizer=^4.0.0	resolution.type=registry
+16	engines.node=>=20.19.0	peerDependencies.@csstools/css-tokenizer=^4.0.0	resolution.type=registry
+17	peerDependencies.css-tree=^3.2.1	peerDependenciesMeta.css-tree.optional=true	resolution.type=registry
+18	engines.node=>=20.19.0	resolution.type=registry
+19	resolution.type=registry
+20	resolution.type=registry
+21	resolution.type=registry
+22	cpu.0=ppc64	os.0=aix	engines.node=>=18	resolution.type=registry
+23	cpu.0=arm64	os.0=android	engines.node=>=18	resolution.type=registry
+24	cpu.0=arm	os.0=android	engines.node=>=18	resolution.type=registry
+25	cpu.0=x64	os.0=android	engines.node=>=18	resolution.type=registry
+26	cpu.0=arm64	os.0=darwin	engines.node=>=18	resolution.type=registry
+27	cpu.0=x64	os.0=darwin	engines.node=>=18	resolution.type=registry
+28	cpu.0=arm64	os.0=freebsd	engines.node=>=18	resolution.type=registry
+29	cpu.0=x64	os.0=freebsd	engines.node=>=18	resolution.type=registry
+30	cpu.0=arm64	os.0=linux	engines.node=>=18	resolution.type=registry
+31	cpu.0=arm	os.0=linux	engines.node=>=18	resolution.type=registry
+32	cpu.0=ia32	os.0=linux	engines.node=>=18	resolution.type=registry
+33	cpu.0=loong64	os.0=linux	engines.node=>=18	resolution.type=registry
+34	cpu.0=mips64el	os.0=linux	engines.node=>=18	resolution.type=registry
+35	cpu.0=ppc64	os.0=linux	engines.node=>=18	resolution.type=registry
+36	cpu.0=riscv64	os.0=linux	engines.node=>=18	resolution.type=registry
+37	cpu.0=s390x	os.0=linux	engines.node=>=18	resolution.type=registry
+38	cpu.0=x64	os.0=linux	engines.node=>=18	resolution.type=registry
+39	cpu.0=arm64	os.0=netbsd	engines.node=>=18	resolution.type=registry
+40	cpu.0=x64	os.0=netbsd	engines.node=>=18	resolution.type=registry
+41	cpu.0=arm64	os.0=openbsd	engines.node=>=18	resolution.type=registry
+42	cpu.0=x64	os.0=openbsd	engines.node=>=18	resolution.type=registry
+43	cpu.0=arm64	os.0=openharmony	engines.node=>=18	resolution.type=registry
+44	cpu.0=x64	os.0=sunos	engines.node=>=18	resolution.type=registry
+45	cpu.0=arm64	os.0=win32	engines.node=>=18	resolution.type=registry
+46	cpu.0=ia32	os.0=win32	engines.node=>=18	resolution.type=registry
+47	cpu.0=x64	os.0=win32	engines.node=>=18	resolution.type=registry
+48	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	peerDependencies.eslint=^6.0.0 || ^7.0.0 || >=8.0.0	resolution.type=registry
+49	engines.node=^12.0.0 || ^14.0.0 || >=16.0.0	resolution.type=registry
+50	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+51	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+52	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+53	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+54	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+55	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	peerDependencies.@noble/hashes=^1.8.0 || ^2.0.0	peerDependenciesMeta.@noble/hashes.optional=true	resolution.type=registry
+56	engines.node=>=18.18.0	resolution.type=registry
+57	engines.node=>=18.18.0	resolution.type=registry
+58	engines.node=>=12.22	resolution.type=registry
+59	engines.node=>=18.18	resolution.type=registry
+60	engines.node=>=18.18	resolution.type=registry
+61	resolution.type=registry
+62	resolution.type=registry
+63	engines.node=>=6.0.0	resolution.type=registry
+64	resolution.type=registry
+65	resolution.type=registry
+66	resolution.type=registry
+67	resolution.type=registry
+68	peerDependencies.@emnapi/core=^1.7.1	peerDependencies.@emnapi/runtime=^1.7.1	resolution.type=registry
+69	resolution.type=registry
+70	resolution.type=registry
+71	cpu.0=arm64	os.0=android	engines.node=>= 10.0.0	resolution.type=registry
+72	cpu.0=arm64	os.0=darwin	engines.node=>= 10.0.0	resolution.type=registry
+73	cpu.0=x64	os.0=darwin	engines.node=>= 10.0.0	resolution.type=registry
+74	cpu.0=x64	os.0=freebsd	engines.node=>= 10.0.0	resolution.type=registry
+75	cpu.0=arm	os.0=linux	libc.0=glibc	engines.node=>= 10.0.0	resolution.type=registry
+76	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=>= 10.0.0	resolution.type=registry
+77	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=>= 10.0.0	resolution.type=registry
+78	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=>= 10.0.0	resolution.type=registry
+79	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=>= 10.0.0	resolution.type=registry
+80	cpu.0=arm64	os.0=win32	engines.node=>= 10.0.0	resolution.type=registry
+81	cpu.0=ia32	os.0=win32	engines.node=>= 10.0.0	resolution.type=registry
+82	cpu.0=x64	os.0=win32	engines.node=>= 10.0.0	resolution.type=registry
+83	engines.node=>= 10.0.0	resolution.type=registry
+84	engines.node=>=22.12.0	peerDependencies.proxy-agent=>=8.0.1	peerDependenciesMeta.proxy-agent.optional=true	bin=true	resolution.type=registry
+85	cpu.0=arm64	os.0=android	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+86	cpu.0=arm64	os.0=darwin	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+87	cpu.0=x64	os.0=darwin	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+88	cpu.0=x64	os.0=freebsd	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+89	cpu.0=arm	os.0=linux	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+90	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+91	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+92	cpu.0=ppc64	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+93	cpu.0=s390x	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+94	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+95	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+96	cpu.0=arm64	os.0=openharmony	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+97	cpu.0=wasm32	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+98	cpu.0=arm64	os.0=win32	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+99	cpu.0=x64	os.0=win32	engines.node=^20.19.0 || >=22.12.0	resolution.type=registry
+100	resolution.type=registry
+101	engines.node=>=20.19.0	peerDependencies.rollup=>=4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+102	engines.node=>=16.0.0 || 14 >= 14.17	peerDependencies.rollup=^2.68.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+103	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+104	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+105	engines.node=>=14.0.0	peerDependencies.rollup=^2.78.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+106	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+107	engines.node=>=14.0.0	peerDependencies.rollup=^1.20.0||^2.0.0||^3.0.0||^4.0.0	peerDependenciesMeta.rollup.optional=true	resolution.type=registry
+108	cpu.0=arm	os.0=android	resolution.type=registry
+109	cpu.0=arm64	os.0=android	resolution.type=registry
+110	cpu.0=arm64	os.0=darwin	resolution.type=registry
+111	cpu.0=x64	os.0=darwin	resolution.type=registry
+112	cpu.0=arm64	os.0=freebsd	resolution.type=registry
+113	cpu.0=x64	os.0=freebsd	resolution.type=registry
+114	cpu.0=arm	os.0=linux	libc.0=glibc	resolution.type=registry
+115	cpu.0=arm	os.0=linux	libc.0=musl	resolution.type=registry
+116	cpu.0=arm64	os.0=linux	libc.0=glibc	resolution.type=registry
+117	cpu.0=arm64	os.0=linux	libc.0=musl	resolution.type=registry
+118	cpu.0=loong64	os.0=linux	libc.0=glibc	resolution.type=registry
+119	cpu.0=loong64	os.0=linux	libc.0=musl	resolution.type=registry
+120	cpu.0=ppc64	os.0=linux	libc.0=glibc	resolution.type=registry
+121	cpu.0=ppc64	os.0=linux	libc.0=musl	resolution.type=registry
+122	cpu.0=riscv64	os.0=linux	libc.0=glibc	resolution.type=registry
+123	cpu.0=riscv64	os.0=linux	libc.0=musl	resolution.type=registry
+124	cpu.0=s390x	os.0=linux	libc.0=glibc	resolution.type=registry
+125	cpu.0=x64	os.0=linux	libc.0=glibc	resolution.type=registry
+126	cpu.0=x64	os.0=linux	libc.0=musl	resolution.type=registry
+127	cpu.0=x64	os.0=openbsd	resolution.type=registry
+128	cpu.0=arm64	os.0=openharmony	resolution.type=registry
+129	cpu.0=arm64	os.0=win32	resolution.type=registry
+130	cpu.0=ia32	os.0=win32	resolution.type=registry
+131	cpu.0=x64	os.0=win32	resolution.type=registry
+132	cpu.0=x64	os.0=win32	resolution.type=registry
+133	engines.node=>=18	resolution.type=registry
+134	engines.node=>=18	resolution.type=registry
+135	engines.node=>=18	resolution.type=registry
+136	resolution.type=registry
+137	cpu.0=arm64	os.0=darwin	engines.node=>=10	resolution.type=registry
+138	cpu.0=x64	os.0=darwin	engines.node=>=10	resolution.type=registry
+139	cpu.0=arm	os.0=linux	engines.node=>=10	resolution.type=registry
+140	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=>=10	resolution.type=registry
+141	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=>=10	resolution.type=registry
+142	cpu.0=ppc64	os.0=linux	libc.0=glibc	engines.node=>=10	resolution.type=registry
+143	cpu.0=s390x	os.0=linux	libc.0=glibc	engines.node=>=10	resolution.type=registry
+144	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=>=10	resolution.type=registry
+145	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=>=10	resolution.type=registry
+146	cpu.0=arm64	os.0=win32	engines.node=>=10	resolution.type=registry
+147	cpu.0=ia32	os.0=win32	engines.node=>=10	resolution.type=registry
+148	cpu.0=x64	os.0=win32	engines.node=>=10	resolution.type=registry
+149	engines.node=>=10	peerDependencies.@swc/helpers=>=0.5.17	peerDependenciesMeta.@swc/helpers.optional=true	resolution.type=registry
+150	resolution.type=registry
+151	resolution.type=registry
+152	resolution.type=registry
+153	resolution.type=registry
+154	resolution.type=registry
+155	resolution.type=registry
+156	resolution.type=registry
+157	resolution.type=registry
+158	resolution.type=registry
+159	resolution.type=registry
+160	resolution.type=registry
+161	resolution.type=registry
+162	resolution.type=registry
+163	resolution.type=registry
+164	resolution.type=registry
+165	resolution.type=registry
+166	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.@typescript-eslint/parser=^8.59.4	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+167	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+168	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+169	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+170	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+171	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+172	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+173	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+174	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+175	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+176	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+177	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+178	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+179	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+180	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+181	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+182	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+183	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	resolution.type=registry
+184	cpu.0=arm	os.0=android	resolution.type=registry
+185	cpu.0=arm64	os.0=android	resolution.type=registry
+186	cpu.0=arm64	os.0=darwin	resolution.type=registry
+187	cpu.0=x64	os.0=darwin	resolution.type=registry
+188	cpu.0=x64	os.0=freebsd	resolution.type=registry
+189	cpu.0=arm	os.0=linux	resolution.type=registry
+190	cpu.0=arm	os.0=linux	resolution.type=registry
+191	cpu.0=arm64	os.0=linux	libc.0=glibc	resolution.type=registry
+192	cpu.0=arm64	os.0=linux	libc.0=musl	resolution.type=registry
+193	cpu.0=ppc64	os.0=linux	libc.0=glibc	resolution.type=registry
+194	cpu.0=riscv64	os.0=linux	libc.0=glibc	resolution.type=registry
+195	cpu.0=riscv64	os.0=linux	libc.0=musl	resolution.type=registry
+196	cpu.0=s390x	os.0=linux	libc.0=glibc	resolution.type=registry
+197	cpu.0=x64	os.0=linux	libc.0=glibc	resolution.type=registry
+198	cpu.0=x64	os.0=linux	libc.0=musl	resolution.type=registry
+199	cpu.0=wasm32	engines.node=>=14.0.0	resolution.type=registry
+200	cpu.0=arm64	os.0=win32	resolution.type=registry
+201	cpu.0=ia32	os.0=win32	resolution.type=registry
+202	cpu.0=x64	os.0=win32	resolution.type=registry
+203	engines.node=^20.19.0 || >=22.12.0	peerDependencies.vite=^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0	peerDependencies.vue=^3.2.25	resolution.type=registry
+204	peerDependencies.@vitest/browser=4.1.7	peerDependencies.vitest=4.1.7	peerDependenciesMeta.@vitest/browser.optional=true	resolution.type=registry
+205	engines.node=>=18	peerDependencies.@typescript-eslint/eslint-plugin=*	peerDependencies.eslint=>=8.57.0	peerDependencies.typescript=>=5.0.0	peerDependencies.vitest=*	peerDependenciesMeta.@typescript-eslint/eslint-plugin.optional=true	peerDependenciesMeta.typescript.optional=true	peerDependenciesMeta.vitest.optional=true	resolution.type=registry
+206	resolution.type=registry
+207	peerDependencies.msw=^2.4.9	peerDependencies.vite=^6.0.0 || ^7.0.0 || ^8.0.0	peerDependenciesMeta.msw.optional=true	peerDependenciesMeta.vite.optional=true	resolution.type=registry
+208	resolution.type=registry
+209	resolution.type=registry
+210	resolution.type=registry
+211	resolution.type=registry
+212	resolution.type=registry
+213	engines.node=>= 0.12.0	resolution.type=registry
+214	resolution.type=registry
+215	resolution.type=registry
+216	peerDependencies.acorn=^6.0.0 || ^7.0.0 || ^8.0.0	resolution.type=registry
+217	engines.node=>=0.4.0	bin=true	resolution.type=registry
+218	engines.node=>=0.4.0	bin=true	resolution.type=registry
+219	resolution.type=registry
+220	resolution.type=registry
+221	resolution.type=registry
+222	engines.node=>=6	resolution.type=registry
+223	engines.node=>=18	resolution.type=registry
+224	engines.node=>=8	resolution.type=registry
+225	engines.node=>=12	resolution.type=registry
+226	engines.node=>=12	resolution.type=registry
+227	engines.node=>=8	resolution.type=registry
+228	engines.node=>=12	resolution.type=registry
+229	engines.node=>=12	resolution.type=registry
+230	resolution.type=registry
+231	resolution.type=registry
+232	resolution.type=registry
+233	resolution.type=registry
+234	resolution.type=registry
+235	resolution.type=registry
+236	resolution.type=registry
+237	resolution.type=registry
+238	engines.node=>= 10.0.0	resolution.type=registry
+239	resolution.type=registry
+240	engines.node=18 || 20 || >=22	resolution.type=registry
+241	resolution.type=registry
+242	engines.bare=>=1.7.0	resolution.type=registry
+243	engines.bare=>=1.6.0	resolution.type=registry
+244	resolution.type=registry
+245	resolution.type=registry
+246	resolution.type=registry
+247	engines.node=>=14.16	resolution.type=registry
+248	resolution.type=registry
+249	engines.node=18 || 20 || >=22	resolution.type=registry
+250	engines.node=18 || 20 || >=22	resolution.type=registry
+251	engines.node=>=8	resolution.type=registry
+252	engines.node=>= 0.8	resolution.type=registry
+253	engines.node=>= 0.8	resolution.type=registry
+254	engines.node=>= 0.4	resolution.type=registry
+255	engines.node=>=6	resolution.type=registry
+256	engines.node=>=14.16	resolution.type=registry
+257	engines.node=>=18	resolution.type=registry
+258	engines.node=>=12	resolution.type=registry
+259	engines.node=>=10	resolution.type=registry
+260	engines.node=^12.17.0 || ^14.13 || >=16.0.0	resolution.type=registry
+261	engines.node=^12.17.0 || ^14.13 || >=16.0.0	resolution.type=registry
+262	resolution.type=registry
+263	engines.node=>= 20.19.0	resolution.type=registry
+264	engines.node=>=20.19.0 <22.0.0 || >=22.12.0	peerDependencies.devtools-protocol=*	resolution.type=registry
+265	engines.node=>=10	resolution.type=registry
+266	engines.node=>=18	resolution.type=registry
+267	engines.node=>=20	resolution.type=registry
+268	engines.node=^12.20.0 || ^14.13.1 || >=16.0.0	resolution.type=registry
+269	engines.node=>=12	resolution.type=registry
+270	engines.node=>=7.0.0	resolution.type=registry
+271	resolution.type=registry
+272	engines.node=>= 12.0.0	resolution.type=registry
+273	resolution.type=registry
+274	resolution.type=registry
+275	engines.node=>= 0.6	resolution.type=registry
+276	engines.node=>= 0.8.0	resolution.type=registry
+277	resolution.type=registry
+278	resolution.type=registry
+279	engines.node=>= 0.6	resolution.type=registry
+280	engines.node=>=18	resolution.type=registry
+281	engines.node=>=18	resolution.type=registry
+282	engines.node=>=18	bin=true	resolution.type=registry
+283	engines.node=>=18	bin=true	resolution.type=registry
+284	engines.node=>=18	resolution.type=registry
+285	engines.node=>=18	bin=true	resolution.type=registry
+286	resolution.type=registry
+287	resolution.type=registry
+288	engines.node=>=14	peerDependencies.typescript=>=4.9.5	peerDependenciesMeta.typescript.optional=true	resolution.type=registry
+289	engines.node=>= 8	resolution.type=registry
+290	engines.node=^10 || ^12.20.0 || ^14.13.0 || >=15.0.0	resolution.type=registry
+291	engines.node=>=4	bin=true	resolution.type=registry
+292	resolution.type=registry
+293	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	resolution.type=registry
+294	peerDependencies.supports-color=*	peerDependenciesMeta.supports-color.optional=true	resolution.type=registry
+295	engines.node=>=6.0	peerDependencies.supports-color=*	peerDependenciesMeta.supports-color.optional=true	resolution.type=registry
+296	engines.node=>=6.0	peerDependencies.supports-color=*	peerDependenciesMeta.supports-color.optional=true	resolution.type=registry
+297	resolution.type=registry
+298	engines.node=>=4.0.0	resolution.type=registry
+299	resolution.type=registry
+300	engines.node=>=0.10.0	resolution.type=registry
+301	engines.node=>= 0.4	resolution.type=registry
+302	engines.node=>=0.10	bin=true	resolution.type=registry
+303	engines.node=>=8	resolution.type=registry
+304	resolution.type=registry
+305	resolution.type=registry
+306	resolution.type=registry
+307	engines.node=>=8	resolution.type=registry
+308	resolution.type=registry
+309	resolution.type=registry
+310	resolution.type=registry
+311	resolution.type=registry
+312	resolution.type=registry
+313	engines.node=>=8.6	resolution.type=registry
+314	engines.node=>=0.12	resolution.type=registry
+315	engines.node=>=20.19.0	resolution.type=registry
+316	engines.node=>=6	resolution.type=registry
+317	engines.node=>=18	resolution.type=registry
+318	resolution.type=registry
+319	engines.node=>= 0.4	resolution.type=registry
+320	engines.node=>= 0.4	resolution.type=registry
+321	resolution.type=registry
+322	resolution.type=registry
+323	deprecated=Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.	peerDependencies.esbuild=*	resolution.type=registry
+324	engines.node=>=18	bin=true	resolution.type=registry
+325	engines.node=>=6	resolution.type=registry
+326	engines.node=>=10	resolution.type=registry
+327	engines.node=^12.20.0 || ^14.18.0 || >=16.0.0	peerDependencies.unrs-resolver=^1.0.0	peerDependenciesMeta.unrs-resolver.optional=true	resolution.type=registry
+328	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.@typescript-eslint/utils=^8.56.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.eslint-import-resolver-node=*	peerDependenciesMeta.@typescript-eslint/utils.optional=true	peerDependenciesMeta.eslint-import-resolver-node.optional=true	resolution.type=registry
+329	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+330	engines.node=^12.22.0 || ^14.17.0 || >=16.0.0	resolution.type=registry
+331	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+332	engines.node=^20.19.0 || ^22.13.0 || >=24	peerDependencies.jiti=*	peerDependenciesMeta.jiti.optional=true	bin=true	resolution.type=registry
+333	engines.node=^20.19.0 || ^22.13.0 || >=24	resolution.type=registry
+334	engines.node=>=0.10	resolution.type=registry
+335	engines.node=>=4.0	resolution.type=registry
+336	engines.node=>=4.0	resolution.type=registry
+337	resolution.type=registry
+338	resolution.type=registry
+339	engines.node=>=0.10.0	resolution.type=registry
+340	resolution.type=registry
+341	engines.node=>=10	resolution.type=registry
+342	engines.node=>=12.0.0	resolution.type=registry
+343	resolution.type=registry
+344	resolution.type=registry
+345	resolution.type=registry
+346	resolution.type=registry
+347	resolution.type=registry
+348	resolution.type=registry
+349	engines.node=>=12.0.0	peerDependencies.picomatch=^3 || ^4	peerDependenciesMeta.picomatch.optional=true	resolution.type=registry
+351	engines.node=>=16.0.0	resolution.type=registry
+352	resolution.type=registry
+353	engines.node=>=8	resolution.type=registry
+354	engines.node=>=10	resolution.type=registry
+355	engines.node=>=16	resolution.type=registry
+356	resolution.type=registry
+357	os.0=darwin	engines.node=^8.16.0 || ^10.6.0 || >=11.0.0	resolution.type=registry
+358	resolution.type=registry
+359	resolution.type=registry
+360	engines.node=6.* || 8.* || >= 10.*	resolution.type=registry
+361	engines.node=>=18	resolution.type=registry
+362	engines.node=>=18	resolution.type=registry
+363	engines.node=>= 0.4	resolution.type=registry
+364	engines.node=>=10	resolution.type=registry
+365	resolution.type=registry
+366	resolution.type=registry
+367	engines.node=>=10.13.0	resolution.type=registry
+368	engines.node=18 || 20 || >=22	resolution.type=registry
+369	resolution.type=registry
+370	engines.node=>=0.4.7	bin=true	resolution.type=registry
+371	engines.node=>=8	resolution.type=registry
+372	resolution.type=registry
+373	engines.node=>= 0.4	resolution.type=registry
+374	engines.node=>= 0.4	resolution.type=registry
+375	engines.node=>= 0.4	resolution.type=registry
+376	resolution.type=registry
+377	engines.node=>= 0.4	resolution.type=registry
+378	engines.node=^18.17.0 || >=20.5.0	resolution.type=registry
+379	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	resolution.type=registry
+380	resolution.type=registry
+381	engines.node=>=10.17.0	resolution.type=registry
+382	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0	resolution.type=registry
+383	engines.node=>= 4	resolution.type=registry
+384	engines.node=>= 4	resolution.type=registry
+385	resolution.type=registry
+386	resolution.type=registry
+387	engines.node=>=6	resolution.type=registry
+388	resolution.type=registry
+389	engines.node=>=0.8.19	resolution.type=registry
+390	resolution.type=registry
+391	resolution.type=registry
+392	resolution.type=registry
+393	engines.node=>= 0.4	resolution.type=registry
+394	engines.node=>= 0.4	resolution.type=registry
+395	engines.node=>=8	bin=true	resolution.type=registry
+396	resolution.type=registry
+397	engines.node=>=0.10.0	resolution.type=registry
+398	engines.node=>=8	resolution.type=registry
+399	engines.node=>=18	resolution.type=registry
+400	engines.node=>=18	resolution.type=registry
+401	engines.node=>=0.10.0	resolution.type=registry
+402	resolution.type=registry
+403	engines.node=>=0.12.0	resolution.type=registry
+404	engines.node=>=8	resolution.type=registry
+405	engines.node=^12.20.0 || ^14.13.1 || >=16.0.0	resolution.type=registry
+406	resolution.type=registry
+407	resolution.type=registry
+408	resolution.type=registry
+409	engines.node=>= 0.4	resolution.type=registry
+410	engines.node=>=8	resolution.type=registry
+411	engines.node=>=8	resolution.type=registry
+412	resolution.type=registry
+413	resolution.type=registry
+414	engines.node=>=16	resolution.type=registry
+415	engines.node=>=8	resolution.type=registry
+416	engines.node=>=10	resolution.type=registry
+417	engines.node=>=8	resolution.type=registry
+418	resolution.type=registry
+419	resolution.type=registry
+420	resolution.type=registry
+421	bin=true	resolution.type=registry
+422	engines.node=^20.19.0 || ^22.13.0 || >=24.0.0	peerDependencies.canvas=^3.0.0	peerDependenciesMeta.canvas.optional=true	resolution.type=registry
+423	resolution.type=registry
+424	resolution.type=registry
+425	engines.node=^18.17.0 || >=20.5.0	resolution.type=registry
+426	resolution.type=registry
+427	resolution.type=registry
+428	resolution.type=registry
+429	resolution.type=registry
+430	resolution.type=registry
+431	resolution.type=registry
+432	engines.node=>= 0.8.0	resolution.type=registry
+433	resolution.type=registry
+434	cpu.0=arm64	os.0=android	engines.node=>= 12.0.0	resolution.type=registry
+435	cpu.0=arm64	os.0=darwin	engines.node=>= 12.0.0	resolution.type=registry
+436	cpu.0=x64	os.0=darwin	engines.node=>= 12.0.0	resolution.type=registry
+437	cpu.0=x64	os.0=freebsd	engines.node=>= 12.0.0	resolution.type=registry
+438	cpu.0=arm	os.0=linux	engines.node=>= 12.0.0	resolution.type=registry
+439	cpu.0=arm64	os.0=linux	libc.0=glibc	engines.node=>= 12.0.0	resolution.type=registry
+440	cpu.0=arm64	os.0=linux	libc.0=musl	engines.node=>= 12.0.0	resolution.type=registry
+441	cpu.0=x64	os.0=linux	libc.0=glibc	engines.node=>= 12.0.0	resolution.type=registry
+442	cpu.0=x64	os.0=linux	libc.0=musl	engines.node=>= 12.0.0	resolution.type=registry
+443	cpu.0=arm64	os.0=win32	engines.node=>= 12.0.0	resolution.type=registry
+444	cpu.0=x64	os.0=win32	engines.node=>= 12.0.0	resolution.type=registry
+445	engines.node=>= 12.0.0	resolution.type=registry
+446	resolution.type=registry
+447	engines.node=>=22.22.1	bin=true	resolution.type=registry
+448	engines.node=>=22.13.0	resolution.type=registry
+449	engines.node=>= 12.13.0	resolution.type=registry
+450	engines.node=>=10	resolution.type=registry
+451	resolution.type=registry
+452	resolution.type=registry
+453	engines.node=>=18	resolution.type=registry
+454	engines.node=14 || >=16.14	resolution.type=registry
+455	engines.node=20 || >=22	resolution.type=registry
+456	engines.node=20 || >=22	resolution.type=registry
+457	resolution.type=registry
+458	resolution.type=registry
+459	engines.node=>=10	resolution.type=registry
+460	resolution.type=registry
+461	engines.node=>= 18	bin=true	resolution.type=registry
+462	engines.node=>= 18	bin=true	resolution.type=registry
+463	resolution.type=registry
+464	engines.node=>= 0.10.0	resolution.type=registry
+465	engines.node=>=18	resolution.type=registry
+466	resolution.type=registry
+467	resolution.type=registry
+468	engines.node=>=8.6	resolution.type=registry
+469	engines.node=>= 0.6	resolution.type=registry
+470	engines.node=>= 0.6	resolution.type=registry
+471	engines.node=>= 0.6	resolution.type=registry
+472	engines.node=>=6	resolution.type=registry
+473	engines.node=>=18	resolution.type=registry
+474	engines.node=18 || 20 || >=22	resolution.type=registry
+475	engines.node=18 || 20 || >=22	resolution.type=registry
+476	resolution.type=registry
+477	resolution.type=registry
+478	engines.node=>=16 || 14 >=14.17	resolution.type=registry
+479	resolution.type=registry
+480	resolution.type=registry
+481	resolution.type=registry
+482	resolution.type=registry
+483	engines.node=^10 || ^12 || ^13.7 || ^14 || >=15.0.1	bin=true	resolution.type=registry
+484	engines.node=^12.20.0 || ^14.18.0 || >=16.0.0	bin=true	resolution.type=registry
+485	resolution.type=registry
+486	engines.node=>= 0.6	resolution.type=registry
+487	resolution.type=registry
+488	resolution.type=registry
+489	engines.node=^18.17.0 || >=20.5.0	resolution.type=registry
+490	engines.node=^18.17.0 || >=20.5.0	resolution.type=registry
+491	engines.node=^20.5.0 || >=22.0.0	engines.npm=>= 10	bin=true	resolution.type=registry
+492	engines.node=>=8	resolution.type=registry
+493	engines.node=>=0.10.0	resolution.type=registry
+494	resolution.type=registry
+495	engines.node=>= 0.8	resolution.type=registry
+496	resolution.type=registry
+497	engines.node=>=6	resolution.type=registry
+498	engines.node=>=18	resolution.type=registry
+499	engines.node=>= 0.8.0	resolution.type=registry
+500	engines.node=>=10	resolution.type=registry
+501	engines.node=>=10	resolution.type=registry
+502	resolution.type=registry
+520	resolution.type=registry
+521	engines.node=>=6	resolution.type=registry
+522	engines.node=>=8	resolution.type=registry
+523	resolution.type=registry
+524	engines.node=>=8	resolution.type=registry
+525	resolution.type=registry
+526	engines.node=>=8	resolution.type=registry
+527	resolution.type=registry
+528	engines.node=18 || 20 || >=22	resolution.type=registry
+529	resolution.type=registry
+530	resolution.type=registry
+531	resolution.type=registry
+532	engines.node=>=8.6	resolution.type=registry
+533	engines.node=>=12	resolution.type=registry
+534	engines.node=>=12	resolution.type=registry
+535	engines.node=>=12	resolution.type=registry
+536	engines.node=>=0.10	bin=true	resolution.type=registry
+537	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0	resolution.type=registry
+538	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0	resolution.type=registry
+539	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0	resolution.type=registry
+540	engines.node=^10 || ^12 || >= 14	peerDependencies.postcss=^8.1.0	resolution.type=registry
+541	peerDependencies.postcss=^8.0.0	resolution.type=registry
+542	engines.node=>=4	resolution.type=registry
+543	engines.node=>=4	resolution.type=registry
+544	resolution.type=registry
+545	engines.node=^10 || ^12 || >=14	resolution.type=registry
+546	engines.node=>= 0.8.0	resolution.type=registry
+547	engines.node=>=14	bin=true	resolution.type=registry
+548	engines.node=>=20	resolution.type=registry
+549	resolution.type=registry
+550	engines.node=>=0.4.0	resolution.type=registry
+551	resolution.type=registry
+552	resolution.type=registry
+553	resolution.type=registry
+554	resolution.type=registry
+555	resolution.type=registry
+556	resolution.type=registry
+557	resolution.type=registry
+558	resolution.type=registry
+559	resolution.type=registry
+560	resolution.type=registry
+561	resolution.type=registry
+562	resolution.type=registry
+563	resolution.type=registry
+564	resolution.type=registry
+565	engines.node=>=6	resolution.type=registry
+566	engines.node=>=22.12.0	resolution.type=registry
+567	engines.node=>=22.12.0	bin=true	resolution.type=registry
+568	resolution.type=registry
+569	engines.node=>= 0.6	resolution.type=registry
+570	bin=true	resolution.type=registry
+571	engines.node=^18.17.0 || >=20.5.0	resolution.type=registry
+572	resolution.type=registry
+573	engines.node=>= 20.19.0	resolution.type=registry
+574	resolution.type=registry
+575	engines.node=>=0.10.0	resolution.type=registry
+576	engines.node=>=0.10.0	resolution.type=registry
+577	engines.node=>=0.10.0	resolution.type=registry
+578	engines.node=>=4	resolution.type=registry
+579	resolution.type=registry
+580	engines.node=>= 0.4	bin=true	resolution.type=registry
+581	bin=true	resolution.type=registry
+582	engines.node=>=18	resolution.type=registry
+583	resolution.type=registry
+584	engines.node=20 || >=22	bin=true	resolution.type=registry
+585	engines.node=^20.19.0 || >=22.12.0	bin=true	resolution.type=registry
+586	engines.node=>=20	peerDependencies.rollup=^3.29.4 || ^4	peerDependencies.typescript=^4.5 || ^5.0 || ^6.0	resolution.type=registry
+587	engines.node=>=14.18.0	peerDependencies.esbuild=>=0.18.0	peerDependencies.rollup=^1.20.0 || ^2.0.0 || ^3.0.0 || ^4.0.0	resolution.type=registry
+588	peerDependencies.rollup=^1.20.0 || ^2.0.0 || ^3.0.0 || ^4.0.0	resolution.type=registry
+589	engines.node=>=18.0.0	engines.npm=>=8.0.0	bin=true	resolution.type=registry
+590	resolution.type=registry
+591	resolution.type=registry
+592	engines.node=>=20.19.0	bin=true	resolution.type=registry
+593	engines.node=>=v12.22.7	resolution.type=registry
+594	engines.node=>=10	bin=true	resolution.type=registry
+595	engines.node=>=10	bin=true	resolution.type=registry
+596	resolution.type=registry
+597	engines.node=>= 14	bin=true	resolution.type=registry
+598	engines.node=>= 0.4	resolution.type=registry
+599	resolution.type=registry
+600	engines.node=>=8	resolution.type=registry
+601	engines.node=>=8	resolution.type=registry
+602	resolution.type=registry
+603	resolution.type=registry
+604	resolution.type=registry
+605	engines.node=>=14	resolution.type=registry
+606	bin=true	resolution.type=registry
+607	engines.node=>=18	resolution.type=registry
+608	engines.node=>=20	resolution.type=registry
+609	engines.node=>=0.10.0	resolution.type=registry
+610	engines.node=>=0.10.0	resolution.type=registry
+611	resolution.type=registry
+612	resolution.type=registry
+613	resolution.type=registry
+614	resolution.type=registry
+615	engines.node=>=12.0.0	resolution.type=registry
+616	resolution.type=registry
+617	resolution.type=registry
+618	resolution.type=registry
+619	engines.node=>=0.6.19	resolution.type=registry
+620	resolution.type=registry
+621	engines.node=>=8	resolution.type=registry
+622	engines.node=>=12	resolution.type=registry
+623	engines.node=>=18	resolution.type=registry
+624	engines.node=>=20	resolution.type=registry
+625	resolution.type=registry
+626	engines.node=>=8	resolution.type=registry
+627	engines.node=>=12	resolution.type=registry
+628	engines.node=>=12	resolution.type=registry
+629	engines.node=>=6	resolution.type=registry
+630	engines.node=>=0.10.0	resolution.type=registry
+631	engines.node=>=8	resolution.type=registry
+632	engines.node=>= 0.4	resolution.type=registry
+633	resolution.type=registry
+634	resolution.type=registry
+635	resolution.type=registry
+636	resolution.type=registry
+637	resolution.type=registry
+638	engines.node=>=18	resolution.type=registry
+639	engines.node=>=18	resolution.type=registry
+640	engines.node=>=12.0.0	resolution.type=registry
+641	engines.node=>=14.0.0	resolution.type=registry
+642	resolution.type=registry
+643	bin=true	resolution.type=registry
+644	engines.node=>=8.0	resolution.type=registry
+645	engines.node=>=4	resolution.type=registry
+646	resolution.type=registry
+647	engines.node=>=16	resolution.type=registry
+648	engines.node=>=20	resolution.type=registry
+649	engines.node=>=18.12	peerDependencies.typescript=>=4.8.4	resolution.type=registry
+650	resolution.type=registry
+651	engines.node=>= 0.8.0	resolution.type=registry
+652	engines.node=>=12.20	resolution.type=registry
+653	resolution.type=registry
+654	engines.node=^18.18.0 || ^20.9.0 || >=21.1.0	peerDependencies.eslint=^8.57.0 || ^9.0.0 || ^10.0.0	peerDependencies.typescript=>=4.8.4 <6.1.0	resolution.type=registry
+655	engines.node=>=14.17	bin=true	resolution.type=registry
+656	engines.node=>=0.8.0	bin=true	resolution.type=registry
+657	resolution.type=registry
+658	engines.node=>=20.18.1	resolution.type=registry
+659	engines.node=>=18.12.0	resolution.type=registry
+660	resolution.type=registry
+661	resolution.type=registry
+662	resolution.type=registry
+663	resolution.type=registry
+664	resolution.type=registry
+665	engines.node=>= 0.8	resolution.type=registry
+666	engines.node=^20.19.0 || >=22.12.0	peerDependencies.@types/node=^20.19.0 || >=22.12.0	peerDependencies.@vitejs/devtools=^0.1.18	peerDependencies.esbuild=^0.27.0 || ^0.28.0	peerDependencies.jiti=>=1.21.0	peerDependencies.less=^4.0.0	peerDependencies.sass=^1.70.0	peerDependencies.sass-embedded=^1.70.0	peerDependencies.stylus=>=0.54.8	peerDependencies.sugarss=^5.0.0	peerDependencies.terser=^5.16.0	peerDependencies.tsx=^4.8.1	peerDependencies.yaml=^2.4.2	peerDependenciesMeta.@types/node.optional=true	peerDependenciesMeta.@vitejs/devtools.optional=true	peerDependenciesMeta.esbuild.optional=true	peerDependenciesMeta.jiti.optional=true	peerDependenciesMeta.less.optional=true	peerDependenciesMeta.sass.optional=true	peerDependenciesMeta.sass-embedded.optional=true	peerDependenciesMeta.stylus.optional=true	peerDependenciesMeta.sugarss.optional=true	peerDependenciesMeta.terser.optional=true	peerDependenciesMeta.tsx.optional=true	peerDependenciesMeta.yaml.optional=true	bin=true	resolution.type=registry
+667	engines.node=^20.0.0 || ^22.0.0 || >=24.0.0	peerDependencies.@edge-runtime/vm=*	peerDependencies.@opentelemetry/api=^1.9.0	peerDependencies.@types/node=^20.0.0 || ^22.0.0 || >=24.0.0	peerDependencies.@vitest/browser-playwright=4.1.7	peerDependencies.@vitest/browser-preview=4.1.7	peerDependencies.@vitest/browser-webdriverio=4.1.7	peerDependencies.@vitest/coverage-istanbul=4.1.7	peerDependencies.@vitest/coverage-v8=4.1.7	peerDependencies.@vitest/ui=4.1.7	peerDependencies.happy-dom=*	peerDependencies.jsdom=*	peerDependencies.vite=^6.0.0 || ^7.0.0 || ^8.0.0	peerDependenciesMeta.@edge-runtime/vm.optional=true	peerDependenciesMeta.@opentelemetry/api.optional=true	peerDependenciesMeta.@types/node.optional=true	peerDependenciesMeta.@vitest/browser-playwright.optional=true	peerDependenciesMeta.@vitest/browser-preview.optional=true	peerDependenciesMeta.@vitest/browser-webdriverio.optional=true	peerDependenciesMeta.@vitest/coverage-istanbul.optional=true	peerDependenciesMeta.@vitest/coverage-v8.optional=true	peerDependenciesMeta.@vitest/ui.optional=true	peerDependenciesMeta.happy-dom.optional=true	peerDependenciesMeta.jsdom.optional=true	bin=true	resolution.type=registry
+668	engines.node=>=0.10.0	resolution.type=registry
+669	engines.node=>=18	resolution.type=registry
+670	engines.node=20 || >=22	resolution.type=registry
+671	resolution.type=registry
+672	engines.node=>=20	resolution.type=registry
+673	engines.node=>=20	resolution.type=registry
+674	engines.node=^20.19.0 || ^22.12.0 || >=24.0.0	resolution.type=registry
+675	engines.node=>= 8	bin=true	resolution.type=registry
+676	engines.node=^18.17.0 || >=20.5.0	bin=true	resolution.type=registry
+677	engines.node=>=8	bin=true	resolution.type=registry
+678	engines.node=>=12	resolution.type=registry
+679	engines.node=>= 10.0.0	resolution.type=registry
+680	engines.node=>=0.10.0	resolution.type=registry
+681	resolution.type=registry
+682	engines.node=>=20	resolution.type=registry
+683	engines.node=>=10	resolution.type=registry
+684	engines.node=>=12	resolution.type=registry
+685	engines.node=>=18	resolution.type=registry
+686	resolution.type=registry
+687	engines.node=>=10.0.0	peerDependencies.bufferutil=^4.0.1	peerDependencies.utf-8-validate=>=5.0.2	peerDependenciesMeta.bufferutil.optional=true	peerDependenciesMeta.utf-8-validate.optional=true	resolution.type=registry
+688	engines.node=>=18	resolution.type=registry
+689	resolution.type=registry
+690	engines.node=>=10	resolution.type=registry
+691	engines.node=>= 14.6	bin=true	resolution.type=registry
+692	engines.node=>=12	resolution.type=registry
+693	engines.node=>=12	resolution.type=registry
+694	engines.node=>=10	resolution.type=registry
+695	resolution.type=registry

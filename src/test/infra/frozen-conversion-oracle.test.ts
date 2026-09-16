@@ -322,6 +322,9 @@ describe('infra: frozen conversion native oracle', () => {
           to: adapter.format,
           strict: false,
           targetVersion: adapter.version,
+          ...(adapter.family === 'yarn-classic' && registry?.registry !== undefined
+            ? { registry: registry.registry }
+            : {}),
           ...(cacheKey === undefined ? {} : { cacheKey }),
           manifests: {
             '': {

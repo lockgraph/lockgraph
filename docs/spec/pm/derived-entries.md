@@ -281,6 +281,5 @@ both pinned Yarn binaries. The oracle requires:
 - unchanged project inputs; and
 - `yarn install --immutable` exit 0.
 
-The public behavior spec records the evidence boundary. The implementation
-decision and graph invariants are in
-[ADR-0039](../decisions/0039-target-pm-compatibility-overlays.md).
+The public behavior spec records the evidence boundary; the implementation
+decision and graph invariants are recorded outside it.

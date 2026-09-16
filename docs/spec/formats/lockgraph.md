@@ -345,7 +345,7 @@ TarballKey discriminators (`+patch=` / `+src=`) folded into the node's identity.
 |------|--------------|---------|
 | `ws=<path>` | the node is a workspace member | `Node.workspacePath`. A **root** workspace carries `ws=` with an **empty** path (and is pinned at node 0 — see below); a non-root member carries its path, e.g. `ws=packages/a`. |
 | `patch=<token>` | the node is yarn-patched | the `+patch=` fingerprint ([§2 of `_common.md`](./_common.md#2-patch-slot--tarballkey-sentinel)). Stored **explicitly** — the format does **not** look through a patch to its base; it stores the base node **and** the patch node as two distinct rows. |
-| `src=<16-hex>` | `Node.source` is set | the `+src=` source discriminator (ADR-0032 — the 16-hex digest that distinguishes non-registry siblings sharing `name@version`). Stored **verbatim**, **NOT re-derived**: present exactly when `Node.source` is set, absent otherwise. Like `patch=`, it is folded into the re-derived NodeId. See [§ The `+src=` slot is stored, not re-derived](#the-src-slot-is-stored-not-re-derived). |
+| `src=<16-hex>` | `Node.source` is set | the `+src=` source discriminator (the 16-hex digest that distinguishes non-registry siblings sharing `name@version`). Stored **verbatim**, **NOT re-derived**: present exactly when `Node.source` is set, absent otherwise. Like `patch=`, it is folded into the re-derived NodeId. See [§ The `+src=` slot is stored, not re-derived](#the-src-slot-is-stored-not-re-derived). |
 | `peer=<ctx>` | the node is peer-virtualised | the `peerContext` (the NodeId-list block, [§4.2 of `_common.md`](./_common.md#4-reserved-vocabulary)), e.g. `peer=(react@17.0.2)`. Drives the re-derivation of this instance's NodeId. |
 
 > **Why `integrity` stays on the node, not in `F`.** The N row is the identity
@@ -400,7 +400,7 @@ followed by the `peerContext` suffix (`(…)…`) when the node is peer-virtuali
 
 #### The `+src=` slot is stored, not re-derived
 
-The `+src=` source discriminator (ADR-0032 — the 16-hex `Node.source` that
+The `+src=` source discriminator (the 16-hex `Node.source` that
 distinguishes non-registry siblings sharing `name@version`) is part of the
 NodeId, and it is **stored verbatim** as the N-row **`src=` slot**, present
 **exactly when `Node.source` is set** and absent otherwise. On parse it is read
@@ -529,7 +529,7 @@ mutually exclusive outcomes plus the "never existed" case:
 > **non-canonical** native and is stored verbatim (outcome 2). The distinction
 > between "omitted-because-canonical-url" (outcome 1) and "never-existed"
 > (outcome 3) must still be **unambiguous**, because inventing a resolution on a
-> tarball that never had one is the same failure class as the ADR-0032 phantom
+> tarball that never had one is the same failure class as the phantom
 > `+src=` bug — the `u`-member and a verbatim `nativeResolution=` are **mutually
 > exclusive**.
 
@@ -595,8 +595,8 @@ origin, prefixed onto the member so the derive-vs-fetch boundary survives:
 
 > **The `berry-zip` z-member folds the yarn-berry checksum cache-key.** A
 > yarn-berry `checksum` is `<cacheKey>/<sha512-hex>` (v8+) or a bare
-> `<sha512-hex>` (v4–v6); the `<cacheKey>/` prefix (`10c0` / `10` / `8` / `2`,
-> ADR-0031) is **part of that hash's value**, so it rides the `z`-member itself
+> `<sha512-hex>` (v4–v6); the `<cacheKey>/` prefix (`10c0` / `10` / `8` / `2`)
+> is **part of that hash's value**, so it rides the `z`-member itself
 > as `z<cacheKey>/<algo>-<digest>` (e.g. `z10c0/sha512-…`) rather than a separate
 > `F` slot. A cacheKey contains no `/` and an `<algo>-<digest>` contains no `/`,
 > so on decode the **first `/`** unambiguously separates the cacheKey (before it)
@@ -1462,7 +1462,7 @@ payloads, and a byte-stable body re-serialize) — now **without any checksum**:
 - **`patch` slot** — both the canonical 128-hex form and the
   `unresolved-<64hex>` sentinel; the base node and the patch node are stored as
   **two** distinct N rows.
-- **`+src=` source discriminator** (ADR-0032) — **stored verbatim** as the N-row
+- **`+src=` source discriminator** — **stored verbatim** as the N-row
   `src=` slot, **not re-derived**.
 - **`EdgeAttrs`** — `range` (the verbatim `descriptor`), `optional` (`o`),
   `workspace` (`w`), `alias` (the `alias=` slot), and `workspaceRange`

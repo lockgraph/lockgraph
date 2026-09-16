@@ -35,7 +35,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
   readFileSync(resolve(here, '../resources/fixtures/lockfiles', rel), 'utf8')
 
-// Eight-fixture matrix per ADR-0021 §A.4 acceptance gate.
+// Eight-fixture matrix per acceptance gate.
 const FIXTURES = [
   'deps-with-scopes',
   'git-github-tarball',
@@ -46,8 +46,8 @@ const FIXTURES = [
   'yarn-crlf',
 ] as const
 
-// Note: bundled-deps has no npm-1 fixture in the working set (per ADR-0021
-// §C/§D acceptance). The other 7 + patch-yarn cover the matrix.
+// Note: bundled-deps has no npm-1 fixture in the working set for §C/§D
+// acceptance. The other 7 + patch-yarn cover the matrix.
 const PATCH_FIXTURES = ['patch-yarn'] as const
 
 function graphSnapshot(graph: Graph) {
@@ -202,11 +202,11 @@ describe('npm-1 — parse fixtures', () => {
 
   it('parses git/github resolutions where version itself carries the URL', () => {
     const graph = parseFixtureGraph('git-github-tarball')
-    // ADR-0032 — address the nodes by name rather than a hard-coded bare id.
+    // address the nodes by name rather than a hard-coded bare id.
     // `is-git`'s version is a `git+https://…#sha` URL → canonical `git` → it
     // gains a `+src=` discriminator. `is-github`'s version is the `github:`
     // shorthand → canonical `unknown` (the recipe does not peel `github:`) →
-    // BARE per ADR-0032's unknown-is-bare rule. Both nodes still exist.
+    // BARE per 's unknown-is-bare rule. Both nodes still exist.
     const gitNode = graph.byName('is-git').map(id => graph.getNode(id)).find(n => n !== undefined)
     expect(gitNode).toBeDefined()
     expect(gitNode!.id).toContain('+src=')
@@ -226,7 +226,7 @@ describe('npm-1 — parse fixtures', () => {
 
 describe('npm-1 — stringify (§A.4 Graph-level roundtrip)', () => {
   // §A.4 predicate: parse(stringify(parse(x))).diff(parse(x)) is empty +
-  // tarballs() iteration-equal. yarn-crlf excluded (CRLF handled below).
+  // tarballs iteration-equal. yarn-crlf excluded (CRLF handled below).
   it.each(FIXTURES.filter(n => n !== 'yarn-crlf'))('roundtrips %s at Graph level', (name) => {
     const original = parseFixtureGraph(name)
     const emitted = stringify(original)
@@ -476,7 +476,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
       m.setTarball({ name: 'react-dom', version: '18.2.0', patch }, { integrity: mkIntegrity('sha512-x') })
       m.removeTarball({ name: 'react-dom', version: '18.2.0' })
       // replacePeerContext rebinds incoming edges to the virt-id form, so
-      // adding a peer edge AFTER is a no-op (the edge already exists from
+      // adding a peer edge AFTER is a no-op (the edge already exists
       // parse — although for npm-1 fixtures the peer edges are absent on
       // disk, the parse-time `peerDependencies` lives in sidecar only).
       // Use a fresh synthetic virt-id node to exercise both PEER_VIRT and
@@ -500,7 +500,7 @@ describe('npm-1 — modify (§B Mutator surface)', () => {
   })
 })
 
-describe('npm-1 — enrich (§C, ADR-0021 §C.npm-1)', () => {
+describe('npm-1 — enrich (§C, -1)', () => {
   it('peer-virt structurally absent: no peer edges на graph, no peer-virt NodeIds', () => {
     const graph = parseFixtureGraph('peers-basic')
     expect(graph.out('react-dom@18.2.0', 'peer')).toEqual([])
@@ -568,7 +568,7 @@ describe('npm-1 — enrich (§C, ADR-0021 §C.npm-1)', () => {
   })
 })
 
-describe('npm-1 — optimize (§D, ADR-0021 §D.npm-1 — prune unreachable)', () => {
+describe('npm-1 — optimize (§D, -1 — prune unreachable)', () => {
   function graphWithOrphan(): Graph {
     const base = parseFixtureGraph('simple')
     return base.mutate(m => {
@@ -659,7 +659,7 @@ const v1Lock = (body: Record<string, unknown>): string =>
 describe('parse', () => {
   it('throws FORMAT_MISMATCH when the top-level JSON value is an array', () => {
     const lock = '[1,2,3]'
-    // check() would reject (no lockfileVersion), but parse() is called directly
+    // check would reject (no lockfileVersion), but parse is called directly
     // here and its parseJson runs first. arrLock keeps a lockfileVersion while
     // staying a top-level array.
     const arrLock = '[{"lockfileVersion":1}]'
@@ -983,12 +983,12 @@ describe('enrich', () => {
           requires: { 'pkg-a': '0.0.0' },
         },
         // member `pkg-a` as a top-level sibling with NO resolved/integrity →
-        // no tarball payload. host resolves `pkg-a` against this sibling scope.
+        // only an undetermined-registry marker. host resolves it against this sibling scope.
         'pkg-a': { version: '0.0.0' },
       },
     })
     const graph = parse(lock)
-    expect(graph.tarballOf('pkg-a@0.0.0')).toBeUndefined()
+    expect(graph.tarballOf('pkg-a@0.0.0')?.resolution).toEqual({ type: 'registry' })
     // Parse wired a host→pkg-a dep edge.
     expect(graph.out('host@1.0.0', 'dep').some(e => e.dst === 'pkg-a@0.0.0')).toBe(true)
     const result = enrich(graph, {

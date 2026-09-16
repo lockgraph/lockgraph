@@ -1,4 +1,4 @@
-// ADR-0023 §3.1 — ModifyContext shape.
+// ModifyContext shape.
 //
 // `registry` is required at the type level — every modifier may need to
 // consult the adapter even for pure-graph intents (e.g. replaceVersion
@@ -11,7 +11,7 @@ import type { RegistryAdapter } from '../registry/types.ts'
 
 export interface ModifyContext {
   registry:   RegistryAdapter
-  /** Declared manifests keyed by workspace path (ADR-0025). Carries override
+  /** Declared manifests keyed by workspace path. Carries override
    *  declarations + workspace context for enrich / re-resolution. */
   manifests?: Record<string, Manifest>
 }

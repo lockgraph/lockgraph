@@ -7,7 +7,7 @@
 // the flat-suite lifecycle coverage с v5 literals substituted. This
 // module factors lifecycle assertions that are identical in semantics
 // across all three versions (mutator surface, enrich peer-virt-first-
-// class + manifests, optimize prune, ADR-0006 canonical NodeId
+// class + manifests, optimize prune, canonical NodeId
 // roundtrip) and parameterises them через a richer spec type.
 //
 // Shape-specific assertions (importers vs. collapsed-dependencies-only
@@ -52,7 +52,7 @@ export interface PnpmCoreAdapter {
 export interface PnpmCoreSuiteSpec {
   /** Display label, e.g. 'pnpm-v5', 'pnpm-v6', 'pnpm-v9'. */
   label: string
-  /** Diagnostic prefix per ADR-0022 (e.g. `PNPM_V5`, `PNPM_V6`, `PNPM_V9`). */
+  /** Diagnostic prefix per (e.g. `PNPM_V5`, `PNPM_V6`, `PNPM_V9`). */
   diagPrefix: string
   /**
    * `<scenario>/<adapter>.lock` filename suffix (e.g. `pnpm-v5.lock`).
@@ -156,7 +156,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
       })
       const reparsed = spec.adapter.parse(spec.adapter.stringify(result.graph))
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      // ADR-0014 §4.F3 — round-trip parse re-derives canonical resolution
+      // round-trip parse re-derives canonical resolution
       // from the on-disk `resolution:` block (or by convention from
       // name@version when only `integrity:` is emitted).
       expect(canonicalDigest(reparsed.tarballOf('ms@2.1.3')!.integrity!)).toBe(MODIFIED_SRI)
@@ -222,7 +222,7 @@ export function describeModifyCommon(spec: PnpmCoreSuiteSpec): void {
 
 export function describeEnrichCommon(spec: PnpmCoreSuiteSpec): void {
   const { label, diagPrefix } = spec
-  describe(`${label} — enrich (§C, ADR-0006 reference impl)`, () => {
+  describe(`${label} — enrich (§C,  reference impl)`, () => {
     it('peer-virt FIRST-CLASS: parse reads peer-context from disk (dominant path)', () => {
       const graph = parseFixtureGraph(spec, 'peers-basic')
       const result = spec.adapter.enrich(graph)
@@ -329,11 +329,11 @@ export function describeOptimizeCommon(spec: PnpmCoreSuiteSpec): void {
   })
 }
 
-// === ADR-0006 canonical NodeId form roundtrip ===============================
+// === canonical NodeId form roundtrip ===============================
 
 export function describeCanonicalNodeIdRoundtrip(spec: PnpmCoreSuiteSpec): void {
   const { label } = spec
-  describe(`${label} — ADR-0006 canonical NodeId form roundtrip`, () => {
+  describe(`${label} —  canonical NodeId form roundtrip`, () => {
     it('peer-virt NodeId roundtrips byte-stable через emit + reparse', () => {
       const graph = parseFixtureGraph(spec, 'peers-multi')
       const peerVirtNodes = Array.from(graph.nodes()).filter(n => n.peerContext.length > 0)
@@ -419,7 +419,7 @@ export function describeParseFixturesCommon(spec: PnpmCoreSuiteSpec): void {
       expect(graph.getNode('@types/node@20.11.30')).toBeDefined()
     })
 
-    it('parses peer-virt keys into canonical NodeIds (ADR-0006)', () => {
+    it('parses peer-virt keys into canonical NodeIds ()', () => {
       const graph = parseFixtureGraph(spec, 'peers-basic')
       const peerVirtId = 'react-dom@18.2.0(react@18.2.0)'
       const node = graph.getNode(peerVirtId)

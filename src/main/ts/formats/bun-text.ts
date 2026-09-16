@@ -15,13 +15,13 @@
 //
 // §B Lossy-but-acceptable:
 //   - `RECIPE_FEATURE_DROPPED` (feature='patch') — bun cannot encode
-//     patches; drop on emit per ADR-0014 §5 canonical loss code.
+// patches; drop on emit per canonical loss code.
 //   - `BUN_TEXT_PEER_VIRT_FLATTENED` — bun's peer-deps are declarative;
 //     peer-virt NodeIds (`<id>(<peer>@<v>)`) flatten on emit.
 //
 // §C enrich: workspace concretisation from manifests. peer-virt structurally
 // absent (declarative peer-deps live in the inner-block).
-// §D optimize: prune unreachable from `graph.roots()` BFS (ADR-0016 §D).
+// §D optimize: prune unreachable from `graph.roots()` BFS.
 
 import {
   GraphError,
@@ -33,6 +33,7 @@ import {
   type EdgeKind,
   type Graph,
   type Node,
+  type TarballPayload,
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
@@ -64,6 +65,7 @@ import {
   unresolvedDependencyData,
 } from '../recipe/unresolved-dependency.ts'
 import type { OverrideConstraint } from '../graph.ts'
+import { registryTarballUrl } from '../recipe/resolution.ts'
 
 // === CONSTANTS ==============================================================
 
@@ -90,12 +92,14 @@ export interface BunTextGeneration {
 export const BUN_TEXT_V1: BunTextGeneration = { lockfileVersion: 1 }
 export const BUN_TEXT_V2: BunTextGeneration = { lockfileVersion: 2 }
 
-export interface BunTextParseOptions {}
+export interface BunTextParseOptions {
+  registryFor?: (packageName: string) => string | undefined
+}
 
 export interface BunTextStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   /**
-   * Caller-supplied canonical override constraints (ADR-0025). bun's `overrides`
+   * Caller-supplied canonical override constraints. bun's `overrides`
    * block is FLAT top-level only, so these project through the bun-flat grammar
    * (`projectOverrides(_, 'bun')`); an ancestry-scoped constraint is dropped with
    * BUN_OVERRIDE_NESTED_UNSUPPORTED. An explicit `[]` suppresses the verbatim
@@ -179,6 +183,7 @@ interface BunTextPackageEntry {
 }
 
 interface BunTextParseContext {
+  readonly options: BunTextParseOptions
   readonly builder: ReturnType<typeof newBuilder>
   readonly diagnostics: Diagnostic[]
   readonly workspaces: Record<string, BunTextWorkspaceManifest>
@@ -221,11 +226,11 @@ interface BunTextSidecar {
   nodes: Map<string, BunTextNodeSidecar>
   /** declared peer ranges keyed by `<srcId>|<peerName>`. */
   peerDeclarations: Map<string, string>
-  /** Verbatim top-level `overrides` block (ADR-0025 §3 lossless same-PM carrier,
+  /** Verbatim top-level `overrides` block (lossless same-PM carrier,
    *  symmetric to npm's `rootMeta.nativeOverrides` / pnpm's `sidecar.overrides`).
    *  bun's block is npm-shaped (flat `{name: target}` or nested). */
   nativeOverrides?: Record<string, unknown>
-  /** Canonical projection of `overrides` (ADR-0025 §6) — for cross-PM reads. */
+  /** Canonical projection of `overrides` — for cross-PM reads. */
   canonicalOverrides?: OverrideConstraint[]
   /** Verbatim top-level `trustedDependencies` — postinstall-execution allowlist;
    *  load-bearing for reproducibility (spec/formats/bun-text.md Quirks). */
@@ -281,7 +286,7 @@ export function rebindAdapterState(
 
 /**
  * Canonical override constraints captured from a bun-text graph's top-level
- * `overrides` block (ADR-0025 §6, A2). Mirrors `getPnpmOverridesCanonical` /
+ * `overrides` block (A2). Mirrors `getPnpmOverridesCanonical` /
  * npm's `rootMeta.overrides` so `index.ts` `overridesOf` can fold a bun source's
  * overrides into a cross-PM conversion. Returns undefined when the graph carries
  * no overrides block (or the sidecar was lost to a bare `mutate`).
@@ -322,11 +327,11 @@ export function check(input: string, generation: BunTextGeneration = BUN_TEXT_V1
 
 export function parse(
   input: string,
-  _options: BunTextParseOptions = {},
+  options: BunTextParseOptions = {},
   generation: BunTextGeneration = BUN_TEXT_V1,
 ): Graph {
   const lf = parseBunLockfile(input, generation)
-  const context = createBunParseContext(lf)
+  const context = createBunParseContext(lf, options)
 
   // --- Pass 1: register all packages entries as graph nodes ----------------
   //
@@ -364,7 +369,7 @@ export function parse(
   // name@version regardless.
   addPackageEntryEdges(context, packageByName)
 
-  // --- Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md) ----
+  // -- Top-level fidelity blocks (spec/formats/bun-text.md) ----
   // Capture `overrides` / `trustedDependencies` / `patchedDependencies`
   // verbatim so a same-PM round-trip is lossless. `overrides` is bun's
   // forced-resolution mechanism — the npm/bun analog of yarn `resolutions`,
@@ -410,7 +415,7 @@ function parseBunLockfile(input: string, generation: BunTextGeneration): BunText
   return lf
 }
 
-function createBunParseContext(lf: BunTextLockfile): BunTextParseContext {
+function createBunParseContext(lf: BunTextLockfile, options: BunTextParseOptions): BunTextParseContext {
   const builder = newBuilder()
   const diagnostics: Diagnostic[] = []
   const nodeSidecar = new Map<string, BunTextNodeSidecar>()
@@ -436,6 +441,7 @@ function createBunParseContext(lf: BunTextLockfile): BunTextParseContext {
   const seenNodeIds = new Set<string>([rootId])
   const entriesByKey = new Map<string, BunTextPackageEntry>()
   return {
+    options,
     builder,
     diagnostics,
     workspaces,
@@ -712,7 +718,7 @@ function registerRegularPackageEntry(
       version,
       peerContext: [],
     })
-    setBunTarball(context, name, version, nodeId, integrity)
+    setBunTarball(context, name, version, nodeId, integrity, raw[1] === '')
   }
   context.nodeSidecar.set(nodeId, { inner, packagesKey })
   context.entriesByKey.set(packagesKey, { id: nodeId, inner, integrity })
@@ -724,14 +730,26 @@ function setBunTarball(
   version: string,
   nodeId: string,
   integrity: string | undefined,
+  isRegistry: boolean,
 ): void {
-  if (integrity === undefined) return
-  const parsed = parseSri(integrity, 'sri')
-  if (isEmptyIntegrity(parsed)) {
-    context.diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
-  } else {
-    context.builder.setTarball({ name, version }, { integrity: parsed })
+  if (!isRegistry && integrity === undefined) return
+  const registry = context.options.registryFor?.(name)
+  const payload: TarballPayload = isRegistry
+    ? {
+        resolution: registry === undefined
+          ? { type: 'registry' }
+          : { type: 'tarball', url: registryTarballUrl(name, version, registry) },
+      }
+    : {}
+  if (integrity !== undefined) {
+    const parsed = parseSri(integrity, 'sri')
+    if (isEmptyIntegrity(parsed)) {
+      context.diagnostics.push(invalidIntegrityDiagnostic('BUN_TEXT', nodeId, integrity))
+    } else {
+      payload.integrity = parsed
+    }
   }
+  context.builder.setTarball({ name, version }, payload)
 }
 
 export function stringify(
@@ -816,10 +834,10 @@ export function stringify(
     packagesBlock[key] = [`${node.name}@${node.version}`, '', inner, integrity]
   }
 
-  // Top-level fidelity blocks (ADR-0025 §3 / spec/formats/bun-text.md). Key
+  // Top-level fidelity blocks (spec/formats/bun-text.md). Key
   // order mirrors bun's emit: workspaces, overrides, packages, then the
   // trailing reproducibility blocks. `overrides` source precedence matches the
-  // npm-core precedent (ADR-0025 §3/§4):
+  // npm-core precedent:
   //   1. caller `options.overrides` (canonical) → project via npm grammar
   //      (bun's block is npm-shaped). An explicit `[]` suppresses the carrier.
   //   2. else the VERBATIM parse-time block (lossless same-PM round-trip).
@@ -887,7 +905,8 @@ export function enrich(
     const member = memberByName.get(node.name)
     if (member === undefined) continue
     if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
-    if (graph.tarball({ name: node.name, version: node.version }) !== undefined) continue
+    const payload = graph.tarball({ name: node.name, version: node.version })
+    if (payload !== undefined && Object.keys(payload).some(key => key !== 'resolution')) continue
     memberReplacements.push({ ...node, workspacePath: member.path })
   }
 
@@ -962,7 +981,7 @@ interface BunTextDepBlocks {
 // manifest or inner-block of a packages entry). For source = 'manifest',
 // workspace-protocol ranges resolve via `workspaceByPath`; otherwise we
 // rely on the pre-scoped `byName` map. Peer ranges are stashed declaratively
-// — bun encodes peers as data, not graph edges (ADR-0006 / §C enrich).
+// bun encodes peers as data, not graph edges (§C enrich).
 export function addBlockEdges(
   builder: ReturnType<typeof newBuilder>,
   diagnostics: Diagnostic[],
@@ -1019,7 +1038,7 @@ export function addBlockEdges(
       if (depName !== nameOf(dstId)) attrs.alias = depName
       if (isWorkspaceProtocolRange(range)) {
         attrs.workspace = true
-        // ADR-0014 §4.F4 — bun-text member-ref form has no version range;
+        // bun-text member-ref form has no version range;
         // canonical specifier is `workspace:*` (bun's coarse default). The
         // verbatim source-side richer specifier survives in `attrs.range`
         // for same-format roundtrip; the canonical workspaceRange flags the
@@ -1340,7 +1359,7 @@ function captureGraphWorkspaceManifest(
           : edge.kind === 'peer' ? peerDependencies
             : undefined
     if (target === undefined) continue
-    // ADR-0014 §4.F4 — bun-text canonical specifier is `workspace:*`
+    // bun-text canonical specifier is `workspace:*`
     // (member-ref form has no version range). Cross-format sources that
     // carry richer `^|~|<exact>` specifiers surface a collapse diagnostic;
     // the verbatim range is preserved in the manifest dep block (bun
@@ -1625,7 +1644,7 @@ function reportPatchDrop(
   )
 }
 
-// ADR-0014 §4.F3 stringify table — bun-text encodes only registry tarballs
+// stringify table — bun-text encodes only registry tarballs
 // (URL derived by convention from name@version) and workspace members
 // (via the `workspaces` block). git / directory / unknown F3 cases have
 // no representation in bun-text and are dropped with RECIPE_FEATURE_DROPPED.
@@ -1640,7 +1659,7 @@ function reportResolutionDrop(
   if (warned.has(node.id)) return
   const canonical = graph.tarballOf(node.id)?.resolution
   if (canonical === undefined) return
-  if (canonical.type === 'tarball') return
+  if (canonical.type === 'tarball' || canonical.type === 'registry') return
   if (canonical.type === 'unknown' && node.patch !== undefined) return
   warned.add(node.id)
   recipeEmitDropped(

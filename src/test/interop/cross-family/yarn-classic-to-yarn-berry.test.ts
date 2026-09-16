@@ -53,7 +53,7 @@ describe('interop: yarn-classic -> yarn-berry (naive)', () => {
   }
 })
 
-// Per ADR-0019 §C: when manifests are supplied, yarn-classic enrich synthesises
+// Per: when manifests are supplied, yarn-classic enrich synthesises
 // the root workspace node, classifies dep/dev/optional edges out of the root,
 // and tags workspace-protocol edges. The cross-family loop verifies that this
 // classification survives across the classic -> berry-v{4,5,6,8,9} stringify

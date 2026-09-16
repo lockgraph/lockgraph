@@ -1,4 +1,4 @@
-// ADR-0014 §4.F5 — CRLF / BOM byte normalisation on patch file bytes
+// CRLF / BOM byte normalisation on patch file bytes
 // before the F2 sha512 fingerprint. Tests cover (a) the primitive in
 // isolation, (b) cross-platform F2 hash stability under CRLF rewrites,
 // and (c) per-node `RECIPE_PATCH_NORMALISED` diagnostic emission across
@@ -139,7 +139,7 @@ describe('recipe/patch — canonicalHashOfBytes applies F5 transparently (hash s
 // === Diagnostic factories ===================================================
 
 describe('recipe/patch — RECIPE_PATCH_NORMALISED diagnostic factory', () => {
-  it('builds the canonical info-severity diagnostic shape per ADR-0014 §5', () => {
+  it('builds the canonical info-severity diagnostic shape per ', () => {
     const d = patchNormalizedDiagnostic('lodash@4.17.21')
     expect(d.code).toBe('RECIPE_PATCH_NORMALISED')
     expect(d.severity).toBe('info')

@@ -89,8 +89,7 @@ rule is **hoist-to-shallowest-non-conflicting**:
   pure function of the manifest**. Two developers with the same `package.json`
   can commit byte-different but resolution-equivalent locks. *(This project's
   own L3 layout model formalises the same find-up oracle —
-  `resolveDepTarget` — and the under-determination it implies; see
-  [ADR-0027](../decisions/0027-npm-layout-generator.md).)*
+  `resolveDepTarget` — and the under-determination it implies.)*
 
 `npm dedupe` (a.k.a. `npm ddp`) is a **separate pass** that "scans a tree for
 duplicated modules and works to squash them down as much as possible while
@@ -126,8 +125,7 @@ Escape hatches:
 
 `peerDependenciesMeta.<name>.optional: true` marks a peer as **optional** — its
 absence is not a conflict. *(Note: npm's lock writer and this project's npm core
-do not always round-trip `peerDependenciesMeta` — flagged in
-[ADR-0021](../decisions/0021-npm-family-completeness-contract.md) as out of the
+do not always round-trip `peerDependenciesMeta` — flagged as out of the
 current family-contract scope.)*
 
 ### `overrides` (manifest-driven forced replacement)
@@ -151,11 +149,8 @@ resolved result). Rules, quoting
   for a package that you directly depend on unless both the dependency and the
   override itself share the exact same spec."* The escape is the **`$<name>`
   reference**, which points an override at a direct dependency's own spec so the
-  two cannot drift. *(This project models `overrides` as
-  [ADR-0025 manifest overrides](../decisions/0025-manifest-overrides.md), passed
-  as `StringifyOptions.overrides` per
-  [ADR-0027 §5](../decisions/0027-npm-layout-generator.md) — never as a lockfile
-  field.)*
+  two cannot drift. *(This project models `overrides` as manifest overrides,
+  passed as `StringifyOptions.overrides` — never as a lockfile field.)*
 
 npm's `overrides` is the analogue of yarn's `resolutions`; they are not
 interchangeable on disk but cover the same need.
@@ -175,8 +170,7 @@ ideal tree**:
 - npm has **no `workspace:` protocol** on disk (unlike yarn-berry/pnpm). A
   member-to-member dependency is declared with an ordinary semver range that the
   local member satisfies; npm links the local copy when its version matches.
-  *(Confirmed against this project's fixtures in
-  [ADR-0021](../decisions/0021-npm-family-completeness-contract.md): npm-2/3/4 locks
+  *(Confirmed against this project's fixtures: npm-2/3/4 locks
   carry `link: true` + `resolved: "<wsPath>"` symlink entries, never a
   `workspace:` range.)*
 
@@ -508,8 +502,7 @@ published tarball, **`npm-shrinkwrap.json`** — same schema, different name). T
 they are
 fully specced in [`formats/npm-1.md`](../formats/npm-1.md),
 [`npm-2.md`](../formats/npm-2.md), [`npm-3.md`](../formats/npm-3.md), and
-[`npm-4.md`](../formats/npm-4.md), and modelled
-by [ADR-0021](../decisions/0021-npm-family-completeness-contract.md) — **not
+[`npm-4.md`](../formats/npm-4.md) — **not
 re-documented here**. The npm-CLI↔version interaction only:
 
 | `lockfileVersion` | Written by | Shape | Read by |
@@ -544,8 +537,7 @@ Key interactions worth stating once:
   SRI hash ([`formats/_common.md` integrity model](../formats/_common.md#3-integrity-model)).
 - npm's lock **never** records peer-virtualised identities, `patch:` protocols,
   or `workspace:` ranges — those are yarn/pnpm refinements npm has not adopted
-  (the basis of the npm-family completeness contract,
-  [ADR-0021](../decisions/0021-npm-family-completeness-contract.md)).
+  (the basis of the npm-family completeness contract).
 
 ### Integrity verification
 
@@ -750,9 +742,6 @@ Authoritative, cited inline above; consolidated:
   [Snyk](https://snyk.io/articles/npm-security-best-practices-shai-hulud-attack/)
   *(pre-release; flagged in Axis 5)*.
 - This project's internal model (cross-references, not external authority):
-  [ADR-0021](../decisions/0021-npm-family-completeness-contract.md),
-  [ADR-0025](../decisions/0025-manifest-overrides.md),
-  [ADR-0027](../decisions/0027-npm-layout-generator.md);
   [`registry/npm.md`](../registry/npm.md), [`registry/_common.md`](../registry/_common.md);
   [`formats/npm-{1,2,3,4}.md`](../formats/npm-4.md).
 
@@ -774,7 +763,7 @@ Authoritative, cited inline above; consolidated:
   [`formats/npm-4.md`](../formats/npm-4.md).
 - **`peerDependenciesMeta` round-trip.** npm records optional-peer metadata that
   the current npm-family contract does not fully model
-  ([ADR-0021](../decisions/0021-npm-family-completeness-contract.md) scope note) —
+ —
   revisit if a fixture forces it.
 - **Focused-install pruning.** Whether `npm install -w <name>` against an
   existing full tree prunes hoisted packages belonging only to non-selected

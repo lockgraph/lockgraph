@@ -78,6 +78,9 @@ describe('interop: yarn-berry-v10 incident-pair coverage', () => {
         from: 'yarn-berry-v10',
         to,
         strict: false,
+        ...(to === 'yarn-classic'
+          ? { registry: 'https://registry.yarnpkg.com' }
+          : {}),
         onDiagnostic: diagnostic => diagnostics.push(diagnostic),
       })).resolves.toEqual(expect.any(String))
 

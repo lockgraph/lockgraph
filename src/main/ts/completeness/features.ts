@@ -16,6 +16,7 @@ export const GRAPH_FEATURES = [
   'edge-alias',
   'patch',
   'source-discriminator',
+  'resolution:registry',
   'resolution:tarball',
   'resolution:git',
   'resolution:directory',
@@ -364,6 +365,11 @@ function inspectResolution(value: unknown, subject: string, state: DetectionStat
   }
 
   switch (value.type) {
+    case 'registry':
+      inspectKeys(value, new Set(['type', 'bind']), subject, 'tarball.resolution', state)
+      inspectOptionalString(value.bind, subject, 'tarball.resolution.bind', state)
+      state.features.add('resolution:registry')
+      break
     case 'tarball':
       inspectKeys(value, new Set(['type', 'url', 'hostingProvider', 'bind']), subject, 'tarball.resolution', state)
       inspectString(value.url, subject, 'tarball.resolution.url', state)

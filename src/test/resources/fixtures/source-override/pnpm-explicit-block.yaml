@@ -1,0 +1,9 @@
+lockfileVersion: '6.0'
+
+packages:
+
+  /ms@2.1.3:
+    resolution:
+      integrity: sha512-KEPT-BLOCK
+      tarball: 'https://registry.npmjs.org/ms/-/ms-2.1.3.tgz?signature=kept'
+

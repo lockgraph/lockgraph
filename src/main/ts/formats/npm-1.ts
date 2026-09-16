@@ -1,41 +1,41 @@
 // npm-1 adapter — npm `package-lock.json` lockfileVersion 1 (nested-tree shape).
 //
-// Standalone adapter per ADR-0021 §5: the npm-1
+// Standalone adapter: the npm-1
 // recursive `dependencies` tree shape is fundamentally different from the
 // flat `packages` block layout shared by npm-2/npm-3. Forcing a unified
 // pipeline rots both sides; this module owns its own parse / stringify
-// pipeline and reuses ONLY shape-compatible utilities from
+// pipeline and reuses ONLY shape-compatible utilities
 // `_npm-flat-types.ts` + `_npm-core.ts` (cmpStr, sortRecord, edgeTripleKey,
 // NPM_EDGE_RANGE_ATTR, NpmSidecar, derivePeerCandidates, pruneSidecar).
 //
 // Dependency direction (parallel to yarn-classic precedent):
-//   - this module imports from `_npm-flat-types.ts` (types + tiny utilities)
-//     and `_npm-core.ts` (cross-format peer derivation, sidecar pruning).
-//   - it does NOT call `parseFamily` / `stringifyFamily` — those are
-//     flat-shape specific.
-//   - `_npm-core.ts` does NOT import this module.
+// - this module imports from `_npm-flat-types.ts` (types + tiny utilities)
+// and `_npm-core.ts` (cross-format peer derivation, sidecar pruning).
+// - it does NOT call `parseFamily` / `stringifyFamily` — those are
+// flat-shape specific.
+// - `_npm-core.ts` does NOT import this module.
 //
-// §A pinning per ADR-0021 §A.npm-1:
-//   - top-level `lockfileVersion: 1` literal handshake; reject `packages`-
-//     shape inputs (npm-2/npm-3) with FORMAT_MISMATCH.
-//   - top-level `dependencies` recursive map; entries carry `version` +
-//     optional `resolved` / `integrity` / `dev` / `optional` / `bundled` /
-//     `requires` / nested `dependencies`.
-//   - JSON canonical 2-space indent, alphabetical sort, trailing `\n`.
+// §A pinning per -1:
+// - top-level `lockfileVersion: 1` literal handshake; reject `packages`-
+// shape inputs (npm-2/npm-3) with FORMAT_MISMATCH.
+// - top-level `dependencies` recursive map; entries carry `version` +
+// optional `resolved` / `integrity` / `dev` / `optional` / `bundled` /
+// `requires` / nested `dependencies`.
+// - JSON canonical 2-space indent, alphabetical sort, trailing `\n`.
 //
 // §B Lossy-but-acceptable (npm-1 specific):
-//   - `NPM_V1_PEER_DROPPED` — peer edges drop on emit (no on-disk slot).
-//   - `NPM_V1_PEER_VIRT_FLATTENED` — peer-virt NodeIds flatten on emit.
-//   - `NPM_V1_PATCH_DROPPED` — patch slot drops on emit (no `patch:` protocol).
-//   - `NPM_V1_WORKSPACES_UNSAFE` — workspace members omitted on emit.
+// - `NPM_V1_PEER_DROPPED` — peer edges drop on emit (no on-disk slot).
+// - `NPM_V1_PEER_VIRT_FLATTENED` — peer-virt NodeIds flatten on emit.
+// - `NPM_V1_PATCH_DROPPED` — patch slot drops on emit (no `patch:` protocol).
+// - `NPM_V1_WORKSPACES_UNSAFE` — workspace members omitted on emit.
 //
 // §C enrich:
-//   - peer-virt structurally absent (no on-disk peer block).
-//   - workspace concretisation from `manifests` only; `NPM_V1_NO_MANIFESTS`
-//     warning when manifests absent.
+// - peer-virt structurally absent (no on-disk peer block).
+// - workspace concretisation from `manifests` only; `NPM_V1_NO_MANIFESTS`
+// warning when manifests absent.
 //
-// §D optimize: prune unreachable from `graph.roots()` BFS — inherits
-// ADR-0016 §D verbatim via the same algorithm shape as `_npm-core.ts`.
+// §D optimize: prune unreachable from `graph.roots` BFS — inherits
+// verbatim via the same algorithm shape as `_npm-core.ts`.
 
 import {
   GraphError,
@@ -72,6 +72,7 @@ import { emitDropped as patchEmitDropped, emitDropped as recipeEmitDropped } fro
 import {
   isYarnBerryLocator,
   parse as parseResolutionRecipe,
+  registryTarballUrl,
   sourceDiscriminatorOf,
   stringifyForNpm,
   stripRegistrySha1Fragment,
@@ -84,7 +85,9 @@ import {
 
 // === TYPES ==================================================================
 
-export interface Npm1ParseOptions {}
+export interface Npm1ParseOptions {
+  registryFor?: (packageName: string) => string | undefined
+}
 
 export interface Npm1StringifyOptions {
   lineEnding?: 'lf' | 'crlf'
@@ -112,7 +115,7 @@ interface Npm1Entry {
   requires?: Record<string, string>
   dependencies?: Record<string, Npm1Entry>
   // npm v5/v6 may carry `peerDependencies` in newer fixtures; sidecar
-  // captures it but emit elides per ADR-0021 §A.npm-1.
+  // captures it but emit elides per -1.
   peerDependencies?: Record<string, string>
 }
 
@@ -126,6 +129,7 @@ interface Npm1Lockfile {
 }
 
 interface Npm1ParseContext {
+  readonly options: Npm1ParseOptions
   readonly lf: Npm1Lockfile
   readonly builder: ReturnType<typeof newBuilder>
   readonly diagnostics: Diagnostic[]
@@ -231,10 +235,10 @@ export function check(input: string): boolean {
   return true
 }
 
-export function parse(input: string, _options: Npm1ParseOptions = {}): Graph {
+export function parse(input: string, options: Npm1ParseOptions = {}): Graph {
   const lf = parseJson(input)
   assertNpm1Shape(lf)
-  const context = createNpm1ParseContext(lf)
+  const context = createNpm1ParseContext(lf, options)
   addNpm1TreeNodes(context, { deps: lf.dependencies, parentPath: '', inheritedDev: false, inheritedOptional: false })
   addNpm1RootEdges(context)
   normalizeNpm1InstallPaths(context)
@@ -314,7 +318,7 @@ function assertNpm1Shape(lf: Npm1Lockfile): void {
   }
 }
 
-function createNpm1ParseContext(lf: Npm1Lockfile): Npm1ParseContext {
+function createNpm1ParseContext(lf: Npm1Lockfile, options: Npm1ParseOptions): Npm1ParseContext {
   const builder = newBuilder()
   const rootName = lf.name ?? ''
   const rootVersion = lf.version ?? '0.0.0'
@@ -327,6 +331,7 @@ function createNpm1ParseContext(lf: Npm1Lockfile): Npm1ParseContext {
     workspacePath: '',
   })
   return {
+    options,
     lf,
     builder,
     diagnostics: [],
@@ -439,7 +444,7 @@ function addNpm1EntryNode(
   }
   if (identity.source !== undefined) node.source = identity.source
   context.builder.addNode(node)
-  const payload = npm1TarballPayload(context, entry, identity)
+  const payload = npm1TarballPayload(context, entry, identity, declaredName)
   if (Object.keys(payload).length > 0) {
     context.builder.setTarball(
       { name: declaredName, version: identity.version, source: identity.source },
@@ -452,13 +457,22 @@ function npm1TarballPayload(
   context: Npm1ParseContext,
   entry: Npm1Entry,
   identity: Npm1EntryIdentity,
+  name: string,
 ): TarballPayload {
   const payload: TarballPayload = {}
   if (entry.integrity !== undefined) {
     const integrity = parseSri(entry.integrity, 'sri')
     if (!isEmptyIntegrity(integrity)) payload.integrity = integrity
   }
-  if (identity.resolved === undefined) return payload
+  if (identity.resolved === undefined) {
+    if (entry.bundled !== true) {
+      const registry = context.options.registryFor?.(name)
+      payload.resolution = registry === undefined
+        ? { type: 'registry' }
+        : { type: 'tarball', url: registryTarballUrl(name, identity.version, registry) }
+    }
+    return payload
+  }
   payload.nativeResolution = identity.resolved
   const canonical = parseResolutionRecipe(identity.resolved, { sourceKind: 'npm-resolved' })
   if (canonical.type === 'unknown') {
@@ -619,7 +633,7 @@ function ensureSidecar(map: Map<string, NpmFlatSidecar>, id: string): NpmFlatSid
 
 function collectRequires(entry: Npm1Entry): Record<string, string> | undefined {
   if (entry.requires !== undefined) return entry.requires
-  // Fall back: legacy npm v5 fixtures sometimes encode declared deps via
+  // Fall back: legacy npm v5 fixtures sometimes encode declared deps
   // the nested `dependencies` block alone (with version pin as range).
   if (entry.dependencies !== undefined) {
     const out: Record<string, string> = {}
@@ -803,7 +817,7 @@ function reportNpm1WorkspaceDrop(context: Npm1StringifyContext, node: Node): voi
   recipeEmitDropped(
     node.id,
     'workspace',
-    'npm-1 has no workspace primitive (ADR-0021 §A.npm-1)',
+    'npm-1 has no workspace primitive (-1)',
     context.emitDiagnostic,
   )
 }
@@ -1042,10 +1056,10 @@ function buildEntry(
   // Resolved / from / integrity. npm v6 convention: git/github resolutions
   // live in `version` directly (`version: "git+https://..."`); direct tarball
   // URLs (`https://.../<tgz>`) live in `version` IFF the node's version was
-  // parsed as a URL (preserving the parse-time shape per ADR-0021 §A.npm-1);
+  // parsed as a URL (preserving the parse-time shape per -1);
   // otherwise the URL goes under `resolved`.
   const tarball = graph.tarballOf(node.id)
-  // ADR-0014 §4.F3 cross-format fallback: when PM-native `nativeResolution`
+  // cross-format fallback: when PM-native `nativeResolution`
   // is absent (cross-format input), derive from canonical.
   const native = tarball?.nativeResolution
   const resolutionStr = (native !== undefined && !isYarnBerryLocator(native) ? native : undefined)
@@ -1101,7 +1115,7 @@ function buildEntry(
   return entry
 }
 
-// ADR-0014 §4.F3 — project canonical resolution → npm-1 `resolved` URL.
+// project canonical resolution → npm-1 `resolved` URL.
 // Workspace canonical returns undefined (npm-1 predates workspaces).
 function deriveResolvedFromCanonical(canonical: ResolutionCanonical | undefined): string | undefined {
   if (canonical === undefined) return undefined
@@ -1298,7 +1312,8 @@ function planExistingNpm1Members(
     const member = memberByName.get(node.name)
     if (member === undefined) continue
     if (member.manifest.version !== undefined && node.version !== member.manifest.version) continue
-    if (graph.tarballOf(node.id) !== undefined) continue
+    const payload = graph.tarballOf(node.id)
+    if (payload !== undefined && Object.keys(payload).some(key => key !== 'resolution')) continue
     plan.memberNodeReplacements.push({ ...node, workspacePath: member.path })
   }
 }

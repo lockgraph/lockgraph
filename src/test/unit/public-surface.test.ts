@@ -1,4 +1,4 @@
-// ADR-0014 §3 public surface — dispatcher contract.
+// public surface — dispatcher contract.
 //
 // Covers per-format `parse / stringify / check` dispatch, `detect` matrix
 // across all adapters via the `simple` fixture, plus the `convert` orchestrator with
@@ -236,7 +236,7 @@ describe('public surface — convert', () => {
   })
 
   it('cross-family conversion: yarn-berry-v9 → bun-text observes patch-drop diagnostic', async () => {
-    // bun-text drops patches per ADR-0014 §4.F2 stringify table (RECIPE_FEATURE_DROPPED).
+    // bun-text drops patches per stringify table (RECIPE_FEATURE_DROPPED).
     // Today the diagnostic emit lives in the bun-text adapter directly; verify the public
     // surface threads it through onDiagnostic. Recipe-layer F2 adds the RECIPE_*
     // family — for now we assert the callback fires when patches are present in source.

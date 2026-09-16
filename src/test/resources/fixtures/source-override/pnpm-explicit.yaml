@@ -1,0 +1,14 @@
+lockfileVersion: '9.0'
+
+packages:
+
+  ms@2.1.3:
+    resolution: {integrity: sha512-KEPT, tarball: https://registry.npmjs.org/ms/-/ms-2.1.3.tgz}
+
+  derived@1.0.0:
+    resolution: {integrity: sha512-DERIVED}
+
+  file:packages/local:
+    resolution: {directory: packages/local, type: directory}
+
+snapshots: {}

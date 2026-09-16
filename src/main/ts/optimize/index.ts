@@ -1,4 +1,4 @@
-// ADR-0024 — optimize/ public re-exports.
+// optimize/ public re-exports.
 //
 // Mark-and-sweep orphan GC + OPTIMIZE_* diagnostic taxonomy. Per ADR §3.2
 // directory layout; subpath `lockgraph/optimize` mirrors

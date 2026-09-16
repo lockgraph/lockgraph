@@ -403,7 +403,10 @@ describe('bun-text — modify (§B Mutator surface)', () => {
     })
     const reparsed = parse(stringify(result.graph))
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: sri(MODIFIED_SRI) })
+    expect(reparsed.tarballOf('ms@2.1.3')).toEqual({
+      integrity: sri(MODIFIED_SRI),
+      resolution: { type: 'registry' },
+    })
   })
 
   it('roundtrips replaceNode (version bump)', () => {
@@ -670,7 +673,7 @@ describe('bun-text — optimize (§D prune unreachable + idempotence)', () => {
 
 // === Top-level fidelity blocks (overrides / trusted / patched) ==============
 //
-// ADR-0025 §3 carrier + audit-fix write path. bun's `overrides` is the
+// carrier + audit-fix write path. bun's `overrides` is the
 // npm/bun analog of yarn `resolutions` — the mechanism an audit-fix uses to
 // force a transitive vulnerable dep onto a safe version. These blocks were
 // silently dropped on round-trip before this slice; the tests below pin the
@@ -1179,8 +1182,10 @@ describe('enrich', () => {
         packages: { mypkg: ['mypkg@2.0.0', '', {}, ''] },
       }),
     )
-    // Precondition: no tarball, so the replacement guard does NOT skip.
-    expect(graph.tarball({ name: 'mypkg', version: '2.0.0' })).toBeUndefined()
+    // Precondition: only the weak undetermined-registry marker exists, so the
+    // replacement guard does NOT treat it as artifact evidence.
+    expect(graph.tarball({ name: 'mypkg', version: '2.0.0' })?.resolution)
+      .toEqual({ type: 'registry' })
     const result = enrich(graph, {
       manifests: {
         '': { name: 'root' },

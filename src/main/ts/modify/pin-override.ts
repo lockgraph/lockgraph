@@ -1,4 +1,4 @@
-// ADR-0023 §3.2 — `pinOverride`.
+// `pinOverride`.
 //
 // Equivalent to `replaceVersion(graph, {name, fromRange: '*'}, range, ctx)`,
 // PLUS emits a single `MODIFY_OVERRIDE_PINNED` diagnostic per §7.1 / F6 /
@@ -38,7 +38,7 @@ export async function pinOverride(
 
   if (resolved !== undefined) {
     const diag = modifyOverridePinned(name, resolved.version)
-    // ADR-0023 §3.2 emission path / §8.6 Mutator API extension:
+    // emission path / §8.6 Mutator API extension:
     // land the pin record on Graph.diagnostics() via m.diagnostic so
     // stringify-side adapters can project it back to a PM-native
     // override entry. The diagnostic is ALSO surfaced on

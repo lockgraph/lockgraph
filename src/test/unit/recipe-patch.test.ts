@@ -47,13 +47,13 @@ describe('recipe/patch — isCanonicalHash', () => {
     expect(isCanonicalHash('A'.repeat(128))).toBe(false)
     expect(isCanonicalHash('g'.repeat(128))).toBe(false)
   })
-  it('rejects sentinel form (different shape per ADR-0011)', () => {
+  it('rejects sentinel form (different shape per )', () => {
     expect(isCanonicalHash('unresolved-' + 'a'.repeat(64))).toBe(false)
   })
 })
 
 describe('recipe/patch — isSentinelPatch', () => {
-  it('accepts ADR-0011 sentinel form: unresolved-<sha256-hex>', () => {
+  it('accepts  sentinel form: unresolved-<sha256-hex>', () => {
     expect(isSentinelPatch('unresolved-' + 'a'.repeat(64))).toBe(true)
     expect(isSentinelPatch('unresolved-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef')).toBe(true)
   })
@@ -253,6 +253,7 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
       from: 'pnpm-v9',
       to:   'yarn-classic',
       strict: false,
+      registry: 'https://registry.npmjs.org',
       workspaceRoot: templateDir('patch-yarn'),
       onDiagnostic: d => diagnostics.push(d),
     })
@@ -261,7 +262,7 @@ describe('recipe/patch — convert emits RECIPE_FEATURE_DROPPED when target is p
   })
 })
 
-// === B1: pnpm override key grammar (ADR-0011 / pnpm docs) ==================
+// === B1: pnpm override key grammar (pnpm docs) ==================
 //
 // Three literal-key shapes must be recognised against lodash@4.17.21:
 //   - bare       `lodash`           → matches every lodash node

@@ -1,4 +1,4 @@
-// ADR-0023 §3.2 — `replaceVersion`.
+// `replaceVersion`.
 //
 // Replace every node matching `{name, fromRange}` with one resolving to
 // `toRange`. The audit-fix workhorse. `toRange` is forwarded VERBATIM to
@@ -48,11 +48,11 @@ export interface ReplaceVersionResult {
   removed:          NodeId[]
   /** From/to pairs for every successful replacement. */
   replaced:         Array<{ from: NodeId; to: NodeId }>
-  /** ADR-0023 §4.1 — NodeIds for the completion frontier seed. */
+  /** — NodeIds for the completion frontier seed. */
   recentlyAdded:    Set<NodeId>
-  /** ADR-0023 §4.1 — NodeIds excluded from the completion frontier seed. */
+  /** — NodeIds excluded from the completion frontier seed. */
   recentlyOrphaned: Set<NodeId>
-  /** ADR-0023 §7.5 — all diagnostics emitted by this primitive call. */
+  /** — all diagnostics emitted by this primitive call. */
   unresolved:       Diagnostic[]
 }
 
@@ -70,10 +70,10 @@ export async function replaceVersion(
 ): Promise<ReplaceVersionResult> {
   const onDiagnostic = options.onDiagnostic
   const unresolved: Diagnostic[] = []
-  // Per ADR-0023 §7.5: ModifyResult.unresolved carries ALL diagnostics emitted
+  // Per: ModifyResult.unresolved carries ALL diagnostics emitted
   // by this primitive call (info / warning / error). The `onDiagnostic` stream
   // mirrors the same events for live consumption.
-  // ADR-0023 §8.6 Mutator API extension: MODIFY_* diagnostics ALSO land on
+  // Mutator API extension: MODIFY_* diagnostics ALSO land on
   // Graph.diagnostics() so the stringify-side read channel is consistent with
   // §3.2 pinOverride. Each emit-call routes the diagnostic via a pending list;
   // the caller emits inside a mutate transaction to honour the "lands on the
@@ -175,7 +175,7 @@ export async function replaceVersion(
           },
           payload,
         )
-        // ADR-0023 §8.6: land the diagnostic on Graph.diagnostics() inside
+        // land the diagnostic on Graph.diagnostics() inside
         // the mutate transaction that performs the replace.
         m.diagnostic(replacedDiag)
       })

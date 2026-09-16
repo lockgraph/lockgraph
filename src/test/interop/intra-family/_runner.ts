@@ -1,4 +1,4 @@
-// Shared intra-family contract runner per ADR-0020 §2 — iterates pinned
+// Shared intra-family contract runner per — iterates pinned
 // `fixtureSubset` для each contract, invokes the dispatcher's `convert()`,
 // derives the observed contract through `_observe.activeContract()`, и
 // asserts declared = observed. Reentrancy semantics:
@@ -57,13 +57,20 @@ export function runIntraFamily(
             to:     contract.to,
             source: sourceLockfile,
             mode:   'naive',
-            ...(contract.from.startsWith('deno-v')
+            ...(contract.from.startsWith('deno-v') || contract.to === 'yarn-classic'
               ? {
                   options: {
-                    manifests: denoManifestsForFixture(
-                      fixtureName,
-                      contract.from as Extract<typeof contract.from, `deno-v${string}`>,
-                    ),
+                    ...(contract.from.startsWith('deno-v')
+                      ? {
+                          manifests: denoManifestsForFixture(
+                            fixtureName,
+                            contract.from as Extract<typeof contract.from, `deno-v${string}`>,
+                          ),
+                        }
+                      : {}),
+                    ...(contract.to === 'yarn-classic'
+                      ? { registry: 'https://registry.yarnpkg.com' }
+                      : {}),
                   },
                 }
               : {}),

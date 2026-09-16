@@ -1,6 +1,6 @@
 // Shared cross-format `NodeId` parsing helpers.
 //
-// Canonical `NodeId` shape per ADR-0006 / ADR-0017:
+// Canonical `NodeId` shape per /:
 //   `<name>@<version>` — scoped names keep their leading `@`;
 //   peer-context suffix `(<peer>)*` appended at depth 0.
 //

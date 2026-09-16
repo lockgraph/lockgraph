@@ -7,7 +7,7 @@ import { parse, stringify } from '../../../main/ts/index.ts'
 // Bug #4 (yarn-audit-fix sweep): yarnpkg/berry's own monorepo lock failed seal
 // because a `portal:` package (a local directory link, not a workspace) declares
 // `"<root>": "workspace:^"`, giving the root workspace an incoming edge from a
-// non-workspace source. ADR-0017's intent is to block *published* packages from
+// non-workspace source. 's intent is to block *published* packages from
 // depending on a workspace; a LOCAL node (canonical resolution type 'directory')
 // may. The full 980KB lock is the only repro — the trigger is graph-shape-
 // dependent — so it lives here (not the auto-scanned `real-world/` corpus).

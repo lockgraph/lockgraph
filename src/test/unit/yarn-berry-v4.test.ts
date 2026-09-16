@@ -330,7 +330,7 @@ describe('yarn-berry-v4 — modify', () => {
   it('roundtrips setTarball', () => {
     const original = parseFixtureGraph('simple')
     const result = original.mutate(m => {
-      // yarn-berry `checksum` is a zip-cache (berry-zip) digest — ADR-0031
+      // yarn-berry `checksum` is a zip-cache (berry-zip) digest —
       // only fills it from a berry-zip-origin hash, so set one here.
       m.setTarball({ name: 'ms', version: '2.1.3' }, { integrity: parseBerryChecksum(MODIFIED_HEX).integrity })
     })
@@ -340,7 +340,7 @@ describe('yarn-berry-v4 — modify', () => {
     expectEmptyGraphDiff(result.graph.diff(reparsed))
     expect(emitted).toContain(`checksum: ${MODIFIED_HEX}`)
     expect(emitted).not.toContain(`checksum: 7/${MODIFIED_HEX}`)
-    // ADR-0014 §4.F3 — the round-trip parse re-derives canonical resolution
+    // the round-trip parse re-derives canonical resolution
     // from the on-disk `resolution:` line; the set-via-mutator integrity is
     // what we assert here, not the full payload shape.
     expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toEqual(parseBerryChecksum(MODIFIED_HEX).integrity)
@@ -354,7 +354,7 @@ describe('yarn-berry-v4 — modify', () => {
     const reparsed = parseV4(stringifyV4(result.graph))
 
     expectEmptyGraphDiff(result.graph.diff(reparsed))
-    // ADR-0014 §4.F3 — yarn-berry always emits a `resolution:` line; the
+    // yarn-berry always emits a `resolution:` line; the
     // round-trip parse re-derives canonical resolution onto the payload.
     // Integrity is what removeTarball was about — assert it's gone.
     expect(reparsed.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()

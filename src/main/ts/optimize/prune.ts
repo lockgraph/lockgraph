@@ -6,7 +6,7 @@
 // deps) behind as orphans. `yarn install --immutable` then fails because those
 // removable nodes count as a pending change.
 //
-// `optimize` (ADR-0024) is the WRONG tool here: it is a REACHABILITY sweep
+// `optimize` is the WRONG tool here: it is a REACHABILITY sweep
 // (keep iff reachable from a workspace), so on a graph with incomplete edges it
 // drops present-but-unreferenced dev / optional / peer nodes a valid lock must
 // keep — a reachability sweep on an incomplete-edge graph removes valid

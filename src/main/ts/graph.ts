@@ -21,18 +21,19 @@ export type IntegrityHash = Hash
 
 export type NodeId = string
 
-/** `${name}@${version}[+patch=…][+src=…]` — NodeId stripped of peerContext. Per ADR-0010/0011/0032. */
+/** `${name}@${version}[+patch=…][+src=…]` — NodeId stripped of peerContext. Per /0011/0032. */
 export type TarballKey = string
 export type Patch = string
-/** ADR-0032 — the `+src=` slot value: 16 lowercase-hex chars (sha256 prefix of
- *  the F3-canonical source string), or `undefined` for the bare default-registry
- *  / directory majority. Derived by `recipe/resolution.sourceDiscriminatorOf`. */
+/** — the `+src=` slot value: 16 lowercase-hex chars (sha256 prefix
+ * the F3-canonical source string), or `undefined` for an undetermined/default
+ * registry and the bare directory majority. Derived by
+ * `recipe/resolution.sourceDiscriminatorOf`. */
 export type SourceDiscriminator = string
 export interface TarballKeyInput {
   name:    string
   version: string
   patch?:  Patch
-  // ADR-0032 — discriminates NON-REGISTRY sources that share `name@version`
+  // discriminates NON-REGISTRY sources that share `name@version`
   // (a registry copy vs a git fork). Sorts AFTER `patch=` in the slot list.
   // `undefined` for the registry-tarball / directory majority → BARE key
   // (zero registry blast radius).
@@ -50,26 +51,26 @@ export interface Node {
   version:        string
   peerContext:    NodeId[]
   patch?:         Patch
-  // ADR-0032 — the `+src=` slot carrier. The 16-hex source discriminator for a
+  // the `+src=` slot carrier. The 16-hex source discriminator for a
   // NON-REGISTRY node (git / non-registry-host tarball / unknown), so the node's
   // identity is re-derivable from the Node alone at seal time (parallels how
   // `patch` carries the `+patch=` slot). `undefined` for the bare registry /
-  // directory majority — those NodeIds are byte-identical to the pre-ADR-0032
+  // directory majority — those NodeIds are byte-identical to the pre-
   // form. Populated by `recipe/resolution.sourceDiscriminatorOf(node's
   // ResolutionCanonical)` at construction.
   source?:        SourceDiscriminator
   workspacePath?: string
 }
 
-/** Cross-format artefact metadata, shared across peer-virt siblings. Per ADR-0010 + 11-enrich.md. */
+/** Cross-format artefact metadata, shared across peer-virt siblings. Per + 11-enrich.md. */
 export interface TarballPayload {
-  // ADR-0031 — multi-hash carrier tagged by origin. `undefined` iff no hash is
+  // multi-hash carrier tagged by origin. `undefined` iff no hash is
   // known (kept undefined-when-empty so presence checks stay a plain
   // `!== undefined`). A tarball digest (`origin !== 'berry-zip'`) and a
   // yarn-berry zip-cache digest (`origin === 'berry-zip'`) are NOT
   // interchangeable; emit is origin-aware (see recipe/integrity.ts).
   integrity?:           Integrity
-  // ADR-0031 round-trip sidecar — the `<cacheKey>` prefix of a yarn-berry
+  // round-trip sidecar — the `<cacheKey>` prefix of a yarn-berry
   // `checksum: <cacheKey>/<hex>` captured verbatim at parse, so emit can
   // reproduce it byte-for-byte for EVERY berry generation (yarn-2.0 v4 `2/`,
   // v8/v9 `10c0/`). Per-node because a single lock may legitimately mix
@@ -90,7 +91,7 @@ export interface TarballPayload {
   // like `funding`/`deprecated`; non-npm emitters ignore it.
   hasInstallScript?:    boolean
   bundledDependencies?: string[]
-  // Declared peer requirements from the package manifest (ADR-0023 §4.2). Carried
+  // Declared peer requirements from the package manifest. Carried
   // on the payload so a COMPLETION-added yarn-berry node can re-emit its
   // `peerDependencies:` / `peerDependenciesMeta:` blocks: completion cannot wire a
   // `peer` EDGE for an unresolved/optional peer (there is no target node in the
@@ -100,18 +101,18 @@ export interface TarballPayload {
   // while their sidecar remains the verbatim same-format replay authority.
   peerDependencies?:     Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
-  // ADR-0014 §4.F3 — typed canonical resolution. Distinct from
-  // `nativeResolution` (PM-native verbatim string sidecar per ADR-0013): this
-  // carrier holds the 4-case discriminated union (tarball | git | directory |
-  // unknown) populated at adapter parse via `recipe/resolution.parse()`.
+  // typed canonical resolution. Distinct
+  // `nativeResolution` (PM-native verbatim string sidecar): this
+  // carrier holds the 5-case discriminated union (registry | tarball | git |
+  // directory | unknown) populated at adapter parse via `recipe/resolution.parse`.
   // Adapter stringify projects back to PM-native via `recipe/resolution.stringifyFor*`.
   resolution?:          ResolutionCanonical
-  // ADR-0013 — PM-native verbatim resolution string sidecar. Captured at
+  // PM-native verbatim resolution string sidecar. Captured at
   // adapter parse verbatim (e.g. yarn-classic `resolved`, npm `resolved`,
   // yarn-berry/pnpm resolution locators) and replayed at same-format stringify
   // for byte-exact round-trip + patch/file/link-locator retrieval. Per-tarball
   // (NOT node identity — it is invariant across peer-virtual siblings sharing a
-  // TarballKey): yarn-berry siblings copy the base locator, pnpm sources it from
+  // TarballKey): yarn-berry siblings copy the base locator, pnpm sources it
   // the shared bare key, npm/yarn-classic are flat, bun-text never sets it.
   nativeResolution?:    string
 }
@@ -132,7 +133,7 @@ export type PackageMetadataField =
 
 export interface EdgeAttributes {
   range?:          string
-  // The override-FORCED descriptor range for this edge (ADR-0025), set by
+  // The override-FORCED descriptor range for this edge, set
   // completion/replace when a project override/resolution redirected this edge's
   // resolution. `range` stays the DECLARED range (what npm/pnpm write in the
   // parent's deps); the yarn adapters emit `overrideRange` as the ENTRY-KEY
@@ -145,18 +146,17 @@ export interface EdgeAttributes {
   workspace?:      boolean
   // Local descriptor name when it differs from the target node's actual
   // name — i.e. npm-alias deps like
-  //   `"@scope/pkg--variant": "npm:@scope/pkg@…"`
-  //   `"react-is-18": "npm:react-is@^18"`,
+  // `"@scope/pkg--variant": "npm:@scope/pkg@…"`
+  // `"react-is-18": "npm:react-is@^18"`,
   // and `dependencies.foo: "npm:bar@…"` in npm/pnpm/bun manifests. Unlike
   // the other attrs (which are opaque per-instance metadata), `alias`
   // PARTICIPATES IN EDGE IDENTITY: two edges (src, dst, kind) from the
   // same source to the same target are permitted iff their `alias` slots
   // differ. `alias === undefined` denotes the canonical descriptor where
   // the parent's dependencies-block key matches `dst`'s actual name; a
-  // string value is the alias. Sort key: tertiary after (dst, kind) per
-  // ADR-0007.
+  // string value is the alias. Sort key: tertiary after (dst, kind)
   alias?:          string
-  // ADR-0014 §4.F4 — canonical workspace-specifier pair. Populated by
+  // canonical workspace-specifier pair. Populated
   // adapters at parse time on edges where `workspace === true`; consumed
   // at stringify time to drive RECIPE_WORKSPACE_* diagnostics.
   workspaceRange?: WorkspaceRange
@@ -180,8 +180,8 @@ export interface Diagnostic {
   severity: 'info' | 'warning' | 'error'
   message:  string
   /** Optional structured payload for machine consumers (e.g. a pinned-override
-   *  record `{ package, to }` that `overridesOf` folds back). Absent on
-   *  human-only diagnostics — never affects equality of those. */
+   * record `{ package, to }` that `overridesOf` folds back). Absent on
+   * human-only diagnostics — never affects equality of those. */
   data?:    Record<string, unknown>
 }
 
@@ -192,7 +192,7 @@ export interface LayoutHints {
 /**
  * Canonical, PM-neutral declaration that a dependency's resolution is forced —
  * the common form of npm `overrides`, yarn `resolutions`, and pnpm
- * `pnpm.overrides` (ADR-0025). A *declared* L1 input, never a resolved Graph
+ * `pnpm.overrides`. A *declared* L1 input, never a resolved Graph
  * instance. Modelled on npm's nested form (the only one expressing
  * parent-scoping); pnpm `>`-chains and yarn flat patterns derive from it.
  */
@@ -200,35 +200,35 @@ export interface OverrideConstraint {
   /** Package whose resolution is forced. */
   package: string
   /** Ancestor scope — the override applies only when `package` is reached
-   *  under this consumer chain. Absent/empty = global. One segment for the
-   *  common single-parent case; multiple for pnpm `a>b>c` chains. */
+   * under this consumer chain. Absent/empty = global. One segment for the
+   * common single-parent case; multiple for pnpm `a>b>c` chains. */
   parentPath?: string[]
   /** Version condition gating the override (pnpm `foo@2`, yarn `foo@range`).
-   *  Absent = unconditional. */
+   * Absent = unconditional. */
   versionCondition?: string
   /** The forced resolution — a version, range, dist-tag, `npm:` alias, or an
-   *  npm `$name` parent-version back-reference. Carried verbatim. */
+   * npm `$name` parent-version back-reference. Carried verbatim. */
   to: string
   /** `to` is an npm `$name` self-ref (no yarn/pnpm equivalent). */
   selfRef?: boolean
   /** Source PM grammar (stamped at capture). Drives the PM-faithful override
-   *  tie-break: npm/bun = first-match in declaration order, yarn/pnpm =
-   *  most-specific. */
+   * tie-break: npm/bun = first-match in declaration order, yarn/pnpm =
+   * most-specific. */
   origin?: OverrideManager
   /** Declaration order within its capture (0-based) — carries npm's
-   *  first-match ordering through `mergeOverrides`' key-sort. */
+   * first-match ordering through `mergeOverrides`' key-sort. */
   captureIndex?: number
 }
 
-/** Package-manager grammar an override was declared in (ADR-0025). */
+/** Package-manager grammar an override was declared. */
 export type OverrideManager = 'npm' | 'yarn' | 'pnpm'
 
 /** @internal pre-0.6 name retained for internal algorithm source compatibility. */
 export type OverridePM = OverrideManager
 
 /**
- * L1 Manifest — declared constraints from a `package.json` (ADR-0001 §L1,
- * materialised by ADR-0025). PM-neutral; supplied keyed by workspace path as
+ * L1 Manifest — declared constraints from a `package.json` (
+ * materialised). PM-neutral; supplied keyed by workspace path as
  * `Record<string, Manifest>`. Distinct from the resolved Graph (L2): a
  * Manifest is what was *declared*, not what was *resolved*.
  */
@@ -240,10 +240,10 @@ export interface Manifest {
   optionalDependencies?: Record<string, string>
   peerDependencies?:     Record<string, string>
   workspaces?:           string[]
-  /** Canonical override declarations (load-bearing per ADR-0013). */
+  /** Canonical override declarations (load-bearing). */
   overrides?: OverrideConstraint[]
-  /** Verbatim PM-native override blocks — attribution per ADR-0013, kept for
-   *  lossless same-PM round-trip. At most one is populated per manifest. */
+  /** Verbatim PM-native override blocks — attribution, kept for
+   * lossless same-PM round-trip. At most one is populated per manifest. */
   native?: {
     npmOverrides?:    unknown
     yarnResolutions?: Record<string, string>
@@ -329,9 +329,9 @@ export interface GraphMutation {
   replacePeerContext(id: NodeId, peers: NodeId[]):                          void
   setTarball(inputs: TarballKeyInput, payload: TarballPayload):             void
   removeTarball(inputs: TarballKeyInput):                                   void
-  // ADR-0023 §8.6 — write-side diagnostic surface. Appends the supplied
-  // Diagnostic to the resulting Graph's diagnostic list; visible via
-  // Graph.diagnostics() once the surrounding mutate() call settles.
+  // write-side diagnostic surface. Appends the supplied
+  // Diagnostic to the resulting Graph's diagnostic list; visible
+  // Graph.diagnostics once the surrounding mutate call settles.
   // Mirrors Builder.diagnostic so parse-time and modify-time emit paths
   // share one implementation.
   addDiagnostic(diagnostic: Diagnostic):                                    void
@@ -437,7 +437,7 @@ export function newBuilder(): Builder {
   }
 }
 
-// === NodeId helpers (per spec/02-graph.md#canonical-nodeid-form, ADR-0006) ==
+// === NodeId helpers (per spec/02-graph.md#canonical-nodeid-form) ==
 
 /** Last `@` at depth 0 separates name from version+peerContext. Scoped names keep their leading `@`. */
 export function nameOf(id: NodeId): string {
@@ -452,7 +452,7 @@ export function nameOf(id: NodeId): string {
   return lastAt < 0 ? id : id.slice(0, lastAt)
 }
 
-/** peerContext is expected pre-sorted alphabetically by name (caller's contract per ADR-0006). */
+/** peerContext is expected pre-sorted alphabetically by name (caller's contract). */
 export function serializeNodeId(
   name: string,
   version: string,
@@ -465,7 +465,7 @@ export function serializeNodeId(
   return base + peerContext.map(p => `(${p})`).join('')
 }
 
-/** Strips peerContext from a NodeId to derive the ADR-0010/0011 base key (`${name}@${version}[+patch=…]`). */
+/** Strips peerContext from a NodeId to derive the /0011 base key (`${name}@${version}[+patch=…]`). */
 export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
   // Find first depth-0 `(` — that's where peerContext begins. Scoped names are unaffected.
   let depth = 0
@@ -478,8 +478,8 @@ export function stripPeerContextFromNodeId(id: NodeId): TarballKey {
   return id
 }
 
-// Patch-token grammar predicates owned by `recipe/patch.ts` per ADR-0014
-// §4.F2 + ADR-0011 §Decision. graph.ts consumes them — there is no local
+// Patch-token grammar predicates owned by `recipe/patch.ts`
+// §4.F2 +. graph.ts consumes them — there is no local
 // regex shadow here so the token grammar stays single-source.
 import { isCanonicalHash, isHashedPeerSetToken, isSentinelPatch as recipeIsSentinelPatch } from './recipe/patch.ts'
 
@@ -519,7 +519,7 @@ export function toTarballKey(inputs: TarballKeyInput): TarballKey {
     validatePatchToken(inputs.patch)
     slots.push(`patch=${inputs.patch}`)
   }
-  // ADR-0032 — the `+src=` slot. `cmpStr`-sorted alongside `patch=`; since
+  // the `+src=` slot. `cmpStr`-sorted alongside `patch=`; since
   // `'patch' < 'src'` the canonical order is `…+patch=…+src=…`. Bare for the
   // registry / directory majority (`source === undefined`) → zero-blast-radius.
   if (inputs.source !== undefined) {
@@ -534,7 +534,7 @@ export function toTarballKey(inputs: TarballKeyInput): TarballKey {
 // === INTERNALS ==============================================================
 
 function acceptedNodeIds(node: Node): readonly NodeId[] {
-  // ADR-0032 — the `+src=` slot ALWAYS participates in the derived id (it
+  // the `+src=` slot ALWAYS participates in the derived id (it
   // describes which non-registry source minted the node and, unlike `patch`,
   // has no bare/slotted duality: a node either is from a discriminated source
   // or is bare). Thread `node.source` through every candidate so re-derivation
@@ -559,13 +559,13 @@ function isSentinelPatch(patch: string): boolean {
   return recipeIsSentinelPatch(patch)
 }
 
-// ADR-0011:282-304 — sentinel-keyed mutator coherence rule.
+// 282-304 — sentinel-keyed mutator coherence rule.
 //
 // A 'sentinel-keyed entry' is a Node whose .patch satisfies the spec-defined
 // predicate startsWith('unresolved-'). At the Mutator layer, ANY operation
 // that modifies-or-forks the bytes of a sentinel-keyed Node throws
 // LockfileError({ code: 'IRREDUCIBLE_LOSS' }). Pure-deletion ops do NOT fork
-// siblings (ADR-0011:301-304 explicitly carves out removeTarball; the same
+// siblings (:301-304 explicitly carves out removeTarball; the same
 // logic extends to removeNode); they are permitted. Edge-structure ops
 // (addEdge, removeEdge) do not touch the Node's bytes; permitted. Builder is
 // parse-time and must remain unguarded — that is how sentinels land in the
@@ -579,7 +579,7 @@ function refuseSentinelMutation(patch: Patch | undefined, opName: string, subjec
   }
 }
 
-// ADR-0032 — the `+src=` slot value is the 16-lowercase-hex source discriminator
+// the `+src=` slot value is the 16-lowercase-hex source discriminator
 // minted by `recipe/resolution.sourceDiscriminatorOf`. Guard the slot grammar
 // (no `+`/whitespace so the `+`-joined slot list stays parseable) exactly as
 // `validatePatchToken` guards `+patch=`. The 16-hex shape is asserted too — the
@@ -600,7 +600,7 @@ function tarballKeyInputsOfNode(node: Pick<Node, 'name' | 'version' | 'patch' | 
 
 const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0
 
-// Tertiary key on alias (ADR-0007 — content-sorted iteration). `undefined`
+// Tertiary key on alias (— content-sorted iteration). `undefined`
 // sorts before any string so canonical descriptors lead aliased siblings.
 const cmpAlias = (a: string | undefined, b: string | undefined): number =>
   a === b ? 0 : a === undefined ? -1 : b === undefined ? 1 : cmpStr(a, b)
@@ -708,7 +708,7 @@ function rebindNodeId(s: State, oldId: NodeId, newId: NodeId, newNode: Node): vo
   }
 }
 
-// === Published-self-link seal carve-out (ADR-0017 amendment, Bug #4) ========
+// === Published-self-link seal carve-out (amendment, Bug #4) ========
 
 // Extracts the protocol prefix of a descriptor range (the substring before the
 // first `:`), or `undefined` for a bare/unprefixed range. Mirrors the
@@ -729,7 +729,7 @@ function protocolOf(range: string): string | undefined {
 // registry-equivalent) AND the workspace is the resolution yarn recorded for
 // that descriptor. The structural signal (the edge resolved to a workspace
 // node, i.e. it exists targeting `n`) is the faithful one — we do NOT
-// `semver.satisfies`-test the workspace's sentinel version (ADR-0011's
+// `semver.satisfies`-test the workspace's sentinel version ('s
 // `0.0.0-use.local` does not satisfy e.g. `^30.0.0`; the satisfaction was
 // performed by yarn at install time and recorded structurally via entry-key
 // fusion, not re-derivable here). Every other protocol
@@ -781,16 +781,16 @@ function validateWorkspaceIncomingEdges(s: State, id: NodeId, node: Node): void 
   const inc = s.incoming.get(id) ?? []
   // Workspace-to-workspace edges are kind-agnostic by design here; the seal
   // blocks incoming edges sourced from non-workspace nodes — EXCEPT a
-  // published self-link (ADR-0017 amendment, Bug #4): a registry-protocol
+  // published self-link (amendment, Bug #4): a registry-protocol
   // descriptor that yarn resolved onto a co-located workspace. Partition the
   // non-workspace incoming edges; permit published self-links (emitting an
   // info diagnostic each), reject everything else with the verbatim message.
   for (const edge of inc) {
     if (s.nodes.get(edge.src)?.workspacePath !== undefined) continue // ws→ws: permitted
     // A workspace can satisfy a peer dependency, so a `peer` edge into a workspace
-    // node is permitted (ADR-0022); other kinds still reject below.
+    // node is permitted; other kinds still reject below.
     if (edge.kind === 'peer') continue
-    // ADR-0017 amendment — a LOCAL node (canonical resolution type
+    // amendment — a LOCAL node (canonical resolution type
     // 'directory': yarn `portal:` / `link:`, npm/pnpm `file:` directory
     // link) is part of the project graph, not a published package, so it
     // may depend on a workspace — e.g. a berry `portal:` package that
@@ -828,7 +828,7 @@ function edgeBearingPeerContext(node: Node): NodeId[] {
 function validatePeerContext(s: State, id: NodeId, node: Node): void {
   // Peer-edge ↔ peerContext coherence is checked by BASE-KEY PROJECTION
   // (NodeId stripped of its `(...)` peer-context suffix), not full-NodeId
-  // string equality. pnpm's suffix grammar (ADR-0006) is one-level: a
+  // string equality. pnpm's suffix grammar is one-level: a
   // node's peerContext records bare `name@version` base keys, but a peer
   // edge must target a real node — and when that peer is itself a peer-
   // variant (transitive peer-of-a-peer, e.g. pnpm v9
@@ -836,16 +836,16 @@ function validatePeerContext(s: State, id: NodeId, node: Node): void {
   // the fully-qualified variant NodeId. Full-id bijection only holds for
   // leaf peers; projecting both sides to base keys restores the invariant
   // at the granularity the suffix actually encodes. The no-orphan /
-  // no-missing intent is preserved — just matched on base key. (ADR-0017.)
+  // no-missing intent is preserved — just matched on base key. (.)
   const peerEdgeTargets = (s.outgoing.get(id) ?? [])
     .filter(e => e.kind === 'peer')
     .map(e => stripPeerContextFromNodeId(e.dst))
     .sort()
-  // ADR-0030 — a pnpm-v9 HASHED PEER-SET token in the peerContext is a bare-
+  // a pnpm-v9 HASHED PEER-SET token in the peerContext is a bare-
   // hex identity discriminator that bears NO peer edge (the real peers are
   // hidden inside the hash). Exempt it from the edge↔context coherence
   // compare so it does not look like a peerContext entry with a missing edge.
-  // The derived-id check above is UNCHANGED — the token still participates in
+  // The derived-id check above is UNCHANGED — the token still participates
   // `serializeNodeId`, so id re-derivation stays exact. Only EDGE-BEARING
   // peerContext entries are matched against the peer edges here.
   const peerCtx = edgeBearingPeerContext(node)
@@ -1289,9 +1289,9 @@ function createMutator(next: State, applied: GraphChange[]): GraphMutation {
     replacePeerContext: (id, peers) => mutatorReplacePeerContext(next, applied, id, peers),
     setTarball:         (inputs, payload) => mutatorSetTarball(next, applied, inputs, payload),
     removeTarball:      inputs => mutatorRemoveTarball(next, applied, inputs),
-    // ADR-0023 §8.6 — write-side diagnostic emit. Append to the staged
-    // diagnostics list; the resulting Graph.diagnostics() surfaces it
-    // once mutate() settles. Same append semantics as Builder.diagnostic.
+    // write-side diagnostic emit. Append to the staged
+    // diagnostics list; the resulting Graph.diagnostics surfaces it
+    // once mutate settles. Same append semantics as Builder.diagnostic.
     addDiagnostic,
     diagnostic: addDiagnostic,
   }

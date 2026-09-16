@@ -1,7 +1,7 @@
 import { CONTRACTS, type ConversionContract } from '../_matrix.ts'
 import { runIntraFamily } from '../intra-family/_runner.ts'
 
-// ADR-0020 Phase C-i: cross-family yarn-berry-v9 -> pnpm-v9 contract.
+// Phase C-i: cross-family yarn-berry-v9 -> pnpm-v9 contract.
 // Reverse direction (pnpm-v9 -> yarn-berry-v9) is OUT-OF-PHASE-C-i-SCOPE per
 // _matrix.ts (bare-range entry-key composition bug + sentinel-divergence
 // patch-yarn crash in yarn-berry-v9 stringifier). The asymmetric reentrancy

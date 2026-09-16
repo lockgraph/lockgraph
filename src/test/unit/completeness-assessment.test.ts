@@ -283,6 +283,20 @@ describe('assessConversion', () => {
     }).status).toBe('satisfied')
   })
 
+  it('marks an undetermined registry unsupported for yarn-classic', () => {
+    const graph = parse('pnpm-v9', fixture('pnpm-v9.lock'))
+    const assessment = assessConversion(graph, {
+      contract: 'snapshot',
+      target: { format: 'yarn-classic' },
+    }, { outputProbe: { accepted: true, diagnostics: [] } })
+
+    expect(assessment.status).toBe('unsatisfied')
+    expect(assessment.requirements).toContainEqual(expect.objectContaining({
+      key: 'target-feature:resolution:registry',
+      status: 'unsatisfied',
+    }))
+  })
+
   it('gives proven target incompatibility precedence over evidence gaps', () => {
     const builder = newBuilder()
     builder.addNode({

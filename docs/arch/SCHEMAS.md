@@ -150,6 +150,41 @@ top-level state remain in the shared native sidecar. Every concrete source also
 supports manifest-backed npm-subgraph projection to the 16 Node-family
 formats. Node-family → Deno and v2/v3/v4 → v5 fail closed.
 
+## Where a source locator is recorded
+
+Schemas disagree about whether the lockfile names where a package came from. The difference decides
+what a locator rewrite can reach, and what a check of a package's origin can prove — see
+[`overrideSource` / `assertSource`](./API.md#overridesource).
+
+| Schema | Locator in the lock | Digest that guards it |
+|---|---|---|
+| `npm-1` | `dependencies` tree `resolved`, and a URL-valued `version` | `integrity` |
+| `npm-2` | BOTH `packages[*].resolved` and the legacy `dependencies` tree — a rewrite must move both, or npm 6 and npm 7+ resolve differently from one file | `integrity` |
+| `npm-3`, `npm-4` | `packages[*].resolved` | `integrity` |
+| `yarn-classic` | `resolved`, carrying `#<40-hex>` | that inline `#<40-hex>`, and `integrity` when present |
+| `pnpm-v5`, `pnpm-v6`, `pnpm-v9` | `resolution.tarball`, written only for a non-default registry | `integrity` |
+| `deno-v2`…`deno-v5` | `npm.*.tarball`, written only for a non-default registry | `integrity` |
+| `yarn-berry-*` | none for a registry package (`__archiveUrl` only for an explicit archive) | `checksum` |
+| `bun-text`, `bun-text-v2` | none for a registry package | SRI on explicit tarball entries |
+
+A package whose row says "none", or whose optional locator is absent, resolves through the package
+manager's configuration — `.npmrc`, `.yarnrc.yml` (`npmRegistryServer`), `bunfig.toml` — and nothing
+in the lock records which registry that is. Measured with pnpm 10 against a `.npmrc` naming a
+mirror: the package is fetched from the mirror and the lock records only its integrity, byte-identical
+to a lock made against the public registry.
+
+Such a package parses to `{ kind: 'registry' }` — a registry package whose host is undetermined. No
+public default is substituted, so a host read back from the model is always one the lock, the caller
+or the project's configuration actually named. Supply it with `parse`'s `registry` option, or with
+`cwd` so the project's own configuration is read; without either, a target that cannot express an
+undetermined host omits the locator, and yarn-classic — whose format requires one — refuses.
+
+Entries with no remote source of their own — bundled inside a parent archive, a workspace link or
+member directory, a `file:`, `link:` or directory resolution — have no locator by nature. On the npm
+corpus they are the majority of locator-less entries: 45,422 npm-1 `bundled: true`, 3,882 npm-2+
+`inBundle`, 682 workspace links and member directories, against 12,308 registry entries whose lock
+simply omits `resolved`.
+
 ## Sources
 
 Where each schema is canonically defined. Permalinks pinned at specific

@@ -8,6 +8,9 @@
 | [`stringify`](#stringify) | graph → lockfile | Emit a graph for a target format. |
 | [`convert`](#convert) | lockfile → lockfile | Parse, enrich and emit in one call. |
 | [`modify`](#modify) | graph | Apply edits and report the frontier. |
+| [`overrideSource`](#overridesource) | lockfile → lockfile | Rewrite recorded source locators in place. |
+| [`assertSource`](#assertsource) | lockfile | Check that packages resolve from allowed sources. |
+| [`parseSourceRule`](#parsesourcerule) | rule string | Validate one source rule. |
 | [`complete`](#complete) | graph | Resolve and wire what a change introduced. |
 | [`removeUnreachable`](#removeunreachable) | graph | Sweep nodes unreachable from the workspaces. |
 | [`selectConstrained`](#selectconstrained) | registry | Pick a version satisfying range and conditions. |
@@ -22,7 +25,7 @@
 | [`lockgraphStore`](#lockgraphstore) | — | Construct a verified-byte store. |
 | [`engines`](#engines) | — | Condition on a candidate's `engines`. |
 | [`license`](#license) | — | Condition on a candidate's licence. |
-| [`LockfileError`](#lockfileerror) | — | The only thrown type. |
+| [`LockfileError`](#lockfileerror) | — | The error type for domain failures. |
 
 Shared shapes: [common options](#common-options) · [target](#target) ·
 [sources](#sources) · [guards](#guards) · [store](#store) · [contracts](#contracts)
@@ -88,9 +91,19 @@ workspace and override material from the project, controlled by `cwd` and
 |---|---|---|---|---|
 | `input` | `string` | yes | | Lockfile text. |
 | `format` | `FormatId` | no | detected | Source format. |
-| `options.cwd` | `string` | no | `process.cwd()` | Discovery start for workspace and policy material. |
+| `options.cwd` | `string` | no | `process.cwd()` | Discovery start for workspace and policy material, and for the registry the project's own configuration declares. |
+| `options.registry` | `string` | no | | The registry a lock does not record. Absolute `http(s)`, no query, fragment or credentials. |
 | `options.sources.policy` | `PmConfigEvidence` | no | discovered | Package-manager configuration evidence. |
 | `options.onDiagnostic` | `DiagnosticObserver` | no | | Non-fatal findings, in emission order. |
+
+**An unrecorded registry stays unknown.** npm and yarn-classic write an absolute URL for every
+entry; pnpm and deno write one only for a non-default registry, and yarn berry and bun write none —
+for those the registry lives in `.npmrc`, `.yarnrc.yml` or `bunfig.toml`, which the lock does not
+carry. Such a package parses to `{ kind: 'registry' }` — a registry package whose host is
+undetermined — and no public default is substituted. Pass `registry`, or `cwd` so the project's own
+configuration can be read, to determine it. A target that cannot express an undetermined host says
+so: npm omits `resolved`, pnpm keeps the integrity-only spelling, berry writes the plain `npm:`
+locator, and yarn-classic refuses, naming the package and the two options.
 
 **Returns** `Graph`.
 
@@ -244,6 +257,148 @@ const bumped = await modify(graph, [
 
 await complete(bumped.graph, { target, seed: bumped.frontier, pruneOrphans: true })
 ```
+
+## overrideSource
+
+<!-- readme-example id="api-sig-overridesource" mode="signature" -->
+```ts
+function overrideSource(
+  input: string,
+  rules: string | SourceRule | readonly (string | SourceRule)[],
+  options?: SourceOperationOptions,
+): OverrideSourceResult
+```
+
+Rewrites the source locators a lockfile records — for example, moving every package from the
+public registry behind an internal repository manager. It edits the text in place: the output is
+byte-identical to the input everywhere except the rewritten URLs, so the diff is as small as a text
+substitution. It never touches a digest — an integrity hash, the yarn-classic `#<sha1>` fragment, a
+git commit id — so if the new source serves different bytes, the install fails its integrity check.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `input` | `string` | yes | Lockfile text. |
+| `rules` | `string \| SourceRule \| (string \| SourceRule)[]` | yes | One or more [source rules](#source-rules). |
+| `options.format` | `FormatId` | no | Skip detection. |
+| `options.allowEmptyRules` | `boolean` | no | Accept a rule that matches nothing. Off by default, because an empty migration looks like a successful one. |
+
+**Returns** `OverrideSourceResult` — `result.output` (the rewritten text), `result.ok`, and every
+entry it considered, itemized in `result.items` and totalled in `result.counts` by
+[status](#source-statuses). `result.ok` is false if any status is `'unguarded'`, `'unrewritable'` or
+`'unmatched'`.
+
+Supported: npm-\*, yarn-classic, pnpm (explicit `resolution.tarball` locators), deno (explicit
+`npm.*.tarball`).
+Yarn berry and bun are refused: they record no locator for a registry package, whose registry
+comes from `.yarnrc.yml`, or from `.npmrc` / `bunfig.toml`.
+
+**Throws** `LockfileError` — `CAPABILITY_LACK` (unsupported format), `FORMAT_DETECT_FAILED`;
+`TypeError` for a malformed rule.
+
+<!-- readme-example id="api-overridesource" mode="typecheck" -->
+```ts
+import { readFile, writeFile } from 'node:fs/promises'
+import { overrideSource } from 'lockgraph'
+
+const input = await readFile('package-lock.json', 'utf8')
+const result = overrideSource(input, [
+  'https://registry.npmjs.org=https://nexus.example.com/repository/npm-group/',
+  'https://registry.yarnpkg.com=https://nexus.example.com/repository/npm-group/',
+  'npm:@corp/*=https://nexus.example.com/repository/internal/',
+])
+if (!result.ok) console.error(result.counts)
+else await writeFile('package-lock.json', result.output)
+```
+
+## assertSource
+
+<!-- readme-example id="api-sig-assertsource" mode="signature" -->
+```ts
+function assertSource(
+  input: string,
+  rules: string | SourceRule | readonly (string | SourceRule)[],
+  options?: SourceOperationOptions,
+): AssertSourceResult
+```
+
+Checks that the packages a rule selects already resolve from its destination, and changes nothing.
+Use it in CI to keep packages that must stay on an internal repository from resolving anywhere else,
+whatever the registry configuration says. Each selected entry's status is `'compliant'`,
+`'violation'`, or `'uncertifiable'` — the lock does not record where it comes from, so it cannot be
+checked. `result.ok` is false on any `'violation'`, `'uncertifiable'` or `'unmatched'`: a policy that
+cannot be evaluated does not hold.
+
+Parameters, supported formats and throws are those of [`overrideSource`](#overridesource).
+
+<!-- readme-example id="api-assertsource" mode="typecheck" -->
+```ts
+import { readFile } from 'node:fs/promises'
+import { assertSource } from 'lockgraph'
+
+const result = assertSource(
+  await readFile('package-lock.json', 'utf8'),
+  'npm:@corp/*=https://nexus.example.com/repository/internal/',
+)
+for (const item of result.items) {
+  if (item.status === 'violation') console.error(`${item.packageName} resolves from ${item.locator}`)
+}
+if (!result.ok) process.exitCode = 1
+```
+
+## parseSourceRule
+
+<!-- readme-example id="api-sig-parsesourcerule" mode="signature" -->
+```ts
+function parseSourceRule(raw: string): SourceRule
+```
+
+Validates one rule and returns its normalized form, for tools that accept rules from a command line
+before running either operation. **Throws** `TypeError` for a malformed rule.
+
+### Source rules
+
+A rule is `<selector>=<destination>`. Always quote rules on a command line.
+
+A selector is either a **pattern**, which understands its protocol, or a **URL**, which is taken
+literally:
+
+| Selector | Selects | Rewrites |
+|---|---|---|
+| `npm:*` | every npm package | the registry base, keeping `<name>/-/<file>` |
+| `npm:@scope/*` | packages in that scope | the registry base |
+| `npm:<name>`, `npm:@scope/<name>` | one package | the registry base |
+| `git:<host>/<owner>/*` | that owner's repositories, over any transport | host and owner |
+| `git:<host>/<owner>/<repo>` | one repository, over any transport | host, owner and repository |
+| `<scheme>://<host>[/<path>]` | every recorded URL, npm or git, that starts with exactly this | exactly this prefix |
+
+Package patterns match the resolved package, never an alias key. A URL is literal, scheme included:
+`https://registry.npmjs.org` does not select `http://registry.npmjs.org/...`, so a lock that records
+both declares both.
+
+- **Precedence:** a package, then a scope, then a location — `git:` patterns and URLs together, the
+  longer one first — then `npm:*`. Two rules equally specific for one entry are refused, not ordered:
+  write a more specific rule. A rule whose destination another rule would match is refused.
+- The destination is an absolute URL with a scheme. Credentials, a query, a fragment and a downgrade
+  from `https:` to `http:` are refused.
+- `git:*` is refused: a repository path is not unique across hosts, so one destination would merge
+  distinct repositories. `npm:@scope` without `/*` or a name is refused.
+- `npm:*` selects every npm package, including one whose lock records no URL — that one is reported
+  (`'unrewritable'`, `'uncertifiable'`), never skipped. A URL rule selects only recorded URLs.
+
+### Source statuses
+
+| Status | Operation | Meaning | Fails `ok` |
+|---|---|---|---|
+| `rewritten` | override | Locator moved to the destination. | no |
+| `compliant` | both | Already at the destination, with a digest. | no |
+| `violation` | assert | Resolves from a source outside the rule. | yes |
+| `uncertifiable` | assert | No recorded locator, or no digest on an allowed one. | yes |
+| `unguarded` | override | Matched, but no digest pins its bytes — left unchanged. | yes |
+| `unrewritable` | override | A registry entry whose lock omits the locator — change the registry setting instead. | yes |
+| `local` | both | No remote source of its own: bundled, a workspace, `file:`, `link:`, a directory. | no |
+| `unmatched` | both | A rule that selected nothing. | yes |
+
+---
 
 ## complete
 
@@ -689,7 +844,8 @@ class LockfileError extends Error {
 }
 ```
 
-The only type this package throws.
+The type every domain failure throws. A malformed argument — an invalid source rule, a byte size
+that does not parse — throws a `TypeError` instead.
 
 | Property | Type | Description |
 |---|---|---|

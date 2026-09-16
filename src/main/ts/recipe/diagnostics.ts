@@ -4,14 +4,14 @@
 // math; adapters carry the diagnostic invocation. This module hosts the
 // shared adapter-side helpers so the per-feature drop semantics surface
 // through ONE code-shape (`RECIPE_FEATURE_DROPPED`) across patch-incapable
-// adapters — replacing the per-adapter `<PREFIX>_PATCH_DROPPED` codes per
-// ADR-0014 §5 :454 canonical-mapping rule.
+// adapters — replacing the per-adapter `<PREFIX>_PATCH_DROPPED` codes
+// 454 canonical-mapping rule.
 
 import type { Diagnostic, EdgeTriple, Graph, NodeId } from '../graph.ts'
 
 /**
  * F1 integrity parse-side diagnostic factory — emitted when present integrity
- * input yields NO parseable hash (ADR-0031). Every recognised algorithm is now
+ * input yields NO parseable hash. Every recognised algorithm is now
  * preserved verbatim (sha1, sha256, sha384, sha512, and each member of a
  * multi-hash SRI), so this fires only for genuinely malformed input: a body
  * that is not an SRI member of a known shape, nor a valid yarn-berry checksum.
@@ -34,7 +34,7 @@ export function invalidIntegrityDiagnostic(
 }
 
 /**
- * Emit `RECIPE_INTEGRITY_INCOMPLETE` (warning, ADR-0031 §Decision.3) — fired on
+ * Emit `RECIPE_INTEGRITY_INCOMPLETE` (warning) — fired on
  * emit when the source carries integrity but the target format cannot represent
  * any of its origin classes, so the field is OMITTED rather than fabricated.
  * The canonical case crosses the tarball/zip boundary: npm/pnpm/bun/yarn-classic
@@ -165,7 +165,7 @@ export function resolutionPinUnresolvedDiagnostic(
  * observable. With `manifests`, the override rung performs the redirect itself
  * and this does NOT fire (no double-redirect). `subject` is the consumer node id;
  * `patchId` is the patch node the edge now points at. The base node is left
- * GC-able (the patch re-emits from its own locator; `optimize()` prunes the
+ * GC-able (the patch re-emits from its own locator; `optimize` prunes the
  * orphaned base) — this is intentional, matching yarn.
  */
 export function patchPreferredDiagnostic(
@@ -184,9 +184,9 @@ export function patchPreferredDiagnostic(
 }
 
 /**
- * Emit `RECIPE_FEATURE_DROPPED` (warning) per ADR-0014 §5 — the canonical
+ * Emit `RECIPE_FEATURE_DROPPED` (warning) per — the canonical
  * loss diagnostic when a target adapter cannot represent a recipe-owned
- * feature on emit. Feature tag follows ADR-0014 §4 table: `patch` (F2);
+ * feature on emit. Feature tag follows table: `patch` (F2);
  * `git` / `directory` / `workspace` / `unknown` (F3 — bun-text drops git
  * + directory + unknown; npm-1 drops workspace). Subject is the affected
  * node id.
@@ -207,11 +207,11 @@ export function emitDropped(
 }
 
 /**
- * Pure factory for the canonical `RECIPE_RESOLUTION_UNKNOWN` (warning,
- * ADR-0014 §5) diagnostic object — one per distinct `{ type: 'unknown', raw }`
+ * Pure factory for the canonical `RECIPE_RESOLUTION_UNKNOWN` (warning)
+ * diagnostic object — one per distinct `{ type: 'unknown', raw }`
  * value. Use this directly when pushing to an adapter-side `Diagnostic[]`
- * buffer; use `emitUnknownResolution()` for the callback-style consumer surface.
- * Callers own de-duplication across nodes (the helper keeps no state). Lives in
+ * buffer; use `emitUnknownResolution` for the callback-style consumer surface.
+ * Callers own de-duplication across nodes (the helper keeps no state). Lives
  * `recipe/diagnostics.ts` (not `recipe/resolution.ts`) per the F1/F2 split
  * convention — recipe primitives stay pure-math, diagnostics live here.
  */
@@ -238,7 +238,7 @@ export function emitUnknownResolution(
 
 // === F4 workspace specifier diagnostics =====================================
 //
-// `RECIPE_WORKSPACE_RESOLVED` (info, per ADR-0014 §5) — once per edge
+// `RECIPE_WORKSPACE_RESOLVED` (info) — once per edge
 // when the target lacks a workspace protocol entirely. The source-side
 // `specifier` is dropped on emit; `resolvedVersion` is written into the
 // dep range. Lossy version substitution (yarn-classic / npm-2 / npm-3
@@ -316,7 +316,7 @@ export function emitWorkspaceUnresolved(
 
 // === F5 patch byte normalization diagnostics ================================
 //
-// `RECIPE_PATCH_NORMALISED` (info, per ADR-0014 §5) — once per affected
+// `RECIPE_PATCH_NORMALISED` (info) — once per affected
 // node when the F5 byte normalization altered at least one byte of the
 // patch input (CRLF → LF rewrite or leading BOM stripped). When source
 // bytes pass through unchanged the diagnostic does not fire; this is
@@ -340,7 +340,7 @@ export function emitPatchNormalized(
 
 // === F6 manifest override capture diagnostics ===============================
 //
-// `RECIPE_OVERRIDE_NORMALISED` (info, per ADR-0025 §6) — emitted once per
+// `RECIPE_OVERRIDE_NORMALISED` (info) — emitted once
 // successful `captureOverrides` call when a manifest's PM-native override
 // block is normalized into the canonical `OverrideConstraint[]` form. Carries
 // the source PM and the canonical entry count for observability. This is the
@@ -368,7 +368,7 @@ export function emitOverrideNormalized(
   onDiagnostic(recipeOverrideNormalized(pm, count))
 }
 
-// Projection-side override loss diagnostics (ADR-0025 §6). Fire when
+// Projection-side override loss diagnostics. Fire when
 // `projectOverrides` lowers a canonical constraint to a target PM whose grammar
 // cannot express it faithfully.
 

@@ -10,6 +10,7 @@
 //   pnpm           .npmrc                          npm_config_*
 //   yarn-classic   .yarnrc, .npmrc                 npm_config_*
 //   yarn-berry     .yarnrc.yml                     YARN_*        (NO .npmrc)
+//   bun            bunfig.toml, .npmrc             npm_config_*
 //
 // So a planted `.yarnrc.yml` cannot affect an npm/pnpm/yarn-classic resolve, a
 // planted `.npmrc` cannot affect a yarn-berry resolve, and an npm project never
@@ -35,7 +36,7 @@ import { DEFAULT_NPM_REGISTRY } from '../recipe/resolution.ts'
 export const DEFAULT_REGISTRY = DEFAULT_NPM_REGISTRY
 
 /** Which package-manager config to read — selects the deterministic source set. */
-export type RegistryConfigDialect = 'npm' | 'pnpm' | 'yarn-classic' | 'yarn-berry'
+export type RegistryConfigDialect = 'npm' | 'pnpm' | 'yarn-classic' | 'yarn-berry' | 'bun'
 
 /** @internal pre-0.6 name retained for implementation and test compatibility. */
 export type Ecosystem = RegistryConfigDialect
@@ -53,6 +54,13 @@ export interface RegistryConfig {
    *  `undefined` when the bound credential is Basic, absent, or the URL is http. */
   /** @internal pre-0.6 convenience accessor. */
   tokenFor(registryUrl: string): string | undefined
+}
+
+/** Registry configuration returned by filesystem discovery. Unlike
+ * `registryFor`, this accessor does not replace missing declarations with the
+ * public npm default. */
+export interface ResolvedRegistryConfig extends RegistryConfig {
+  declaredRegistryFor(pkgName: string): string | undefined
 }
 
 /** The package-selected registry endpoint plus the credential decisions bound
@@ -97,17 +105,23 @@ interface LegacyResolveRegistryOptions extends Omit<ResolveRegistryOptions, 'con
   ecosystem: RegistryConfigDialect
 }
 
-type FileKind = 'npmrc' | 'yarnrc-yml' | 'yarnrc'
+type FileKind = 'npmrc' | 'yarnrc-yml' | 'yarnrc' | 'bunfig'
 interface SourceProfile {
   files: ReadonlyArray<readonly [FileKind, 'project' | 'user']> // in precedence order
-  env: 'npm' | 'yarn'
+  env: 'npm' | 'yarn' | 'bun'
 }
-const FILE_NAME: Record<FileKind, string> = { npmrc: '.npmrc', 'yarnrc-yml': '.yarnrc.yml', yarnrc: '.yarnrc' }
+const fileNameOf = (kind: FileKind, scope: 'project' | 'user'): string => {
+  if (kind === 'bunfig') return scope === 'project' ? 'bunfig.toml' : '.bunfig.toml'
+  return { npmrc: '.npmrc', 'yarnrc-yml': '.yarnrc.yml', yarnrc: '.yarnrc' }[kind]
+}
 const PROFILES: Record<RegistryConfigDialect, SourceProfile> = {
   npm:            { files: [['npmrc', 'project'], ['npmrc', 'user']], env: 'npm' },
   pnpm:           { files: [['npmrc', 'project'], ['npmrc', 'user']], env: 'npm' },
   'yarn-classic': { files: [['yarnrc', 'project'], ['npmrc', 'project'], ['npmrc', 'user']], env: 'npm' },
   'yarn-berry':   { files: [['yarnrc-yml', 'project'], ['yarnrc-yml', 'user']], env: 'yarn' },
+  // Bun loads global/project npmrc, then global/project bunfig, then env/CLI;
+  // first-writer order is therefore the reverse of that producer order.
+  bun:            { files: [['bunfig', 'project'], ['bunfig', 'user'], ['npmrc', 'project'], ['npmrc', 'user']], env: 'bun' },
 }
 
 type AuthScheme = 'Bearer' | 'Basic'
@@ -128,6 +142,9 @@ const b64decode = (s: string): string => Buffer.from(s, 'base64').toString('utf8
 
 const expandEnv = (v: string, env: Record<string, string | undefined>): string =>
   v.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name) => env[name] ?? '')
+
+const expandBunEnv = (v: string, env: Record<string, string | undefined>): string =>
+  expandEnv(v, env).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => env[name] ?? '')
 
 const hostPathKey = (url: string): string => {
   const u = attempt(() => new URL(url))
@@ -201,6 +218,16 @@ function parseNpmEnv(reg: RegMap, tokens: AuthEntry[], basic: BasicParts, env: R
   drainBasic(basic, tokens)
 }
 
+// Bun's own env registry wins over its config files. Bun also consumes the
+// npm_config namespace, so parse it second under the same first-writer rule.
+function parseBunEnv(reg: RegMap, tokens: AuthEntry[], basic: BasicParts, env: Record<string, string | undefined>): void {
+  const registry = normalizeRegistry(env.BUN_CONFIG_REGISTRY ?? env.NPM_CONFIG_REGISTRY ?? '')
+  if (registry !== '' && reg.default === undefined) reg.default = registry
+  const token = env.BUN_CONFIG_TOKEN ?? env.NPM_CONFIG_TOKEN
+  if (token !== undefined && token !== '') tokens.push({ prefix: '', scheme: 'Bearer', value: token })
+  parseNpmEnv(reg, tokens, basic, env)
+}
+
 // yarn's env namespace — the common globals.
 function parseYarnEnv(reg: RegMap, tokens: AuthEntry[], env: Record<string, string | undefined>): void {
   const r = normalizeRegistry(env.YARN_NPM_REGISTRY_SERVER ?? '')
@@ -253,6 +280,71 @@ function parseYarnrc(text: string, reg: RegMap): void {
   }
 }
 
+// ── bunfig.toml (minimal TOML subset — registry routing + bearer auth) ───────
+function parseBunfig(text: string, reg: RegMap, tokens: AuthEntry[], env: Record<string, string | undefined>): void {
+  let section = ''
+  const parseValue = (raw: string): { url?: string; token?: string } => {
+    const value = expandBunEnv(raw.trim(), env)
+    if (!value.startsWith('{')) return { url: stripQuotes(value) }
+    const url = /(?:^|[,\s])url\s*=\s*(["'][^"']*["'])/.exec(value)?.[1]
+    const token = /(?:^|[,\s])token\s*=\s*(["'][^"']*["'])/.exec(value)?.[1]
+    return {
+      ...(url === undefined ? {} : { url: stripQuotes(url) }),
+      ...(token === undefined ? {} : { token: stripQuotes(token) }),
+    }
+  }
+  const logicalLines: string[] = []
+  let pending = ''
+  let objectDepth = 0
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/\s+#.*$/, '').trim()
+    if (line === '' || line.startsWith('#')) continue
+    if (pending !== '') {
+      pending += ` ${line}`
+      objectDepth += (line.match(/{/g) ?? []).length - (line.match(/}/g) ?? []).length
+      if (objectDepth <= 0) {
+        logicalLines.push(pending)
+        pending = ''
+      }
+      continue
+    }
+    const rhs = line.slice(line.indexOf('=') + 1).trim()
+    if (line.includes('=') && rhs.startsWith('{')) {
+      objectDepth = (rhs.match(/{/g) ?? []).length - (rhs.match(/}/g) ?? []).length
+      if (objectDepth > 0) {
+        pending = line
+        continue
+      }
+    }
+    logicalLines.push(line)
+  }
+  if (pending !== '') logicalLines.push(pending)
+
+  for (const line of logicalLines) {
+    const heading = /^\[([^\]]+)]$/.exec(line)
+    if (heading !== null) { section = heading[1] ?? ''; continue }
+    const kv = /^((?:"[^"]+"|'[^']+'|[^=\s]+))\s*=\s*(.+)$/.exec(line)
+    if (kv === null) continue
+    let key = stripQuotes(kv[1]!)
+    let effectiveSection = section
+    if (section === '' && key === 'install.registry') {
+      effectiveSection = 'install'
+      key = 'registry'
+    }
+    const value = parseValue(kv[2]!)
+    const url = normalizeRegistry(value.url ?? '')
+    if (effectiveSection === 'install' && key === 'registry' && url !== '' && reg.default === undefined) {
+      reg.default = url
+      if (value.token !== undefined) tokens.push({ prefix: hostPathKey(url), scheme: 'Bearer', value: value.token })
+    }
+    if (effectiveSection === 'install.scopes' && url !== '') {
+      const scope = key.startsWith('@') ? key : `@${key}`
+      safeSet(reg.scopes, scope, url)
+      if (value.token !== undefined) tokens.push({ prefix: hostPathKey(url), scheme: 'Bearer', value: value.token })
+    }
+  }
+}
+
 /**
  * Resolve registry routing + host-bound auth for `opts.ecosystem` under `cwd`
  * (project) + `home` (user) + the ecosystem's env namespace + an explicit
@@ -260,13 +352,13 @@ function parseYarnrc(text: string, reg: RegMap): void {
  * ecosystem's sources are read, in a fixed order, first writer wins —
  * `opts.registry` → env → project files → user files.
  */
-export function resolveRegistry(cwd: string, opts: ResolveRegistryOptions): RegistryConfig
+export function resolveRegistry(cwd: string, opts: ResolveRegistryOptions): ResolvedRegistryConfig
 /** @internal pre-0.6 overload. */
-export function resolveRegistry(cwd: string, opts: LegacyResolveRegistryOptions): RegistryConfig
+export function resolveRegistry(cwd: string, opts: LegacyResolveRegistryOptions): ResolvedRegistryConfig
 export function resolveRegistry(
   cwd: string,
   opts: ResolveRegistryOptions | LegacyResolveRegistryOptions,
-): RegistryConfig {
+): ResolvedRegistryConfig {
   const env = opts.env ?? process.env
   const home = opts.home ?? os.homedir()
   const profile = PROFILES['config' in opts ? opts.config : opts.ecosystem]
@@ -278,14 +370,21 @@ export function resolveRegistry(
   if (flagReg !== '') reg.default = flagReg
 
   if (profile.env === 'npm') parseNpmEnv(reg, tokens, basic, env)   // env layer, scoped — no mixing
-  else parseYarnEnv(reg, tokens, env)
+  else if (profile.env === 'yarn') parseYarnEnv(reg, tokens, env)
+  else parseBunEnv(reg, tokens, basic, env)
 
   for (const [kind, scope] of profile.files) {                      // file layers, fixed order
-    const text = read(path.join(scope === 'project' ? cwd : home, FILE_NAME[kind]))
+    const base = scope === 'project'
+      ? cwd
+      : kind === 'bunfig' && env.XDG_CONFIG_HOME
+        ? env.XDG_CONFIG_HOME
+        : home
+    const text = read(path.join(base, fileNameOf(kind, scope)))
     if (text === undefined) continue
     if (kind === 'npmrc') parseNpmrc(text, reg, tokens, basic, env)
     else if (kind === 'yarnrc-yml') parseYarnrcYml(text, reg, tokens, env)
-    else parseYarnrc(text, reg)
+    else if (kind === 'yarnrc') parseYarnrc(text, reg)
+    else parseBunfig(text, reg, tokens, env)
   }
 
   const defaultRegistry = reg.default ?? DEFAULT_REGISTRY
@@ -308,6 +407,14 @@ export function resolveRegistry(
   }
 
   return {
+    declaredRegistryFor(pkgName) {
+      if (pkgName.startsWith('@')) {
+        const scope = pkgName.slice(0, pkgName.indexOf('/'))
+        const scoped = reg.scopes[scope]
+        if (scoped !== undefined) return scoped
+      }
+      return reg.default
+    },
     registryFor(pkgName) {
       if (pkgName.startsWith('@')) {
         const scope = pkgName.slice(0, pkgName.indexOf('/'))

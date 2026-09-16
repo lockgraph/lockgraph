@@ -50,16 +50,18 @@ export function isDenoFormat(format: string): format is DenoFormatId {
 export interface ParseOptions extends ObserveOptions {
   /** Discovery start for project-relative lock semantics. */
   cwd?: string
+  /** Explicit registry authority for npm-class entries with no lock-borne URL. */
+  registry?: string
   /** Structured policy authority; manifests belong to graph operations. */
   sources?: Pick<OperationSources, 'policy'>
   /**
    * Filesystem root for adapter parse hooks that read out-of-lockfile
    * sources (yarn-berry / pnpm v6 / pnpm v9 / npm-4 patch byte hashing per
-   * ADR-0014 §4.F2). Adapters without out-of-lockfile reads ignore it.
+   * ). Adapters without out-of-lockfile reads ignore it.
    */
   workspaceRoot?: string
   /**
-   * Declared manifests keyed by workspace path (ADR-0025). Supplies override
+   * Declared manifests keyed by workspace path. Supplies override
    * declarations + workspace context the lockfile alone cannot carry.
    */
   manifests?: Record<string, Manifest>
@@ -79,7 +81,7 @@ export interface StringifyOptions extends ObserveOptions {
   sources?: Pick<OperationSources, 'policy'>
   cacheKey?: string
   /**
-   * Caller-supplied canonical override constraints (ADR-0025). Each adapter
+   * Caller-supplied canonical override constraints. Each adapter
    * projects them to its native form (pnpm `overrides:` / npm
    * `packages[""].overrides`); yarn-berry emits a loss diagnostic.
    */

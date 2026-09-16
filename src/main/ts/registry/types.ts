@@ -19,7 +19,7 @@ export type Limiter = <T>(task: () => Promise<T>) => Promise<T>
 export interface PackumentVersion {
   readonly name:                 string
   readonly version:              string
-  /** Multi-hash integrity carrier (ADR-0031). Undefined when no hash is known. */
+  /** Multi-hash integrity carrier. Undefined when no hash is known. */
   readonly integrity?:           Integrity
   /** Tarball URL at the registry origin when the source graph carried it. */
   readonly tarball?:             string

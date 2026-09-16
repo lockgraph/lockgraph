@@ -42,7 +42,7 @@ const ADAPTERS = [
   { id: 'yarn-berry-v4', alias: 'pm-yarn-2',  bin: 'yarn', runtime: 'node',
     args: ['install'], lockfile: 'yarn.lock',
     setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },
-  // ADR-0005 / C2: yarn 3+/4+ producers via downloaded .cjs (gitignored .cache/yarn-bin/).
+  // / C2: yarn 3+/4+ producers via downloaded.cjs (gitignored.cache/yarn-bin/).
   { id: 'yarn-berry-v5', yarnBundle: '3.1.0',  runtime: 'yarn-bundle',
     args: ['install'], lockfile: 'yarn.lock',
     setup: { '.yarnrc.yml': 'enableImmutableInstalls: false\nnodeLinker: node-modules\n' } },

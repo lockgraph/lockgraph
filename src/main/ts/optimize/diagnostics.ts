@@ -1,4 +1,4 @@
-// OPTIMIZE_* diagnostic codes — ADR-0024 §6.
+// OPTIMIZE_* diagnostic codes —.
 //
 // Four codes total: NODE_REMOVED (per-removal info), NOOP (per-call info
 // when removed.length === 0), WORKSPACE_UNREACHABLE (reserved warning code
@@ -6,7 +6,7 @@
 // opt-in mark-policy tightenings), NO_ROOTS (per-call warning when the mark
 // phase finds no live anchor on a non-empty graph — see §6 amendment).
 //
-// Subjects honour ADR-0023 §7.3: NodeId for per-node events, the 'graph'
+// Subjects honour: NodeId for per-node events, the 'graph'
 // literal for the per-call event. Severities follow §6's table verbatim.
 
 import { nameOf, type Diagnostic, type NodeId } from '../graph.ts'
@@ -23,7 +23,7 @@ export interface OptimizeDiagnostic extends Diagnostic {
 
 /**
  * Fires once per removed node. `subject` is the NodeId being swept.
- * Message includes `name@version` for grep-ability per ADR-0006 readability
+ * Message includes `name@version` for grep-ability per readability
  * rationale — the NodeId alone may carry a long peerContext suffix.
  */
 export function optimizeNodeRemoved(nodeId: NodeId): OptimizeDiagnostic {
@@ -105,7 +105,7 @@ export function pruneNoRoots(): PruneDiagnostic {
   }
 }
 
-// reserved — v1 never emits per ADR-0024 §6 amendment.
+// reserved — v1 never emits per amendment.
 // The §4.1 explicit workspace mark unconditionally adds every workspace to
 // the live set, so the §4 sweep branch that would fire this diagnostic is
 // dead under the v1 mark policy. Factory kept for future opt-in mark-policy
@@ -123,7 +123,7 @@ export function optimizeWorkspaceUnreachable(nodeId: NodeId): OptimizeDiagnostic
 
 /**
  * Fires once per `optimize(graph)` call when `removed.length === 0`. The
- * subject is the `'graph'` literal per ADR-0023 §7.3 / ADR-0024 §6.2 —
+ * subject is the `'graph'` literal per / —
  * the event is per-call, not per-node. Useful for fixpoint convergence
  * detection: an iteration with OPTIMIZE_NOOP confirms the reductive phase
  * is stable.
@@ -132,7 +132,7 @@ export function optimizeNoop(): OptimizeDiagnostic {
   return {
     code:     'OPTIMIZE_NOOP',
     severity: 'info',
-    // 'graph' literal per ADR-0023 §7.3 — the modify-layer convention for
+    // 'graph' literal per — the modify-layer convention for
     // per-call events. graph.ts types `subject` as `NodeId | EdgeTriple |
     // undefined`; NodeId is `string` so the 'graph' literal is assignable.
     subject:  'graph',
@@ -143,13 +143,13 @@ export function optimizeNoop(): OptimizeDiagnostic {
 /**
  * Fires once per `optimize(graph)` call when the mark phase finds no live
  * anchor — no workspace nodes AND an empty `preserve` set — on a non-empty
- * graph (ADR-0024 §6). Without an anchor, reachability cannot tell a
+ * graph. Without an anchor, reachability cannot tell a
  * wanted top-level dependency from an orphan (both are zero-incoming roots),
  * so optimize preserves every node and returns the graph unchanged rather
  * than wiping it. The caller supplies the real roots via `preserve` to
  * enable sweeping on non-workspace (classic) graphs.
  *
- * Subject is the `'graph'` literal per ADR-0023 §7.3 — a per-call event.
+ * Subject is the `'graph'` literal per — a per-call event.
  */
 export function optimizeNoRoots(): OptimizeDiagnostic {
   return {

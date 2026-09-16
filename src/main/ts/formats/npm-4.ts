@@ -9,7 +9,7 @@
 //   - `packages[""].npmExtensionHash`
 //   - per-entry `packageExtensionsApplied` / `npmExtensionApplied`
 //
-// Patch identity on Graph follows ADR-0014 F2/F5 (normalised patch bytes), while
+// Patch identity on Graph follows F2/F5 (normalised patch bytes), while
 // npm's native `patched.integrity` hashes the raw file bytes. The native carrier
 // therefore remains in the npm sidecar for same-format replay and is never
 // reconstructed from the canonical hash alone.

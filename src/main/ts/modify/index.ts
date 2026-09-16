@@ -1,4 +1,4 @@
-// ADR-0023 — modify/ public re-exports.
+// modify/ public re-exports.
 //
 // Six modifier primitives + their result types, the ModifyContext shape,
 // the MODIFY_* diagnostic taxonomy, and helper factories. Per ADR §8.1

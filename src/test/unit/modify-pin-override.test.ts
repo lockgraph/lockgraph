@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — pinOverride acceptance gate.
+// pinOverride acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
@@ -58,7 +58,7 @@ describe('modify/pinOverride', () => {
     expect(pinned.length).toBe(1)
   })
 
-  // ADR-0023 §3.2 emission path / §8.6 — pinOverride records the pin on
+  // emission path / §8.6 — pinOverride records the pin on
   // Graph.diagnostics() so stringify-side adapters can project it back to a
   // PM-native override entry. ModifyResult.unresolved is the streaming hook,
   // NOT the canonical read channel.

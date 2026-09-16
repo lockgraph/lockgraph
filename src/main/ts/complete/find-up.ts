@@ -1,8 +1,8 @@
-// ADR-0023 §5 — find-up resolve semantics.
+// find-up resolve semantics.
 //
 // Closest-ancestor-wins flat hoist with nested fallback. Tiebreaker
 // (per §5.1 / F1): highest semver version wins; on tie, lowest NodeId
-// in lexicographic order wins (matches ADR-0007 content-sorted
+// in lexicographic order wins (matches content-sorted
 // iteration order at resolve time).
 
 import semver from 'semver'
@@ -39,17 +39,17 @@ export function ancestorsOf(graph: Graph, consumer: NodeId): Node[] {
 }
 
 /**
- * Find-up resolve per ADR-0023 §5.1.
+ * Find-up resolve.
  *
  * Returns the closest-ancestor satisfying node, or undefined if either
  * (a) no ancestor declares `name` at all → caller may install nested at the
- *     consumer's level, or
+ * consumer's level, or
  * (b) the closest ancestor that declares `name` does so with a conflicting
- *     range → "block hoist", caller installs nested fallback (npm-3 style).
+ * range → "block hoist", caller installs nested fallback (npm-3 style).
  *
  * Tiebreaker:
- *   1. Highest semver-comparable version wins (`semver.rcompare`).
- *   2. On version tie, lowest NodeId lex order wins.
+ * 1. Highest semver-comparable version wins (`semver.rcompare`).
+ * 2. On version tie, lowest NodeId lex order wins.
  *
  * `depKind` is part of the §5.1 normative signature but does NOT affect the
  * algorithm body in v1: every dep-kind (dep / dev / optional / peer) follows
@@ -102,7 +102,7 @@ export function resolveFindUp(
 }
 
 /**
- * Project-wide reuse resolve (ADR-0023 §5 extension, 2026-06-21).
+ * Project-wide reuse resolve (extension, 2026-06-21).
  *
  * The best EXISTING node named `name` whose version satisfies `range`, scanned
  * across the WHOLE graph — not just the consumer's ancestor chain. This is the

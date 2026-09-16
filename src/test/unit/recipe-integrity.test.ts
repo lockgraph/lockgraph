@@ -7,7 +7,7 @@ import { canonicalDigest, pickAlgorithm } from '../../main/ts/recipe/integrity.t
 import type { Diagnostic } from '../../main/ts/graph.ts'
 import { convert, parse } from '../../main/ts/index.ts'
 
-// Adapter-level integrity BEHAVIOUR under ADR-0031 (the multi-hash carrier).
+// Adapter-level integrity BEHAVIOUR under (the multi-hash carrier).
 // Codec units (parseSri/emitSri/parseBerryChecksum/…) live in
 // `recipe-integrity-multihash.test.ts`; this file pins how each adapter parses
 // and emits integrity, and the cross-family origin-aware emit contract.
@@ -37,7 +37,7 @@ const npm3With = (integrity: string): string => JSON.stringify({
   },
 })
 
-describe('integrity parse — preserves every algorithm (ADR-0031)', () => {
+describe('integrity parse — preserves every algorithm ()', () => {
   it('npm-3: a sha1-only SRI is preserved, not dropped, no diagnostic', () => {
     const g = parse('npm-3', npm3With(MS_SHA1_SRI))
     const integ = g.tarballOf('ms@2.1.3')?.integrity

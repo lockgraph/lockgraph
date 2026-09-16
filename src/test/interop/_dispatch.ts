@@ -31,6 +31,7 @@ import { observeInteropDiagnostics } from './_observe.ts'
 export type StringifyOptions = {
   cacheKey?: string
   lineEnding?: 'lf' | 'crlf'
+  registry?: string
 }
 
 type BerryStringifyOptions = {
@@ -42,6 +43,7 @@ type BerryStringifyOptions = {
 type ClassicStringifyOptions = {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
+  registryFor?: (name: string) => string | undefined
 }
 
 type Stringifier =
@@ -110,14 +112,19 @@ export function parseFormat(
   format: FormatId,
   lockfile: string,
   manifests?: Readonly<Record<string, Manifest>>,
+  registry?: string,
 ): Graph {
-  if (format === 'deno-v2') return parseDenoV2(lockfile, { manifests })
-  if (format === 'deno-v3') return parseDenoV3(lockfile, { manifests })
-  if (format === 'deno-v4') return parseDenoV4(lockfile, { manifests })
-  if (format === 'deno-v5') return parseDenoV5(lockfile, { manifests })
+  const registryFor = registry === undefined ? undefined : () => registry
+  if (format === 'deno-v2') return parseDenoV2(lockfile, { manifests, registryFor })
+  if (format === 'deno-v3') return parseDenoV3(lockfile, { manifests, registryFor })
+  if (format === 'deno-v4') return parseDenoV4(lockfile, { manifests, registryFor })
+  if (format === 'deno-v5') return parseDenoV5(lockfile, { manifests, registryFor })
   const parser = PARSERS[format]
   if (parser === undefined) throw new Error(`parseFormat: unsupported format ${format}`)
-  return parser(lockfile)
+  return (parser as unknown as (
+    input: string,
+    options: { registryFor?: (packageName: string) => string | undefined },
+  ) => Graph)(lockfile, { registryFor })
 }
 
 export function stringifyFormat(
@@ -131,7 +138,13 @@ export function stringifyFormat(
   const onDiagnostic = (diagnostic: Diagnostic) => { diagnostics.push(diagnostic) }
   const lockfile = stringifier.kind === 'berry'
     ? stringifier.emit(graph, { cacheKey: options.cacheKey, lineEnding: options.lineEnding, onDiagnostic })
-    : stringifier.emit(graph, { lineEnding: options.lineEnding, onDiagnostic })
+    : stringifier.emit(graph, {
+        lineEnding: options.lineEnding,
+        onDiagnostic,
+        ...(format === 'yarn-classic' && options.registry !== undefined
+          ? { registryFor: () => options.registry }
+          : {}),
+      })
   return { lockfile, diagnostics }
 }
 
@@ -149,6 +162,7 @@ export type ConvertInputOptions = {
   cacheKey?: string
   lineEnding?: 'lf' | 'crlf'
   manifests?: Record<string, Manifest>
+  registry?: string
 }
 
 export type ConvertInput = {
@@ -175,6 +189,10 @@ export type ConvertResult = {
 export function convert(input: ConvertInput): ConvertResult {
   const mode: ConvertMode = input.mode ?? 'naive'
   const options = input.options ?? {}
+  // Cross-format classic contracts exercise the supported, caller-configured
+  // path. The no-config fail-closed path has a focused public-API oracle.
+  const registry = options.registry
+    ?? (input.to === 'yarn-classic' ? 'https://registry.yarnpkg.com' : undefined)
   const cacheKey = options.cacheKey ?? berryCacheKeyForFormat(input.to)
   const contract = findContract(input.from, input.to)
   if (contract?.unsupportedReason !== undefined) {
@@ -183,14 +201,15 @@ export function convert(input: ConvertInput): ConvertResult {
     )
   }
 
-  const parsedSource = parseFormat(input.from, input.source, options.manifests)
+  const parsedSource = parseFormat(input.from, input.source, options.manifests, registry)
   const sourceGraph = prepareSourceGraph(parsedSource, input, mode, options)
 
   const stringified = stringifyFormat(input.to, sourceGraph, {
     cacheKey,
     lineEnding: options.lineEnding,
+    registry,
   })
-  const destinationGraph = parseFormat(input.to, stringified.lockfile, options.manifests)
+  const destinationGraph = parseFormat(input.to, stringified.lockfile, options.manifests, registry)
 
   const interopDiagnostics = contract === undefined ? [] : observeInteropDiagnostics(contract, {
     sourceGraph,

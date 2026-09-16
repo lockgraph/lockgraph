@@ -263,7 +263,7 @@ this is only how bun-text *carries* it.
   vulnerable dependency onto a safe version. The block is **npm-shaped** (flat
   `{name: target}` in the common case, nested for parent-scoped overrides) and
   round-trips **verbatim** (preferred carrier; the canonical name-chain drops
-  npm `pkg@version`-key qualifiers per ADR-0025 §2). It is captured canonically
+  npm `pkg@version`-key qualifiers). It is captured canonically
   at parse for cross-PM reads (`getBunOverridesCanonical` → `overridesOf`).
 - `trustedDependencies` controls postinstall execution — load-bearing for
   reproducibility, even though it's not strictly resolution data. Round-trips

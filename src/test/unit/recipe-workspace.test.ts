@@ -179,7 +179,7 @@ describe('recipe/workspace — workspaceRangeOfEdge', () => {
   })
 
   it('returns undefined when edge.attrs.workspace !== true (not a workspace edge)', () => {
-    // ADR-0014 §4.F4 — FIXIT-2: predicate is the explicit edge marker,
+    // FIXIT-2: predicate is the explicit edge marker,
     // not dst.workspacePath. Edges landing on workspace nodes without the
     // marker are NOT eligible for F4 translation.
     const edge = { attrs: { range: 'workspace:^' } }
@@ -375,6 +375,7 @@ describe('recipe/workspace — parse populates attrs on workspace edges', () => 
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
       strict: false,
+      registry: 'https://registry.npmjs.org',
     })
     const g0 = parse('yarn-classic', yarnText)
     const g = yarnClassic.enrich(g0, undefined, {
@@ -442,6 +443,7 @@ describe('recipe/workspace — yarn-berry-v9 → yarn-classic fires RECIPE_WORKS
       from: 'yarn-berry-v9',
       to:   'yarn-classic',
       strict: false,
+      registry: 'https://registry.npmjs.org',
       onDiagnostic: d => diags.push(d),
     })
     const resolved = diags.filter(d => d.code === 'RECIPE_WORKSPACE_RESOLVED')
@@ -482,7 +484,7 @@ describe('recipe/workspace — yarn-berry-v9 → bun-text fires RECIPE_WORKSPACE
 })
 
 describe('recipe/workspace — yarn-berry-v9 → npm-1 fires RECIPE_FEATURE_DROPPED (workspace)', () => {
-  it('npm-1 drops workspace concept entirely per ADR-0021 §A', async () => {
+  it('npm-1 drops workspace concept entirely per ', async () => {
     const diags: Diagnostic[] = []
     await convert(fixture('workspace-cross-refs/yarn-berry-v9.lock'), {
       from: 'yarn-berry-v9',

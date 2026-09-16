@@ -166,7 +166,7 @@ function slugifyIdent(name: string): string {
 
 /**
  * The berry `checksum:` digest for a cached package — `sha512` of yarn's OWN cache
- * `.zip` (the checksum IS that hash, ADR-0035). This READS yarn's actual output
+ * `.zip` (the checksum IS that hash,). This READS yarn's actual output
  * rather than REPRODUCING it, so it is correct for EVERY compression — including
  * `compressionLevel: mixed`, which is not reproducible off-Node. Prefers a zip whose
  * filename cacheKey matches the requested one, else a checksum-based (format B) name;

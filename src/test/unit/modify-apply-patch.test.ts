@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — applyPatch acceptance gate.
+// applyPatch acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { applyPatch } from '../../main/ts/modify/apply-patch.ts'
@@ -121,7 +121,7 @@ describe('modify/applyPatch', () => {
     expect(second.patched.length).toBe(0)
   })
 
-  // ADR-0023 §7.4 / §9.2 — RECIPE_PATCH_NORMALISED fires once per applyPatch
+  // / §9.2 — RECIPE_PATCH_NORMALISED fires once per applyPatch
   // call when F5 normalisation altered ≥ 1 byte of the patch input.
   it('§7.4 / §9.2 — emits RECIPE_PATCH_NORMALISED when CRLF input is normalised', async () => {
     const graph = graphOf(builder => {

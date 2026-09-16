@@ -88,9 +88,8 @@ the three structured-fields round-trip, and the `::locator=` descriptor
 nuance — all detailed under [Quirks](#quirks) below.
 
 Subsequent phases — modify, enrich, optimize — are read-side-only in
-this preview. Their normative rules are library behaviour, specified outside this document
-(modification / tree completion / enrich) and
-[ADR-0024](../decisions/0024-optimize-phase.md) (optimize: orphan GC).
+this preview. Their normative rules are library behaviour, specified outside this
+document: modification, tree completion, enrich, and optimize (orphan GC).
 
 ## Schema sketch
 
@@ -116,8 +115,7 @@ flag survives conversions that the source format modelled it on:
   pnpm → yarn-berry optional peer with no enrich step and no workspace context.
 - **Enrich fills the gap for formats that drop the flag.** npm, bun, and
   yarn-classic discard `peerDependenciesMeta` on parse, so their edges reach
-  yarn-berry without an `optional` attribute. The enrich pass (published
-  [ADR-0023](../decisions/0023-graph-modification-and-completion.md))
+  yarn-berry without an `optional` attribute. The enrich pass
   walks each such peer edge and consults a **fill ladder**, setting
   `EdgeAttrs.optional = true` only when an authoritative source proves the peer
   optional. The pass is **monotone-additive** (it unions the flag, never clears
@@ -176,7 +174,7 @@ byte-unchanged.
   `"<root>": "workspace:^"` in its own monorepo. The graph seal permits incoming
   edges to a workspace from workspace and local-directory sources; only a
   *published* (registry / tarball / git) source depending on a workspace is
-  rejected (ADR-0017).
+  rejected.
 - **Local-artefact locator at the same `name@version` as a registry entry —
   disambiguated via the `+patch=unresolved-…` sentinel slot.** A `file:`
   local-tarball alias, a `link:`, or a `portal:` reference can resolve to the

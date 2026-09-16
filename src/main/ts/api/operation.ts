@@ -72,6 +72,7 @@ export type PackageManager =
   | 'deno'
   | 'lockgraph'
 export type Resolution =
+  | Readonly<{ kind: 'registry'; bind?: string }>
   | Readonly<{
       kind: 'tarball'
       url: string
@@ -115,6 +116,9 @@ export interface OperationSources {
 
 export interface OperationOptions extends ObserveOptions {
   readonly target: TargetInput
+  /** Explicit registry authority for npm-class lock entries whose native
+   * format omits the registry host. */
+  readonly registry?: string
   readonly sources?: OperationSources
   readonly cwd?: string
   readonly guards?: readonly GuardProfile[]

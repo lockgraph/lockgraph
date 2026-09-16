@@ -195,3 +195,19 @@ export {
 export type {
   Store,
 } from '../../enrich/artifact-store.ts'
+
+export {
+  assertSource,
+  overrideSource,
+  parseSourceRule,
+  type AssertSourceResult,
+  type OverrideSourceResult,
+  type SourceCounts,
+  type SourceLocalReason,
+  type SourceOperationOptions,
+  type SourceResultItem,
+  type SourceRule,
+  type SourceRuleKind,
+  type SourceRuleSelectorType,
+  type SourceStatus,
+} from './source.ts'

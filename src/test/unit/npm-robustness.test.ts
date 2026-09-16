@@ -70,7 +70,7 @@ describe('parse', () => {
     const id = graph.byName('ansi-regex')[0]!
     expect(graph.getNode(id)).toBeDefined()
     expect(graph.tarballOf(id)?.nativeResolution).toBeUndefined()
-    expect(graph.tarballOf(id)?.resolution).toBeUndefined()
+    expect(graph.tarballOf(id)?.resolution).toEqual({ kind: 'registry' })
     // The integrity beside the dropped `resolved` must survive.
     expect(graph.tarballOf(id)?.integrity).toBeDefined()
   })

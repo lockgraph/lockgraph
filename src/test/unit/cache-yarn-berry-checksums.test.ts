@@ -1,6 +1,6 @@
 // `withYarnCacheChecksums` — the security-preserving path for a `mixed` (or any
 // unreproducible) berry checksum: the berry `checksum:` IS `sha512(yarn's cache zip)`
-// (ADR-0035), so we READ yarn's OWN output from `.yarn/cache/` and hash it, rather
+// so we READ yarn's OWN output from `.yarn/cache/` and hash it, rather
 // than REPRODUCE it (impossible off-Node for `mixed`). Result: the bumped dep is
 // PINNED, not omitted — no supply-chain-integrity regression when yarn is installed.
 
@@ -20,7 +20,7 @@ describe('withYarnCacheChecksums — fill a mixed berry checksum from yarn\'s OW
   it('PINS the exact checksum = sha512(cache zip) for a mixed cacheKey (no reproduction)', async () => {
     // A yarn-4 cache zip for selfsigned@5.5.0 under cacheKey `10` (mixed). The bytes are
     // arbitrary — the point is the helper hashes THIS file (yarn's actual output), which
-    // by ADR-0035 IS the berry checksum, so it's correct even where reproduction fails.
+    // by IS the berry checksum, so it's correct even where reproduction fails.
     const dir = mkdtempSync(join(tmpdir(), 'ycache-'))
     const zipBytes = Buffer.from('PK fake yarn-4 cache zip for selfsigned 5.5.0 (mixed)')
     writeFileSync(join(dir, 'selfsigned-npm-5.5.0-abcdef0123-10.zip'), zipBytes)

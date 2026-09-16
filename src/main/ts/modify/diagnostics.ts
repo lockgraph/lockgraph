@@ -1,4 +1,4 @@
-// MODIFY_* diagnostic codes — ADR-0023 §7.1.
+// MODIFY_* diagnostic codes —.
 //
 // Every modifier primitive emits diagnostics through this taxonomy.
 // Severities follow the §7.1 table verbatim; MODIFY_LICENSE_BLOCKED is
@@ -117,5 +117,5 @@ export function modifyOverridePinned(name: string, resolved: string): ModifyDiag
 
 // `subject` is a `Diagnostic` type compatible value or the literal 'graph'. The
 // graph.ts `Diagnostic.subject` is typed `NodeId | EdgeTriple | undefined`; the
-// 'graph' literal lives at the modify-layer level per ADR-0023 §7.3 — we coerce
+// 'graph' literal lives at the modify-layer level per — we coerce
 // via the carrier `subject?:` being string-typed (NodeId IS string).

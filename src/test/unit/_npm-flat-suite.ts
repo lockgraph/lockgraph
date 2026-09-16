@@ -1,6 +1,6 @@
 // _npm-flat-suite.ts — shared describe-block registration for npm-2 + npm-3.
 //
-// Both adapters share the npm-flat-family contract (per ADR-0021 §A).
+// Both adapters share the npm-flat-family contract.
 // The standard suite below covers every contract that is identical
 // across the two versions; per-version delta tests stay in the
 // individual `npm-{2,3}.test.ts` files (dual-mirror + drift for npm-2,
@@ -167,8 +167,8 @@ export function describeParseFixturesCommon(spec: FlatFamilySpec): void {
 export function describeStringifyCommon(spec: FlatFamilySpec): void {
   const { label, lockfileVersion } = spec
   describe(`${label} — stringify (§A.4 Graph-level roundtrip, shared)`, () => {
-    // §A.4 predicate per ADR-0016 §A.4: parse(stringify(parse(x))).diff(parse(x))
-    // is structurally empty + tarballs() iteration-equal.
+    // §A.4 predicate: parse(stringify(parse(x))).diff(parse(x))
+    // is structurally empty + tarballs iteration-equal.
     it.each(FIXTURES.filter(name => name !== 'yarn-crlf'))('roundtrips %s at Graph level', (fixtureName) => {
       const original = parseFixtureGraph(spec, fixtureName)
       const emitted = spec.adapter.stringify(original)
@@ -248,7 +248,7 @@ export function describeStringifyCommon(spec: FlatFamilySpec): void {
 
 export function describeModifyCommon(spec: FlatFamilySpec): void {
   const { label, diagPrefix, adapter } = spec
-  describe(`${label} — modify (§B Mutator surface, inherits ADR-0016 §B verbatim)`, () => {
+  describe(`${label} — modify (§B Mutator surface, inherits  verbatim)`, () => {
     it('roundtrips addNode', () => {
       const original = parseFixtureGraph(spec, 'simple')
       const result = original.mutate(m => {
@@ -341,7 +341,10 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
       const reparsed = adapter.parse(adapter.stringify(result.graph))
 
       expectEmptyGraphDiff(result.graph.diff(reparsed))
-      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({ integrity: sri(MODIFIED_SRI) })
+      expect(reparsed.tarballOf('ms@2.1.3')).toEqual({
+        integrity: sri(MODIFIED_SRI),
+        resolution: { type: 'registry' },
+      })
       expect(result.applied).toEqual([
         { kind: 'tarball-set', subject: 'ms@2.1.3' },
       ])
@@ -378,9 +381,9 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
 
       expect(reparsed.getNode('react-dom@18.2.0(react@18.2.0)')).toBeUndefined()
       expect(reparsed.getNode('react-dom@18.2.0')).toBeDefined()
-      // mutate() drops the parse-captured install-path sidecar, so this emit
+      // mutate drops the parse-captured install-path sidecar, so this emit
       // re-synthesises the npm layout → LAYOUT_PLACEMENT_RESYNTHESISED (info,
-      // ADR-0026) fires alongside the peer-flatten warning. Target the peer
+      // ) fires alongside the peer-flatten warning. Target the peer
       // diagnostic by code rather than assuming list shape/position.
       const peerFlattened = diagnostics.filter(
         d => d.code === `${diagPrefix}_PEER_VIRT_FLATTENED`,
@@ -442,7 +445,7 @@ export function describeModifyCommon(spec: FlatFamilySpec): void {
 
 export function describeEnrichCommon(spec: FlatFamilySpec): void {
   const { label, lockfileVersion, diagPrefix, adapter } = spec
-  describe(`${label} — enrich (§C, ADR-0021 §C.npm-${lockfileVersion})`, () => {
+  describe(`${label} — enrich (§C, -${lockfileVersion})`, () => {
     it('peer-virt structurally absent: peerDependencies stay in sidecar; no graph peer edges', () => {
       const graph = parseFixtureGraph(spec, 'peers-basic')
       expect(graph.out('react-dom@18.2.0', 'peer')).toEqual([])
@@ -534,7 +537,7 @@ export function describeEnrichCommon(spec: FlatFamilySpec): void {
       expect(result.graph.getNode('ms@2.1.3')?.workspacePath).toBeUndefined()
     })
 
-    it(`does NOT emit ${diagPrefix}_NO_MANIFESTS (lockfile embeds manifests natively per ADR-0021 §C.npm-${lockfileVersion})`, () => {
+    it(`does NOT emit ${diagPrefix}_NO_MANIFESTS (lockfile embeds manifests natively per -${lockfileVersion})`, () => {
       const graph = parseFixtureGraph(spec, 'workspaces-basic')
       const result = adapter.enrich(graph)
       expect(result.diagnostics.map(d => d.code)).not.toContain(`${diagPrefix}_NO_MANIFESTS`)
@@ -655,7 +658,7 @@ export function describeOptimizeCommon(spec: FlatFamilySpec): void {
     }).graph
   }
 
-  describe(`${label} — optimize (§D, ADR-0021 §D.npm-${lockfileVersion} — prune unreachable)`, () => {
+  describe(`${label} — optimize (§D, -${lockfileVersion} — prune unreachable)`, () => {
     it('prunes an unreachable self-loop orphan and its tarball', () => {
       const graph = graphWithOrphan()
       const result = adapter.optimize(graph)

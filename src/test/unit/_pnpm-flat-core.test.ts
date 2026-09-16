@@ -175,7 +175,7 @@ describe('parse', () => {
 
   // A LOCAL (`resolution: {type: directory}`) package's own dependencies name
   // sibling members. No peer suffix carries them, and the seal admits a local
-  // node's edge into a workspace member (ADR-0017 amendment).
+  // node's edge into a workspace member (amendment).
   const V9_LOCAL_LINK_CONSUMER = V9(
     'importers:\n\n' +
       '  .:\n    dependencies:\n      courses:\n        specifier: file:nx-dev/courses\n        version: file:nx-dev/courses\n\n' +

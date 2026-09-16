@@ -6,7 +6,7 @@
 //     mirror, if present, surfaces NPM_V3_UNEXPECTED_LEGACY_MIRROR)
 //   - diagnosticPrefix: 'NPM_V3'
 //
-// All §A/§B/§C/§D behaviour lives in `_npm-core.ts` per ADR-0021 §5 core
+// All §A/§B/§C/§D behaviour lives in `_npm-core.ts` per core
 // extraction. This module is the public surface only.
 
 import type { Diagnostic, Graph } from '../graph.ts'

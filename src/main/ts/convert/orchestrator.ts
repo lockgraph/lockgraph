@@ -439,6 +439,8 @@ async function prepareConversionRuntime(
   }
   let graph = prepared.graph ?? parse(prepared.source, prepared.lockfile, {
     workspaceRoot: options.workspaceRoot,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.registry === undefined ? {} : { registry: options.registry }),
     manifests: sources.manifests === undefined ? undefined : { ...sources.manifests },
     onDiagnostic: report,
   })

@@ -1,7 +1,7 @@
 // _pnpm-yaml.ts — minimal YAML reader/emitter scoped to the pnpm-emitted
 // subset of YAML 1.2.
 //
-// Split from `_pnpm-flat-core.ts` per ADR-0022 §5 — the codec is
+// Split from `_pnpm-flat-core.ts` per — the codec is
 // single-responsibility (YAML in/out) and lives independently from any pnpm
 // semantics (lockfileVersion handshake, section ordering, override key shape).
 // The codec accepts structural options only:

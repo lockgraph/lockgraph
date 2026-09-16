@@ -1,4 +1,4 @@
-// ADR-0035 — yarn-berry `checksum` computation, conformance gates.
+// yarn-berry `checksum` computation, conformance gates.
 //
 // The digest is all-or-nothing: a single divergent byte in the reproduced
 // cache zip changes the SHA-512. The static fixture below is yarn's own ground
@@ -20,7 +20,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url))
 const tarball = (rel: string): Buffer => readFileSync(resolve(here, '../resources/fixtures/tarballs', rel))
 
-describe('recipe/berry-checksum (ADR-0035)', () => {
+describe('recipe/berry-checksum ()', () => {
   it('reproduces ms@2.1.3 berry checksum byte-exact (STORE / 10c0)', () => {
     const hex = computeBerryChecksum(tarball('ms-2.1.3.tgz'), 'ms', '10c0')
     expect(hex).toBe(
@@ -30,7 +30,7 @@ describe('recipe/berry-checksum (ADR-0035)', () => {
 
   it('reproduces a SCOPED package checksum (node_modules/@scope/name/ vendor path)', () => {
     // @kwsites/file-exists@1.1.1 — ground truth from the @yarnpkg/core oracle
-    // (ADR-0035 §5 live-oracle gate), which itself matches real yarn output.
+    // (live-oracle gate), which itself matches real yarn output.
     const hex = computeBerryChecksum(tarball('kwsites-file-exists-1.1.1.tgz'), '@kwsites/file-exists', '10c0')
     expect(hex).toBe(
       '39e693239a72ccd8408bb618a0200e4a8d61682057ca7ae2c87668d7e69196e8d7e2c9cde73db6b23b3b0230169a15e5f1bfe086539f4be43e767b2db68e8ee4',

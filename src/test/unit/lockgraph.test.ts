@@ -294,7 +294,7 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     // the integrity column carries the FULL `;`-joined multiset with origin
     // markers (s=sri, z=berry-zip, r=registry), in source order. The berry
     // checksum-cache-key (`10c0`) folds INTO the berry-zip z-member as
-    // `z<cacheKey>/<algo>-<digest>` (ADR-0031) — NOT a separate F slot.
+    // `z<cacheKey>/<algo>-<digest>` — NOT a separate F slot.
     const row = text.split('\n').find(l => l.startsWith('lodash\t'))!
     const integrityCol = row.split('\t')[3]!
     expect(integrityCol).toBe(
@@ -310,7 +310,7 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const b = newBuilder()
     const patch = 'unresolved-' + 'a'.repeat(64) // sentinel form
     // git resolution → a well-formed node carries a `source` discriminator (set by
-    // the adapter; ADR-0032). The format stores it VERBATIM in a `src=` slot.
+    // the adapter;). The format stores it VERBATIM in a `src=` slot.
     const src = 'a26ae4a95234d808'
     const id = serializeNodeId('left-pad', '1.3.0', [], patch, src)
     b.addNode({ id, name: 'left-pad', version: '1.3.0', peerContext: [], patch, source: src })
@@ -391,7 +391,7 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const peerId = serializeNodeId('react', '18.0.0', [])
     b.addNode({ id: peerId, name: 'react', version: '18.0.0', peerContext: [] })
     const patch = 'c'.repeat(128)
-    const src = 'd2a64f79f21e9643' // stored verbatim in the `src=` slot (ADR-0032)
+    const src = 'd2a64f79f21e9643' // stored verbatim in the `src=` slot ()
     const id = serializeNodeId('p', '2.0.0', [peerId], patch, src)
     expect(id).toBe(`p@2.0.0+patch=${patch}+src=${src}(${peerId})`)
     b.addNode({ id, name: 'p', version: '2.0.0', peerContext: [peerId], patch, source: src })
@@ -497,7 +497,7 @@ describe('lockgraph §E — full fidelity of every model element', () => {
     const ver = 'https://codeload.github.com/angular/domino/tar.gz/a9e9e17af7a54af8dde66f651bfde671c3a10444'
     const file = 'file:nx-dev/ui-blog'
     // these nodes carry an explicit `source` (set as any well-behaved adapter
-    // would, per ADR-0032); it is stored verbatim in the `src=` slot and read back
+    // would, per); it is stored verbatim in the `src=` slot and read back
     // exactly on parse.
     const ghSrc = '2cb51226d1722190'
     const ghId = serializeNodeId(gh, ver, [], undefined, ghSrc)
@@ -742,7 +742,7 @@ describe('lockgraph §G — recomposition (res=/payload) + bug regressions', () 
     // The realistic combination: a berry zip-cache checksum (berry-zip origin)
     // ALWAYS accompanies its `<cacheKey>/` prefix — they are one value. The
     // cacheKey now folds into that hash's z-member as `z<cacheKey>/<algo>-<digest>`
-    // (ADR-0031); there is NO separate `ck=` F slot anymore. (A cacheKey present
+    // there is NO separate `ck=` F slot anymore. (A cacheKey present
     // with NO berry-zip member is a model anomaly that does not occur in the
     // corpus — `parseBerryChecksum` only sets the cacheKey alongside a berry-zip
     // digest — and the removed `ck=` slot no longer carries it.)

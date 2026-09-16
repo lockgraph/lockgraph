@@ -2,7 +2,7 @@
 //
 // One definition of "does this license violate an allow/deny policy", used by
 // BOTH the `filterLicense` modifier (modify/) and the completion `license`
-// constraint (complete/), so the two surfaces never drift (ADR-0037).
+// constraint (complete/), so the two surfaces never drift.
 //
 // v1 semantics — SINGLE SPDX ids only. `allow`/`deny` are exact-id sets:
 //   - deny: a license present in `deny` is flagged.

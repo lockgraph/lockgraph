@@ -8,11 +8,11 @@
 // acyclic and core remains a standalone-reuse surface for future
 // flat-family adapters.
 //
-// Layered constraint per ADR-0021 §5, breaking the import cycle:
-//   - core: depends on types only.
-//   - mirror (npm-2-only): depends on types only.
-//   - npm-{2,3,4}.ts thin entries: wire core + (optional) extensions via the
-//     `hooks` slot on `NpmFamilyConfig` so core never imports mirror.
+// Layered constraint, breaking the import cycle:
+// - core: depends on types only.
+// - mirror (npm-2-only): depends on types only.
+// - npm-{2,3,4}.ts thin entries: wire core + (optional) extensions via the
+// `hooks` slot on `NpmFamilyConfig` so core never imports mirror.
 
 import { type Diagnostic, type EdgeKind, type Graph, type Node, type OverrideConstraint } from '../graph.ts'
 import type { UnknownTopLevelState } from './_unknown-top-level.ts'
@@ -36,7 +36,7 @@ export function sortRecord<V>(record: Record<string, V>): Record<string, V> {
 // remainder is alphabetical by `localeCompare('en')`. Emitting in that exact
 // order keeps a generated lock stable under a MUTABLE `npm install`, not only
 // `npm ci` (which is order-insensitive). The same ordering applies recursively,
-// including `packages`/`dependencies` MAP keys, which npm sorts by
+// including `packages`/`dependencies` MAP keys, which npm sorts
 // `localeCompare` rather than the codepoint `cmpStr` used elsewhere here.
 const NPM_SW_KEY_ORDER = [
   'name', 'version', 'lockfileVersion', 'resolved', 'integrity',
@@ -122,7 +122,7 @@ export function edgeTripleKey(src: string, kind: EdgeKind, dst: string): string 
 // === Family config + options ================================================
 
 // Top-level layout shapes recognised by the flat-family core. The
-// `dependencies-tree` (npm-1) shape is intentionally absent — see
+// `dependencies-tree` (npm-1) shape is intentionally absent —
 // `_npm-core.ts` header.
 export type NpmTopLevelShape = 'dual' | 'packages-only'
 
@@ -220,15 +220,16 @@ export interface NpmFamilyHooks {
 
 export interface NpmFamilyParseOptions {
   workspaceRoot?: string
+  registryFor?: (packageName: string) => string | undefined
   onDiagnostic?: (diagnostic: Diagnostic) => void
 }
 
 export interface NpmFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   onDiagnostic?: (diagnostic: Diagnostic) => void
-  /** Caller-declared overrides (ADR-0025 §4) projected into the root entry's
-   *  `overrides` block at `packages[""]`. npm-1 (no packages block) cannot
-   *  carry them — a loss diagnostic fires instead. */
+  /** Caller-declared overrides projected into the root entry's
+   * `overrides` block at `packages[""]`. npm-1 (no packages block) cannot
+   * carry them — a loss diagnostic fires instead. */
   overrides?: OverrideConstraint[]
 }
 
@@ -238,11 +239,11 @@ export type NpmFamilyOptimizeOptions = {}
 // === JSON entry schemas =====================================================
 
 /** The root manifest's `workspaces` field, which npm copies into `packages[""]`
- *  verbatim. npm accepts BOTH spellings and `@npmcli/map-workspaces` reads
- *  either: the array form `["a", "b"]`, and the object form
- *  `{ "packages": ["a"], "nohoist": [...] }` inherited from the yarn-1 era.
- *  Both are carried as written — normalising the object form to its `packages`
- *  array would re-emit a lock that differs from the one npm itself writes. */
+ * verbatim. npm accepts BOTH spellings and `@npmcli/map-workspaces` reads
+ * either: the array form `["a", "b"]`, and the object form
+ * `{ "packages": ["a"], "nohoist": [...] }` inherited from the yarn-1 era.
+ * Both are carried as written — normalising the object form to its `packages`
+ * array would re-emit a lock that differs from the one npm itself writes. */
 export type NpmWorkspacesField =
   | string[]
   | Readonly<{ packages?: string[], [key: string]: unknown }>
@@ -317,8 +318,8 @@ export interface NpmRootMeta {
   version?: string
   requires?: boolean
   /** Whole source-authored `packages[""]` object for npm-2/3 same-format
-   *  replay. The originating version prevents cross-format fabrication;
-   *  stringify clones the record before canonical graph fields overlay it. */
+   * replay. The originating version prevents cross-format fabrication;
+   * stringify clones the record before canonical graph fields overlay it. */
   nativeRootEntry?: Readonly<{
     lockfileVersion: 2 | 3
     value: Readonly<Record<string, unknown>>
@@ -329,18 +330,18 @@ export interface NpmRootMeta {
   peerDependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   /** Canonical overrides captured from the root entry's `overrides` block
-   *  (ADR-0025 §3). The name-chain abstraction — used for cross-PM projection,
-   *  query, and the manifest-capture (A2) path where no npm verbatim exists. */
+   * The name-chain abstraction — used for cross-PM projection,
+   * query, and the manifest-capture (A2) path where no npm verbatim exists. */
   overrides?: OverrideConstraint[]
-  /** VERBATIM npm `overrides` block as written in the lock (ADR-0025 §3). This
-   *  is the lossless same-PM round-trip carrier — re-emitted byte-for-byte when
-   *  the caller supplies no `StringifyOptions.overrides`, symmetric to pnpm's
-   *  `sidecar.overrides`. Preferred over the canonical form on npm→npm re-emit
-   *  because the canonical name-chain drops npm-specific tails (`pkg@version`
-   *  key qualifiers, self-key ordering). */
+  /** VERBATIM npm `overrides` block as written in the lock. This
+   * is the lossless same-PM round-trip carrier — re-emitted byte-for-byte when
+   * the caller supplies no `StringifyOptions.overrides`, symmetric to pnpm's
+   * `sidecar.overrides`. Preferred over the canonical form on npm→npm re-emit
+   * because the canonical name-chain drops npm-specific tails (`pkg@version`
+   * key qualifiers, self-key ordering). */
   nativeOverrides?: Record<string, unknown>
   /** npm 12 v4 may omit top-level name/version even though packages[""]
-   *  carries them. Presence flags keep same-format replay byte-identical. */
+   * carries them. Presence flags keep same-format replay byte-identical. */
   topLevelNamePresent?: boolean
   topLevelVersionPresent?: boolean
   /** npm 12 manifest-extension fingerprints carried by packages[""]. */
@@ -359,18 +360,18 @@ export interface NpmFlatSidecar {
   peer?: boolean
   // npm marks a workspace member `extraneous: true` when it is present on disk
   // but not part of the install graph (no top-level `node_modules/<name>` link).
-  // Captured layout attribution (ADR-0027 §4 / WS-LINK): replayed on stringify so
+  // Captured layout attribution (WS-LINK): replayed on stringify so
   // an extraneous member re-emits WITHOUT a link, matching npm. Absent ⇒ linked.
   extraneous?: boolean
   peerDependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   devDependencies?: Record<string, string>
   /** npm 12 v4 native patch carrier, replayed only while its canonical
-   *  identity still matches Node.patch. */
+   * identity still matches Node.patch. */
   patched?: Readonly<{ integrity: string; path: string }>
   patchIdentity?: string
   /** npm 12 v4 provenance for dependency facts already present in the normal
-   *  dependency blocks. Opaque, same-format replay data. */
+   * dependency blocks. Opaque, same-format replay data. */
   packageExtensionsApplied?: unknown
   npmExtensionApplied?: unknown
 }
@@ -380,18 +381,18 @@ export interface NpmFlatSidecar {
 export interface NpmPackageEntrySidecar {
   nodeId: string
   /** Whole source-authored `packages[path]` record. Same-family replay uses
-   *  this exact-path carrier for native metadata presence and values; graph
-   *  identity/topology still comes from the canonical entry. */
+   * this exact-path carrier for native metadata presence and values; graph
+   * identity/topology still comes from the canonical entry. */
   nativeEntry: Readonly<Record<string, unknown>>
   /** Canonical installed-entry projection at parse time. A later graph rebind
-   *  overlays every key whose canonical value changed, so native state cannot
-   *  replay a stale checksum, URL, identity, or dependency block. */
+   * overlays every key whose canonical value changed, so native state cannot
+   * replay a stale checksum, URL, identity, or dependency block. */
   canonicalEntry?: Readonly<Record<string, unknown>>
 }
 
 /** Native npm `link: true` entry keyed by its physical alias path. The target
- *  node carries canonical workspace/root identity; the source path remains
- *  layout state because it may differ from `node_modules/<target.name>`. */
+ * node carries canonical workspace/root identity; the source path remains
+ * layout state because it may differ from `node_modules/<target.name>`. */
 export interface NpmLinkEntrySidecar {
   targetNodeId: string
   nativeEntry: Readonly<Record<string, unknown>>
@@ -402,7 +403,7 @@ export interface NpmSidecar {
   rootMeta?: NpmRootMeta
   // Edge-level: range record per edgeTripleKey(src, kind, dst).
   edgeRanges: Map<string, string>
-  // Edge-level: declared dep-name in the source manifest. Differs from
+  // Edge-level: declared dep-name in the source manifest. Differs
   // dst.name when the consumer imports via an `npm:` alias or a workspace
   // symlink. Used by stringify to round-trip the consumer's import-name.
   edgeDeclaredNames: Map<string, string>

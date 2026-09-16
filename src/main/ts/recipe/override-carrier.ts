@@ -1,4 +1,4 @@
-// Recipe-owned, parse-time manifest-override carrier (ADR-0025 §6, A2).
+// Recipe-owned, parse-time manifest-override carrier (A2).
 //
 // `overridesOf(graph)` (in `index.ts`) folds three override sources into one
 // canonical list: lock-borne npm `rootMeta.overrides` / pnpm `sidecar.overrides`
@@ -7,14 +7,14 @@
 // in — it is PM-neutral and captured in the public `parse()` wrapper — so it
 // lands here, on a recipe-owned `WeakMap<Graph, …>`.
 //
-// Lifetime (per ADR-0025 §6 "Carrier lifecycle", Option-S): write-once at parse,
+// Lifetime (per "Carrier lifecycle", Option-S): write-once at parse,
 // keyed by the adapter-returned graph; read off that same handle. It is NOT
 // propagated across `graph.mutate()` / enrich / optimize — matching the real
 // modify-path lifetime of every format sidecar (a bare `mutate` drops them all;
 // only yarn-berry's parse-time proxy re-attaches its own sidecar, unaware of this
 // carrier). Consumer contract: read-before-modify. Seal-invisible (a
-// `WeakMap<Graph,…>` is unreachable from `validate(State)`), so ADR-0017 + the
-// ADR-0025 §1 "no overrides on the Graph" boundary stay intact.
+// `WeakMap<Graph,…>` is unreachable from `validate(State)`), so + the
+// "no overrides on the Graph" boundary stay intact.
 
 import type { Graph, OverrideConstraint } from '../graph.ts'
 
@@ -41,7 +41,7 @@ const overrideKey = (c: OverrideConstraint): string =>
 
 /**
  * Merge two override lists by `(package, parentPath, versionCondition)` identity
- * (ADR-0025 §6 Precedence): insert `base`, then `winners` which overwrite on a
+ * (Precedence): insert `base`, then `winners` which overwrite on a
  * tuple collision. Within either list, last-wins on duplicate tuples. Pure —
  * never mutates the input arrays; returns a fresh, deterministically-ordered
  * array (which shares the input `OverrideConstraint` object references —

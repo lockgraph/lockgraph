@@ -1,4 +1,4 @@
-// Test-only Integrity constructors (ADR-0031). Production code builds Integrity
+// Test-only Integrity constructors. Production code builds Integrity
 // via the recipe/integrity.ts codecs; these helpers keep fixtures terse.
 
 import { parseSri, type Integrity } from '../main/ts/recipe/integrity.ts'

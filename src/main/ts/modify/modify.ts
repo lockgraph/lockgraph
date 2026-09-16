@@ -1,4 +1,4 @@
-// ADR-0023 §8.2 — `modify()` orchestrator + `ModifyResult` discriminated union.
+// `modify()` orchestrator + `ModifyResult` discriminated union.
 //
 // Per ADR §8.2, `modify(graph, primitive, options?)` is the single dispatch
 // entry point for the modifier vocabulary. It accepts a discriminated
@@ -10,7 +10,7 @@
 // individually callable; the orchestrator wraps them, it does not replace
 // them. This preserves call-site ergonomics for callers who know which
 // primitive they want, while exposing the §8.2 single entry point for
-// composers (audit-fix runner, ADR-0008 iterative loop) that dispatch over
+// composers (audit-fix runner, iterative loop) that dispatch over
 // kind without per-primitive branching.
 
 import type { Diagnostic, EdgeKind, Graph, NodeId } from '../graph.ts'
@@ -29,10 +29,10 @@ import { resolveContext, type ModifyOptions } from './context.ts'
 /**
  * Common shape every per-primitive result conforms to.
  *
- * Per ADR-0023 §7.5 — `unresolved` is the per-call streaming hook carrying
+ * Per — `unresolved` is the per-call streaming hook carrying
  * all diagnostics emitted by the primitive (info / warning / error).
  *
- * Per ADR-0023 §4.1 — `recentlyAdded` / `recentlyOrphaned` seed the
+ * Per — `recentlyAdded` / `recentlyOrphaned` seed the
  * completion frontier.
  */
 export interface ModifyResultBase {
@@ -104,7 +104,7 @@ export type ModifyResult =
   | ({ kind: 'filterLicense' }    & FilterLicenseResult)
 
 /**
- * ADR-0023 §8.2 — single dispatch entry point for the modifier vocabulary.
+ * single dispatch entry point for the modifier vocabulary.
  *
  * Dispatches on `primitive.kind` to the corresponding per-primitive
  * implementation. The returned `ModifyResult` carries the same kind tag for
@@ -114,7 +114,7 @@ export type ModifyResult =
  * offline-first guarantee — callers may omit the context entirely for the
  * audit-fix v1 use case where the target version is already in-graph.
  *
- * Per ADR-0023 §8.3 — every primitive is `async`; the orchestrator awaits
+ * Per — every primitive is `async`; the orchestrator awaits
  * the inner call and returns the result with the kind discriminator
  * attached.
  */

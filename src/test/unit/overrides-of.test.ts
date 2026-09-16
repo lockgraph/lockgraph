@@ -4,7 +4,7 @@ import { mergeOverrides } from '../../main/ts/recipe/override-carrier.ts'
 import type { Diagnostic, Manifest, OverrideConstraint } from '../../main/ts/graph.ts'
 import { fixture } from '../helpers/lockfile-test-utils.ts'
 
-// A2 (ADR-0025 §6) — `overridesOf(graph)` folds lock-borne + parse-time-manifest
+// A2 — `overridesOf(graph)` folds lock-borne + parse-time-manifest
 // overrides into one canonical list (manifest wins on collision), read off the
 // parsed-graph handle (read-before-modify). Plus the manifest-F6 capture path
 // (`ParseOptions.manifests`) and the cross-PM carry it enables.
@@ -44,7 +44,7 @@ snapshots:
   ms@2.1.3: {}
 `
 
-describe('overridesOf — lock-borne sources (ADR-0025 §6, A2)', () => {
+describe('overridesOf — lock-borne sources (, A2)', () => {
   it('surfaces npm packages[""].overrides as canonical', () => {
     const g = parse('npm-3', NPM3_WITH_OVERRIDES)
     expect(g.overrides()).toEqual([

@@ -49,7 +49,7 @@ describe('serializeNodeId', () => {
 })
 
 describe('stripPeerContextFromNodeId', () => {
-  it('plain id is its own ADR-0010 base key', () => {
+  it('plain id is its own  base key', () => {
     expect(stripPeerContextFromNodeId('lodash@4.17.21')).toBe('lodash@4.17.21')
   })
   it('strips peer-context', () => {
@@ -168,7 +168,7 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
   })
 
-  it('seals a transitive peer whose edge targets a peer-variant (base-key projection, ADR-0017)', () => {
+  it('seals a transitive peer whose edge targets a peer-variant (base-key projection, )', () => {
     // pnpm v9: `a`'s peer `b` is itself a peer-variant `b@1.0.0(c@1.0.0)`.
     // peerContext records the BARE base key `b@1.0.0`; the peer edge targets
     // the fully-qualified variant. Base-key projection makes them cohere.
@@ -192,10 +192,10 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/peer edges of .* disagree with peerContext/)
   })
 
-  // === ADR-0030 (#69): hashed peer-set token is non-edge-bearing ===
+  // === (#69): hashed peer-set token is non-edge-bearing ===
 
   it('seals a node whose ONLY peerContext entry is a bare-hex hashed peer-set token, with NO peer edge', () => {
-    // ADR-0030 — pnpm-v9 abbreviates a long resolved peer-set into one bare-hex
+    // pnpm-v9 abbreviates a long resolved peer-set into one bare-hex
     // digest. The token is an opaque identity discriminator that bears NO peer
     // edge (the real peers are hidden in the hash). The seal must NOT demand a
     // peer edge for it. The derived-id check is unchanged — the token still
@@ -262,7 +262,7 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).not.toThrow()
   })
 
-  // === ADR-0017 amendment (Bug #4): published-self-link carve-out ===
+  // === amendment (Bug #4): published-self-link carve-out ===
   // A workspace node MAY have an incoming edge from a non-workspace node iff the
   // edge's descriptor uses a registry protocol (npm: / bare semver) — yarn
   // resolved a published dependency onto a co-located workspace.
@@ -338,7 +338,7 @@ describe('Builder + seal', () => {
     expect(() => b.seal()).toThrow(/workspace node has incoming edges/)
   })
 
-  // ADR-0017 §Local-directory sources (2026-06-04) — the discriminator is the
+  // directory sources (2026-06-04) — the discriminator is the
   // SOURCE node's canonical resolution locality, not the edge range. These pin
   // the carve-out AND the bus-factor guarantee it must preserve. (The negatives
   // above carry NO tarball on the source, so they never reach this branch.)
@@ -700,7 +700,7 @@ describe('mutate', () => {
     expect(g2.getNode('c@1.0.0')).toBeDefined()
   })
 
-  // ADR-0023 §8.6 — Mutator.diagnostic write-side surface.
+  // Mutator.diagnostic write-side surface.
   it('GraphMutation.addDiagnostic returns only this transaction diagnostics', () => {
     const original = seed().mutate(mutation => {
       mutation.addDiagnostic({ code: 'A', severity: 'info', message: 'existing' })
@@ -788,7 +788,7 @@ describe('mutate', () => {
   })
 })
 
-describe('patch-slot intake gate (ADR-0011)', () => {
+describe('patch-slot intake gate ()', () => {
   const sentinel = `unresolved-${'a'.repeat(64)}`
   const canonical = 'a'.repeat(128)
   const fooSentinelId = toTarballKey({ name: 'foo', version: '1.0.0', patch: sentinel })
@@ -926,7 +926,7 @@ describe('patch-slot intake gate (ADR-0011)', () => {
     expect(g3.out(fooSentinelId)).toEqual([])
   })
 
-  it('Mutator.removeTarball PERMITTED on sentinel key (ADR-0011:301-304 carve-out)', () => {
+  it('Mutator.removeTarball PERMITTED on sentinel key (:301-304 carve-out)', () => {
     const g = sealWithSentinelNode()
     const { graph: g2 } = g.mutate(m => {
       m.removeTarball({ name: 'foo', version: '1.0.0', patch: sentinel })

@@ -1,6 +1,6 @@
-// pnpm-v5 adapter tests — standalone-fit per ADR-0022 §5 r2 amendment.
+// pnpm-v5 adapter tests — standalone-fit per r2 amendment.
 //
-// Lifecycle coverage (parse-fixture, modify, enrich, optimize, ADR-0006
+// Lifecycle coverage (parse-fixture, modify, enrich, optimize,
 // roundtrip) is delegated к `_pnpm-suite-core.ts` — the shape-agnostic
 // suite extracted во время r1 collab F4 fix-up. v5-specific deltas
 // (decimal `5.x` handshake, slash-separator packages keys, underscore
@@ -31,7 +31,7 @@ import {
 } from '../helpers/lockfile-test-utils.ts'
 import { registerPnpmCoreSuite, type PnpmCoreSuiteSpec } from './_pnpm-suite-core.ts'
 
-// v5 fixture matrix per ADR-0022 §A acceptance gate (7 fixtures — no
+// v5 fixture matrix per acceptance gate (7 fixtures — no
 // patch-yarn per the gate's working set table).
 const FIXTURES = [
   'deps-with-scopes',

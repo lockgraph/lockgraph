@@ -1,4 +1,4 @@
-// ADR-0024 §9.2 — optimize phase acceptance gates.
+// optimize phase acceptance gates.
 //
 // Covers all 9 §9.2 scenarios:
 //   1. Noop roundtrip (fully-reachable graph)
@@ -12,7 +12,7 @@
 //   9. Determinism — content-sort iteration order is byte-stable
 //
 // Plus a dual-channel test (OPTIMIZE_* lands on Graph.diagnostics() AND
-// result.unresolved) per ADR §6.3 / ADR-0023 §8.6.
+// result.unresolved) per ADR §6.3 /.
 
 import { describe, expect, it } from 'vitest'
 import { removeDependency } from '../../main/ts/modify/remove-dependency.ts'
@@ -145,7 +145,7 @@ describe('optimize/mark-and-sweep', () => {
   // Gate 5 — Sentinel-keyed unreachable collected normally
   // ────────────────────────────────────────────────────────────────
   //
-  // ADR-0011 sentinel patches carry a pure-deletion carve-out: optimize MAY
+  // sentinel patches carry a pure-deletion carve-out: optimize MAY
   // remove unreachable sentinel-keyed nodes — no sentinel-specific warning,
   // just OPTIMIZE_NODE_REMOVED.
   it('§9.2 — sentinel-keyed orphan removed without special pleading', () => {
@@ -260,7 +260,7 @@ describe('optimize/mark-and-sweep', () => {
   // ────────────────────────────────────────────────────────────────
   // Dual-channel: diagnostics on Graph.diagnostics() AND unresolved
   // ────────────────────────────────────────────────────────────────
-  it('§6.3 / ADR-0023 §8.6 — OPTIMIZE_* lands on Graph.diagnostics() + unresolved', () => {
+  it('§6.3 /  — OPTIMIZE_* lands on Graph.diagnostics() + unresolved', () => {
     const graph = graphOf(builder => {
       addPackage(builder, { name: 'app',    version: '0.0.0', workspacePath: '.' })
       addPackage(builder, { name: 'orphan', version: '1.0.0' })
@@ -298,7 +298,7 @@ describe('optimize/mark-and-sweep', () => {
   // Composition — modifier then optimize
   // ────────────────────────────────────────────────────────────────
   //
-  // Smoke test: a removeDependency call already GCs inline (per ADR-0023
+  // Smoke test: a removeDependency call already GCs inline (per
   // §3.2 / its own tests) — running optimize on the result must be a
   // strict noop, demonstrating the optimize phase composes cleanly even
   // when the modifier ran a fully-converged GC pass.

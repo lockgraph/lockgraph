@@ -487,12 +487,40 @@ for another projection, but cannot prove an untrusted party really ran the manag
 [CONVERT.md](./docs/arch/CONVERT.md#frozen-candidate-and-certification-lifecycle) has
 the lifecycle.
 
+### Moving to another registry
+
+Bringing a project behind an internal repository manager means pointing every recorded
+tarball at the new host. `overrideSource` rewrites those URLs and nothing else — the
+output differs from the input only in the locators it moved, and no digest is touched,
+so a mirror that served different bytes would fail the install rather than slip through.
+`assertSource` is the check for CI: it changes nothing and fails when a package that
+must come from the internal repository resolves anywhere else.
+
+<!-- readme-example id="source-override" mode="typecheck" -->
+```ts
+import { readFile, writeFile } from 'node:fs/promises'
+import { assertSource, overrideSource } from 'lockgraph'
+
+const lock = await readFile('package-lock.json', 'utf8')
+
+const moved = overrideSource(lock, 'npm:*=https://nexus.example.com/repository/npm-group/')
+if (moved.ok) await writeFile('package-lock.json', moved.output)
+
+const policy = assertSource(moved.output, 'npm:@corp/*=https://nexus.example.com/repository/internal/')
+if (!policy.ok) process.exitCode = 1
+```
+
+Yarn berry and bun locks record no URL for a registry package — the registry comes
+from `.yarnrc.yml`, or from `.npmrc` / `bunfig.toml` — so both operations refuse them. Rules, precedence and every reported
+status are in [API.md](./docs/arch/API.md#overridesource).
+
 ## Errors
 
 The library operates on a large set of deterministic, documented failure modes.
 Each code names its cause and, where a remedy exists, the action that resolves it.
-Everything thrown is a `LockfileError` carrying its code and its diagnostics;
-recoverable loss flows through the non-throwing `Diagnostic` channel and
+Every domain failure is thrown as a `LockfileError` carrying its code and its
+diagnostics; a malformed argument, such as an invalid source rule, is a `TypeError`.
+Recoverable loss flows through the non-throwing `Diagnostic` channel and
 `onDiagnostic` instead.
 
 The full catalogue — codes, causes, remedies — is

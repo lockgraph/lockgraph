@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — tree completion BFS acceptance gate.
+// tree completion BFS acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { completeTransitives } from '../../main/ts/complete/tree-complete.ts'
@@ -197,7 +197,7 @@ describe('complete/completeTransitives', () => {
     expect(lodashOut.some(e => e.dst === 'ms@2.1.3' && e.kind === 'dep')).toBe(true)
   })
 
-  // ADR-0023 §8.6 — COMPLETION_* diagnostics land on Graph.diagnostics().
+  // COMPLETION_* diagnostics land on Graph.diagnostics().
   it('§8.6 — COMPLETION_NODE_ADDED lands on Graph.diagnostics()', async () => {
     const graph = graphOf(builder => {
       const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })

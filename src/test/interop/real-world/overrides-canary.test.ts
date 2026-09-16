@@ -6,7 +6,7 @@ import { detect, parse, stringify } from '../../../main/ts/index.ts'
 import { overridesOf } from '../../../main/ts/api/format-api.ts'
 import type { Manifest } from '../../../main/ts/graph.ts'
 
-// Real-world overrides canary (ADR-0025 A1/A2). Exercises overridesOf on
+// Real-world overrides canary (A1/A2). Exercises overridesOf on
 // actual published lockfiles + their package.json override blocks.
 //
 // Two findings this pinned: (1) real npm locks do NOT mirror root `overrides`
@@ -14,7 +14,7 @@ import type { Manifest } from '../../../main/ts/graph.ts'
 // package.json), so A2 manifest-capture is the primary npm path — overridesOf is
 // fed the fixture's package.json via `manifests`. (2) re-stringifying some real
 // npm locks throws `IRREDUCIBLE_LOSS` from the install-path re-derive (deferred
-// to ADR-0026) — the round-trip below pins that as a known-deferred
+// to) — the round-trip below pins that as a known-deferred
 // outcome rather than failing the overrides canary on an orthogonal bug.
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -60,7 +60,7 @@ const OVERRIDE_RICH = new Set([
   'socketio-socket.io-main-190572d', // npm overrides in package.json only (3)
 ])
 
-describe('real-world overrides canary (ADR-0025 A1/A2)', () => {
+describe('real-world overrides canary ( A1/A2)', () => {
   it('overridesOf never throws on any real-world fixture', () => {
     for (const dir of fixtures) {
       const fx = loadFixture(dir)
@@ -91,7 +91,7 @@ describe('real-world overrides canary (ADR-0025 A1/A2)', () => {
       } catch (err) {
         const e = err as { code?: string }
         // Two accepted non-regression outcomes:
-        //   1. Bug #10 (deferred → ADR-0026): a deep-nested real npm lock can throw
+        // 1. Bug #10 (deferred →): a deep-nested real npm lock can throw
         //      IRREDUCIBLE_LOSS on an install-path collision during the re-derive.
         //   2. A target lock with no overrides block (npm/yarn/bun) surfaces the
         //      supplied override as a RECOVERABLE ENRICH_REQUIRED — the pin stays in

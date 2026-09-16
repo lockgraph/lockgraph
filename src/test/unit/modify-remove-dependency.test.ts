@@ -1,4 +1,4 @@
-// ADR-0023 §9.2 — removeDependency acceptance gate.
+// removeDependency acceptance gate.
 
 import { describe, expect, it } from 'vitest'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
@@ -86,7 +86,7 @@ describe('modify/removeDependency', () => {
     expect(second.removed).toEqual([])
   })
 
-  // ADR-0023 §8.6 — MODIFY_NODE_REMOVED lands on Graph.diagnostics().
+  // MODIFY_NODE_REMOVED lands on Graph.diagnostics().
   it('§8.6 — MODIFY_NODE_REMOVED lands on Graph.diagnostics()', async () => {
     const graph = graphOf(builder => {
       const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })

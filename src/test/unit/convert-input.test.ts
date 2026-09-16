@@ -167,6 +167,7 @@ describe('convert input normalization', () => {
         to: target,
         strict: false,
         manifests: DENO_MANIFESTS,
+        ...(target === 'yarn-classic' ? { registry: 'https://registry.npmjs.org' } : {}),
         onDiagnostic: diagnostic => diagnostics.push(diagnostic),
       })
       expect(check(target, output)).toBe(true)

@@ -17,7 +17,7 @@ function collectResolveViolations(format: FormatId, lock: string): Diagnostic[] 
   return diagnostics.filter(d => d.code === 'LAYOUT_RESOLVE_VIOLATION')
 }
 
-// ADR-0028 INV-RESOLVE — the pnpm resolution-graph verifier. Two surfaces:
+// INV-RESOLVE — the pnpm resolution-graph verifier. Two surfaces:
 //
 //  1. the alias-on-emit fix (Task B): an npm-aliased dep must emit under its
 //     ALIAS descriptor slot (`react-is-cjs:`), valued with the canonical
@@ -25,7 +25,7 @@ function collectResolveViolations(format: FormatId, lock: string): Diagnostic[] 
 //     snapshot/inline-package hop — not under the resolved package name.
 //  2. assertResolveValid emits ZERO LAYOUT_RESOLVE_VIOLATION on the well-formed
 //     pnpm corpus (real-world v9 + v5/v6 unit fixtures).
-describe('pnpm INV-RESOLVE — npm-alias on emit (ADR-0028)', () => {
+describe('pnpm INV-RESOLVE — npm-alias on emit ()', () => {
   // A synthetic pnpm-v9 lock with an npm-aliased dep at BOTH hops:
   //   - importer `.` dep `react-is-cjs: { specifier: npm:react-is@^17,
   //     version: react-is@17.0.2 }`  (consumer hop)
@@ -113,7 +113,7 @@ describe('pnpm INV-RESOLVE — npm-alias on emit (ADR-0028)', () => {
   })
 })
 
-describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
+describe('pnpm INV-RESOLVE — clean on the corpus ()', () => {
   // The unit fixtures are find-up/peer-clean by construction: ZERO violations
   // across pnpm-v5 / v6 / v9.
   const unitDirs = readdirSync(unitLockfiles)
@@ -134,7 +134,7 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
   // Real-world v9 locks that round-trip with ZERO INV-RESOLVE violations. The
   // corpus spans clean large locks, npm-aliased `file:` deps (the alias-on-emit
   // fix), nested-peer-suffix consumers (#70), and bare-hex hashed-peer-set
-  // consumers (#69/ADR-0030). Both truncated-peer-context-identity classes are
+  // consumers (#69/). Both truncated-peer-context-identity classes are
   // fixed, so every distinct virtual-store instance stays a distinct NodeId.
   for (const dir of [
     'vuejs-core-main-86ad076',
@@ -151,16 +151,16 @@ describe('pnpm INV-RESOLVE — clean on the corpus (ADR-0028)', () => {
     })
   }
 
-  // #69/ADR-0030 — pnpm-v9 BARE-HEX "hashed peer-set token". When a resolved
+  // #69/ — pnpm-v9 BARE-HEX "hashed peer-set token". When a resolved
   // peer-set grows long, pnpm abbreviates the whole `(peerA@v)…` suffix into one
   // bare-hex digest (e.g. `name@version(<bare-hex>)`). Pre-fix the parser
   // mis-read the bare hex as a patch hash and DROPPED it, collapsing two
   // virtual-store instances of one `name@version` (forking on a transitive peer
   // such as a typings package) onto one NodeId whose divergent dep edges then
-  // collided → LAYOUT_RESOLVE_VIOLATION. ADR-0030 keeps the token as an opaque,
+  // collided → LAYOUT_RESOLVE_VIOLATION. keeps the token as an opaque,
   // non-edge-bearing peerContext discriminator so the instances stay distinct
   // (the lock under test is asserted fully clean in the zero-violation set).
-  it('#69: bare-hex hashed-peer-set instances stay distinct + round-trip (ADR-0030)', () => {
+  it('#69: bare-hex hashed-peer-set instances stay distinct + round-trip ()', () => {
     const lock = readFileSync(resolve(realWorld, 'angular-angular-main-45e8fb5/pnpm-lock.yaml'), 'utf8')
     const graph = parse('pnpm-v9', lock)
     // A package whose two bare-hex snapshot keys differ only by the hash is now

@@ -12,12 +12,12 @@ import {
 import { LockfileError } from '../../main/ts/api/errors.ts'
 import { parse, stringify } from '../../main/ts/index.ts'
 
-// ADR-0032 (#91 / #2b-general, "source-in-key"): the same `name@version` from
+// (#91 / #2b-general, "source-in-key"): the same `name@version` from
 // DIFFERENT non-registry sources must NOT collapse onto ONE NodeId. A
 // `+src=<16hex>` slot discriminates non-registry sources; the ~99% registry
 // majority stays BARE (zero registry blast radius).
 
-describe('ADR-0032 — sourceDiscriminatorOf mapping', () => {
+describe(' — sourceDiscriminatorOf mapping', () => {
   const SHA = '70f5e45c32620c7c3007ab43cab48d017ffaadff'
 
   it('registry tarball (npmjs default) → undefined (BARE)', () => {
@@ -74,7 +74,7 @@ describe('ADR-0032 — sourceDiscriminatorOf mapping', () => {
   })
 })
 
-describe('ADR-0032 — graph.ts `+src=` slot mechanics', () => {
+describe(' — graph.ts `+src=` slot mechanics', () => {
   it('toTarballKey appends `+src=` AFTER `+patch=` (cmpStr-sorted)', () => {
     const patch = 'a'.repeat(128)
     const src = 'b'.repeat(16)
@@ -84,7 +84,7 @@ describe('ADR-0032 — graph.ts `+src=` slot mechanics', () => {
       .toBe(`foo@1.0.0+patch=${patch}+src=${src}`)
   })
 
-  it('bare key is byte-identical to pre-ADR-0032 when source is undefined', () => {
+  it('bare key is byte-identical to pre- when source is undefined', () => {
     expect(toTarballKey({ name: 'foo', version: '1.0.0' })).toBe('foo@1.0.0')
     expect(serializeNodeId('foo', '1.0.0', [])).toBe('foo@1.0.0')
   })
@@ -105,9 +105,9 @@ describe('ADR-0032 — graph.ts `+src=` slot mechanics', () => {
   })
 })
 
-describe('ADR-0032 — #2b repro: registry vs git at the SAME name@version', () => {
+describe(' — #2b repro: registry vs git at the SAME name@version', () => {
   // One yarn-berry lock carrying `is@1.0.0` from the npm registry AND `is@1.0.0`
-  // from a git fork (different code, same name+version). Pre-ADR-0032 both
+  // from a git fork (different code, same name+version). Pre- both
   // minted the IDENTICAL NodeId `is@1.0.0` and collapsed (IRREDUCIBLE_LOSS /
   // wrong graph). The fix gives the git copy a `+src=` slot; the registry copy
   // stays BARE.
@@ -122,7 +122,7 @@ describe('ADR-0032 — #2b repro: registry vs git at the SAME name@version', () 
     '  resolution: "is@npm:1.0.0"\n' +
     '  languageName: node\n' +
     '  linkType: hard\n\n' +
-    // git copy — SAME name AND version, different source. Pre-ADR-0032 BOTH
+    // git copy — SAME name AND version, different source. Pre- BOTH
     // minted the identical NodeId `is@1.0.0` → IRREDUCIBLE_LOSS collapse.
     '"is@https://github.com/example/is.git#commit=' + SHA + '":\n' +
     '  version: 1.0.0\n' +
@@ -131,7 +131,7 @@ describe('ADR-0032 — #2b repro: registry vs git at the SAME name@version', () 
     '  linkType: hard\n'
 
   it('the registry copy and the git copy are DISTINCT nodes (no collapse)', () => {
-    // VERIFY-FIRST: pre-ADR-0032 this lock threw IRREDUCIBLE_LOSS (both entries
+    // VERIFY-FIRST: pre- this lock threw IRREDUCIBLE_LOSS (both entries
     // collide on `is@1.0.0`). Post-fix it parses to TWO distinct nodes — the
     // registry copy BARE, the git copy carrying `+src=`.
     const g = parse('yarn-berry-v8', lock)
@@ -141,8 +141,9 @@ describe('ADR-0032 — #2b repro: registry vs git at the SAME name@version', () 
     const slotted = ids.find(id => id !== 'is@1.0.0')
     expect(bare).toBe('is@1.0.0')                              // registry BARE
     expect(slotted).toMatch(/^is@1\.0\.0\+src=[0-9a-f]{16}$/)  // git +src=
-    // Their canonical resolutions differ (tarball vs git) — different artefacts.
-    expect(g.tarballOf(bare!)?.resolution?.type).toBe('tarball')
+    // Their canonical resolutions differ (undetermined registry vs git) —
+    // different artefacts without inventing a registry host.
+    expect(g.tarballOf(bare!)?.resolution?.type).toBe('registry')
     expect(g.tarballOf(slotted!)?.resolution?.type).toBe('git')
   })
 
@@ -183,7 +184,7 @@ describe('ADR-0032 — #2b repro: registry vs git at the SAME name@version', () 
   })
 })
 
-describe('ADR-0032 — round-trip: +src= is internal identity, not emitted', () => {
+describe(' — round-trip: +src= is internal identity, not emitted', () => {
   it('a git node round-trips through yarn-berry without leaking `+src=` into the lock', () => {
     const SHA = '70f5e45c32620c7c3007ab43cab48d017ffaadff'
     const lock =
@@ -198,7 +199,7 @@ describe('ADR-0032 — round-trip: +src= is internal identity, not emitted', () 
     // The node carries the slot internally...
     expect(g.byName('is')[0]).toMatch(/\+src=/)
     // ...but it must NEVER appear in the emitted lockfile (emit uses entry-key
-    // descriptors, not the NodeId — ADR-0032 zero-lockfile-emit-change).
+    // descriptors, not the NodeId — zero-lockfile-emit-change).
     const out = stringify('yarn-berry-v8', g, { strict: false })
     expect(out).not.toContain('+src=')
     // And the emit round-trips byte-identically to the input.
@@ -209,7 +210,7 @@ describe('ADR-0032 — round-trip: +src= is internal identity, not emitted', () 
   })
 })
 
-describe('ADR-0032 — yarn-classic emit preserves source-forked siblings (no silent whole-package drop)', () => {
+describe(' — yarn-classic emit preserves source-forked siblings (no silent whole-package drop)', () => {
   const SRI = (c: string) => 'sha512-' + c.repeat(86) + '=='
 
   it('two same-`name@version` entries from DIFFERENT sources both survive parse→stringify→parse', () => {
@@ -241,7 +242,7 @@ describe('ADR-0032 — yarn-classic emit preserves source-forked siblings (no si
   })
 })
 
-describe('ADR-0032 — yarn-classic → yarn-berry synthesis emits VALID source-forked locators', () => {
+describe(' — yarn-classic → yarn-berry synthesis emits VALID source-forked locators', () => {
   const SRI = (c: string) => 'sha512-' + c.repeat(86) + '=='
 
   // CROSS-FORMAT SYNTHESIS regression: converting a yarn-classic lock with two
@@ -285,10 +286,11 @@ describe('ADR-0032 — yarn-classic → yarn-berry synthesis emits VALID source-
     expect(ids).toHaveLength(2)
     expect(ids).toContain('lib@1.0.0')
     expect(ids.some(id => id.startsWith('lib@1.0.0+src='))).toBe(true)
-    // the two nodes carry distinct canonical tarball hosts
+    // The bare sibling remains registry-class without a fabricated host; the
+    // fork retains its explicit private tarball URL.
     const bare = reparsed.tarballOf('lib@1.0.0')
     const forked = reparsed.tarballOf(ids.find(id => id.includes('+src='))!)
-    expect(bare?.resolution).toMatchObject({ type: 'tarball', url: 'https://registry.npmjs.org/lib/-/lib-1.0.0.tgz' })
+    expect(bare?.resolution).toEqual({ type: 'registry' })
     expect(forked?.resolution).toMatchObject({ type: 'tarball', url: 'https://nexus.corp/repo/lib/-/lib-1.0.0.tgz' })
   })
 })

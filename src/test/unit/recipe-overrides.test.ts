@@ -1,4 +1,4 @@
-// ADR-0025 §3 — F6 manifest override capture primitive.
+// F6 manifest override capture primitive.
 //
 // Covers (a) each PM grammar rule in isolation (synthetic cases), (b) the
 // scoped-name + version-split edge, (c) RECIPE_OVERRIDE_NORMALISED emission,
@@ -429,7 +429,7 @@ describe('recipe/overrides — real manifests', () => {
   })
 })
 
-describe('projectOverrides — canonical → PM-native (ADR-0025 §4)', () => {
+describe('projectOverrides — canonical → PM-native ()', () => {
   it('npm: capture → project round-trips the nested block', () => {
     const npm = { foo: '1.0.0', parent: { bar: '2.0.0' }, baz: { '.': '3.0.0', qux: '4.0.0' } }
     const { canonical } = captureOverrides(npm, 'npm')
@@ -440,7 +440,7 @@ describe('projectOverrides — canonical → PM-native (ADR-0025 §4)', () => {
     // `.` (the parent's own forced version) authored AFTER the child override:
     // capture yields [{foo, parentPath:[bar]}, {bar, to:2.0.0}] (nested first),
     // and projectNpm must land the `bar` scalar on the `.` self-key, NOT
-    // overwrite the nested scope destructively (ADR-0025 §2 order-independence).
+    // overwrite the nested scope destructively (order-independence).
     const npm = { bar: { foo: '1.0.0', '.': '2.0.0' } }
     const { canonical } = captureOverrides(npm, 'npm')
     expect(projectOverrides(canonical, 'npm')).toEqual(npm)

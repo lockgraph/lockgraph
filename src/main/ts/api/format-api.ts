@@ -38,6 +38,7 @@ import {
 } from '../formats/_pnpm-flat-core.ts'
 import { composeConditionsFromPayload } from '../formats/_yarn-berry-core.ts'
 import { denoDeclarationRangeProjections } from '../formats/_deno-core.ts'
+import { resolveRegistry, type RegistryConfigDialect } from '../registry/config.ts'
 import * as bunText from '../formats/bun-text.ts'
 import * as pnpmV5 from '../formats/pnpm-v5.ts'
 import * as yarnClassic from '../formats/yarn-classic.ts'
@@ -69,7 +70,9 @@ import {
   type Integrity,
 } from '../recipe/integrity.ts'
 import {
+  DEFAULT_NPM_REGISTRY,
   parse as parseResolution,
+  registryTarballUrl,
   stringifyForYarnBerry,
   type ResolutionCanonical,
 } from '../recipe/resolution.ts'
@@ -361,10 +364,12 @@ function parseResolved(
   const overrides = manifestOverrides === undefined
     ? declaredOverrides
     : mergeOverrides(declaredOverrides ?? [], manifestOverrides)
+  const registryFor = registryAuthorityFor(format, options)
   let graph = parseFormat(format, input, {
     workspaceRoot: options.cwd ?? options.workspaceRoot,
     overrides,
     manifests: options.manifests,
+    registryFor,
   })
   if (format === 'yarn-classic' && options.manifests !== undefined) {
     const enriched = yarnClassic.enrich(graph, undefined, {
@@ -398,9 +403,59 @@ function parseResolved(
   return graph
 }
 
+function registryDialectOf(format: FormatId): RegistryConfigDialect | undefined {
+  if (format.startsWith('npm-')) return 'npm'
+  if (format.startsWith('pnpm-')) return 'pnpm'
+  if (format === 'yarn-classic') return 'yarn-classic'
+  if (format.startsWith('yarn-berry-')) return 'yarn-berry'
+  if (isBunTextFormat(format)) return 'bun'
+  if (format.startsWith('deno-')) return 'npm'
+  return undefined
+}
+
+function normalizedRegistryAuthority(value: string): string | undefined {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('unsupported protocol')
+    if (url.search !== '' || url.hash !== '') throw new Error('registry authority has query or fragment')
+    // Userinfo is authentication input, never part of a canonical source URL.
+    url.username = ''
+    url.password = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return undefined
+  }
+}
+
+function explicitRegistry(value: string): string {
+  const registry = normalizedRegistryAuthority(value)
+  if (registry !== undefined) return registry
+  throw new LockfileError({
+    code: 'INVALID_INPUT',
+    message: 'parse: registry must be an absolute http(s) URL without a query or fragment',
+  })
+}
+
+function registryAuthorityFor(
+  format: FormatId,
+  options: ParseOptions,
+): ((packageName: string) => string | undefined) | undefined {
+  if (options.registry !== undefined) {
+    const registry = explicitRegistry(options.registry)
+    return () => registry
+  }
+  const dialect = registryDialectOf(format)
+  if (options.cwd === undefined || dialect === undefined) return undefined
+  const config = resolveRegistry(options.cwd, { config: dialect })
+  return packageName => {
+    const registry = config.declaredRegistryFor(packageName)
+    return registry === undefined ? undefined : normalizedRegistryAuthority(registry)
+  }
+}
+
 // === OVERRIDES AND STRINGIFY DISPATCH =======================================
 
-/** Map a FormatId to its override grammar family (ADR-0025 §6 capture). */
+/** Map a FormatId to its override grammar family (capture). */
 export function packageManagerFamilyOf(format: FormatId): OverridePM {
   if (format.startsWith('yarn')) return 'yarn'
   if (format.startsWith('pnpm')) return 'pnpm'
@@ -588,7 +643,7 @@ function sortByStableJson<T>(values: T[]): T[] {
 export interface TargetProjection {
   readonly overrides?: readonly OverrideConstraint[]
   readonly workspaceNames?: ReadonlyMap<string, string>
-  readonly resolutions?: ReadonlyMap<string, ResolutionCanonical>
+  readonly resolutions?: ReadonlyMap<string, ResolutionCanonical | undefined>
   readonly integrities?: ReadonlyMap<string, Integrity | undefined>
   readonly metadataDrops?: ReadonlyMap<string, ReadonlySet<PackageMetadataField>>
   readonly peerDependencies?: ReadonlyMap<string, Readonly<Record<string, string>>>
@@ -684,7 +739,9 @@ function snapshotEdges(
 
 function snapshotTarballs(graph: Graph, projection: TargetProjection): readonly unknown[] {
   return [...graph.tarballs()].flatMap(([key, payload]) => {
-    const resolution = projection.resolutions?.get(key) ?? payload.resolution
+    const resolution = projection.resolutions?.has(key)
+      ? projection.resolutions.get(key)
+      : payload.resolution
     const integrity = projection.integrities?.has(key)
       ? projection.integrities.get(key)
       : payload.integrity
@@ -719,7 +776,7 @@ function snapshotTarballs(graph: Graph, projection: TargetProjection): readonly 
     // A payload whose only content was a target-dropped structural-expected metadata
     // field (a completed node carrying only `engines`) projects to `{}`; the target
     // reparse emits no tarball entry for such a node, so omit it for a symmetric
-    // snapshot — an empty payload carries no canonical fact (ADR-0038 §8, CASE-A).
+    // snapshot — an empty payload carries no canonical fact (CASE-A).
     return Object.keys(projected).length === 0 ? [] : [[key, stableValue(projected)] as const]
   })
     .sort(([left], [right]) => left.localeCompare(right))
@@ -781,11 +838,44 @@ function projectedTargetIntegrities(
 function projectedTargetResolutions(
   graph: Graph,
   target: FormatId,
-): ReadonlyMap<string, ResolutionCanonical> | undefined {
+): ReadonlyMap<string, ResolutionCanonical | undefined> | undefined {
   if (target === 'yarn-classic') return yarnClassic.projectedCanonicalResolutions(graph)
+
+  // npm's absent `resolved` carrier is precisely the on-disk spelling of an
+  // undetermined registry source. Its parser makes that implicit fact
+  // explicit, so normalize it away on both sides of the output comparator.
+  // This also prevents a hand-built graph with no payload from appearing to
+  // gain information merely by passing through npm.
+  if (target.startsWith('npm-')) {
+    const projected = new Map<string, ResolutionCanonical | undefined>()
+    for (const [key, payload] of graph.tarballs()) {
+      if (payload.resolution?.type === 'registry') projected.set(key, undefined)
+    }
+    return projected.size === 0 ? undefined : projected
+  }
+
+  // Deno v5 omits the public-registry tarball convention from `npm` entries.
+  // Reparse therefore recovers the honest weaker fact `registry` (host
+  // unrecorded), even when a just-fetched mutation carried the absolute public
+  // URL in memory. Project that carrier loss before strict output comparison.
+  if (target === 'deno-v5') {
+    const projected = new Map<string, ResolutionCanonical | undefined>()
+    for (const node of graph.nodes()) {
+      if (node.workspacePath !== undefined) continue
+      const key = toTarballKey(node)
+      const resolution = graph.tarballOf(node.id)?.resolution
+      if (resolution?.type === 'registry') projected.set(key, { type: 'registry' })
+      else if (
+        resolution?.type === 'tarball'
+        && resolution.url === registryTarballUrl(node.name, node.version, DEFAULT_NPM_REGISTRY)
+      ) projected.set(key, { type: 'registry' })
+    }
+    return projected.size === 0 ? undefined : projected
+  }
+
   if (!target.startsWith('yarn-berry-')) return undefined
 
-  const projected = new Map<string, ResolutionCanonical>()
+  const projected = new Map<string, ResolutionCanonical | undefined>()
   for (const node of graph.nodes()) {
     if (node.workspacePath !== undefined) continue
     const resolution = graph.tarballOf(node.id)?.resolution

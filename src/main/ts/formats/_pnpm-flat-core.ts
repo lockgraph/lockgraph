@@ -1,9 +1,9 @@
 // _pnpm-flat-core.ts — pnpm flat-family (pnpm-v6 / pnpm-v9) shared core.
 //
-// Scope: the two on-disk shapes that share the YAML codec + ADR-0006
+// Scope: the two on-disk shapes that share the YAML codec +
 // peer-virt encoding + importer synthesis loop are owned wholly by this
 // module. pnpm-v5 (decimal version literal, dense snapshot tree) ships
-// standalone with its own profile and codec per ADR-0022 phase order,
+// standalone with its own profile and codec per phase order,
 // but reuses the format-neutral helpers exported here — `tarballPayloadOf`
 // (F1/F3 shared parser), peer-target resolution, line-ending normalization,
 // importer-path math. v5 takes the parts that have no on-disk shape
@@ -11,29 +11,29 @@
 // peer-virt encoding stay in scope.
 //
 // Per-version thin entries (`pnpm-v6.ts`, `pnpm-v9.ts`) hand a
-// `PnpmLayoutProfile` — a discriminated union with one variant per
+// `PnpmLayoutProfile` — a discriminated union with one variant
 // supported on-disk shape — through the shared parse / stringify /
 // enrich / optimize implementations. The profile IS the single source
 // of truth for each shape; no separate flag toggles are exposed.
 //
 // Supported profiles:
 //
-//   - `'v6-collapsed-root'`  → pnpm 6.x: quoted `'6.0'` handshake,
-//     single-importer collapses to top-level `dependencies` blocks,
-//     slash-leading `packages` keys, peer-context directly on the
-//     packages key, inline transitives, per-entry `dev: false|true`,
-//     no `snapshots` block.
-//   - `'v9-importers-snapshots'` → pnpm 9.x: quoted `'9.0'` handshake,
-//     `importers` block ALWAYS emitted, bare `packages` keys, peer-context
-//     on `snapshots` keys, separate `snapshots` block carries resolved
-//     tree, no per-entry dev flag.
+// - `'v6-collapsed-root'` → pnpm 6.x: quoted `'6.0'` handshake,
+// single-importer collapses to top-level `dependencies` blocks,
+// slash-leading `packages` keys, peer-context directly on the
+// packages key, inline transitives, per-entry `dev: false|true`,
+// no `snapshots` block.
+// - `'v9-importers-snapshots'` → pnpm 9.x: quoted `'9.0'` handshake,
+// `importers` block ALWAYS emitted, bare `packages` keys, peer-context
+// on `snapshots` keys, separate `snapshots` block carries resolved
+// tree, no per-entry dev flag.
 //
-// Diagnostic codes carry the per-version prefix from
+// Diagnostic codes carry the per-version prefix
 // `profile.diagnosticPrefix` (e.g. `PNPM_V9_PEER_AMBIGUOUS`,
 // `PNPM_V6_INVALID_INTEGRITY`). Family-shared diagnostics keep the bare
 // `PNPM_` prefix (e.g. `PNPM_BAD_ENTRY`, `PNPM_UNRESOLVED_DEP`). Patch
-// loss surfaces through the canonical `RECIPE_FEATURE_DROPPED` code per
-// ADR-0014 §5 (recipe diagnostics live in `recipe/diagnostics.ts`).
+// loss surfaces through the canonical `RECIPE_FEATURE_DROPPED` code
+// (recipe diagnostics live in `recipe/diagnostics.ts`).
 //
 // YAML in/out is delegated to `_pnpm-yaml.ts`; this module owns only
 // the higher-level pnpm family semantics.
@@ -66,8 +66,8 @@ import { captureOverrides, projectOverrides } from '../recipe/overrides.ts'
 import { governingOverrideFor } from '../recipe/descriptor-resolve.ts'
 import { parseSri, emitSriForRegistry, isEmptyIntegrity } from '../recipe/integrity.ts'
 import {
-  DEFAULT_NPM_REGISTRY,
   parse as parseResolutionRecipe,
+  registryTarballUrl,
   stringifyForPnpm,
   stripRegistrySha1Fragment,
   type ResolutionCanonical,
@@ -160,23 +160,24 @@ const PROFILE_TABLE: { readonly [K in PnpmLayoutProfileTag]: PnpmLayoutShape } =
 
 export interface PnpmFamilyParseOptions {
   /**
-   * Filesystem root used by F2 patch-slot extraction (ADR-0014 §4.F2).
+   * Filesystem root used by F2 patch-slot extraction.
    * When the `overrides:` block carries `patch:<spec>#<workspace-path>`
    * entries the resolver reads `<workspaceRoot>/<workspace-path>` bytes
    * and emits the canonical sha512-hex on `Node.patch`. Absent / unreadable
-   * patch sources fall back to the ADR-0011 `unresolved-<sha256-hex>`
+   * patch sources fall back to the `unresolved-<sha256-hex>`
    * sentinel computed from the locator string.
    */
   workspaceRoot?: string
+  registryFor?: (packageName: string) => string | undefined
 }
 
 export interface PnpmFamilyStringifyOptions {
   lineEnding?: 'lf' | 'crlf'
   settings?: PnpmSettings
   onDiagnostic?: (diagnostic: Diagnostic) => void
-  /** Caller-declared overrides (ADR-0025 §4) overlaid onto the pnpm
-   *  `overrides:` block. Caller wins per key; pre-existing `patch:` directives
-   *  (F2) survive on collision. */
+  /** Caller-declared overrides overlaid onto the pnpm
+   * `overrides:` block. Caller wins per key; pre-existing `patch:` directives
+   * (F2) survive on collision. */
   overrides?: OverrideConstraint[]
 }
 
@@ -234,7 +235,7 @@ export interface PnpmSettings {
 
 //
 // Discriminated union — each supported on-disk shape is ONE coherent
-// profile object. The shape constants for each variant are pinned in
+// profile object. The shape constants for each variant are pinned
 // `PROFILE_TABLE` below; per-version adapter modules pass only the
 // discriminant tag (`profile: 'v6-collapsed-root'`) and the core resolves
 // it to the full shape internally.
@@ -248,27 +249,27 @@ export type PnpmDiagnosticPrefix = 'PNPM_V9' | 'PNPM_V6'
 
 export interface PnpmNodeSidecar {
   /** Verbatim v9 `snapshots` key. The Graph NodeId intentionally erases
-   *  pnpm-only labelled patch markers and canonicalises peer-suffix order, so
-   *  the native key is the same-PM round-trip source of truth. */
+   * pnpm-only labelled patch markers and canonicalises peer-suffix order, so
+   * the native key is the same-PM round-trip source of truth. */
   snapshotKey?: string
   /** Verbatim resolved dependency slot values keyed
-   *  `${kind}\0${targetNodeId}\0${aliasSlot}`. */
+   * `${kind}\0${targetNodeId}\0${aliasSlot}`. */
   resolvedDependencies?: Map<string, string>
   /** Verbatim workspace `link:` dependency slots keyed `${kind}\0${targetNodeId}`
-   *  → { declared slot name, raw `link:<dir>` locator }. Neither is derivable
-   *  from the target node: a pnpm lock names importer members by DIRECTORY, and
-   *  a sub-directory publish collapses onto its ancestor importer. */
+   * → { declared slot name, raw `link:<dir>` locator }. Neither is derivable
+   * from the target node: a pnpm lock names importer members by DIRECTORY, and
+   * a sub-directory publish collapses onto its ancestor importer. */
   workspaceLinkDependencies?: Map<string, { slot: string; value: string }>
   /** Declared peerDependencies (range record). */
   peerDependencies?: Record<string, string>
   /** Declared peerDependenciesMeta — the per-peer `{ optional: true }` markers
-   *  from the package's own manifest. Captured VERBATIM (parallel to
-   *  `peerDependencies`) so it round-trips fully, INCLUDING optional peers that
-   *  pnpm never resolved (no peer-virt instance → no peer edge to carry the
-   *  bit). `EdgeAttrs.optional` mirrors it on BOUND peer edges for the model
-   *  graph, but only the bound subset is edge-representable, so this verbatim
-   *  carrier is the round-trip source of truth. Names map 1:1 onto
-   *  `peerDependencies` keys. */
+   * from the package's own manifest. Captured VERBATIM (parallel to
+   * `peerDependencies`) so it round-trips fully, INCLUDING optional peers that
+   * pnpm never resolved (no peer-virt instance → no peer edge to carry the
+   * bit). `EdgeAttrs.optional` mirrors it on BOUND peer edges for the model
+   * graph, but only the bound subset is edge-representable, so this verbatim
+   * carrier is the round-trip source of truth. Names map 1:1 onto
+   * `peerDependencies` keys. */
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
   /** Static manifest extras. */
   engines?: Record<string, string>
@@ -277,20 +278,20 @@ export interface PnpmNodeSidecar {
   cpu?: string[]
   libc?: string[]
   /** v6 packages-entry build-script carrier. pnpm uses this source-authored bit
-   *  to populate pending builds; it is not derivable from other metadata. v9
-   *  producers do not write it in either native section. */
+   * to populate pending builds; it is not derivable from other metadata. v9
+   * producers do not write it in either native section. */
   requiresBuild?: boolean
   /** v9 snapshots extras — preserved across versions for round-trip stability. */
   transitivePeerDependencies?: string[]
   /** v6-only: per-entry dev flag. Treated as `false` if absent. */
   dev?: boolean
   /** Per-entry `optional` bit, captured from whichever entry is the generation's
-   *  AUTHORITATIVE RESOLVED-TREE record: `snapshots[key]` on v9, `packages[key]`
-   *  on v6. It is NOT derivable from `os`/`cpu`/`libc`, which answer whether a
-   *  package is ELIGIBLE on this platform; this bit answers whether failing to
-   *  materialise an eligible snapshot is SOFT. Drop it and pnpm treats the
-   *  reached snapshot as mandatory and fetches a tarball the source install
-   *  never needed. */
+   * AUTHORITATIVE RESOLVED-TREE record: `snapshots[key]` on v9, `packages[key]`
+   * on v6. It is NOT derivable from `os`/`cpu`/`libc`, which answer whether a
+   * package is ELIGIBLE on this platform; this bit answers whether failing to
+   * materialise an eligible snapshot is SOFT. Drop it and pnpm treats the
+   * reached snapshot as mandatory and fetches a tarball the source install
+   * never needed. */
   optional?: boolean
 }
 
@@ -311,40 +312,40 @@ export interface PnpmSidecar {
   nodes: Map<string, PnpmNodeSidecar>
   importerEdges: Map<string, PnpmEdgeSidecar>
   /** Workspace-peer attribution keyed `${ownerNodeId}\0${workspaceNodeId}` →
-   *  { published name, original `+`-encoded locator }, used to reconstruct the native
-   *  locator at emit. Keyed by owner because `resolveWorkspacePeerId` collapses a
-   *  sub-dir publish and its ancestor onto one node, so one target may carry different
-   *  locators across consumers. */
+   * { published name, original `+`-encoded locator }, used to reconstruct the native
+   * locator at emit. Keyed by owner because `resolveWorkspacePeerId` collapses a
+   * sub-dir publish and its ancestor onto one node, so one target may carry different
+   * locators across consumers. */
   workspacePeerNames: Map<string, { name: string; locator: string }>
   /** Attribution keys with a within-owner collision (two published packages on one
-   *  ancestor node); the locator is not reproducible, so they surface as gaps. */
+   * ancestor node); the locator is not reproducible, so they surface as gaps. */
   workspacePeerCollisions: Set<string>
   overrides?: Record<string, string>
   /** Verbatim top-level `catalogs:` block (pnpm v9+ catalog protocol). Replayed
-   *  on same-PM emit so retained `catalog:` specifiers remain resolvable.
-   *  Cross-PM catalog resolution is a separate conversion concern. */
+   * on same-PM emit so retained `catalog:` specifiers remain resolvable.
+   * Cross-PM catalog resolution is a separate conversion concern. */
   catalogs?: YamlMap
   /** Verbatim top-level `packageExtensionsChecksum:` scalar (pnpm v6+). pnpm
-   *  frozen-compares this manifest-config digest, so same-PM emit preserves it.
-   *  It drops cross-PM because it is not graph state. */
+   * frozen-compares this manifest-config digest, so same-PM emit preserves it.
+   * It drops cross-PM because it is not graph state. */
   packageExtensionsChecksum?: string
   /** Verbatim top-level `patchedDependencies:` block (pnpm v6+): each patched dep
-   *  `name@version → { hash, path }`, where `path` is the repo-relative patch file.
-   *  pnpm frozen-compares it (same `getOutdatedLockfileSetting` path as overrides);
-   *  dropping it on a same-PM round-trip breaks `--frozen-lockfile`. The `path` is
-   *  NOT derivable from the modeled `patch_hash=` snapshot-key markers (which carry
-   *  only the hash), so the block is preserved verbatim, sidecar-only → drops
-   *  naturally cross-PM (patch files are pnpm-specific config, not graph state). */
+   * `name@version → { hash, path }`, where `path` is the repo-relative patch file.
+   * pnpm frozen-compares it (same `getOutdatedLockfileSetting` path as overrides);
+   * dropping it on a same-PM round-trip breaks `--frozen-lockfile`. The `path` is
+   * NOT derivable from the modeled `patch_hash=` snapshot-key markers (which carry
+   * only the hash), so the block is preserved verbatim, sidecar-only → drops
+   * naturally cross-PM (patch files are pnpm-specific config, not graph state). */
   patchedDependencies?: YamlMap
   /** Verbatim top-level `pnpmfileChecksum:` scalar (pnpm v9+). pnpm
-   *  frozen-compares this manifest-config digest, so same-PM emit preserves it.
-   *  It drops cross-PM because it is not graph state. */
+   * frozen-compares this manifest-config digest, so same-PM emit preserves it.
+   * It drops cross-PM because it is not graph state. */
   pnpmfileChecksum?: string
   /** Verbatim top-level `settings:` block (pnpm v6+). `extractSettings` keeps only
-   *  the two resolution-affecting booleans for the model, but pnpm frozen-compares
-   *  the FULL block (e.g. `dedupePeers`), so a same-PM round-trip must replay it
-   *  verbatim or dropping keys → frozen mismatch. Reconstructed from defaults
-   *  cross-PM (no verbatim block). */
+   * the two resolution-affecting booleans for the model, but pnpm frozen-compares
+   * the FULL block (e.g. `dedupePeers`), so a same-PM round-trip must replay it
+   * verbatim or dropping keys → frozen mismatch. Reconstructed from defaults
+   * cross-PM (no verbatim block). */
   settingsVerbatim?: YamlMap
   /** Producer-tolerated, adapter-unknown project-level keys. Same-format only. */
   unknownTopLevel?: UnknownTopLevelState
@@ -366,23 +367,23 @@ export interface PnpmManifestExtensionFeatureQuery {
   readonly fingerprints: readonly PnpmManifestExtensionFingerprint[]
 }
 
-// ADR-0014 §4.F2 — parse-side overrides patch extraction.
+// parse-side overrides patch extraction.
 //
 // Scans the pnpm `overrides:` block for entries whose value is a `patch:`
 // locator and returns a directive list. Each directive carries the
-// verbatim `overrides:` key (preserved per ADR-0011 sentinel-input rule),
+// verbatim `overrides:` key (preserved per sentinel-input rule),
 // the raw patch value, a parsed `PatchMatcher` per pnpm key grammar
 // (bare / range / exact), and a pre-computed canonical sha512-hex when
 // source bytes are readable. Per-node resolution walks the directive list,
-// returning the canonical hash on match or the ADR-0011 sentinel
+// returning the canonical hash on match or the sentinel
 // `unresolved-<sha256(<name>@<version>:<literal-key>)>` when bytes are
 // unavailable.
 
 /**
- * pnpm override key grammar per ADR-0011 / pnpm docs:
- *   - bare `<name>` — matches every node of that name
- *   - `<name>@<range>` — semver range; matches versions satisfying range
- *   - `<name>@<version>` — exact version; literal match
+ * pnpm override key grammar per / pnpm docs:
+ * - bare `<name>` — matches every node of that name
+ * - `<name>@<range>` — semver range; matches versions satisfying range
+ * - `<name>@<version>` — exact version; literal match
  * The leading `npm:` protocol prefix on the version-half is accepted and
  * stripped (pnpm permits both `lodash@4.17.21` and `lodash@npm:4.17.21`).
  */
@@ -412,7 +413,7 @@ interface PnpmLayoutShape {
   readonly inlineTransitives: boolean
   /** Whether per-packages-entry `dev: false|true` flag is emitted. */
   readonly devFlag: boolean
-  /** Diagnostic code prefix per ADR-0022. */
+  /** Diagnostic code prefix. */
   readonly diagnosticPrefix: PnpmDiagnosticPrefix
   /** Top-level YAML key order for emit. */
   readonly topLevelOrder: readonly string[]
@@ -425,14 +426,14 @@ interface ParsedPackagesOrSnapshotKey {
   version: string
   peers: Array<{ name: string; version: string; nested: string }>
   /**
-   * ADR-0030 — bare-hex HASHED PEER-SET tokens from the key's `(...)` suffix.
+   * bare-hex HASHED PEER-SET tokens from the key's `(...)` suffix.
    * pnpm-v9 abbreviates a long resolved peer-set into a single bare-hex digest
    * segment (e.g. `(53b8fd9b7f33abb48dff18614cf85bde)`); the real peers are
    * hidden inside the hash, so the token is OPAQUE and NON-EDGE-BEARING — it
    * generates no peer edge but MUST ride through the NodeId as an identity
    * discriminator, otherwise two virtual-store instances of the same
    * `name@version` (forking on a transitive peer like `@types/node`) collapse
-   * to one NodeId and their divergent dep edges collide. Kept distinct from
+   * to one NodeId and their divergent dep edges collide. Kept distinct
    * `peers` precisely because it produces no edge.
    */
   opaquePeers: string[]
@@ -440,7 +441,7 @@ interface ParsedPackagesOrSnapshotKey {
 
 /**
  * Parse a `(peer@v)(peer2@v2(sub@v))…` suffix into its depth-0 peer records
- * plus the bare-hex HASHED PEER-SET tokens (`opaquePeers`, ADR-0030). Each peer
+ * plus the bare-hex HASHED PEER-SET tokens (`opaquePeers`). Each peer
  * record carries the peer's BASE `name@version` plus its OWN nested suffix
  * (`nested`, e.g. `(esbuild@0.26.0)` or '' for a leaf). Returns `undefined` on
  * a malformed suffix (caller treats as unparseable key).
@@ -453,7 +454,7 @@ interface ParsedPackagesOrSnapshotKey {
  * (unrepresentable → LAYOUT_RESOLVE_VIOLATION). `opaquePeers` (#69) is carried
  * for the same reason but is NON-EDGE-BEARING (the hash hides its peers). The
  * seal (graph.ts) reconciles peerContext token vs edge target by BASE-KEY
- * projection (ADR-0017), so a carried nested suffix is invisible to it, and an
+ * projection, so a carried nested suffix is invisible to it, and an
  * opaque hash token is exempted (isHashedPeerSetToken).
  */
 interface ParsedPeerSuffix {
@@ -574,8 +575,8 @@ export function optimizeFamily(
   _options: PnpmFamilyOptimizeOptions = {},
 ): { graph: Graph; diagnostics: Diagnostic[] } {
   const sidecar = sidecarByGraph.get(graph)
-  // Seed every workspace node, not just in-degree-0 `roots()`: an incoming `peer` edge
-  // raises a workspace's in-degree, so `roots()` alone no longer anchors it.
+  // Seed every workspace node, not just in-degree-0 `roots`: an incoming `peer` edge
+  // raises a workspace's in-degree, so `roots` alone no longer anchors it.
   const seeds = new Set(graph.roots())
   for (const node of graph.nodes()) {
     if (node.workspacePath !== undefined) seeds.add(node.id)
@@ -599,6 +600,7 @@ export function optimizeFamily(
 type PnpmGraphBuilder = ReturnType<typeof newBuilder>
 
 interface PnpmParseContext {
+  readonly options: PnpmFamilyParseOptions
   readonly shape: PnpmLayoutShape
   readonly yaml: YamlMap
   readonly builder: PnpmGraphBuilder
@@ -611,16 +613,16 @@ interface PnpmParseContext {
   readonly seenIds: Set<string>
   readonly idByPackagesKey: Map<string, string>
   /** Native v9 snapshot key → canonical Graph NodeId. A verified hashed peer
-   *  set adds recovered workspace peers to the Graph identity while retaining
-   *  the native digest token, so the two ids are intentionally not identical. */
+   * set adds recovered workspace peers to the Graph identity while retaining
+   * the native digest token, so the two ids are intentionally not identical. */
   readonly idBySnapshotKey: Map<string, string>
   /** Workspace peers whose complete producer input re-hashes to the native
-   *  opaque token. Missing or ambiguous inputs leave no entry (fail closed). */
+   * opaque token. Missing or ambiguous inputs leave no entry (fail closed). */
   readonly recoveredPeersBySnapshotKey: Map<string, Array<{ name: string; version: string; nested: string; recovered: true }>>
   /** NodeIds whose `packages` entry carries a `resolution: {type: directory}` —
-   *  pnpm `file:`-protocol LOCAL packages. Part of the project graph rather than
-   *  published artifacts, so the seal admits their edges into workspace members
-   *  (ADR-0017 amendment); a published package's may not. */
+   * pnpm `file:`-protocol LOCAL packages. Part of the project graph rather than
+   * published artifacts, so the seal admits their edges into workspace members
+   * (amendment); a published package's may not. */
   readonly directoryNodes: Set<string>
 }
 
@@ -640,6 +642,7 @@ function createPnpmParseContext(
 
   const sidecar = capturePnpmParseSidecar(yaml, shape)
   return {
+    options,
     shape,
     yaml,
     builder: newBuilder(),
@@ -707,7 +710,7 @@ function capturePnpmParseSidecar(yaml: YamlMap, shape: PnpmLayoutShape): PnpmSid
 
 /**
  * Materialise the implicit root importer and explicit workspace importers.
- * This must precede package parsing: workspace peers encode importer paths in
+ * This must precede package parsing: workspace peers encode importer paths
  * peer locators, and those paths participate in the package NodeId.
  */
 function synthesizePnpmImporterNodes(context: PnpmParseContext): void {
@@ -824,7 +827,7 @@ function addPnpmSnapshotPackageNodes(context: PnpmParseContext): void {
       })
       continue
     }
-    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, context.options.registryFor, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
     recordDirectoryResolution(context, nodeId, pkgEntry)
     const nodeSidecar = sidecar.nodes.get(nodeId)
     if (nodeSidecar !== undefined) nodeSidecar.snapshotKey = snapshotKey
@@ -982,7 +985,7 @@ function addPnpmInlinePackageNodes(context: PnpmParseContext): void {
     seenIds.add(nodeId)
     idByPackagesKey.set(pkgKey, nodeId)
     const pkgEntry = packagesMap[pkgKey]!
-    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
+    addPackageNode(builder, sidecar, name, version, peerContext, nodeId, pkgEntry, diagnostics, context.options.registryFor, resolvePatchForNode(patchDirectives, name, version, nodeId, diagnostics))
     recordDirectoryResolution(context, nodeId, pkgEntry)
     if (isPlainObject(pkgEntry) && typeof pkgEntry.dev === 'boolean') {
       const nodeSidecar = sidecar.nodes.get(nodeId)
@@ -1296,8 +1299,15 @@ function pnpmPackagePayload(
   nodeId: string,
   diagnostics: Diagnostic[],
   nodeSc: PnpmNodeSidecar,
+  name: string,
+  version: string,
+  registryFor?: (packageName: string) => string | undefined,
 ): TarballPayload {
-  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics) ?? {}
+  const payload = tarballPayloadOf(pkgEntry, nodeId, diagnostics, {
+    name,
+    version,
+    registry: registryFor?.(name),
+  }) ?? {}
   if (nodeSc.peerDependencies !== undefined) {
     payload.peerDependencies = { ...nodeSc.peerDependencies }
   }
@@ -1317,12 +1327,13 @@ function addPackageNode(
   nodeId: string,
   pkgEntry: unknown,
   diagnostics: Diagnostic[],
+  registryFor?: (packageName: string) => string | undefined,
   patch?: string,
 ): void {
   builder.addNode(pnpmPackageNode(name, version, peerContext, nodeId, patch))
   const nodeSc = pnpmNodeSidecar(pkgEntry)
   sidecar.nodes.set(nodeId, nodeSc)
-  const payload = pnpmPackagePayload(pkgEntry, nodeId, diagnostics, nodeSc)
+  const payload = pnpmPackagePayload(pkgEntry, nodeId, diagnostics, nodeSc, name, version, registryFor)
   if (Object.keys(payload).length > 0) {
     builder.setTarball({ name, version, patch }, payload)
   }
@@ -1452,33 +1463,33 @@ function workspaceLinkSidecarKey(kind: EdgeKind, targetId: string): string {
  * snapshot reference: pnpm materialises it as a symlink whose path is resolved
  * against the LOCKFILE directory — NOT against the consumer's own location, and
  * NOT through the snapshot key set. Measured on pnpm 10.34.5: a `link:` value
- * retargeted at a directory that does not exist still installs under
+ * retargeted at a directory that does not exist still installs
  * `--frozen-lockfile` (exit 0, lock unrewritten) and produces exactly that
  * dangling symlink, so the value is copied through verbatim with no validation.
  *
  * Which of the three outcomes applies is decided by the CONSUMER, because the
- * seal (ADR-0017 amendment) admits an incoming edge on a workspace node only
+ * seal (amendment) admits an incoming edge on a workspace node only
  * from a workspace node, a LOCAL (`resolution: {type: directory}`) package, or a
  * `peer` edge:
  *
- *   - LOCAL consumer — a `file:<dir>` package whose own dependencies name
- *     sibling members. No peer suffix carries them, so the dep edge is the sole
- *     carrier; it is also the only case the seal admits. Bind it.
- *   - PUBLISHED consumer whose peer suffix already binds that member — pnpm
- *     materialises a workspace-satisfied peer in BOTH the suffix and the
- *     `dependencies` block. The relationship is modelled by the peer edge; the
- *     block entry is a duplicate the seal forbids as a dep edge. Nothing is
- *     lost, so this is `info`.
- *   - PUBLISHED consumer with no such peer binding — a peer folded into a
- *     HASHED peer-set token (#69/ADR-0030), or a project `overrides:` entry
- *     redirecting a published package's ordinary dependency onto a member. The
- *     model carries no edge for it: `warning`.
+ * - LOCAL consumer — a `file:<dir>` package whose own dependencies name
+ * sibling members. No peer suffix carries them, so the dep edge is the sole
+ * carrier; it is also the only case the seal admits. Bind it.
+ * - PUBLISHED consumer whose peer suffix already binds that member — pnpm
+ * materialises a workspace-satisfied peer in BOTH the suffix and the
+ * `dependencies` block. The relationship is modelled by the peer edge; the
+ * block entry is a duplicate the seal forbids as a dep edge. Nothing is
+ * lost, so this is `info`.
+ * - PUBLISHED consumer with no such peer binding — a peer folded into a
+ * HASHED peer-set token (#69/), or a project `overrides:` entry
+ * redirecting a published package's ordinary dependency onto a member. The
+ * model carries no edge for it: `warning`.
  *
  * The last two keep the verbatim slot as an unresolved-dependency declaration,
  * which is what replays the `link:` line at stringify.
  *
  * The declared slot name and the raw locator are both kept in the sidecar:
- * neither is derivable from the target node, which a pnpm lock names by
+ * neither is derivable from the target node, which a pnpm lock names
  * DIRECTORY (`packages/tailwindcss@0.0.0`, not `tailwindcss@3.4.0`) and which
  * collapses a sub-directory publish onto its ancestor importer.
  */
@@ -1507,14 +1518,14 @@ function addWorkspaceLinkDependencyEdge(
       severity: peerBound ? 'info' : 'warning',
       subject: input.srcId,
       message: peerBound
-        ? `pnpm-v${version}: ${input.srcId} dep ${input.depName}@${input.rawValue} is workspace member ${targetId}, already bound as a peer edge; the slot is kept verbatim (a published package carries no dependency edge into a workspace member — ADR-0017)`
-        : `pnpm-v${version}: ${input.srcId} dep ${input.depName}@${input.rawValue} is workspace member ${targetId} with no peer binding (hashed peer set, or an \`overrides:\` redirect); the model carries no edge for it and the slot is kept verbatim (ADR-0017)`,
+        ? `pnpm-v${version}: ${input.srcId} dep ${input.depName}@${input.rawValue} is workspace member ${targetId}, already bound as a peer edge; the slot is kept verbatim (a published package carries no dependency edge into a workspace member — )`
+        : `pnpm-v${version}: ${input.srcId} dep ${input.depName}@${input.rawValue} is workspace member ${targetId} with no peer binding (hashed peer set, or an \`overrides:\` redirect); the model carries no edge for it and the slot is kept verbatim ()`,
       data: workspaceLinkDeclaration(input),
     })
     return
   }
   if (!reserveResolvedEdge(wired, input.kind, targetId, undefined)) return
-  // No `workspace: true` — that flag's contract (ADR-0014 §4.F4) pairs it with
+  // No `workspace: true` — that flag's contract pairs it with
   // `workspaceRange`, and this channel carries no declared specifier: pnpm
   // records only the resolved directory, never the range the consumer asked for.
   addParsedResolvedEdge(context.builder, input.srcId, targetId, input.kind, { range: input.rawValue })
@@ -1731,7 +1742,7 @@ interface PatchDirective {
   readonly match:      PatchMatcher
   /** Canonical sha512-hex iff patch source bytes were readable at parse. */
   readonly canonical?: string
-  /** True iff ADR-0014 §4.F5 byte normalization altered ≥ 1 source byte
+  /** True iff byte normalization altered ≥ 1 source byte
    * (drives per-node `RECIPE_PATCH_NORMALISED` emission). */
   readonly normalised?: boolean
 }
@@ -1754,7 +1765,7 @@ function parseOverridePatches(
       try {
         const bytes = readWorkspaceFileBytes(workspaceRoot, workspacePath, rawValue)
         if (bytes !== undefined) {
-          // ADR-0014 §4.F5 — normalize CRLF / strip leading BOM BEFORE the
+          // normalize CRLF / strip leading BOM BEFORE the
           // F2 sha512 fingerprint; track whether ≥ 1 byte changed so per-
           // node `RECIPE_PATCH_NORMALISED` emits at directive-match time.
           // Combined helper avoids double-scan via canonicalHashOfBytes.
@@ -1764,7 +1775,7 @@ function parseOverridePatches(
         }
       } catch {
         // path-escape / non-regular / etc. — leave canonical undefined →
-        // sentinel fallback per ADR-0011.
+        // sentinel fallback.
       }
     }
     out.push({ literalKey, rawValue, match, canonical, normalised })
@@ -1787,7 +1798,7 @@ function resolvePatchForNode(
       }
       return dir.canonical
     }
-    // ADR-0011 sentinel input for pnpm: `<name>@<version>:<literal-key>`
+    // sentinel input for pnpm: `<name>@<version>:<literal-key>`
     // (verbatim `overrides:` key). Distinct keys collapsing to the same
     // (name, version) yield distinct sentinels per spec.
     return patchSentinelHashOf(`${name}@${version}:${dir.literalKey}`)
@@ -2258,7 +2269,7 @@ function emitPnpmStringifyResult(context: PnpmStringifyContext): string {
 }
 
 // === Validation =============================================================
-// ADR-0028 INV-RESOLVE (pnpm v9/v6) — the resolution-graph verifier.
+// INV-RESOLVE (pnpm v9/v6) — the resolution-graph verifier.
 //
 // For every DECLARED edge `(c → d)` of kind dep/dev/optional (NOT peer), assert
 // that the emitted adjacency resolves the descriptor segment
@@ -2266,14 +2277,14 @@ function emitPnpmStringifyResult(context: PnpmStringifyContext): string {
 // parser uses (`resolveSnapshotTarget` / `resolveAliasedSnapshotTarget` over the
 // emitted NodeId set). Two hops, parameterised by the layout shape:
 //
-//   - consumer hop (`c` is the root or a workspace importer): the
-//     `importers[path(c)]` block, or — when v6 collapses a single importer —
-//     the top-level `dependencies`/`devDependencies`/`optionalDependencies`
-//     blocks. The slot value is the importer entry's `version` field.
-//   - package hop (`c` is a resolved package): v9 reads
-//     `snapshots[snapshotKey(c)].dependencies`/`optionalDependencies`; v6 reads
-//     the INLINE `packages[key(c)].dependencies`/`optionalDependencies` (no
-//     `snapshots:` block). The slot value is the raw dep string.
+// - consumer hop (`c` is the root or a workspace importer): the
+// `importers[path(c)]` block, or — when v6 collapses a single importer —
+// the top-level `dependencies`/`devDependencies`/`optionalDependencies`
+// blocks. The slot value is the importer entry's `version` field.
+// - package hop (`c` is a resolved package): v9 reads
+// `snapshots[snapshotKey(c)].dependencies`/`optionalDependencies`; v6 reads
+// the INLINE `packages[key(c)].dependencies`/`optionalDependencies` (no
+// `snapshots:` block). The slot value is the raw dep string.
 //
 // Workspace-TARGET edges (`d` is a workspace member) are skipped: pnpm emits
 // them as `link:` references, resolved by directory, not through the snapshot
@@ -2413,7 +2424,7 @@ function assertEmittedEdgeResolveValid(
     message:
       `INV-RESOLVE violated: ${view.consumer.id} resolves ${JSON.stringify(seg)} to ` +
       `${value === undefined ? '(no slot)' : (resolved === undefined ? `${JSON.stringify(value)} → (nothing)` : resolved)}, ` +
-      `expected ${dst.id} (pnpm encoding defect — ADR-0028 INV-RESOLVE)`,
+      `expected ${dst.id} (pnpm encoding defect —  INV-RESOLVE)`,
   })
 }
 
@@ -2465,16 +2476,7 @@ function packagesKeyForNode(
   return applyPackagesKeyPrefix(bare + suffix, shape.packagesKeyShape)
 }
 
-// Recognise the pnpm-default registry URL convention for a (name, version).
-// pnpm treats `https://registry.npmjs.org/<n>/-/<tail>-<v>.tgz` as the
-// implicit canonical for a `resolution: {integrity: …}`-only entry; emitting
-// it back would diverge from pnpm-native output, so the stringify side
-// suppresses the URL field when it matches the convention.
-function isNpmRegistryDefault(url: string, name: string, version: string): boolean {
-  return url === deriveRegistryTarballFromSubject(`${name}@${version}`)
-}
-
-// ADR-0014 §4.F3 — project canonical resolution to pnpm `resolution:` block
+// project canonical resolution to pnpm `resolution:` block
 // shape for cross-format fallback. Workspace canonical is encoded elsewhere
 // (importers/ block); returns undefined here.
 function derivePnpmResolutionFromCanonical(
@@ -2493,7 +2495,7 @@ function derivePnpmResolutionFromCanonical(
 }
 
 // Emit-time inverse of the workspace mapping: a peerContext token that is a canonical
-// workspace node id is rewritten to its recorded native locator. Attribution is keyed by
+// workspace node id is rewritten to its recorded native locator. Attribution is keyed
 // (owner, workspace target); a nested token's owner is the enclosing instance `token`
 // (its canonical id per #70). A matched workspace token is a leaf.
 function unresolvedWorkspacePeer(
@@ -2557,7 +2559,7 @@ function nodeIdToSnapshotKey(node: Node, projection: PnpmWorkspacePeerProjection
   return `${node.name}@${node.version}${nativePeerSuffix(node.peerContext, node.id, projection)}`
 }
 
-// ADR-0028 INV-RESOLVE — the (slot-key, slot-value) pair for one resolved-tree
+// INV-RESOLVE — the (slot-key, slot-value) pair for one resolved-tree
 // dependency edge, in a `snapshots[*].dependencies` / inline `packages[*]`
 // block. For a plain dep the slot is `<dst.name>: <version>(<peers>)` — pnpm's
 // bare encoding. For an npm-aliased dep (`edge.attrs.alias` set) the slot is
@@ -2604,7 +2606,7 @@ function buildImporterEntry(
     const edgeKey = `${edge.src}\0${edge.kind}\0${edge.dst}\0${edge.attrs?.alias ?? ''}`
     const edgeSc = sidecar?.importerEdges.get(edgeKey)
 
-    // ADR-0028 INV-RESOLVE — key the dep block by the DESCRIPTOR segment
+    // INV-RESOLVE — key the dep block by the DESCRIPTOR segment
     // (`edge.attrs.alias` when set, else the package name), NOT the resolved
     // package name. An npm-aliased dep (`react-is-cjs: npm:react-is@^17`)
     // emits under its alias slot `react-is-cjs` with the CANONICAL
@@ -2741,14 +2743,12 @@ function writePackageResolution(context: PackageEntryContext): void {
   const nativeIsPnpmUrl = nativeResolution !== undefined
     && (nativeResolution.startsWith('http://') || nativeResolution.startsWith('https://'))
   const derivedPnpm = derivePnpmResolutionFromCanonical(tarball?.resolution)
-  const derivedTarballIsRegistryDefault = tarball?.resolution?.type === 'tarball'
-    && isNpmRegistryDefault(tarball.resolution.url, representative.name, representative.version)
   if (tarball !== undefined) {
     const resolution: YamlMap = {}
     const sri = emitSriForRegistry(tarball.integrity, nativeResolution)
     if (sri !== undefined) resolution.integrity = sri
     if (nativeIsPnpmUrl) resolution.tarball = stripRegistrySha1Fragment(nativeResolution!)
-    else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+    else if (derivedPnpm?.tarball !== undefined) {
       resolution.tarball = derivedPnpm.tarball
     } else if (derivedPnpm?.directory !== undefined) {
       resolution.directory = derivedPnpm.directory
@@ -2758,7 +2758,7 @@ function writePackageResolution(context: PackageEntryContext): void {
     return
   }
   if (nativeIsPnpmUrl) entry.resolution = flowMap({ tarball: nativeResolution! })
-  else if (derivedPnpm?.tarball !== undefined && !derivedTarballIsRegistryDefault) {
+  else if (derivedPnpm?.tarball !== undefined) {
     entry.resolution = flowMap({ tarball: derivedPnpm.tarball })
   } else if (derivedPnpm?.directory !== undefined) {
     entry.resolution = flowMap({ directory: derivedPnpm.directory, type: 'directory' })
@@ -2877,7 +2877,7 @@ function writePackageDevFlag(context: PackageEntryContext): void {
 }
 
 // pnpm v6 writes `requiresBuild` on the inline packages entry, immediately
-// before `dev`. Absence stays absence. v9 has no producer-owned equivalent in
+// before `dev`. Absence stays absence. v9 has no producer-owned equivalent
 // packages or snapshots, so a split-layout target must not gain one.
 function writePackageRequiresBuildFlag(context: PackageEntryContext): void {
   if (context.shape.hasSnapshots) return
@@ -2925,7 +2925,7 @@ function buildSnapshotEntry(
     }
     if (dst.id === sidecar?.rootId) continue
     const block = blocks[edge.kind]!
-    // ADR-0028 INV-RESOLVE — alias slot keying + canonical value. An aliased
+    // INV-RESOLVE — alias slot keying + canonical value. An aliased
     // dep emits under the alias slot (`react-is-cjs:`) with the CANONICAL
     // `<name>@<version>` value (`react-is@17.0.2`), the only form parse's
     // resolveAliasedSnapshotTarget oracle resolves; a bare dep keeps its bare
@@ -2977,10 +2977,10 @@ function buildSnapshotEntry(
   return entry
 }
 
-// ADR-0014 §4.F2 stringify-side: pnpm v6/v9 SUPPORT patch slots via the
+// stringify-side: pnpm v6/v9 SUPPORT patch slots via the
 // `overrides:` block carrier. When `Node.patch` is set on the graph, the
 // adapter ensures the overrides block carries an entry; sidecar.overrides
-// attribution wins when present, else a default entry is synthesized from
+// attribution wins when present, else a default entry is synthesized
 // `Node.resolution` (preserves cross-format conversion's source-side
 // path) or from a generic per-hash convention.
 function synthesizeOverridePatches(
@@ -3302,7 +3302,7 @@ export function pnpmManifestExtensionFeatureOf(
 }
 
 /**
- * Lock-borne pnpm overrides as canonical `OverrideConstraint[]` (ADR-0025 §6,
+ * Lock-borne pnpm overrides as canonical `OverrideConstraint[]` (
  * A2). Reads the verbatim `sidecar.overrides` block captured at parse and
  * canonicalizes it via the F6 `captureOverrides('pnpm')` grammar. F2 `patch:`
  * directives are dropped — those are patch slots, not version overrides.
@@ -3337,8 +3337,8 @@ export function resolvePnpmWorkspacePeerProjection(
 //
 // Micro-utilities below are exported for consumption by pnpm-family
 // adapters that own their own pipelines but share family-internal infra
-// (e.g. pnpm-v5 standalone-fit per ADR-0022). They are NOT part of the
-// interop surface — they remain prefixed-private (`_pnpm-flat-core`) by
+// (e.g. pnpm-v5 standalone-fit). They are NOT part of the
+// interop surface — they remain prefixed-private (`_pnpm-flat-core`)
 // module-naming convention.
 export function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
@@ -3367,18 +3367,18 @@ export function isPlainObject(value: unknown): value is Record<string, any> {
  * `peerVersion` may be a bare version (`8.0.8`, v5 / leaf peers) or a full
  * peer-virt form carrying the consumer's recorded nested suffix
  * (`8.0.8(@types/node@…)(esbuild@0.26.0)…`). Resolution order:
- *   1. EXACT match on the full form — selects the precise virtual-store
- *      instance when same-version siblings differ only by peer context.
- *   2. EXACT match on the bare base.
- *   3. PREFIX scan on the bare base (`base@ver(`) — first match. pnpm records
- *      only a SUBSET of a peer's transitive peers on a consumer's reference
- *      on some consumer references, so the full form may match no node id.
- *      The bare prefix scan still wires the edge to a real instance, keeping
- *      the peer-edge ↔ peerContext base-key bijection (the seal, ADR-0017)
- *      intact — the seal compares BASE keys, so any same-base instance
- *      satisfies it. A consumer carries at most one peer per name, so this
- *      cannot collapse two distinct same-name peers; dependency slots retain
- *      their full peer-context token.
+ * 1. EXACT match on the full form — selects the precise virtual-store
+ * instance when same-version siblings differ only by peer context.
+ * 2. EXACT match on the bare base.
+ * 3. PREFIX scan on the bare base (`base@ver(`) — first match. pnpm records
+ * only a SUBSET of a peer's transitive peers on a consumer's reference
+ * on some consumer references, so the full form may match no node id.
+ * The bare prefix scan still wires the edge to a real instance, keeping
+ * the peer-edge ↔ peerContext base-key bijection (the seal)
+ * intact — the seal compares BASE keys, so any same-base instance
+ * satisfies it. A consumer carries at most one peer per name, so this
+ * cannot collapse two distinct same-name peers; dependency slots retain
+ * their full peer-context token.
  */
 export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, peerVersion: string): string | undefined {
   const fullId = `${peerName}@${peerVersion}`
@@ -3391,7 +3391,7 @@ export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, pe
   // Last resort — a same-base peer-virt instance (partial peer-set references,
   // e.g. a dep reference omitting a peer the target carries). Any same-base
   // instance satisfies the seal's base-key projection, but the pick MUST be
-  // deterministic (ADR-0007): take the lexicographically smallest match, not
+  // deterministic: take the lexicographically smallest match, not
   // the first in `seenIds` insertion order (which flips on benign lock
   // re-orderings). Single pass — no full-set sort.
   const prefix = bareId + '('
@@ -3405,7 +3405,7 @@ export function resolvePeerTargetById(seenIds: Set<string>, peerName: string, pe
 /**
  * Look an importer up by lockfile-relative directory. The root importer is
  * KEYED `.` in `importerByPath`, but pnpm REFERS to it by the empty path — a
- * root-satisfied link is written `link:` and a sibling's is `link:..`, both of
+ * root-satisfied link is written `link:` and a sibling's is `link:..`, both
  * which normalise to `''`. Without this the root importer is unreachable
  * through either link channel.
  */
@@ -3539,6 +3539,7 @@ export function tarballPayloadOf(
   entry: unknown,
   subject: string,
   diagnostics: Diagnostic[],
+  registry?: Readonly<{ name: string; version: string; registry?: string }>,
 ): TarballPayload | undefined {
   if (!isPlainObject(entry)) return undefined
   const payload: TarballPayload = {}
@@ -3551,11 +3552,11 @@ export function tarballPayloadOf(
       payload.integrity = integrity
     }
   }
-  // ADR-0014 §4.F3 — canonical resolution from pnpm `resolution:` block.
+  // canonical resolution from pnpm `resolution:` block.
   // Workspace canonical lives on Node.workspacePath; not on TarballPayload.
   if (isPlainObject(resolution)) {
     if (typeof resolution.tarball === 'string') {
-      // ADR-0013 — PM-native verbatim sidecar, per-tarball. Replayed at
+      // PM-native verbatim sidecar, per-tarball. Replayed at
       // same-format stringify + patch-path retrieval.
       payload.nativeResolution = resolution.tarball
       const canonical = parseResolutionRecipe(resolution.tarball, { sourceKind: 'pnpm-tarball' })
@@ -3566,11 +3567,16 @@ export function tarballPayloadOf(
     } else if (typeof resolution.directory === 'string') {
       payload.resolution = { type: 'directory', path: resolution.directory }
     } else if (typeof resolution.integrity === 'string') {
-      // Per ADR-0014 §4.F3 pnpm row: `{integrity: …}` shape implies a registry
+      // Per pnpm row: `{integrity: …}` shape implies a registry
       // tarball; URL is derived by convention from name@version (the subject
       // is `<name>@<version>` per the pnpm packages-block key form).
-      const derived = deriveRegistryTarballFromSubject(subject)
-      if (derived !== undefined) payload.resolution = { type: 'tarball', url: derived }
+      if (registry !== undefined) {
+        payload.resolution = registry.registry === undefined
+          ? { type: 'registry' }
+          : { type: 'tarball', url: registryTarballUrl(registry.name, registry.version, registry.registry) }
+      } else {
+        payload.resolution = { type: 'registry' }
+      }
     }
   }
   if (isPlainObject(entry.engines)) {
@@ -3611,7 +3617,7 @@ export function relativeImporterPath(importerPath: string, targetPath: string): 
 }
 
 /**
- * Three-branch peer-virt fallback per ADR-0006. Given a peer `peerName`
+ * Three-branch peer-virt fallback. Given a peer `peerName`
  * declaration with semver `peerRange`, return all bare (non-peer-virt)
  * nodes whose version satisfies the range. Sorted lexically for stable
  * downstream diagnostics. Exported for pnpm-family adapters that own
@@ -3648,9 +3654,9 @@ export function parseOverrideKey(key: string): PatchMatcher | undefined {
   if (name === '' || spec === '') return undefined
   if (spec.startsWith('npm:')) spec = spec.slice('npm:'.length)
   if (spec === '') return undefined
-  // semver.valid() normalizes the version (strips build metadata), so a
+  // semver.valid normalizes the version (strips build metadata), so a
   // literal exact key like `foo@1.2.3+build.1` would lose `+build.1` and
-  // fail to match the actual `1.2.3+build.1` node. Use semver.parse() —
+  // fail to match the actual `1.2.3+build.1` node. Use semver.parse —
   // non-mutating validity check — and keep the verbatim spec.
   if (semver.parse(spec, { loose: true }) !== null) {
     return { kind: 'exact', name, version: spec }
@@ -3759,7 +3765,7 @@ function canonicalFeatureValue(value: unknown): unknown {
  * `@astrojs/starlight@…(patch_hash=…)`). A real peer always carries a
  * `name@version` (a depth-0 `@`); a labelled patch never does.
  *
- * ADR-0030 — this is now the LABELLED half ONLY. The bare-hex spelling
+ * this is now the LABELLED half ONLY. The bare-hex spelling
  * (`(53b8fd9b…)`) is NO LONGER read as a patch: it is the pnpm-v9 hashed
  * PEER-SET token, classified by the inverse predicate `isHashedPeerSetToken`
  * (single-sourced in `recipe/patch.ts` so the patch ∣ peer-set boundary cannot
@@ -3894,7 +3900,7 @@ function resolveSnapshotTarget(
   if (parsedTail === undefined) return undefined
   // buildPeerContext drops workspace peers, embeds each surviving peer's
   // recursively-normalized nested suffix (#70), and appends the bare-hex
-  // HASHED PEER-SET token(s) (#69/ADR-0030) — the exact form the target node id
+  // HASHED PEER-SET token(s) (#69/) — the exact form the target node id
   // carries, so a dep value whose target is hash- or transitive-peer-
   // discriminated resolves to the now-distinct node rather than collapsing onto
   // the bare key.
@@ -3925,7 +3931,7 @@ function resolveAliasedSnapshotTarget(
   const parsed = parsePackagesOrSnapshotKey(rawValue)
   if (parsed === undefined) return undefined
   // buildPeerContext — drop workspace peers, embed normalized nested (#70),
-  // append hashed peer-set token(s) (#69/ADR-0030). See resolveSnapshotTarget.
+  // append hashed peer-set token(s) (#69/). See resolveSnapshotTarget.
   const peerContext = buildPeerContext(parsed.peers, importerByPath, parsed.opaquePeers)
   const candidateId = serializeNodeId(parsed.name, parsed.version, peerContext)
   if (seenIds.has(candidateId)) return candidateId
@@ -3948,20 +3954,20 @@ function normalizeNestedSuffix(nested: string, importerByPath: Map<string, strin
 }
 
 /**
- * Build the ADR-0006 peerContext for a node from its parsed suffix peers.
+ * Build the peerContext for a node from its parsed suffix peers.
  * Workspace peers become canonical workspace node ids. A registry peer keeps
  * `name@version` plus its recursively-normalized nested suffix so two
  * consumer instances that differ only in a transitive peer's resolution stay
  * distinct NodeIds. The seal (graph.ts) reconciles this token against the peer
- * edge target by BASE-KEY projection (ADR-0017), which strips the nested
+ * edge target by BASE-KEY projection, which strips the nested
  * suffix on both sides — so carrying it here does not break peer-edge ↔
  * peerContext coherence.
  *
- * ADR-0030 — bare-hex HASHED PEER-SET tokens (`opaquePeers`) are APPENDED to
+ * bare-hex HASHED PEER-SET tokens (`opaquePeers`) are APPENDED to
  * the context, then the whole list is sorted (caller contract). They are
  * NON-EDGE-BEARING: the peer-edge loop iterates `peers` only, never these, so a
  * hashed token contributes an identity discriminator without a peer edge. The
- * seal exempts them from its peerContext↔edge coherence check via
+ * seal exempts them from its peerContext↔edge coherence check
  * `isHashedPeerSetToken`. They ride through `serializeNodeId` verbatim, so emit
  * reproduces the original bare-hex key.
  *
@@ -3982,20 +3988,4 @@ function buildPeerContext(
     return wsId ?? `${p.name}@${p.version}${normalizeNestedSuffix(p.nested, importerByPath)}`
   })
   return [...contextPeers, ...opaquePeers].sort()
-}
-
-// Derive a registry tarball URL from a `<name>@<version>` subject (pnpm
-// packages-block key form). Strips peer-virt parens before parsing the
-// `<name>@<version>` head so peer-virt sibling NodeIds project onto the
-// shared base TarballKey URL.
-function deriveRegistryTarballFromSubject(subject: string): string | undefined {
-  const base = stripPeerContextFromNodeId(subject)
-  const atIdx = base.lastIndexOf('@')
-  if (atIdx <= 0) return undefined
-  const name    = base.slice(0, atIdx)
-  const version = base.slice(atIdx + 1)
-  if (name === '' || version === '') return undefined
-  const tail = name.startsWith('@') ? name.split('/').slice(1).join('/') : name
-  if (tail === '') return undefined
-  return `${DEFAULT_NPM_REGISTRY}/${name}/-/${tail}-${version}.tgz`
 }

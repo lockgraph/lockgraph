@@ -4,7 +4,7 @@ import { overridesOf } from '../../main/ts/api/format-api.ts'
 import type { Diagnostic, OverrideConstraint } from '../../main/ts/graph.ts'
 import { fixture } from '../helpers/lockfile-test-utils.ts'
 
-// StringifyOptions.overrides projection (ADR-0025 §4, corrected). Caller-declared
+// StringifyOptions.overrides projection (corrected). Caller-declared
 // canonical OverrideConstraint[] lower into each target PM's AUTHORITATIVE
 // override carrier on stringify:
 //   - pnpm-v6/v9 → top-level `overrides:` (the lock IS the carrier pnpm frozen-
@@ -22,7 +22,7 @@ const OVERRIDES: OverrideConstraint[] = [
   { package: 'foo', parentPath: ['bar'], to: '1.0.0' }, // scoped under `bar`
 ]
 
-describe('StringifyOptions.overrides projection (ADR-0025 §4)', () => {
+describe('StringifyOptions.overrides projection ()', () => {
   it('npm-3 does NOT synthesize packages[""].overrides — surfaces INTEROP_OVERRIDE_NOT_PROJECTED', () => {
     const g = parse('npm-3', fixture('simple/npm-3.lock'))
     const diags: Diagnostic[] = []
@@ -179,7 +179,7 @@ const V5_MIN =
   `    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}\n` +
   `    dev: false\n`
 
-describe('pnpm-v5 overrides carrier (ADR-0025 §4; pnpm 6–7 frozen-compare)', () => {
+describe('pnpm-v5 overrides carrier (; pnpm 6–7 frozen-compare)', () => {
   it('projects caller overrides into the top-level overrides: block', () => {
     const g = parse('pnpm-v5', V5_MIN)
     const out = stringify('pnpm-v5', g, { overrides: OVERRIDES })

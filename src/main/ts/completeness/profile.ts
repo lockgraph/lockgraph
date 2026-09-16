@@ -475,7 +475,7 @@ function assessPackageMetadata(
     const payload = graph.tarballOf(representative.id)
     const resolutionType = payload?.resolution?.type
     if (representative.source !== undefined
-      || (resolutionType !== undefined && resolutionType !== 'tarball')) {
+      || (resolutionType !== undefined && resolutionType !== 'tarball' && resolutionType !== 'registry')) {
       diagnostics.push(packageMetadataDiagnostic(
         'COMPLETENESS_PACKAGE_METADATA_SOURCE_UNSUPPORTED',
         key,
