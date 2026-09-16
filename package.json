@@ -39,7 +39,8 @@
     "_prepublishOnly": "npm run build:dist && npm run test:readme",
     "test:pairs": "node src/test/e2e/pairs.mjs",
     "test:spec": "node src/test/e2e/spec-selfcontained.mjs",
-    "test:installed-tree": "node --test src/test/e2e/installed-tree-oracle.test.mjs && node src/test/e2e/installed-tree-oracle.mjs --profile pr"
+    "test:installed-tree": "node --test src/test/e2e/installed-tree-oracle.test.mjs && node src/test/e2e/installed-tree-oracle.mjs --profile pr",
+    "test:digest": "node scripts/corpus-digest.mjs"
   },
   "dependencies": {
     "node-fetch-native": "^1.6.7",
