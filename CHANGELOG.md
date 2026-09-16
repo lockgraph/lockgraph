@@ -1,3 +1,8 @@
+## [0.8.0](https://github.com/lockgraph/lockgraph/compare/v0.7.1...v0.8.0) (2026-09-16)
+
+### Features
+* feat: handle undefined registry (#34) ([d7247a8](https://github.com/lockgraph/lockgraph/commit/d7247a89d56a210eb5997627d01ae10a29555823))
+
 ## [0.7.1](https://github.com/lockgraph/lockgraph/compare/v0.7.0...v0.7.1) (2026-09-03)
 
 ### Fixes & improvements
