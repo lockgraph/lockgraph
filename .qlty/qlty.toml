@@ -8,7 +8,7 @@ exclude_patterns = [
 # domain-bounded plumbing: skip structural grading, but keep other scans.
 [[ignore]]
 plugins = ["qlty"]
-file_patterns = ["**/_*.ts", "scripts/**"]
+file_patterns = ["**/_*.ts", "scripts/**", "src/test/**"]
 
 # Thresholds tuned to this codebase's idioms (fail-closed returns, format-dispatch
 # branching); file_complexity, duplication, boolean_logic, nesting keep defaults.
