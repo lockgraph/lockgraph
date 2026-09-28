@@ -57,12 +57,32 @@ export function enrichFieldFilled(nodeId: NodeId, field: string, rung: string): 
   }
 }
 
-export function enrichChecksumDeferred(nodeId: NodeId): EnrichDiagnostic {
+/** Why a berry checksum gap was left open — carried as `data.reason` so a caller
+ *  can name the cause without parsing the message. */
+export type ChecksumDeferralReason =
+  | 'patched'
+  | 'cache-key-unknown'
+  | 'recipe-unreproducible'
+  | 'tarball-unavailable'
+  | 'artifact-limit'
+  | 'tarball-unsupported'
+
+const CHECKSUM_DEFERRAL_CAUSE: Readonly<Record<ChecksumDeferralReason, string>> = {
+  'patched': 'a patched package hashes the patched archive, which only yarn builds',
+  'cache-key-unknown': 'no cache key from the options, a sibling checksum or the lock header',
+  'recipe-unreproducible': 'no calibrated recipe reproduces this cache key and no oracle supplied the digest',
+  'tarball-unavailable': 'the tarball could not be loaded',
+  'artifact-limit': 'the tarball exceeds an artifact resource limit',
+  'tarball-unsupported': 'the archive could not be repacked',
+}
+
+export function enrichChecksumDeferred(nodeId: NodeId, reason: ChecksumDeferralReason): EnrichDiagnostic {
   return {
     code:     'ENRICH_CHECKSUM_DEFERRED',
     severity: 'warning',
     subject:  nodeId,
-    message:  `enrich: berry checksum for ${nodeId} not recomputable (DEFLATE cacheKey or tarball bytes unavailable) — line omitted; plain \`yarn install\` recovers it, \`yarn install --immutable\` will reject this node`,
+    message:  `enrich: berry checksum for ${nodeId} not recomputable (${CHECKSUM_DEFERRAL_CAUSE[reason]}) — line omitted; plain \`yarn install\` recovers it, \`yarn install --immutable\` will reject this node`,
+    data:     { reason },
   }
 }
 

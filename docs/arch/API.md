@@ -549,11 +549,18 @@ depend on the distinction.
 
 Two boundaries worth knowing before you call it:
 
-- **A bare-era Berry lock needs an explicit cache key.** Wire versions v4–v7 carry no
-  per-entry prefix to infer from, so without `options.cacheKey` every gap defers
-  rather than filling. Prefix-era locks (v8 and later) can infer it — see
+- **The cache key comes from the lock unless you say otherwise.** Prefix-era locks
+  (v8 and later) carry it on every checksum as `<cacheKey>/`. Bare-era locks (v4–v7)
+  carry none there, so the key is read from the lock's own `__metadata.cacheKey`
+  header instead — which needs a graph parsed from a Berry lock. A graph built any
+  other way, with no `options.cacheKey`, defers every gap rather than guess. Whatever
+  the source, when the lock already carries a checksum whose tarball can be fetched,
+  the recipe must reproduce it first — a key that does not fills nothing. See
   [Berry cache keys](#berry-cache-keys) and
   [within one family](./CONVERT.md#within-one-family).
+- **A gap that stays open says why.** Each `ENRICH_CHECKSUM_DEFERRED` carries
+  `data.reason`: `'patched'`, `'cache-key-unknown'`, `'recipe-unreproducible'`,
+  `'tarball-unavailable'`, `'artifact-limit'` or `'tarball-unsupported'`.
 - **`TarballSource.berryChecksum` is an optional fast path.** Yarn Berry stores its
   repacked zip with the digest in the filename, so returning it skips both the fetch
   and the recompute. It is purely additive: return `undefined` and the normal
