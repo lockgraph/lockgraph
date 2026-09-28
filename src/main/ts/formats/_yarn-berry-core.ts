@@ -423,6 +423,13 @@ export function adapterStateSubjects(graph: Graph): readonly string[] {
     .map(key => `__metadata.${key}`)
 }
 
+/** The lock's own `__metadata.cacheKey`, when the graph was parsed from a Berry
+ *  lock that recorded one. Observed provenance, not a default: it names the cache
+ *  generation Yarn used to write that lock's checksums. */
+export function recordedBerryCacheKey(graph: Graph): string | undefined {
+  return asString(sidecarByGraph.get(graph)?.metadata?.cacheKey)
+}
+
 export function rememberSidecar(graph: Graph, sidecar: YarnBerryFamilySidecar): void {
   if (isEmptySidecar(sidecar)) return
   sidecarByGraph.set(graph, sidecar)

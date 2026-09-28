@@ -99,6 +99,15 @@ describe('package metadata completeness', () => {
     expect(malformed.integrity).toBeUndefined()
   })
 
+  it('projects a string `bin` as the one-command map lockfiles record', () => {
+    const scoped: PackumentVersion = { name: '@babel/parser', version: '7.29.9', bin: './bin/babel-parser.js' }
+    const plain: PackumentVersion = { name: 'ms', version: '2.1.3', bin: 'cli.js' }
+
+    expect(payloadOfPackumentVersion(scoped).bin).toEqual({ parser: './bin/babel-parser.js' })
+    expect(payloadOfPackumentVersion(plain).bin).toEqual({ ms: 'cli.js' })
+    expect(payloadOfPackumentVersion(manifest).bin).toEqual({ pkg: 'bin.js' })
+  })
+
   it('normalizes semantically empty metadata before comparison', () => {
     const projected = packageMetadataOfPayload(payloadOfPackumentVersion({
       name: 'pkg',

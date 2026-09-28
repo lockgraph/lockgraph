@@ -264,7 +264,7 @@ output, and receipt failures use `error`.
 | Code | Severity | Meaning / cause | Remedy |
 |---|---:|---|---|
 | `ENRICH_FIELD_FILLED` | info | Enrichment filled one install-required field and records the evidence rung. | No action. |
-| `ENRICH_CHECKSUM_DEFERRED` | warning | Berry checksum cannot be recomputed from available bytes/cache key. | Supply bytes or run mutable Yarn; frozen install will reject until verified. |
+| `ENRICH_CHECKSUM_DEFERRED` | warning | Berry checksum cannot be recomputed. `data.reason` names why: `'patched'`, `'cache-key-unknown'`, `'recipe-unreproducible'`, `'tarball-unavailable'`, `'artifact-limit'` or `'tarball-unsupported'`. | Supply bytes or the cache key, or run mutable Yarn; frozen install will reject until verified. |
 | `ENRICH_NOOP` | info | Enrichment found nothing to fill. | No action. |
 | `ENRICH_OVERRIDE_AUTHORITY_UNKNOWN` | warning | Transitive completion lacks authoritative override policy. | Supply manifests/config evidence. |
 | `ENRICH_OVERRIDE_AUTHORITY_CONFLICT` | warning | Override authorities disagree, so completion was skipped. | Reconcile policy sources. |

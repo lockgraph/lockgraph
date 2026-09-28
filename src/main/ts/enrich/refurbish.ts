@@ -15,10 +15,12 @@ import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry
 import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
 import {
   isBareYarnBerryNpmAliasNode,
+  recordedBerryCacheKey,
   yarnBerryChecksumFreeNodes,
 } from '../formats/_yarn-berry-core.ts'
 import {
   enrichChecksumDeferred,
+  type ChecksumDeferralReason,
   enrichArtifactLimit,
   enrichFieldFilled,
   enrichNoop,
@@ -91,10 +93,11 @@ export interface RefurbishOptions {
    *  Default 16. The graph mutation that applies each result stays sequential and
    *  deterministic (node order), so this only parallelises the fetch/compute. */
   concurrency?:  number
-  /** The berry cacheKey to recompute against (e.g. `'10c0'`, `'8'`). REQUIRED to
-   *  fill a BARE-era lock (v4–v7) — its entries carry no per-node prefix to infer
-   *  it from, so absent it every gap DEFERS. Optional for a prefix-era lock (read
-   *  off a sibling's `<cacheKey>/`). */
+  /** The berry cacheKey to recompute against (e.g. `'10c0'`, `'8'`). Overrides
+   *  inference. Needed only when the graph carries no evidence of its own: a
+   *  prefix-era lock yields it from a sibling's `<cacheKey>/`, and a graph parsed
+   *  from any Berry lock yields its `__metadata.cacheKey`. Absent all three, every
+   *  gap DEFERS. */
   cacheKey?:     string
   /** Cache-key inference policy. `format-default` preserves the direct primitive's
    *  historical v8+ `10c0` fallback. Target-aware enrichment uses
@@ -127,14 +130,20 @@ const isPrefixEraFormat = (format: string): boolean => {
 
 /** The cacheKey to recompute against, or `undefined` when it can't be inferred
  *  in-graph (so the caller DEFERS rather than guess). Precedence:
- *    1. a unique per-node `<cacheKey>/` prefix on existing siblings — the only
- *       in-graph signal, present in a prefix-era (v8+) lock;
- *    2. for a prefix-era FORMAT with no such sibling (e.g. a fresh cross-family
- *       convert) the Yarn-4 STORE default `10c0` — this assumes the modern STORE
- *       convention; an orchestrator targeting a `mixed` project should pass
+ *    1. a unique per-node `<cacheKey>/` prefix on existing siblings — present in a
+ *       prefix-era (v8+) lock;
+ *    2. the lock's own `__metadata.cacheKey`, when the graph was parsed from a Berry
+ *       lock — the only signal a bare-era (v4–v7) lock carries, since its checksums
+ *       have no prefix. Observed, so it serves both inference policies;
+ *    3. for a prefix-era FORMAT with neither (e.g. a fresh cross-family convert) the
+ *       Yarn-4 STORE default `10c0` under `format-default` — this assumes the modern
+ *       STORE convention; an orchestrator targeting a `mixed` project should pass
  *       `opts.cacheKey` so a STORE digest is not filled for a mixed lock;
- *    3. otherwise (bare-era v4–v7, no sibling prefix) `undefined` — the caller
- *       must pass `opts.cacheKey` (the lock's `__metadata.cacheKey`) to fill. */
+ *    4. otherwise `undefined`.
+ *  Whatever the source, the recipe is calibrated against an existing sibling checksum
+ *  when one is fetchable (`selectChecksumStrategy`): a key that does not reproduce the
+ *  lock's own digests defers every gap. With no fetchable anchor the key is used
+ *  unchecked, as an explicit `opts.cacheKey` is. */
 export function berryCacheKeyFor(
   graph: Graph,
   format: string,
@@ -148,6 +157,8 @@ export function berryCacheKeyFor(
   if (observed.size === 1) return observed.values().next().value
   if (observed.size > 1 && inference === 'observed-only') return undefined
   if (observed.size > 1) return observed.values().next().value
+  const recorded = recordedBerryCacheKey(graph)
+  if (recorded !== undefined) return recorded
   return inference === 'format-default' && isPrefixEraFormat(format) ? '10c0' : undefined
 }
 
@@ -353,11 +364,11 @@ async function mapPool<T, R>(
 // === REFURBISHMENT PIPELINE =================================================
 
 type RefurbishCandidate =
-  | { kind: 'defer'; id: NodeId }
+  | { kind: 'defer'; id: NodeId; reason: ChecksumDeferralReason }
   | { kind: 'fetch'; node: Node; payload: TarballPayload; cacheKey: string }
 
 type ResolvedRefurbishment =
-  | { kind: 'defer'; id: NodeId; diagnostic?: Diagnostic }
+  | { kind: 'defer'; id: NodeId; reason: ChecksumDeferralReason; diagnostic?: Diagnostic }
   | { kind: 'fill'; node: Node; merged: TarballPayload }
 
 interface RefurbishResolutionContext {
@@ -439,8 +450,14 @@ function classifyRefurbishCandidates(
     // Fetch iff there is SOME way to a CORRECT digest — byte-reproduce it OR ask the
     // oracle for yarn's own. A patch, an indeterminable cacheKey, or neither → defer
     // (never a wrong value).
-    if (node.patch !== undefined || cacheKey === undefined || (!reproducible && !canSupply)) {
-      candidates.push({ kind: 'defer', id: node.id }); continue
+    if (node.patch !== undefined) {
+      candidates.push({ kind: 'defer', id: node.id, reason: 'patched' }); continue
+    }
+    if (cacheKey === undefined) {
+      candidates.push({ kind: 'defer', id: node.id, reason: 'cache-key-unknown' }); continue
+    }
+    if (!reproducible && !canSupply) {
+      candidates.push({ kind: 'defer', id: node.id, reason: 'recipe-unreproducible' }); continue
     }
     candidates.push({ kind: 'fetch', node, payload, cacheKey })
   }
@@ -468,7 +485,7 @@ async function resolveRefurbishCandidate(
     // (yarn recomputes on install). The candidate existed because the oracle MIGHT
     // have supplied — it didn't, so fall back to reproduce-or-defer.
     if (context.recompute === undefined) {
-      return { kind: 'defer', id: candidate.node.id }
+      return { kind: 'defer', id: candidate.node.id, reason: 'recipe-unreproducible' }
     }
     let tgz: Uint8Array | undefined
     try {
@@ -482,12 +499,13 @@ async function resolveRefurbishCandidate(
         return {
           kind: 'defer',
           id: candidate.node.id,
+          reason: 'tarball-unavailable',
           diagnostic: error.diagnostic,
         }
       }
-      return { kind: 'defer', id: candidate.node.id }
+      return { kind: 'defer', id: candidate.node.id, reason: 'tarball-unavailable' }
     }
-    if (tgz === undefined) return { kind: 'defer', id: candidate.node.id }
+    if (tgz === undefined) return { kind: 'defer', id: candidate.node.id, reason: 'tarball-unavailable' }
     let releaseDirect: (() => void) | undefined
     try {
       if (!hasRequestLoader(context.npmTarballs)) {
@@ -509,6 +527,7 @@ async function resolveRefurbishCandidate(
         return {
           kind: 'defer',
           id: candidate.node.id,
+          reason: 'artifact-limit',
           diagnostic: enrichArtifactLimit(
             toTarballKey(candidate.node),
             error.representation,
@@ -518,13 +537,13 @@ async function resolveRefurbishCandidate(
         }
       }
       // e.g. parseTar rejected an unsupported entry (symlink) → defer
-      return { kind: 'defer', id: candidate.node.id }
+      return { kind: 'defer', id: candidate.node.id, reason: 'tarball-unsupported' }
     } finally {
       releaseDirect?.()
       releaseTarball(context.npmTarballs, tgz)
     }
     // backend couldn't pack — defer
-    if (hex === undefined) return { kind: 'defer', id: candidate.node.id }
+    if (hex === undefined) return { kind: 'defer', id: candidate.node.id, reason: 'tarball-unsupported' }
   }
 
   // Yarn emits exactly one checksum per entry. A verified source-domain
@@ -572,7 +591,7 @@ function commitRefurbishments(
   for (const result of resolved) {
     if (result.kind === 'defer') {
       if (result.diagnostic !== undefined) record(result.diagnostic)
-      record(enrichChecksumDeferred(result.id))
+      record(enrichChecksumDeferred(result.id, result.reason))
       continue
     }
     const diagnostic = enrichFieldFilled(result.node.id, 'berryChecksum', 'recompute')

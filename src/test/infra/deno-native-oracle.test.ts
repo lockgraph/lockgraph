@@ -18,7 +18,7 @@ import type { DenoFormatId } from '../../main/ts/api/format-contract.ts'
 
 interface DenoOracle {
   readonly lockVersion: '3' | '4' | '5'
-  readonly denoVersion: '1.44.4' | '2.2.8' | '2.9.4'
+  readonly denoVersion: '1.44.4' | '2.2.8' | '2.9.6'
   readonly fixture: string
   readonly importRange: string
   readonly tamperedExit: number
@@ -44,7 +44,7 @@ const oracles: readonly DenoOracle[] = [
   },
   {
     lockVersion: '5',
-    denoVersion: '2.9.4',
+    denoVersion: '2.9.6',
     fixture: 'deno.lock',
     importRange: '^19.1.0',
     tamperedExit: 1,

@@ -76,17 +76,17 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     nativeLockfileVersion: 3, nodeRange: '^14.17.0 || ^16.13.0 || >=18.0.0',
   },
   {
-    family: 'npm', format: 'npm-3', version: '10.9.8', alias: 'pm-npm-10', binName: 'npm',
+    family: 'npm', format: 'npm-3', version: '10.9.9', alias: 'pm-npm-10', binName: 'npm',
     nativeLockfileVersion: 3, nodeRange: '^18.17.0 || >=20.5.0',
   },
   {
-    family: 'npm', format: 'npm-3', version: '11.18.0', alias: 'pm-npm-11', binName: 'npm',
+    family: 'npm', format: 'npm-3', version: '11.20.0', alias: 'pm-npm-11', binName: 'npm',
     nativeLockfileVersion: 3, nodeRange: '^20.17.0 || >=22.9.0',
   },
   {
     family: 'npm',
     format: 'npm-3',
-    version: '12.0.1',
+    version: '12.1.0',
     alias: 'pm-npm-12',
     binName: 'npm',
     // npm 12 defaults to v3; patch/extension triggers use the dedicated npm-4
@@ -123,7 +123,7 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     nativeYarnLockfileVersion: 9, nodeRange: '>=18.12.0',
   },
   {
-    family: 'yarn-berry', format: 'yarn-berry-v10', version: '4.17.1', alias: 'pm-yarn-berry-v10', binName: 'yarn',
+    family: 'yarn-berry', format: 'yarn-berry-v10', version: '4.18.1', alias: 'pm-yarn-berry-v10', binName: 'yarn',
     nativeYarnLockfileVersion: 10, nodeRange: '>=18.12.0',
   },
   {
@@ -153,7 +153,7 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     nativePnpmLockfileVersion: '9.0', nodeRange: '>=18.12',
   },
   {
-    family: 'pnpm', format: 'pnpm-v9', version: '12.3.4', alias: 'pm-pnpm-12', binName: 'pnpm',
+    family: 'pnpm', format: 'pnpm-v9', version: '12.6.0', alias: 'pm-pnpm-12', binName: 'pnpm',
     runtime: 'native', nativePnpmLockfileVersion: '9.0', nodeRange: '>=18',
   },
   {
@@ -164,7 +164,7 @@ export const FROZEN_ORACLE_MATRIX: readonly FrozenOracleAdapter[] = Object.freez
     // bun 1.4 writes `lockfileVersion: 2` for a NEW lock while still accepting a
     // 1 and leaving it alone, so both generations are live and both are pinned —
     // 1.3.14 is kept as the v1 WRITER (and as the binary that refuses a v2).
-    family: 'bun', format: 'bun-text-v2', version: '1.4.0', alias: 'pm-bun-v2', binName: 'bun',
+    family: 'bun', format: 'bun-text-v2', version: '1.4.2', alias: 'pm-bun-v2', binName: 'bun',
     runtime: 'native', nativeBunLockfileVersion: 2,
   },
 ])

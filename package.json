@@ -49,29 +49,29 @@
   },
   "devDependencies": {
     "@antongolub/artel": "^0.4.0",
-    "@size-limit/file": "^13.0.3",
+    "@size-limit/file": "^14.1.0",
     "@types/node": "^26.4.1",
     "@types/semver": "^7.8.0",
-    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.2",
     "@yarnpkg/libzip": "^3.2.2",
     "bun": "1.3.14",
-    "pm-bun-v2": "npm:bun@1.4.0",
-    "pm-npm-10": "npm:npm@10.9.8",
-    "pm-npm-11": "npm:npm@11.18.0",
-    "pm-npm-12": "npm:npm@12.0.1",
+    "pm-bun-v2": "npm:bun@1.4.2",
+    "pm-npm-10": "npm:npm@10.9.9",
+    "pm-npm-11": "npm:npm@11.20.0",
+    "pm-npm-12": "npm:npm@12.1.0",
     "pm-npm-6": "npm:npm@6.14.18",
     "pm-npm-7": "npm:npm@7.24.2",
     "pm-npm-8": "npm:npm@8.19.4",
     "pm-npm-9": "npm:npm@9.9.4",
     "pm-pnpm-10": "npm:pnpm@10.34.5",
-    "pm-pnpm-12": "npm:pnpm@12.3.4",
+    "pm-pnpm-12": "npm:pnpm@12.6.0",
     "pm-pnpm-6": "npm:pnpm@6.35.1",
     "pm-pnpm-7": "npm:pnpm@7.33.7",
     "pm-pnpm-8": "npm:pnpm@8.15.9",
     "pm-pnpm-9": "npm:pnpm@9.15.9",
     "pm-yarn-1": "npm:yarn@1.22.22",
     "pm-yarn-2": "npm:yarn@2.4.3",
-    "pm-yarn-berry-v10": "npm:@yarnpkg/cli-dist@4.17.1",
+    "pm-yarn-berry-v10": "npm:@yarnpkg/cli-dist@4.18.1",
     "pm-yarn-berry-v5": "npm:@yarnpkg/cli-dist@3.1.1",
     "pm-yarn-berry-v6": "npm:@yarnpkg/cli-dist@3.8.7",
     "pm-yarn-berry-v7": "npm:@yarnpkg/cli-dist@4.0.0-rc.46",
@@ -79,9 +79,9 @@
     "pm-yarn-berry-v9": "npm:@yarnpkg/cli-dist@4.14.1",
     "rollup": "^4.63.1",
     "rollup-plugin-esbuild": "^6.2.1",
-    "size-limit": "^13.0.3",
+    "size-limit": "^14.1.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.2"
   },
   "peerDependencies": {
     "@yarnpkg/libzip": ">=3.0.0"
@@ -110,5 +110,5 @@
     "url": "https://github.com/lockgraph/lockgraph/issues"
   },
   "homepage": "https://github.com/lockgraph/lockgraph#readme",
-  "packageManager": "npm@10.9.8"
+  "packageManager": "npm@10.9.9"
 }

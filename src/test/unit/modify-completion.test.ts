@@ -1,7 +1,9 @@
 // tree completion BFS acceptance gate.
 
 import { describe, expect, it } from 'vitest'
+import { parse, stringify } from '../../main/ts/index.ts'
 import { completeTransitives } from '../../main/ts/complete/tree-complete.ts'
+import { emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
 import type { Packument, RegistryAdapter } from '../../main/ts/registry/types.ts'
 import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'
@@ -195,6 +197,51 @@ describe('complete/completeTransitives', () => {
     // Edge wired: lodash → ms
     const lodashOut = result.graph.out('lodash@4.17.21')
     expect(lodashOut.some(e => e.dst === 'ms@2.1.3' && e.kind === 'dep')).toBe(true)
+  })
+
+  it('adds a string-`bin` package in the map form a strict Berry emit reads back', async () => {
+    // A packument's string `bin` names one command after the UNSCOPED package name.
+    // Yarn writes it as a map and the Berry parser reads a map, so a graph holding the
+    // string fails the strict emit's read-back check (real: qiwi/mware, @babel/parser).
+    const lock = [
+      '__metadata:', '  version: 6', '  cacheKey: 8', '',
+      '"app@workspace:.":', '  version: 0.0.0-use.local', '  resolution: "app@workspace:."',
+      '  dependencies:', '    host: "npm:1.0.0"', '  languageName: unknown', '  linkType: soft', '',
+      '"host@npm:1.0.0":', '  version: 1.0.0', '  resolution: "host@npm:1.0.0"',
+      `  checksum: ${'a'.repeat(128)}`, '  languageName: node', '  linkType: hard', '',
+    ].join('\n')
+    const packuments: Record<string, Packument> = {
+      'host': {
+        name: 'host', distTags: { latest: '1.0.0' },
+        versions: { '1.0.0': { name: 'host', version: '1.0.0', dependencies: { '@scope/tool': '^1.0.0' } } },
+      },
+      '@scope/tool': {
+        name: '@scope/tool', distTags: { latest: '1.0.0' },
+        versions: { '1.0.0': {
+          name: '@scope/tool', version: '1.0.0', bin: './bin/tool.js',
+          tarball: 'https://registry.npmjs.org/@scope/tool/-/tool-1.0.0.tgz',
+        } },
+      },
+    }
+    const registry: RegistryAdapter = {
+      async packument(name) { return packuments[name] },
+      async resolve(name) { return packuments[name]?.versions['1.0.0'] },
+    }
+
+    const completed = await completeTransitives(parse('yarn-berry-v6', lock), registry)
+    const tool = { name: '@scope/tool', version: '1.0.0' }
+    expect(completed.graph.tarball(tool)?.bin).toEqual({ tool: './bin/tool.js' })
+
+    // The checksum a refurbish would add; without one the strict emit stops earlier.
+    const checksummed = completed.graph.mutate(m => {
+      m.setTarball(tool, {
+        ...completed.graph.tarball(tool),
+        integrity: mergeIntegrity(emptyIntegrity(), {
+          hashes: [{ algorithm: 'sha512', digest: 'b'.repeat(128), origin: 'berry-zip' }],
+        }),
+      })
+    }).graph
+    expect(stringify('yarn-berry-v6', checksummed)).toContain('  bin:\n    tool: ./bin/tool.js\n')
   })
 
   // COMPLETION_* diagnostics land on Graph.diagnostics().

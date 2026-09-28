@@ -478,9 +478,9 @@ fetch or a repack.
 The table above is the DIGEST algorithm — which cacheKeys reproduce byte-exact.
 Whether enrich actually WRITES a recomputed value is separately gated by the
 write-policy of [§3.4](#34-omit-never-fabricate): a bare-era lock (v4–v7, whose
-checksums carry no `<cacheKey>/` prefix to infer from) is filled only when its
-`__metadata.cacheKey` is supplied as the recompute target; absent a determinable
-cacheKey the recompute defers rather than guess. A recomputed checksum is rendered
+checksums carry no `<cacheKey>/` prefix to infer from) is filled against its own
+`__metadata.cacheKey`, read from the parsed lock or supplied by the caller; absent a
+determinable cacheKey the recompute defers rather than guess. A recomputed checksum is rendered
 in the format's native shape (bare for v4–v7, `<cacheKey>/<hex>` for v8+ — the
 `checksumPrefix` rule of [§3.3](#33-the-berry-zip--tarball-sri-boundary)), never
 forcing a foreign prefix into a bare lock.
@@ -978,9 +978,14 @@ recompute fills it, a relabelled tarball SRI never does.
 STORE (any era) and `mixed` at cacheKey 7/8/9 ([§1.7.1](#171-checksum-recompute-reproducibility)).
 What a **bare-era** lock (v4–v7 = yarn 2.x/3.x, `checksumPrefix: false`) lacks is
 not reproducibility but an in-lock cacheKey: its checksums carry no `<cacheKey>/`
-prefix to read the generation from. So it is filled only when `__metadata.cacheKey`
-is supplied (`opts.cacheKey`) — the value then renders bare (`checksumPrefix: false`,
-§3.3), never forcing a foreign `10c0/` prefix in. Absent a determinable cacheKey the
+prefix to read the generation from. Its `__metadata.cacheKey` header does name it,
+and the parsed graph keeps that header, so the recompute reads it from there when the
+caller supplies none (`opts.cacheKey` still wins). The value then renders bare
+(`checksumPrefix: false`, §3.3), never forcing a foreign `10c0/` prefix in. The header
+is evidence, not proof: when the lock carries a checksum whose tarball can be fetched,
+the recipe the header selects must reproduce it before any gap is filled, so a header
+the lock's own digests contradict fills nothing. With no such anchor the header is
+used unchecked — exactly as a caller-supplied `opts.cacheKey` is. Absent a determinable cacheKey the
 enrich gate (`berryCacheKeyReproducible`, keyed on the PER-LOCK cacheKey — not the
 format version) defers rather than guess a `10c0/` STORE digest a yarn-3 project
 would reject and rewrite (observed on a real yarn-3 project). A blank yarn

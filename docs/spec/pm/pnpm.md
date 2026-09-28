@@ -690,6 +690,26 @@ rules are recorded in both versioned format specs and
   directory elsewhere. Keying the slot by directory produces
   `specifiers in the lockfile don't match specifiers in package.json`.
 
+- **A `lockfileVersion: '6.0'` lock is refused under `--frozen-lockfile` from pnpm 10
+  on, and pnpm 12 refuses it with a different code.** pnpm 9 installs from it and
+  leaves it byte-identical; 10 and 11 exit 1 with `ERR_PNPM_LOCKFILE_BREAKING_CHANGE`;
+  12 exits 1 with `ERR_PNPM_BROKEN_LOCKFILE` ("The lockfileVersion of 6.0 is
+  incompatible with the supported formats"). None of them writes the file in that
+  mode. Without `--frozen-lockfile` all four migrate it to `'9.0'` and exit 0. A tool
+  that classifies pnpm's refusal by error code must accept both codes.
+
+  > **Measured** · pnpm 9.15.9, 10.34.5, 11.28.1, 12.6.0 · 2026-09-28 · a v6 lock
+  > written by pnpm 8.15.9 for a two-dependency project, `pnpm install
+  > --frozen-lockfile`, lock hashed before and after.
+
+- **`--lockfile-only` overrides `--frozen-lockfile` on pnpm 9.** `pnpm install
+  --frozen-lockfile --lockfile-only` rewrites the same v6 lock to `'9.0'` and exits
+  0 — the frozen flag alone leaves it untouched. On 10, 11 and 12 the combination is
+  refused exactly like the plain frozen run. An oracle must therefore never pass
+  `--lockfile-only` on its frozen leg; lockgraph's frozen harness does not.
+
+  > **Measured** · pnpm 9.15.9, 10.34.5, 11.28.1, 12.6.0 · 2026-09-28 · same lock.
+
 ## Quirks
 
 - **Two peer-suffix encodings** for one identity: filesystem `_`/`+` (§2.4) vs

@@ -8,7 +8,7 @@ themselves are in [REGISTRIES.md](./REGISTRIES.md).
 ## Versions, dates and the runtime they need
 
 Last release of each major line, its date, and the Node range the package declares.
-Read 2026-08-15 from the npm registry; Deno from its GitHub releases.
+Read 2026-09-28 from the npm registry; Deno from its GitHub releases.
 
 | Manager | Major | Last release | Date | Node range |
 | --- | --- | --- | --- | --- |
@@ -17,26 +17,30 @@ Read 2026-08-15 from the npm registry; Deno from its GitHub releases.
 | npm | 8 | 8.19.4 | 2023-02-14 | `^12.13.0 \|\| ^14.15.0 \|\| >=16.0.0` |
 | npm | 9 | 9.9.4 | 2024-12-09 | `^14.17.0 \|\| ^16.13.0 \|\| >=18.0.0` |
 | npm | 10 | 10.9.9 | 2026-07-29 | `^18.17.0 \|\| >=20.5.0` |
-| npm | 11 | 11.19.1 | 2026-07-29 | `^20.17.0 \|\| >=22.9.0` |
-| npm | 12 | 12.0.2 | 2026-07-29 | `^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0` |
+| npm | 11 | 11.20.0 | 2026-09-22 | `^20.17.0 \|\| >=22.9.0` |
+| npm | 12 | 12.1.0 | 2026-09-22 | `^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0` |
 | Yarn Classic | 1 | 1.22.22 | 2024-03-09 | `>=4.0.0` |
 | Yarn Berry | 2 | 2.4.3 | 2021-09-06 | `>=10.19.0` |
 | Yarn Berry | 3 | 3.8.7 | 2024-12-04 | `>=12 <14 \|\| 14.2 - 14.9 \|\| >14.10.0` |
-| Yarn Berry | 4 | 4.18.0 | 2026-07-29 | `>=18.12.0` |
+| Yarn Berry | 4 | 4.18.1 | 2026-09-24 | `>=18.12.0` |
 | pnpm | 6 | 6.35.1 | 2022-11-11 | `>=12.17` |
 | pnpm | 7 | 7.33.7 | 2024-02-15 | `>=14.6` |
 | pnpm | 8 | 8.15.9 | 2024-07-17 | `>=16.14` |
 | pnpm | 9 | 9.15.9 | 2025-03-10 | `>=18.12` |
 | pnpm | 10 | 10.34.5 | 2026-07-10 | `>=18.12` |
-| pnpm | 11 | 11.25.0 | 2026-08-09 | `>=22.13` |
-| Bun | 1 | 1.4.0 | 2026-09-01 | — |
-| Deno | 2 | 2.9.5 | 2026-08-06 | — |
+| pnpm | 11 | 11.27.1 | 2026-09-20 | `>=22.13` |
+| pnpm | 12 | 12.6.0 | 2026-09-22 | `>=18.*` |
+| Bun | 1 | 1.4.2 | 2026-09-05 | — |
+| Deno | 2 | 2.9.6 | 2026-08-27 | — |
 
 Every Node-hosted manager tightens its range with each major: npm 12 will not start
 on Node 20. Bun and Deno declare none, so the manager can never be too old for the
-runtime — it *is* the runtime.
+runtime — it *is* the runtime. pnpm 12 has joined them: its package ships a native
+executable, so the `>=18.*` it still declares — looser than pnpm 11's — does not describe
+a runtime it needs.
 
-npm 10, 11 and 12 were published the same day. Each major is pinned to a slice of
+npm 11 and 12 were published the same day, and all three lines last shipped together on
+2026-07-29. Each major is pinned to a slice of
 Node's supported lines, so npm carries three parallel lines because Node does.
 
 ## What each version reads and writes
@@ -53,6 +57,11 @@ Node's supported lines, so npm carries three parallel lines because Node does.
   3.2.0 jumped to v6.
 - **Yarn 4** — v8 from 4.0, v9 from 4.14.0, v10 from 4.17.1. v7 exists only in the
   4.0 RC window; no stable release writes it.
+- **pnpm 12** — not yet a column in these tables; what is measured so far is here. It
+  writes `'9.0'`, byte-identical to pnpm 11.28.1 for the same project (12.6.0 and
+  12.8.0), and reads a v6 lock only to migrate it. Under
+  `--frozen-lockfile` pnpm 9 installs from a v6 lock; 10 and 11 refuse it with
+  `ERR_PNPM_LOCKFILE_BREAKING_CHANGE`, and 12 with `ERR_PNPM_BROKEN_LOCKFILE`.
 - **Deno 2** — 2.2.8 writes v4, 2.9.4 writes v5. No released Deno writes v2: every
   pinned binary rewrites a v2 lock to its own version on install.
 

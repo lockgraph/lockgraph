@@ -50,7 +50,7 @@ export const fixtures = [
     ],
     tool: {
       alias: 'pm-npm-11',
-      version: '11.18.0',
+      version: '11.20.0',
       runtime: 'node22',
       bin: 'bin/npm-cli.js',
     },

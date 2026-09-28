@@ -512,9 +512,9 @@ re-documented here**. The npm-CLI↔version interaction only:
 | **3** | npm **9+** (default) | `packages` only — **drops** the legacy mirror | npm **7+** (npm 5/6 **cannot** read v3) |
 | **4** | npm **12+** (feature-triggered) | v3 packages-only layout plus native patch and manifest-extension evidence | npm **12+** |
 
-> Verified current through **npm 12** (`12.0.1`, 2026-07): ordinary projects
-> follow the `npm 9+` row (`lockfileVersion: 3`; npm 11 emits byte-identical to
-> npm 12). Native `npm patch`, `packageExtensions`, or `.npm-extension` state
+> Verified current through **npm 12** (`12.1.0`, 2026-09): ordinary projects
+> follow the `npm 9+` row (`lockfileVersion: 3`; npm 10.9.9 and 11.20.0 emit
+> byte-identical to npm 12.1.0). Native `npm patch`, `packageExtensions`, or `.npm-extension` state
 > activates v4.
 > The one field change within the v3 era is **`license`, added per-entry at npm 10**
 > (npm 9 omits it). npm 12's breaking changes are install-time (Axis 5), not
@@ -538,6 +538,15 @@ Key interactions worth stating once:
 - npm's lock **never** records peer-virtualised identities, `patch:` protocols,
   or `workspace:` ranges — those are yarn/pnpm refinements npm has not adopted
   (the basis of the npm-family completeness contract).
+- A manifest's string `bin` is recorded as a one-command map named after the
+  **unscoped** package name, with the leading `./` dropped: `@babel/parser`'s
+  `"bin": "./bin/babel-parser.js"` becomes `"bin": { "parser": "bin/babel-parser.js" }`.
+  `npm ci` does not hold the lock to that spelling: a lock carrying the string, the
+  map with `./`, or npm's own map installs identically, leaves the lock untouched and
+  links the same `.bin/parser`.
+
+  > **Measured** · npm 11.20.0 · 2026-09-28 · `@babel/parser@7.29.9`,
+  > `npm install --package-lock-only` then `npm ci` on each variant.
 
 ### Integrity verification
 

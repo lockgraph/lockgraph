@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { LockfileError, parse, stringify } from '../../main/ts/index.ts'
 import {
+  berryCacheKeyFor,
   refurbish,
   type RefurbishSources,
   type TarballSource,
@@ -23,6 +24,38 @@ const berryV8Lock = (): string => readFileSync(
   resolve(here, '../resources/fixtures/lockfiles/simple/yarn-berry-v8.lock'),
   'utf8',
 )
+
+// A bare-era v6 lock (yarn 3.x): checksums carry no `<cacheKey>/` prefix, so the
+// header is the only record of the cache generation. `anchor` optionally carries a
+// checksum the calibration can vet the recipe against; `ms` is always a gap.
+const bareV6Lock = (header: string | undefined, anchorChecksum?: string): string => [
+  '__metadata:',
+  '  version: 6',
+  ...(header === undefined ? [] : [`  cacheKey: ${header}`]),
+  '',
+  '"anchor@npm:1.0.0":',
+  '  version: 1.0.0',
+  '  resolution: "anchor@npm:1.0.0"',
+  ...(anchorChecksum === undefined ? [] : [`  checksum: ${anchorChecksum}`]),
+  '  languageName: node',
+  '  linkType: hard',
+  '',
+  '"fixture@workspace:.":',
+  '  version: 0.0.0-use.local',
+  '  resolution: "fixture@workspace:."',
+  '  dependencies:',
+  '    anchor: "npm:1.0.0"',
+  '    ms: "npm:2.1.3"',
+  '  languageName: unknown',
+  '  linkType: soft',
+  '',
+  '"ms@npm:2.1.3":',
+  '  version: 2.1.3',
+  '  resolution: "ms@npm:2.1.3"',
+  '  languageName: node',
+  '  linkType: hard',
+  '',
+].join('\n')
 
 const sourceOf = (map: Record<string, Buffer>): TarballSource => ({
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -304,6 +337,7 @@ describe('enrich/refurbish ( + )', () => {
     expect(r.enriched).toEqual([])
     expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
     expect(r.unresolved[0]!.severity).toBe('warning')
+    expect(r.unresolved[0]!.data).toEqual({ reason: 'tarball-unavailable' })
     expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
 
@@ -321,6 +355,7 @@ describe('enrich/refurbish ( + )', () => {
 
     expect(r.enriched).toEqual([])
     expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
+    expect(r.unresolved[0]!.data).toEqual({ reason: 'patched' })
     expect(r.graph.getNode(`fsevents@2.3.3+patch=${sentinel}`)).toBeDefined()
   })
 
@@ -334,6 +369,7 @@ describe('enrich/refurbish ( + )', () => {
 
     expect(r.enriched).toEqual([])
     expect(r.unresolved.map(d => d.code)).toEqual(['ENRICH_CHECKSUM_DEFERRED'])
+    expect(r.unresolved[0]!.data).toEqual({ reason: 'cache-key-unknown' })
     expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
   })
 
@@ -352,6 +388,57 @@ describe('enrich/refurbish ( + )', () => {
     )
     // no forced prefix → the v6 (bare-era) emit renders the hex without `8/`.
     expect(r.graph.tarballOf('ms@2.1.3')?.berryChecksumCacheKey).toBeUndefined()
+  })
+
+  it('fills a parsed bare-era lock from its own `__metadata.cacheKey` — no option needed', async () => {
+    // The lock records the generation Yarn wrote it with; a caller should not have to
+    // read the header back out of a graph that already holds it.
+    const graph = parse('yarn-berry-v6', bareV6Lock('8'))
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'anchor@1.0.0': multiDirTgz(),
+      'ms@2.1.3': tgz('ms-2.1.3.tgz'),
+    }))
+
+    expect(r.enriched).toEqual(['anchor@1.0.0', 'ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '8'),
+    )
+    const emitted = stringify('yarn-berry-v6', r.graph)
+    expect(emitted).toContain('  cacheKey: 8\n')
+    expect(emitted).toContain(`  checksum: ${computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '8')}\n`)
+  })
+
+  it('calibrates a header-derived cacheKey against the lock\'s own checksum before filling', async () => {
+    const anchor = computeBerryChecksum(multiDirTgz(), 'anchor', '8')
+    const graph = parse('yarn-berry-v6', bareV6Lock('8', anchor))
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'anchor@1.0.0': multiDirTgz(),
+      'ms@2.1.3': tgz('ms-2.1.3.tgz'),
+    }))
+
+    expect(r.enriched).toEqual(['ms@2.1.3'])
+    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '8'),
+    )
+  })
+
+  it('defers every gap when the header contradicts the lock\'s own checksums', async () => {
+    // A header that does not reproduce the existing digests is not trusted: the
+    // anchor was written in a STORE generation while the header claims mixed `8`.
+    // (8 and 9 hash this archive identically, so they cannot contradict here.)
+    const foreign = computeBerryChecksum(multiDirTgz(), 'anchor', '10c0')
+    expect(foreign).not.toBe(computeBerryChecksum(multiDirTgz(), 'anchor', '8'))
+    const graph = parse('yarn-berry-v6', bareV6Lock('8', foreign))
+    const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
+      'anchor@1.0.0': multiDirTgz(),
+      'ms@2.1.3': tgz('ms-2.1.3.tgz'),
+    }))
+
+    expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
+    expect(r.unresolved.map(d => [d.subject, d.data])).toEqual([
+      ['ms@2.1.3', { reason: 'recipe-unreproducible' }],
+    ])
   })
 
   it('fills a `mixed` cacheKey 9 (yarn 3.6+) via the pure-JS nodejs-hash port — NO libzip', async () => {
@@ -627,5 +714,35 @@ describe('enrich/refurbish ( + )', () => {
 
     expect(r.enriched).toEqual(['selfsigned@5.5.0'])
     expect(emitBerryChecksum(r.graph.tarballOf('selfsigned@5.5.0')!.integrity!)).toBe(YARN_DIGEST)
+  })
+})
+
+describe('berryCacheKeyFor', () => {
+  it('reads a bare-era lock\'s `__metadata.cacheKey` under both inference policies', () => {
+    const graph = parse('yarn-berry-v6', bareV6Lock('8'))
+
+    expect(berryCacheKeyFor(graph, 'yarn-berry-v6', 'observed-only')).toBe('8')
+    expect(berryCacheKeyFor(graph, 'yarn-berry-v6', 'format-default')).toBe('8')
+  })
+
+  it('stays undetermined for a bare-era target when the graph carries no header', () => {
+    const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
+
+    expect(berryCacheKeyFor(graph, 'yarn-berry-v6', 'observed-only')).toBeUndefined()
+    expect(berryCacheKeyFor(graph, 'yarn-berry-v6', 'format-default')).toBeUndefined()
+  })
+
+  it('prefers a per-node `<cacheKey>/` prefix over the header', () => {
+    const graph = parse('yarn-berry-v8', berryV8Lock().replace('  cacheKey: 10c0\n', '  cacheKey: 10c9\n'))
+
+    expect(berryCacheKeyFor(graph, 'yarn-berry-v8', 'observed-only')).toBe('10c0')
+  })
+
+  it('uses the header before the `10c0` default when no checksum carries a prefix', () => {
+    const graph = parse('yarn-berry-v8', berryV8Lock()
+      .replace('  cacheKey: 10c0\n', '  cacheKey: 10c9\n')
+      .replace(/^ {2}checksum: .*\n/gmu, ''))
+
+    expect(berryCacheKeyFor(graph, 'yarn-berry-v8', 'format-default')).toBe('10c9')
   })
 })
