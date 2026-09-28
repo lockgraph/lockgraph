@@ -694,6 +694,15 @@ including any `::__archiveUrl=…` bind ([§1.5](#15--bind-modifiers-and-__archi
 in newer schemas). Emit invariants shared across the berry family:
 [`docs/spec/formats/_common.md` §1](../formats/_common.md#1-yarn-berry-emit-invariants-version-invariant).
 
+A manifest's string `bin` is written as a one-command map named after the
+**unscoped** package name, path kept verbatim: `@babel/parser`'s
+`"bin": "./bin/babel-parser.js"` becomes `bin:` / `parser: ./bin/babel-parser.js`.
+npm writes the same key but drops the `./`, so the two lockfiles spell one fact
+differently.
+
+> **Measured** · Yarn 3.8.7 · 2026-09-28 · `@babel/parser@7.29.9` in a real
+> project lock written by a plain `yarn install`.
+
 ### 6.2 Registry
 
 Both lineages default to **`registry.yarnpkg.com`** (`npmRegistryServer`),

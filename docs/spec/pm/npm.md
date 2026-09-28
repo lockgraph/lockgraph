@@ -538,6 +538,15 @@ Key interactions worth stating once:
 - npm's lock **never** records peer-virtualised identities, `patch:` protocols,
   or `workspace:` ranges — those are yarn/pnpm refinements npm has not adopted
   (the basis of the npm-family completeness contract).
+- A manifest's string `bin` is recorded as a one-command map named after the
+  **unscoped** package name, with the leading `./` dropped: `@babel/parser`'s
+  `"bin": "./bin/babel-parser.js"` becomes `"bin": { "parser": "bin/babel-parser.js" }`.
+  `npm ci` does not hold the lock to that spelling: a lock carrying the string, the
+  map with `./`, or npm's own map installs identically, leaves the lock untouched and
+  links the same `.bin/parser`.
+
+  > **Measured** · npm 11.20.0 · 2026-09-28 · `@babel/parser@7.29.9`,
+  > `npm install --package-lock-only` then `npm ci` on each variant.
 
 ### Integrity verification
 

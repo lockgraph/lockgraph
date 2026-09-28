@@ -121,6 +121,20 @@ function canonicalMetadataValue(
  * and re-broke `yarn install --immutable` (YN0028) after only the completion copy had
  * been fixed. Add the field ONCE, here.
  */
+/**
+ * A string `bin` is npm's shorthand for one command named after the package's
+ * UNSCOPED name (`@babel/parser` → `parser`). Every lockfile that records commands
+ * stores the map — Yarn Berry writes `parser: ./bin/babel-parser.js`, npm
+ * `"parser": "bin/babel-parser.js"` — so the graph holds the map. Kept as a string it
+ * disagrees with what a target's own parser reads back, and a strict emit refuses the
+ * node as a projection loss.
+ */
+function binOfPackumentVersion(pv: PackumentVersion): TarballPayload['bin'] {
+  if (typeof pv.bin !== 'string') return pv.bin
+  const command = pv.name.startsWith('@') ? pv.name.slice(pv.name.indexOf('/') + 1) : pv.name
+  return { [command]: pv.bin }
+}
+
 export function payloadOfPackumentVersion(pv: PackumentVersion): TarballPayload {
   const projected: TarballPayload = {
     integrity:            integrityOfPackumentVersion(pv.integrity),
@@ -130,7 +144,7 @@ export function payloadOfPackumentVersion(pv: PackumentVersion): TarballPayload 
     os:                   pv.os === undefined ? undefined : [...pv.os],
     cpu:                  pv.cpu === undefined ? undefined : [...pv.cpu],
     libc:                 pv.libc === undefined ? undefined : [...pv.libc],
-    bin:                  pv.bin,
+    bin:                  binOfPackumentVersion(pv),
     bundledDependencies:  pv.bundledDependencies === undefined
       ? undefined
       : [...pv.bundledDependencies],
