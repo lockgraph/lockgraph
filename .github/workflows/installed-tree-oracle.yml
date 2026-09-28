@@ -44,11 +44,11 @@ jobs:
 
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.9.4
-      - name: Retain the Deno 2.9.4 runtime selector
+          deno-version: v2.9.6
+      - name: Retain the Deno 2.9.6 runtime selector
         run: |
-          mkdir -p tmp/deno-oracle/2.9.4
-          cp "$(command -v deno)" tmp/deno-oracle/2.9.4/deno
+          mkdir -p tmp/deno-oracle/2.9.6
+          cp "$(command -v deno)" tmp/deno-oracle/2.9.6/deno
 
       - run: npm ci
       - run: npm run build:dist

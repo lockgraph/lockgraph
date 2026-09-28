@@ -512,9 +512,9 @@ re-documented here**. The npm-CLI↔version interaction only:
 | **3** | npm **9+** (default) | `packages` only — **drops** the legacy mirror | npm **7+** (npm 5/6 **cannot** read v3) |
 | **4** | npm **12+** (feature-triggered) | v3 packages-only layout plus native patch and manifest-extension evidence | npm **12+** |
 
-> Verified current through **npm 12** (`12.0.1`, 2026-07): ordinary projects
-> follow the `npm 9+` row (`lockfileVersion: 3`; npm 11 emits byte-identical to
-> npm 12). Native `npm patch`, `packageExtensions`, or `.npm-extension` state
+> Verified current through **npm 12** (`12.1.0`, 2026-09): ordinary projects
+> follow the `npm 9+` row (`lockfileVersion: 3`; npm 10.9.9 and 11.20.0 emit
+> byte-identical to npm 12.1.0). Native `npm patch`, `packageExtensions`, or `.npm-extension` state
 > activates v4.
 > The one field change within the v3 era is **`license`, added per-entry at npm 10**
 > (npm 9 omits it). npm 12's breaking changes are install-time (Axis 5), not

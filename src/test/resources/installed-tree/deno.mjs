@@ -45,10 +45,10 @@ export const fixtures = [
       { path: 'deno.lock', sha256: '297bc2988d08b7c319af4e6e774bea7d92823894e56738d71fc4a562091a07ee' },
     ],
     tool: {
-      alias: 'deno-2.9.4',
-      version: '2.9.4',
+      alias: 'deno-2.9.6',
+      version: '2.9.6',
       runtime: 'native',
-      path: 'tmp/deno-oracle/2.9.4/deno',
+      path: 'tmp/deno-oracle/2.9.6/deno',
     },
     commands: {
       online: ['install', '--frozen', '--allow-import'],

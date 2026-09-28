@@ -32,7 +32,7 @@ const nodeRange = '^22.22.2 || ^24.15.0 || >=26.0.0'
 const adapter: FrozenOracleAdapter = Object.freeze({
   family: 'npm',
   format: 'npm-4',
-  version: '12.0.1',
+  version: '12.1.0',
   alias: 'pm-npm-12',
   binName: 'npm',
   nativeLockfileVersion: 4,

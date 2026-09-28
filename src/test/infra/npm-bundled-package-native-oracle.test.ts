@@ -122,7 +122,7 @@ suite(
     const native = process.env.LOCKGRAPH_NPM_BUNDLED_OFFLINE_ORACLE === '1' ? it : it.skip
     for (const [label, cli] of [
       ['npm 8.19.4', resolve('node_modules/pm-npm-8/bin/npm-cli.js')],
-      ['npm 11.18.0', resolve('node_modules/pm-npm-11/bin/npm-cli.js')],
+      ['npm 11.20.0', resolve('node_modules/pm-npm-11/bin/npm-cli.js')],
     ] as const) {
       native(`${label} accepts source and replay offline with identical installed trees`, () => {
         const base = mkdtempSync(resolve(tmpdir(), 'lockgraph-npm-bundled-'))

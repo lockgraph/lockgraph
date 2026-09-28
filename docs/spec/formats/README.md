@@ -177,7 +177,7 @@ does not shell out).
 | measured legacy corpus | RW | – | – | – | v2 has parse/emit proof; no pinned producer |
 | Deno 1.44.4 | – | RW | – | – | v3 producer- and frozen-verified |
 | Deno 2.2.8 | – | – | RW | – | v4 producer- and frozen-verified |
-| Deno 2.9.4 | – | – | – | RW | v5 producer- and frozen-verified |
+| Deno 2.9.4, 2.9.6 | – | – | – | RW | v5 producer- and frozen-verified |
 
 Each adapter accepts exactly its literal top-level version. Same-identity RW
 includes npm-section audit/fix with native JSR/remote/workspace replay. Nine

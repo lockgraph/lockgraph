@@ -1,7 +1,7 @@
 # `bun-text-v2` — bun `bun.lock` (lockfileVersion 2)
 
-> Status: stable (adapter + round-trip tested against bun 1.4.0 producer output).
-> Updated: 2026-09-03
+> Status: stable (adapter + round-trip tested against bun 1.4.0 producer output; frozen oracle pinned at 1.4.2).
+> Updated: 2026-09-28
 > Provenance: **Official** (bun 1.4.0).
 
 The second bun lockfile generation. **The schema is identical to

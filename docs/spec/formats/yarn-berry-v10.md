@@ -1,9 +1,9 @@
 # `yarn-berry-v10` — yarn berry `yarn.lock` (`__metadata.version: 10`)
 
-> Status: stable schema target (adapter + round-trip tested; frozen certification contract available; emitted by stable Yarn 4.17.1).
-> Updated: 2026-07-26
+> Status: stable schema target (adapter + round-trip tested; frozen certification contract available; emitted by stable Yarn 4.17.1 and later).
+> Updated: 2026-09-28
 > Provenance: **Source-only** (Yarn 4.17.1 producer source).
-> Frozen certification: bundled pinned Yarn 4.17.1 producer plus
+> Frozen certification: bundled pinned Yarn 4.18.1 producer plus
 > `prepareFrozen` / `certifyFrozen` native-PM receipt contract.
 
 The completeness contract — stringify, modify, enrich, optimize —

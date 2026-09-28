@@ -13,7 +13,7 @@ import {
 const adapter: FrozenOracleAdapter = Object.freeze({
   family: 'npm',
   format: 'npm-1',
-  version: '11.18.0',
+  version: '11.20.0',
   alias: 'pm-npm-11',
   binName: 'npm',
   nativeLockfileVersion: 1,
@@ -23,7 +23,7 @@ const adapter: FrozenOracleAdapter = Object.freeze({
 const uncalibratedWriterAdapter: FrozenOracleAdapter = Object.freeze({
   family: 'npm',
   format: 'npm-1',
-  version: '11.18.0',
+  version: '11.20.0',
   alias: 'pm-npm-11',
   binName: 'npm',
   nodeRange: '^20.17.0 || >=22.9.0',
