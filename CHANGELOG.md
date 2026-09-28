@@ -1,3 +1,8 @@
+## [0.8.1](https://github.com/lockgraph/lockgraph/compare/v0.8.0...v0.8.1) (2026-09-28)
+
+### Fixes & improvements
+* fix: fix packument bin (#36) ([caa270e](https://github.com/lockgraph/lockgraph/commit/caa270e0fe2b0ce196a988908ac01ac1513a0b88))
+
 ## [0.8.0](https://github.com/lockgraph/lockgraph/compare/v0.7.1...v0.8.0) (2026-09-16)
 
 ### Features
