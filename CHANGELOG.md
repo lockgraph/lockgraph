@@ -1,3 +1,8 @@
+## [0.9.0](https://github.com/lockgraph/lockgraph/compare/v0.8.1...v0.9.0) (2026-09-29)
+
+### Features
+* feat: anchor yarn-classic root descriptors from manifests and add replaceRange ([2864e5d](https://github.com/lockgraph/lockgraph/commit/2864e5de5b080be77e6844b634ee18577deba7a9))
+
 ## [0.8.1](https://github.com/lockgraph/lockgraph/compare/v0.8.0...v0.8.1) (2026-09-28)
 
 ### Fixes & improvements
