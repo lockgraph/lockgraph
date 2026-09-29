@@ -10,6 +10,7 @@ import {
 } from '../../modify/operation.ts'
 import type { ApplyPatchSpec } from '../../modify/apply-patch.ts'
 import type { ReplaceVersionSelector } from '../../modify/replace-version.ts'
+import type { ReplaceRangeEdgeKind } from '../../modify/replace-range.ts'
 import {
   internalGraph,
   isPublicGraph,
@@ -29,6 +30,7 @@ import { internalProjectionOptions } from './options.ts'
 import { publicPromise } from './errors.ts'
 
 export type { ApplyPatchSpec, ReplaceVersionSelector }
+export type { ReplaceRangeEdgeKind }
 
 export type Modification =
   | Readonly<{
@@ -37,6 +39,14 @@ export type Modification =
       to: string
     }>
   | Readonly<{ kind: 'pinOverride'; name: string; to: string }>
+  | Readonly<{
+      kind: 'replaceRange'
+      parent: NodeId
+      name: string
+      to: string
+      from?: string
+      edge?: ReplaceRangeEdgeKind
+    }>
   | Readonly<{
       kind: 'addDependency'
       parent: NodeId

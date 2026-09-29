@@ -1,4 +1,4 @@
-import type { Graph as InternalGraph } from '../../graph.ts'
+import type { Graph as InternalGraph, Manifest as InternalManifest } from '../../graph.ts'
 import { targetRequestOf } from '../../completeness/targets.ts'
 import type { TargetInput } from './assessment.ts'
 import { internalObserver } from './diagnostics.ts'
@@ -7,6 +7,7 @@ import {
   publicGraph,
   type Graph,
 } from './graph.ts'
+import { normalizeProjectManifest } from '../../convert/input.ts'
 import type { ObserveOptions, OperationSources } from './operation.ts'
 import { internalPmConfig } from './assessment.ts'
 import { rethrowPublic } from './errors.ts'
@@ -28,6 +29,8 @@ export interface ParseOptions extends ObserveOptions {
   readonly cwd?: string
   readonly registry?: string
   readonly sources?: Pick<OperationSources, 'policy'>
+  /** package.json objects keyed by exact graph workspace path (`''` for root). */
+  readonly manifests?: Readonly<Record<string, object>>
 }
 
 /** Public stringify policy; target-specific spelling lives on TargetInput. */
@@ -74,12 +77,17 @@ export function parse(
   }
   const options = c as ParseOptions | undefined
   try {
-    const parsed = parseInternal(a, b as FormatId | undefined, {
+    const format = (b as FormatId | undefined) ?? detectInternal(a)
+    const manifests = options?.manifests === undefined
+      ? undefined
+      : internalParseManifests(options.manifests, format)
+    const parsed = parseInternal(a, format, {
       ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options?.registry === undefined ? {} : { registry: options.registry }),
       ...(options?.sources?.policy === undefined
         ? {}
         : { sources: { policy: internalPmConfig(options.sources.policy) } }),
+      ...(manifests === undefined ? {} : { manifests }),
       ...(options?.onDiagnostic === undefined
         ? {}
         : { onDiagnostic: internalObserver(options.onDiagnostic) }),
@@ -88,6 +96,28 @@ export function parse(
   } catch (error) {
     return rethrowPublic(error)
   }
+}
+
+function internalParseManifests(
+  values: Readonly<Record<string, object>>,
+  format: FormatId | undefined,
+): Record<string, InternalManifest> {
+  if (format === undefined) {
+    throw new TypeError('parse: format is required when manifests are supplied')
+  }
+  const manifests: Record<string, InternalManifest> = {}
+  for (const [workspacePath, value] of Object.entries(values)) {
+    if (workspacePath !== '' && (
+      workspacePath.startsWith('/')
+      || workspacePath.includes('\\')
+      || workspacePath.split('/').some(part => part === '' || part === '.' || part === '..')
+    )) {
+      throw new TypeError(`parse: manifest key ${JSON.stringify(workspacePath)} must be a POSIX relative workspace path`)
+    }
+    const label = workspacePath === '' ? 'package.json' : `${workspacePath}/package.json`
+    manifests[workspacePath] = normalizeProjectManifest(value, label, format)
+  }
+  return manifests
 }
 
 interface InternalStringifyOptionsWithFormat extends InternalStringifyOptions {

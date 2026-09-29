@@ -22,6 +22,12 @@ export {
   type ReplaceVersionResult,
   type ReplaceVersionSelector,
 } from './replace-version.ts'
+export {
+  replaceRange,
+  type ReplaceRangeEdgeKind,
+  type ReplaceRangeResult,
+  type ReplaceRangeSpec,
+} from './replace-range.ts'
 
 export {
   modify,

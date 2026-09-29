@@ -371,15 +371,25 @@ function parseResolved(
     manifests: options.manifests,
     registryFor,
   })
+  if (format === 'yarn-classic' && options.manifests === undefined) {
+    graph = graph.mutate(m => {
+      m.diagnostic({
+        code: 'YARN_CLASSIC_ROOT_DESCRIPTORS_UNANCHORED',
+        severity: 'warning',
+        message: 'yarn-classic entry keys may include root/workspace requests that cannot be attributed without parse manifests',
+      })
+    }).graph
+  }
   if (format === 'yarn-classic' && options.manifests !== undefined) {
     const enriched = yarnClassic.enrich(graph, undefined, {
       manifests: options.manifests,
       overrides,
     })
-    graph = enriched.graph
-    if (options.onDiagnostic !== undefined) {
-      for (const diagnostic of enriched.diagnostics) options.onDiagnostic(diagnostic)
-    }
+    graph = enriched.diagnostics.length === 0
+      ? enriched.graph
+      : enriched.graph.mutate(mutation => {
+          for (const diagnostic of enriched.diagnostics) mutation.diagnostic(diagnostic)
+        }).graph
   }
   if (overrides !== undefined && overrides.length > 0) {
     rememberManifestOverrides(graph, overrides)
@@ -397,6 +407,7 @@ function parseResolved(
   attachParsedMutationLineage(
     graph,
     format,
+    options.cwd ?? options.workspaceRoot,
     hasFormatAdapterState(format, graph),
     formatAdapterStateSubjects(format, graph),
   )
@@ -1065,8 +1076,14 @@ function projectionOutputDiagnostics(
   let reparsed: Graph
   try {
     const reparseOverrides = reparseOverrideContext(graph, overrides)
+    const workspaceRoot = adapterMutationLineageOf(graph)?.workspaceRoot
+    const manifests = target === 'yarn-classic' && yarnClassic.hasRootDescriptorAnchors(graph)
+      ? classicManifestsOfGraph(graph)
+      : undefined
     reparsed = parse(target, output, {
       ...(reparseOverrides.length === 0 ? {} : { overrides: reparseOverrides }),
+      ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+      ...(manifests === undefined ? {} : { manifests }),
     })
   } catch (error) {
     return Object.freeze([assessedDiagnostic(
@@ -1127,4 +1144,34 @@ function projectionOutputDiagnostics(
     }
   }
   return Object.freeze(diagnostics)
+}
+
+function classicManifestsOfGraph(graph: Graph): Record<string, Manifest> {
+  const manifests: Record<string, Manifest> = {}
+  for (const node of graph.nodes()) {
+    if (node.workspacePath === undefined) continue
+    const dependencies: Record<string, string> = {}
+    const devDependencies: Record<string, string> = {}
+    const optionalDependencies: Record<string, string> = {}
+    const peerDependencies: Record<string, string> = {}
+    for (const edge of graph.out(node.id)) {
+      if (edge.attrs?.range === undefined) continue
+      const target = graph.getNode(edge.dst)
+      if (target === undefined) continue
+      const name = edge.attrs.alias ?? target.name
+      if (edge.kind === 'dep') dependencies[name] = edge.attrs.range
+      else if (edge.kind === 'dev') devDependencies[name] = edge.attrs.range
+      else if (edge.kind === 'optional') optionalDependencies[name] = edge.attrs.range
+      else if (edge.kind === 'peer') peerDependencies[name] = edge.attrs.range
+    }
+    manifests[node.workspacePath] = {
+      name: node.name,
+      version: node.version,
+      ...(Object.keys(dependencies).length === 0 ? {} : { dependencies }),
+      ...(Object.keys(devDependencies).length === 0 ? {} : { devDependencies }),
+      ...(Object.keys(optionalDependencies).length === 0 ? {} : { optionalDependencies }),
+      ...(Object.keys(peerDependencies).length === 0 ? {} : { peerDependencies }),
+    }
+  }
+  return manifests
 }

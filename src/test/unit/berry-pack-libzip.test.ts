@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { computeBerryChecksumViaLibzip } from '../../main/ts/recipe/berry-pack-libzip.ts'
+import { storeFallbackArchive } from '../helpers/berry-archives.ts'
 import {
   ArtifactEnvelopeError,
   artifactResourceLimits,
@@ -32,6 +33,19 @@ describe('recipe/berry-pack-libzip (optional @yarnpkg/libzip backend)', () => {
   it.skipIf(!hasLibzip)('reproduces is-buffer@2.0.5 cacheKey-10 (mixed) byte-exact', async () => {
     expect(await computeBerryChecksumViaLibzip(tgz('is-buffer-2.0.5.tgz'), 'is-buffer', '10')).toBe(
       '3261a8b858edcc6c9566ba1694bf829e126faa88911d1c0a747ea658c5d81b14b6955e3a702d59dabadd58fdd440c01f321aa71d6547105fd21d03f94d0597e7',
+    )
+  })
+
+  // Ground truth: the checksums yarn 4.18.1 wrote with `compressionLevel: mixed`.
+  it.skipIf(!hasLibzip)('reproduces an archive that lists its directories (diff@4.0.4)', async () => {
+    expect(await computeBerryChecksumViaLibzip(tgz('diff-4.0.4.tgz'), 'diff', '10')).toBe(
+      '5019b3f5ae124ea9e95137119e1a83a59c252c75ddac873cc967832fd7a834570a58a4d58b941bdbd07832ebf98dcb232b27c561b7f5584357da6dae59bcac62',
+    )
+  })
+
+  it.skipIf(!hasLibzip)('reproduces incompressible entries on both sides of the STORE fallback', async () => {
+    expect(await computeBerryChecksumViaLibzip(storeFallbackArchive(), 'rnd', '10')).toBe(
+      'c363f1e46091e33cfe90bf818726010b3992b0f19932fbe61223857d844d7a1356373f1d6603bd91cb9f38b39962b1ba1eec9bf3893c0f3bdb188b05068d65e6',
     )
   })
 

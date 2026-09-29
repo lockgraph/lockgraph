@@ -554,8 +554,8 @@ describe('yarn-berry-v9 — alias collision rejection ()', () => {
     // Use a tighter scenario: two entries with same parsed (name, version) tuple.
     const input2 =
       '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
-      '"foo@npm:1.0.0":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n\n' +
-      '"foo@npm:1.0.0-alias":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n'
+      '"foo@npm:1.0.0":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n  linkType: hard\n\n' +
+      '"foo@npm:1.0.0-alias":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n  linkType: soft\n'
     expect(() => parse(input2)).toThrow(/IRREDUCIBLE_LOSS|collapse onto NodeId/)
   })
 
@@ -768,7 +768,7 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation', () => {
     expect(unresolved).toHaveLength(1)
   })
 
-  it('still throws IRREDUCIBLE_LOSS when two link: entries collide on identical locators', () => {
+  it('still throws IRREDUCIBLE_LOSS when identical link locators have different content', () => {
     // Pathological: identical resolution strings on two entries — no
     // disambiguator available, sentinel hashes collide. The hint mentions
     // workspace link: locator collision so callers get a usable signal.
@@ -776,10 +776,12 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation', () => {
       '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
       '"shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa":\n' +
       '  version: 0.0.0-use.local\n' +
-      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n\n' +
+      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n' +
+      '  linkType: soft\n\n' +
       '"shared@link:../shared":\n' +
       '  version: 0.0.0-use.local\n' +
-      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n'
+      '  resolution: "shared@link:../shared::locator=pkg-a%40workspace%3Apackages%2Fa"\n' +
+      '  linkType: hard\n'
 
     expect(() => parse(dupInput)).toThrow(LockfileError)
     try {
@@ -795,8 +797,8 @@ describe('yarn-berry-v9 — link: / portal: locator disambiguation', () => {
     // tailored hint still lists both resolution strings to aid diagnosis.
     const input =
       '__metadata:\n  version: 9\n  cacheKey: 10c0\n\n' +
-      '"foo@npm:1.0.0":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n\n' +
-      '"foo@npm:1.0.0-alias":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n'
+      '"foo@npm:1.0.0":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n  linkType: hard\n\n' +
+      '"foo@npm:1.0.0-alias":\n  version: 1.0.0\n  resolution: "foo@npm:1.0.0"\n  linkType: soft\n'
 
     try {
       parse(input)

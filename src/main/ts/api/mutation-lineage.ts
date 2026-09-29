@@ -13,6 +13,8 @@ import type { FormatId } from './format-contract.ts'
  */
 export interface AdapterMutationLineage {
   readonly sourceFormat: FormatId
+  /** Effective project root used by parse-time out-of-lockfile reads. */
+  readonly workspaceRoot?: string
   readonly adapterStateRequired: boolean
   readonly adapterStateSubjects: readonly string[]
   readonly mutated: boolean
@@ -23,11 +25,13 @@ const lineageByGraph = new WeakMap<Graph, AdapterMutationLineage>()
 export function attachParsedMutationLineage(
   graph: Graph,
   sourceFormat: FormatId,
+  workspaceRoot: string | undefined,
   adapterStateRequired: boolean,
   adapterStateSubjects: readonly string[] = [],
 ): void {
   lineageByGraph.set(graph, Object.freeze({
     sourceFormat,
+    ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
     adapterStateRequired,
     adapterStateSubjects: Object.freeze([...adapterStateSubjects]),
     mutated: false,

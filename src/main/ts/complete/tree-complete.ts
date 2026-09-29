@@ -21,7 +21,11 @@ import {
   type TarballPayload,
 } from '../graph.ts'
 import type { Packument, PackumentVersion, RegistryAdapter } from '../registry/types.ts'
-import { payloadOfPackumentVersion, setMintedTarball } from '../registry/payload.ts'
+import {
+  dependencyDeclarationsOfPackumentVersion,
+  payloadOfPackumentVersion,
+  setMintedTarball,
+} from '../registry/payload.ts'
 import { bestExistingSatisfying, resolveFindUp } from './find-up.ts'
 import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
 import {
@@ -50,6 +54,19 @@ export interface CompletionResult {
   added:       NodeId[]
   wired:       EdgeTriple[]
   unresolved:  Diagnostic[]
+}
+
+/** One target-native descriptor already bound by an existing lock entry. */
+export interface DescriptorBinding {
+  readonly name: string
+  readonly range: string
+  readonly nodeId: NodeId
+}
+
+/** Target-native package variant preferred over its plain base node. */
+export interface PackageVariantBinding {
+  readonly baseNodeId: NodeId
+  readonly variantNodeId: NodeId
 }
 
 /**
@@ -103,6 +120,13 @@ export interface CompletionOptions {
    *  override to pin) — read-only, the emitted lock is unchanged. Requires
    *  non-empty `constraints`. */
   budget?: CompletionBudget
+  /** Target-native entry-key bindings that have no live graph edge. Yarn
+   * lockfiles may retain such descriptors in compound keys; they remain pinned
+   * and must win before range resolution. */
+  descriptorBindings?: readonly DescriptorBinding[]
+  /** Producer-authored install targets for package-manager compatibility
+   * overlays (for example Yarn Berry builtin patches). */
+  packageVariants?: readonly PackageVariantBinding[]
 }
 
 interface CompletionContext {
@@ -118,6 +142,7 @@ interface CompletionContext {
   readonly wired: EdgeTriple[]
   readonly unresolved: Diagnostic[]
   readonly descriptorResolution: Map<string, NodeId>
+  readonly preferredVariants: Map<NodeId, NodeId>
   readonly packCache: Map<string, Promise<Packument | undefined>>
   readonly frontier: NodeId[]
   currentGraph: Graph
@@ -232,33 +257,27 @@ async function completeNodeDependencies(
   node: Node,
   packumentVersion: PackumentVersion,
 ): Promise<void> {
-  // Install-tree kinds only. A transitive node's devDependencies are excluded.
-  const buckets: Array<{ deps?: Record<string, string>; kind: EdgeKind }> = [
-    { deps: packumentVersion.dependencies,         kind: 'dep' },
-    { deps: packumentVersion.optionalDependencies, kind: 'optional' },
-    { deps: packumentVersion.peerDependencies,     kind: 'peer' },
-  ]
-  for (const { deps, kind } of buckets) {
-    if (deps === undefined) continue
-    for (const depName of Object.keys(deps).sort(cmpStr)) {
-      const depRange = deps[depName]!
-      if (alreadyWired(context.currentGraph, node.id, depName, kind)) continue
+  // Install-tree kinds only. A transitive node's devDependencies are excluded;
+  // the shared registry projection also applies npm's optional-over-dependency
+  // precedence before any edge is considered.
+  for (const declaration of dependencyDeclarationsOfPackumentVersion(packumentVersion)) {
+    const { name: depName, range: depRange, kind } = declaration
+    if (alreadyWired(context.currentGraph, node.id, depName, kind)) continue
 
-      // An active scoped override creates the effective descriptor before any
-      // dedup, reuse, or registry rung and cannot poison the plain descriptor.
-      const dependency = completionDependency(context, {
-        node,
-        depName,
-        depRange,
-        kind,
-      })
-      // The ladder order is load-bearing for PM fidelity.
-      if (reuseBoundDescriptor(context, dependency)) continue
-      if (reuseFindUp(context, dependency)) continue
-      if (reuseProjectWide(context, dependency)) continue
-      const resolved = await resolveDependency(context, dependency)
-      if (resolved !== undefined) mintDependency(context, dependency, resolved)
-    }
+    // An active scoped override creates the effective descriptor before any
+    // dedup, reuse, or registry rung and cannot poison the plain descriptor.
+    const dependency = completionDependency(context, {
+      node,
+      depName,
+      depRange,
+      kind,
+    })
+    // The ladder order is load-bearing for PM fidelity.
+    if (reuseBoundDescriptor(context, dependency)) continue
+    if (reuseFindUp(context, dependency)) continue
+    if (reuseProjectWide(context, dependency)) continue
+    const resolved = await resolveDependency(context, dependency)
+    if (resolved !== undefined) mintDependency(context, dependency, resolved)
   }
 }
 
@@ -276,6 +295,7 @@ function completionContext(
   registry: RegistryAdapter,
   options: CompletionOptions,
 ): CompletionContext {
+  const preferredVariants = preferredVariantsOf(graph, options.packageVariants)
   return {
     registry,
     onDiagnostic: options.onDiagnostic,
@@ -289,7 +309,12 @@ function completionContext(
     wired: [],
     unresolved: [],
     currentGraph: graph,
-    descriptorResolution: descriptorResolutionsOf(graph),
+    descriptorResolution: descriptorResolutionsOf(
+      graph,
+      options.descriptorBindings,
+      preferredVariants,
+    ),
+    preferredVariants,
     packCache: new Map(),
     frontier: [],
   }
@@ -327,7 +352,9 @@ function canonicalCompletionEdgeAttrs(
   dependency: CompletionDependency,
   targetName: string,
 ): EdgeAttrs {
-  if (dependency.depName !== targetName) return dependency.edgeAttrs
+  if (dependency.depName !== targetName) {
+    return { ...dependency.edgeAttrs, alias: dependency.depName }
+  }
   const { range, overrideRange, ...rest } = dependency.edgeAttrs
   return {
     ...rest,
@@ -375,14 +402,15 @@ function reuseFindUp(
   dependency: CompletionDependency,
 ): boolean {
   if (context.resolution !== 'prefer-existing' || dependency.overrideTo !== undefined) return false
-  const targetId = resolveFindUp(
+  const resolvedId = resolveFindUp(
     context.currentGraph,
     dependency.nodeId,
     dependency.depName,
     dependency.depRange,
     dependency.kind,
   )
-  if (targetId === undefined) return false
+  if (resolvedId === undefined) return false
+  const targetId = preferredTargetId(context, resolvedId)
 
   // Peer wiring requires re-keying the consumer's peerContext, which remains a
   // recipe-layer operation rather than a completion-side synthesis.
@@ -427,12 +455,14 @@ function reuseProjectWide(
 ): boolean {
   if (context.resolution !== 'prefer-existing' || dependency.overrideTo !== undefined
     || dependency.kind === 'peer') return false
-  const reuseId = bestExistingSatisfying(
+  const resolvedId = bestExistingSatisfying(
     context.currentGraph,
     dependency.depName,
     dependency.depRange,
   )
-  if (reuseId === undefined || reuseId === dependency.nodeId) return false
+  if (resolvedId === undefined) return false
+  const reuseId = preferredTargetId(context, resolvedId)
+  if (reuseId === dependency.nodeId) return false
 
   const triple: EdgeTriple = {
     src: dependency.nodeId,
@@ -549,9 +579,10 @@ function mintDependency(
     return
   }
 
-  const newId = serializeNodeId(resolved.name, resolved.version, [])
+  const baseId = serializeNodeId(resolved.name, resolved.version, [])
+  const newId = preferredTargetId(context, baseId)
   const newNode: Node = {
-    id: newId,
+    id: baseId,
     name: resolved.name,
     version: resolved.version,
     peerContext: [],
@@ -655,17 +686,55 @@ function budgetCounterOf(options: CompletionOptions): BudgetCounter | undefined 
     : { max: options.budget.maxCombinations, spent: 0 }
 }
 
-function descriptorResolutionsOf(graph: Graph): Map<string, NodeId> {
+function descriptorResolutionsOf(
+  graph: Graph,
+  nativeBindings: readonly DescriptorBinding[] = [],
+  preferredVariants: ReadonlyMap<NodeId, NodeId> = new Map(),
+): Map<string, NodeId> {
   const resolutions = new Map<string, NodeId>()
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
       const range = edge.attrs?.range
       if (range === undefined) continue
       const dst = graph.getNode(edge.dst)
-      if (dst !== undefined) resolutions.set(descriptorKey(dst.name, range), edge.dst)
+      if (dst !== undefined) {
+        resolutions.set(
+          descriptorKey(dst.name, range),
+          preferredVariants.get(edge.dst) ?? edge.dst,
+        )
+      }
     }
   }
+  // The native entry key is the descriptor authority for descriptor-keyed
+  // targets. Apply it after edge-derived bindings so a verbatim orphan key
+  // remains pinned even though no surviving consumer reconstructs an edge.
+  for (const binding of nativeBindings) {
+    if (graph.getNode(binding.nodeId) === undefined) continue
+    resolutions.set(
+      descriptorKey(binding.name, binding.range),
+      preferredVariants.get(binding.nodeId) ?? binding.nodeId,
+    )
+  }
   return resolutions
+}
+
+function preferredVariantsOf(
+  graph: Graph,
+  bindings: readonly PackageVariantBinding[] = [],
+): Map<NodeId, NodeId> {
+  const variants = new Map<NodeId, NodeId>()
+  for (const binding of bindings) {
+    const base = graph.getNode(binding.baseNodeId)
+    const variant = graph.getNode(binding.variantNodeId)
+    if (base === undefined || variant === undefined
+      || base.name !== variant.name || base.version !== variant.version) continue
+    variants.set(binding.baseNodeId, binding.variantNodeId)
+  }
+  return variants
+}
+
+function preferredTargetId(context: CompletionContext, nodeId: NodeId): NodeId {
+  return context.preferredVariants.get(nodeId) ?? nodeId
 }
 
 function alreadyWired(
@@ -676,7 +745,7 @@ function alreadyWired(
 ): boolean {
   for (const edge of graph.out(src, kind)) {
     const dst = graph.getNode(edge.dst)
-    if (dst !== undefined && dst.name === depName) return true
+    if (dst !== undefined && (edge.attrs?.alias ?? dst.name) === depName) return true
   }
   return false
 }
@@ -695,5 +764,3 @@ function projectPackumentVersion(pv: PackumentVersion): {
     payload: payloadOfPackumentVersion(pv),
   }
 }
-
-const cmpStr = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0

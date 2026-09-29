@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   LockfileError,
   enrich,
+  modify,
   parse,
   stringify,
   type FormatId,
 } from '../../main/ts/index.ts'
+import type { RegistryAdapter } from '../../main/ts/registry/types.ts'
 import { fixture } from '../helpers/lockfile-test-utils.ts'
 
 function harmlessMutation(format: FormatId, input: string) {
@@ -134,5 +136,35 @@ describe('strict mutation sidecar containment', () => {
       const mutated = harmlessMutation(format, input)
       expect(() => stringify(format, mutated)).not.toThrow()
     }
+  })
+
+  it('accepts a yarn-classic bump that leaves no recorded descriptor to carry', async () => {
+    const lock = [
+      '# yarn lockfile v1', '', '',
+      '"vuln@^1.0.0":',
+      '  version "1.0.0"',
+      `  resolved "https://registry.yarnpkg.com/vuln/-/vuln-1.0.0.tgz#${'a'.repeat(40)}"`,
+      `  integrity sha512-${'A'.repeat(86)}==`,
+      '',
+    ].join('\n')
+    const versions = {
+      '1.0.0': { name: 'vuln', version: '1.0.0' },
+      '2.0.0': { name: 'vuln', version: '2.0.0' },
+    }
+    const registry: RegistryAdapter = {
+      async packument() { return { name: 'vuln', distTags: { latest: '2.0.0' }, versions } },
+      async resolve(_name, range) { return versions[range as keyof typeof versions] ?? versions['2.0.0'] },
+    }
+    const bumped = await modify(parse('yarn-classic', lock), {
+      kind: 'replaceVersion',
+      selector: { name: 'vuln', fromRange: '1.0.0' },
+      to: '2.0.0',
+    }, { target: 'yarn-classic', sources: { packuments: [registry] } })
+
+    expect(stringify('yarn-classic', bumped.graph)).toContain('vuln@2.0.0:')
+    const chained = bumped.graph.mutate(mutator => {
+      mutator.diagnostic({ code: 'TEST_MUTATION', severity: 'info', message: 'second mutation' })
+    }).graph
+    expect(() => stringify('yarn-classic', chained)).not.toThrow()
   })
 })

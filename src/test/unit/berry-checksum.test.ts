@@ -10,7 +10,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
-import { computeBerryChecksum, cacheKeyCompressionLevel, crc32Table } from '../../main/ts/recipe/berry-checksum.ts'
+import { computeBerryChecksum, cacheKeyCompressionLevel, crc32Table, parseTar } from '../../main/ts/recipe/berry-checksum.ts'
+import { storeFallbackArchive } from '../helpers/berry-archives.ts'
 import {
   ArtifactEnvelopeError,
   ArtifactLiveMeter,
@@ -67,13 +68,50 @@ describe('recipe/berry-checksum ()', () => {
   // "nodejs-compatible" match-hash (`legacyHash:false`), NOT the legacy hash. Ground
   // truth is the real sha512 a Yarn-4 RC wrote to its cache for ms@2.1.3 (a
   // DEFLATE-carrying package, so this exercises the hash difference).
-  it('reproduces ms@2.1.3 berry checksum byte-exact (mixed / cacheKey 9, nodejs-hash)', () => {
-    const hex = computeBerryChecksum(tarball('ms-2.1.3.tgz'), 'ms', '9')
-    expect(hex).toBe(
-      '78c12f6b473a022ebacc393fc14b76fe40b8feda7218124b86c4684e440e10377a063bec1d3902df1f74714f02b74b36ad7d3a6de9e2fbffa26fc29e5ce018fc',
+  it('refuses mixed cacheKey 9 — the Yarn-4 RC builds that write it differ in zlib', () => {
+    // rc.14 matches pako's nodejs-compatible hash on small inputs (ms@2.1.3) but not on
+    // large ones: its 45063-byte `src/ua-parser.js` (ua-parser-js@0.7.33) deflates to
+    // 11474 bytes where pako and node:zlib give 11473. The lock does not say which RC
+    // wrote it, so the digest is not reproducible and the caller defers.
+    expect(() => computeBerryChecksum(tarball('ms-2.1.3.tgz'), 'ms', '9')).toThrow(/reproducible/)
+  })
+
+  // diff@4.0.4 LISTS its directories (`package/dist`, `package/lib`, …) ahead of
+  // files that sort before them. Yarn creates each where the archive lists it, so the
+  // zip holds `dist/` and `lib/` before `package.json`. Ground truth: the checksums
+  // yarn 2.4.3, 3.8.7 and 4.18.1 wrote for the registry tarball.
+  it('reproduces an archive that lists its directories (diff@4.0.4) in every era', () => {
+    const diff = tarball('diff-4.0.4.tgz')
+    expect(computeBerryChecksum(diff, 'diff', '7')).toBe(
+      'd71483990b8ebe4eed072db8c6b34cbac6c9206995659ffac38a7e96a16e1c829612eaf52389e5a52323f6e453a59dc5cc0c5677b0a35029f9c0b6c1a3f84933',
     )
-    // the nodejs-hash (v9) differs from the legacy hash (v8) → distinct DEFLATE bytes.
-    expect(hex).not.toBe(computeBerryChecksum(tarball('ms-2.1.3.tgz'), 'ms', '8'))
+    expect(computeBerryChecksum(diff, 'diff', '8')).toBe(
+      'e3f1c368778b16f9e7e4fd4199d04913bba9b017c37fbca7642b3613ebefcf3b18a4bd55e5f7074dc023fc95c96bd265f72114044e62cebae7f9a0f53bc36ace',
+    )
+    expect(computeBerryChecksum(diff, 'diff', '10c0')).toBe(
+      '855fb70b093d1d9643ddc12ea76dca90dc9d9cdd7f82c08ee8b9325c0dc5748faf3c82e2047ced5dcaa8b26e58f7903900be2628d0380a222c02d79d8de385df',
+    )
+  })
+
+  it('refuses the dirs-first order for an archive that lists its directories', () => {
+    expect(() => computeBerryChecksum(tarball('diff-4.0.4.tgz'), 'diff', '8', true)).toThrow(/dirs-first/)
+  })
+
+  // libzip falls back to STORE only while an entry's deflate stream fits its first
+  // 8192-byte read, so an incompressible entry past that point stays DEFLATE though it
+  // grew. Ground truth: yarn 2.4.3 and 3.8.7 stored the 8186-byte entry and deflated the
+  // 8187- and 12000-byte ones; STORE (10c0, yarn 4.18.1) is the control.
+  it('keeps DEFLATE for an incompressible entry once its stream fills the first read', () => {
+    const archive = storeFallbackArchive()
+    expect(computeBerryChecksum(archive, 'rnd', '7')).toBe(
+      '108d18eca460f97d6ae3e54bf6b856b7787403627a55eebd700da2bfeccae53d872e24dfef7df4fdd778bd361a826281bfe7742bac630840129bd987d42e51ce',
+    )
+    expect(computeBerryChecksum(archive, 'rnd', '8')).toBe(
+      'c363f1e46091e33cfe90bf818726010b3992b0f19932fbe61223857d844d7a1356373f1d6603bd91cb9f38b39962b1ba1eec9bf3893c0f3bdb188b05068d65e6',
+    )
+    expect(computeBerryChecksum(archive, 'rnd', '10c0')).toBe(
+      '24779eea389092a36f5956e2184a864e429554de0dfc43b3ea50c6547e0cbb28c3b389fb5c4faa2f8813a432abcc2292bb44cbc07808d355a9fb3fffe39cdc27',
+    )
   })
 
   it('STORE is era-independent — cacheKey 8c0 reproduces the same digest as 10c0', () => {
@@ -101,7 +139,6 @@ describe('recipe/berry-checksum ()', () => {
     expect(() => computeBerryChecksum(ms, 'ms', '10c5')).toThrow(/reproducible/)
     // mixed cacheKey 10 (yarn-4 mixed) — a libzip-vendored zlib the pure-JS port
     // matches at neither hash; refuse rather than emit a digest yarn would reject.
-    // (cacheKey 9 IS reproducible via the nodejs-hash — covered above, not here.)
     expect(() => computeBerryChecksum(ms, 'ms', '10')).toThrow(/reproducible/)
     // STORE below cacheKey 8 — yarn 2.x never wrote STORE; the DOS-epoch-vs-
     // SAFE_TIME mtime there is unproven, so refuse rather than guess.
@@ -155,5 +192,40 @@ describe('recipe/berry-checksum ()', () => {
     } finally {
       release()
     }
+  })
+})
+
+describe('parseTar', () => {
+  const header = (name: string, type: string, body = Buffer.alloc(0)): Buffer => {
+    const h = Buffer.alloc(512)
+    h.write(name, 0, 'utf8')
+    h.write('0000755\0', 100)
+    h.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124)
+    h.write(type, 156)
+    h.write('ustar\0', 257)
+    const padding = Buffer.alloc(Math.ceil(body.length / 512) * 512 - body.length)
+    return Buffer.concat([h, body, padding])
+  }
+
+  it('returns directory entries in archive order', () => {
+    const tar = Buffer.concat([
+      header('package/lib/', '5'),
+      header('package/lib/a.js', '0', Buffer.from('a')),
+      Buffer.alloc(1024),
+    ])
+    expect(parseTar(tar).map(entry => [entry.name, entry.dir])).toEqual([
+      ['package/lib/', true],
+      ['package/lib/a.js', false],
+    ])
+  })
+
+  it('refuses a PAX header that renames the next entry', () => {
+    const record = '30 path=package/long/name.js\n'
+    const tar = Buffer.concat([
+      header('PaxHeader/x', 'x', Buffer.from(record)),
+      header('package/short.js', '0', Buffer.from('x')),
+      Buffer.alloc(1024),
+    ])
+    expect(() => parseTar(tar)).toThrow(/PAX/)
   })
 })

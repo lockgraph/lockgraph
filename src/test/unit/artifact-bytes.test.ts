@@ -230,16 +230,16 @@ describe('remote artifact bytes — authorization ladder', () => {
   it('rung 3 uses the exact-version registry URL when the lock states none', async () => {
     const bytes = tarballOf()
     const url = 'https://cdn.test/artifacts/pkg-1.0.0.tgz'
-    const sourceChecksum = computeBerryChecksum(bytes, 'pkg', '9')
+    const sourceChecksum = computeBerryChecksum(bytes, 'pkg', '8')
     const fetchSpy = vi.fn(async () => new Response(bytes))
     const graph = parse('yarn-berry-v8', `__metadata:
   version: 8
-  cacheKey: 9
+  cacheKey: 8
 
 "pkg@npm:1.0.0":
   version: 1.0.0
   resolution: "pkg@npm:1.0.0"
-  checksum: 9/${sourceChecksum}
+  checksum: 8/${sourceChecksum}
   languageName: node
   linkType: hard
 `)

@@ -11,7 +11,7 @@
 import { toTarballKey } from '../graph.ts'
 import type { Diagnostic, Edge, Graph, Node, NodeId, TarballPayload } from '../graph.ts'
 import { emptyIntegrity, emitBerryChecksum, mergeIntegrity } from '../recipe/integrity.ts'
-import { berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
+import { berryCacheKeyLibzipGeneration, berryCacheKeyReproducible, computeBerryChecksum } from '../recipe/berry-checksum.ts'
 import { computeBerryChecksumViaLibzip } from '../recipe/berry-pack-libzip.ts'
 import {
   isBareYarnBerryNpmAliasNode,
@@ -404,8 +404,12 @@ async function selectChecksumStrategy(
     )
   }
   if (cacheKey === undefined) return undefined
-  // ONLY a cacheKey pako can't reproduce (mixed 10 = zlib-ng, explicit `cN`) may
-  // fall to the OPTIONAL `@yarnpkg/libzip` — trusted solely on a positive `match`.
+  // ONLY a cacheKey of libzip's OWN generation (mixed 10 = zlib-ng, or an explicit `cN`
+  // from 10 on) may fall to the OPTIONAL `@yarnpkg/libzip` — trusted solely on a positive
+  // `match`. An older key pako cannot reproduce (mixed 9, `cN` before 10) defers: libzip
+  // would calibrate itself off a generation-independent sibling and write cacheKey-10
+  // bytes into that lock (YN0018).
+  if (!berryCacheKeyLibzipGeneration(cacheKey)) return undefined
   return (await calibrate(
     graph,
     cacheKey,

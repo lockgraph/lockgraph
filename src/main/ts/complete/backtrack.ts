@@ -17,6 +17,7 @@
 import semver from 'semver'
 import type { Graph, NodeId, OverrideConstraint } from '../graph.ts'
 import type { PackumentVersion, RegistryAdapter } from '../registry/types.ts'
+import { dependencyDeclarationsOfPackumentVersion } from '../registry/payload.ts'
 import { overrideTargetFor } from '../recipe/descriptor-resolve.ts'
 import {
   constrainedCandidates,
@@ -117,14 +118,19 @@ async function immediateDepsClean(
   },
 ): Promise<boolean> {
   const { registry, constraints, onUnevaluable, overrides } = opts
-  for (const deps of [pv.dependencies, pv.optionalDependencies]) {
-    if (deps === undefined) continue
-    for (const depName of Object.keys(deps).sort()) {
-      const declared = deps[depName]!
-      const to = overrides.length > 0 ? overrideTargetFor(depName, declared, [pv.name], overrides) : undefined
-      const sel = await selectConstrained(registry, depName, to ?? declared, constraints, onUnevaluable)
-      if (sel.selected === undefined && sel.rejected.length > 0) return false // this dep cliffs → pv not viable
-    }
+  for (const dependency of dependencyDeclarationsOfPackumentVersion(pv)) {
+    if (dependency.kind === 'peer') continue
+    const to = overrides.length > 0
+      ? overrideTargetFor(dependency.name, dependency.range, [pv.name], overrides)
+      : undefined
+    const sel = await selectConstrained(
+      registry,
+      dependency.name,
+      to ?? dependency.range,
+      constraints,
+      onUnevaluable,
+    )
+    if (sel.selected === undefined && sel.rejected.length > 0) return false // this dep cliffs → pv not viable
   }
   return true
 }

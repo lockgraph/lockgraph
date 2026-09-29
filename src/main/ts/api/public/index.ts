@@ -162,6 +162,7 @@ export type {
   ModifyOptions,
   ModifyResult,
   ReplaceVersionSelector,
+  ReplaceRangeEdgeKind,
 } from './modify.ts'
 
 export {

@@ -1,14 +1,106 @@
 // tree completion BFS acceptance gate.
 
 import { describe, expect, it } from 'vitest'
-import { parse, stringify } from '../../main/ts/index.ts'
+import { complete, parse, stringify } from '../../main/ts/index.ts'
 import { completeTransitives } from '../../main/ts/complete/tree-complete.ts'
+import { addDependency } from '../../main/ts/modify/add-dependency.ts'
+import { replaceVersion } from '../../main/ts/modify/replace-version.ts'
 import { emptyIntegrity, mergeIntegrity } from '../../main/ts/recipe/integrity.ts'
 import { frozenRegistry } from '../../main/ts/registry/frozen.ts'
 import type { Packument, RegistryAdapter } from '../../main/ts/registry/types.ts'
+import type { Graph } from '../../main/ts/graph.ts'
 import { addEdge, addPackage, graphOf } from './_modify-test-utils.ts'
 
 describe('complete/completeTransitives', () => {
+  const duplicateOptionalPackuments: Record<string, Packument> = {
+    host: {
+      name: 'host',
+      distTags: { latest: '2.0.0' },
+      versions: {
+        '1.0.0': { name: 'host', version: '1.0.0' },
+        '2.0.0': {
+          name: 'host',
+          version: '2.0.0',
+          dependencies: { leaf: '^1.0.0' },
+          optionalDependencies: { leaf: '1.0.0' },
+        },
+      },
+    },
+    leaf: {
+      name: 'leaf',
+      distTags: { latest: '1.0.0' },
+      versions: { '1.0.0': { name: 'leaf', version: '1.0.0' } },
+    },
+  }
+  const duplicateOptionalRegistry: RegistryAdapter = {
+    async packument(name) { return duplicateOptionalPackuments[name] },
+    async resolve(name) {
+      const packument = await this.packument(name)
+      if (packument === undefined) return undefined
+      return packument.versions[name === 'host' ? '2.0.0' : '1.0.0']
+    },
+  }
+
+  const expectOptionalLeafOnly = (graph: Graph): void => {
+    expect(graph.out('host@2.0.0')
+      .filter(edge => graph.getNode(edge.dst)?.name === 'leaf')
+      .map(edge => [edge.kind, edge.attrs?.range]))
+      .toEqual([['optional', '1.0.0']])
+  }
+
+  it('optionalDependencies overrides a duplicate dependencies entry in direct completion', async () => {
+    const graph = graphOf(builder => {
+      const workspace = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      const host = addPackage(builder, { name: 'host', version: '2.0.0' })
+      addEdge(builder, workspace, host, 'dep', '^2.0.0')
+    })
+
+    const completed = await completeTransitives(graph, duplicateOptionalRegistry)
+    expectOptionalLeafOnly(completed.graph)
+  })
+
+  it('optionalDependencies overrides a duplicate dependencies entry after replaceVersion', async () => {
+    const graph = graphOf(builder => {
+      const workspace = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      const host = addPackage(builder, { name: 'host', version: '1.0.0' })
+      addEdge(builder, workspace, host, 'dep', '^1.0.0')
+    })
+    const modified = await replaceVersion(
+      graph,
+      { name: 'host', fromRange: '1.0.0' },
+      '2.0.0',
+      { registry: duplicateOptionalRegistry },
+    )
+    const completed = await completeTransitives(modified.graph, duplicateOptionalRegistry, {
+      seed: {
+        recentlyAdded: modified.recentlyAdded,
+        recentlyOrphaned: modified.recentlyOrphaned,
+      },
+    })
+    expectOptionalLeafOnly(completed.graph)
+  })
+
+  it('optionalDependencies overrides a duplicate dependencies entry after addDependency', async () => {
+    const graph = graphOf(builder => {
+      addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+    })
+    const modified = await addDependency(
+      graph,
+      'app@0.0.0',
+      'host',
+      '^2.0.0',
+      'dep',
+      { registry: duplicateOptionalRegistry },
+    )
+    const completed = await completeTransitives(modified.graph, duplicateOptionalRegistry, {
+      seed: {
+        recentlyAdded: modified.recentlyAdded,
+        recentlyOrphaned: modified.recentlyOrphaned,
+      },
+    })
+    expectOptionalLeafOnly(completed.graph)
+  })
+
   it('no-op when graph is already fully wired', async () => {
     const graph = graphOf(builder => {
       const ws = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
@@ -19,6 +111,105 @@ describe('complete/completeTransitives', () => {
     const result = await completeTransitives(graph, frozenRegistry(graph))
     expect(result.added).toEqual([])
     expect(result.wired).toEqual([])
+  })
+
+  it('treats an existing aliased edge as satisfying its declared dependency name', async () => {
+    const graph = graphOf(builder => {
+      const workspace = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      const cliui = addPackage(builder, { name: '@isaacs/cliui', version: '8.0.2' })
+      const width = addPackage(builder, { name: 'string-width', version: '4.2.3' })
+      addEdge(builder, workspace, cliui, 'dep')
+      builder.addEdge(cliui, width, 'dep', {
+        range: 'npm:string-width@^4.2.0',
+        alias: 'string-width-cjs',
+      })
+    })
+    const registry: RegistryAdapter = {
+      async packument(name) {
+        if (name !== '@isaacs/cliui') return undefined
+        return {
+          name,
+          distTags: { latest: '8.0.2' },
+          versions: {
+            '8.0.2': {
+              name,
+              version: '8.0.2',
+              dependencies: { 'string-width-cjs': 'npm:string-width@^4.2.0' },
+            },
+          },
+        }
+      },
+      async resolve() { return undefined },
+    }
+
+    const result = await completeTransitives(graph, registry, {
+      seed: {
+        recentlyAdded: new Set(['@isaacs/cliui@8.0.2']),
+        recentlyOrphaned: new Set(),
+      },
+      descriptorBindings: [{
+        name: 'string-width-cjs',
+        range: 'npm:string-width@^4.2.0',
+        nodeId: 'string-width@4.2.3',
+      }],
+    })
+
+    expect(result.graph.out('@isaacs/cliui@8.0.2', 'dep')
+      .filter(edge => edge.dst === 'string-width@4.2.3'))
+      .toEqual([expect.objectContaining({
+        attrs: {
+          range: 'npm:string-width@^4.2.0',
+          alias: 'string-width-cjs',
+        },
+      })])
+    expect(result.wired).toEqual([])
+  })
+
+  it('retains alias identity when completion wires a bound aliased descriptor', async () => {
+    const graph = graphOf(builder => {
+      const workspace = addPackage(builder, { name: 'app', version: '0.0.0', workspacePath: '.' })
+      const cliui = addPackage(builder, { name: '@isaacs/cliui', version: '8.0.2' })
+      addPackage(builder, { name: 'string-width', version: '4.2.3' })
+      addEdge(builder, workspace, cliui, 'dep')
+    })
+    const registry: RegistryAdapter = {
+      async packument(name) {
+        if (name !== '@isaacs/cliui') return undefined
+        return {
+          name,
+          distTags: { latest: '8.0.2' },
+          versions: {
+            '8.0.2': {
+              name,
+              version: '8.0.2',
+              dependencies: { 'string-width-cjs': 'npm:string-width@^4.2.0' },
+            },
+          },
+        }
+      },
+      async resolve() { return undefined },
+    }
+
+    const result = await completeTransitives(graph, registry, {
+      seed: {
+        recentlyAdded: new Set(['@isaacs/cliui@8.0.2']),
+        recentlyOrphaned: new Set(),
+      },
+      descriptorBindings: [{
+        name: 'string-width-cjs',
+        range: 'npm:string-width@^4.2.0',
+        nodeId: 'string-width@4.2.3',
+      }],
+    })
+
+    expect(result.graph.out('@isaacs/cliui@8.0.2', 'dep'))
+      .toEqual([expect.objectContaining({
+        dst: 'string-width@4.2.3',
+        attrs: {
+          range: 'npm:string-width@^4.2.0',
+          alias: 'string-width-cjs',
+        },
+      })])
   })
 
   it('workspace skip — workspace nodes are not queried as packument targets', async () => {
@@ -703,4 +894,84 @@ describe('complete/completeTransitives', () => {
     expect(result.graph.getNode('semver@7.8.5')).toBeUndefined()
     expect(result.added).not.toContain('semver@7.8.5')
   })
+
+  const orphanDescriptorPackuments: Record<string, Packument> = {
+    a: {
+      name: 'a', distTags: { latest: '1.0.0' },
+      versions: { '1.0.0': { name: 'a', version: '1.0.0' } },
+    },
+    b: {
+      name: 'b', distTags: { latest: '2.0.0' },
+      versions: {
+        '2.0.0': { name: 'b', version: '2.0.0', dependencies: { which: '^1.2.9' } },
+      },
+    },
+    which: {
+      name: 'which', distTags: { latest: '1.3.1' },
+      versions: {
+        '1.3.0': { name: 'which', version: '1.3.0' },
+        '1.3.1': { name: 'which', version: '1.3.1' },
+      },
+    },
+  }
+  const orphanDescriptorRegistry: RegistryAdapter = {
+    async packument(name) { return orphanDescriptorPackuments[name] },
+    async resolve(name) {
+      if (name === 'which') return orphanDescriptorPackuments.which!.versions['1.3.1']
+      return orphanDescriptorPackuments[name]?.versions[name === 'a' ? '1.0.0' : '2.0.0']
+    },
+  }
+  const classicOrphanDescriptorLock = [
+    '# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.',
+    '# yarn lockfile v1', '', '',
+    'a@1.0.0:', '  version "1.0.0"', '  dependencies:', '    which "^1.2.10"', '',
+    'b@2.0.0:', '  version "2.0.0"', '',
+    '"which@^1.2.10, which@^1.2.9":', '  version "1.3.0"', '',
+  ].join('\n')
+  const berryOrphanDescriptorLock = [
+    '__metadata:', '  version: 9', '  cacheKey: 10c0', '',
+    '"a@npm:1.0.0":', '  version: 1.0.0', '  resolution: "a@npm:1.0.0"',
+    '  dependencies:', '    which: "npm:^1.2.10"', '  languageName: node', '  linkType: hard', '',
+    '"b@npm:2.0.0":', '  version: 2.0.0', '  resolution: "b@npm:2.0.0"',
+    '  languageName: node', '  linkType: hard', '',
+    '"which@npm:^1.2.10, which@npm:^1.2.9":', '  version: 1.3.0',
+    '  resolution: "which@npm:1.3.0"', '  languageName: node', '  linkType: hard', '',
+  ].join('\n')
+
+  it('Yarn Classic binds a verbatim orphan descriptor before resolving highest (#8)', async () => {
+    const result = await complete(parse('yarn-classic', classicOrphanDescriptorLock), {
+      target: 'yarn-classic',
+      sources: { packuments: [orphanDescriptorRegistry] },
+    })
+
+    expect(result.graph.out('b@2.0.0').some(edge =>
+      edge.dst === 'which@1.3.0' && edge.attrs?.range === '^1.2.9')).toBe(true)
+    expect(result.graph.getNode('which@1.3.1')).toBeUndefined()
+    const output = stringify('yarn-classic', result.graph, { strict: false })
+    expect(output.match(/which@\^1\.2\.9/g)).toHaveLength(1)
+  })
+
+  it('Yarn Berry binds a verbatim orphan descriptor before resolving highest (#8)', async () => {
+    const result = await complete(parse('yarn-berry-v9', berryOrphanDescriptorLock), {
+      target: 'yarn-berry-v9',
+      sources: { packuments: [orphanDescriptorRegistry] },
+    })
+
+    expect(result.graph.out('b@2.0.0').some(edge =>
+      edge.dst === 'which@1.3.0' && edge.attrs?.range === '^1.2.9')).toBe(true)
+    expect(result.graph.getNode('which@1.3.1')).toBeUndefined()
+    const output = stringify('yarn-berry-v9', result.graph, { strict: false })
+    expect(output.match(/which@npm:\^1\.2\.9/g)).toHaveLength(1)
+  })
+
+  it.each(['npm-3', 'pnpm-v9', 'bun-text'] as const)(
+    '%s completion does not consume Yarn entry-key sidecars',
+    async target => {
+      const result = await complete(parse('yarn-classic', classicOrphanDescriptorLock), {
+        target,
+        sources: { packuments: [orphanDescriptorRegistry] },
+      })
+      expect(result.graph.out('b@2.0.0').some(edge => edge.dst === 'which@1.3.1')).toBe(true)
+    },
+  )
 })

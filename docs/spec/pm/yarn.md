@@ -703,6 +703,63 @@ differently.
 > **Measured** · Yarn 3.8.7 · 2026-09-28 · `@babel/parser@7.29.9` in a real
 > project lock written by a plain `yarn install`.
 
+`--frozen-lockfile` checks only the patterns the root manifest declares. A
+root pattern that is missing from the lock, or whose locked `version` does not
+satisfy it, fails the check. A pattern that only another entry requests is not
+checked: frozen mode accepts it keyed on a version outside its range, and a
+plain install then splits it back into an entry of its own. A lock that frozen
+mode accepts is therefore not necessarily canonical.
+
+> **Measured** · Yarn 1.22.22 · 2026-09-29 · `package.json` declares
+> `is-number@^7.0.0`, locked to `6.0.0` with its real `resolved` and
+> `integrity`: `--frozen-lockfile` exits 1 ("Your lockfile needs to be
+> updated"), and `yarn install` rewrites the entry to `7.0.0`. Two real project
+> locks where only other entries request the pattern, `brace-expansion@^1.1.7`
+> keyed on `2.1.4` and `send@0.18.0` keyed on `0.19.0`: `--frozen-lockfile`
+> exits 0, and a plain `yarn install` on the second splits `send@0.18.0` back
+> into its own entry.
+
+Classic reuses an entry that already answers a descriptor. When a dependent is
+resolved again, for example because its own entry was removed or replaced, its
+dependency descriptors bind to the existing entries keyed by them; Yarn does not
+move them to the newest version in range.
+
+> **Measured** · Yarn 1.22.22 · 2026-09-29 · a lock with `ansi-styles@^4.1.0`
+> locked to `4.2.0` and the `chalk` entry deleted: `yarn install` re-adds
+> `chalk`, keeps `ansi-styles@^4.1.0` at `4.2.0`, and installs `4.2.0`, although
+> `4.3.0` satisfies the range.
+
+Classic does not install `peerDependencies`, the root's included. A peer range
+never becomes an entry key, and a package that only a peer declaration names
+gets no entry.
+
+> **Measured** · Yarn 1.22.22 · 2026-09-29 · `package.json` with
+> `peerDependencies: { "is-number": ">=6" }` and
+> `devDependencies: { "is-number": "^7.0.0" }`: a fresh `yarn install` writes the
+> single key `is-number@^7.0.0`. With the peer declaration alone, the lock has no
+> entry.
+
+A plain Classic install rewrites the lock only when the install changes it. A
+lock already in sync is left byte for byte, whatever its entry grouping or key
+order, so a plain install cannot show that a lock is canonical. Yarn-written
+locks contain both a merged entry whose key lists an npm-alias descriptor next
+to a plain one (`"string-width-cjs@npm:string-width@^4.2.0", string-width@^4.1.0:`)
+and the same two descriptors as separate entries with identical bodies.
+
+> **Measured** · Yarn 1.22.22 · 2026-09-29 · three real project locks, two with
+> the merged form and one with the separate form: a plain `yarn install` leaves
+> each lock byte-identical.
+
+When Classic writes a lock, it sorts the descriptors of every entry key by
+UTF-16 code units, comparing the unquoted descriptor text, and orders entries by
+their smallest descriptor.
+
+> **Measured** · Yarn 1.22.22 · 2026-09-29 · committed locks written by `yarn
+> install` list keys such as `call-bind@^1.0.0, call-bind@^1.0.2, call-bind@^1.0.4,
+> call-bind@^1.0.5:` in that order. A lock with an unsorted key such as
+> `"@babel/core@^7.12.10", "@babel/core@^7.11.6"` survives a plain install
+> unchanged while it is in sync.
+
 ### 6.2 Registry
 
 Both lineages default to **`registry.yarnpkg.com`** (`npmRegistryServer`),

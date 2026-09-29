@@ -205,6 +205,15 @@ export function parseProjectManifest(
   } catch (cause) {
     throw invalid(`${filename}: package.json parse failed`, cause)
   }
+  return normalizeProjectManifest(value, filename, source)
+}
+
+/** Normalize a package.json object while ignoring fields the graph does not model. */
+export function normalizeProjectManifest(
+  value: unknown,
+  filename: string,
+  source: FormatId,
+): Manifest {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw invalid(`${filename}: package.json root must be an object`)
   }

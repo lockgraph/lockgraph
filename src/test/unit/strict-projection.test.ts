@@ -451,6 +451,36 @@ describe('strict projection gate', () => {
     expect(() => stringify('yarn-classic', builder.seal())).not.toThrow()
   })
 
+  it('strict-emits a completion-shaped classic node while dropping every metadata field Yarn 1 never writes', () => {
+    const metadata = {
+      engines: { node: '>=18' },
+      funding: { url: 'https://example.test/fund' },
+      license: 'MIT',
+      bin: { dep: 'cli.js' },
+      deprecated: 'use dep-next',
+      cpu: ['x64'],
+      os: ['linux'],
+      libc: ['glibc'],
+      hasInstallScript: true,
+      bundledDependencies: ['bundled'],
+      peerDependencies: { peer: '^1.0.0' },
+      peerDependenciesMeta: { peer: { optional: true } },
+    } satisfies Partial<TarballPayload>
+    const graph = singleMetadataGraph(metadata, sriIntegrity, 'yarn-classic')
+    const projected = stringifyProjected('yarn-classic', graph)
+
+    for (const field of Object.keys(metadata) as (keyof typeof metadata)[]) {
+      expect(isStructuralExpectedDrop(field, 'yarn-classic')).toBe(true)
+      expect(projected.losses).toContainEqual(expect.objectContaining({
+        class: 'structural-expected',
+        feature: `metadata:${field}`,
+        target: 'yarn-classic',
+      }))
+    }
+    expect(projected.losses.some(loss => loss.class === 'inherent-meaningful')).toBe(false)
+    expect(() => stringify('yarn-classic', graph)).not.toThrow()
+  })
+
   it.each([
     ['funding', { url: 'https://example.test/fund' }],
     ['license', 'MIT'],
@@ -500,8 +530,11 @@ describe('strict projection gate', () => {
       'libc',
       'hasInstallScript',
       'bundledDependencies',
+      'peerDependencies',
+      'peerDependenciesMeta',
     ] as const) {
-      expect(isStructuralExpectedDrop(field, 'yarn-classic')).toBe(false)
+      expect(isStructuralExpectedDrop(field, 'yarn-classic')).toBe(true)
+      expect(isStructuralExpectedDrop(field, 'pnpm-v9')).toBe(false)
     }
   })
 

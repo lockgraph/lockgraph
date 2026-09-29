@@ -17,7 +17,11 @@ import {
 } from '../../main/ts/recipe/diagnostics.ts'
 import type { Diagnostic } from '../../main/ts/graph.ts'
 import { newBuilder, toTarballKey } from '../../main/ts/graph.ts'
-import { convert, parse, stringify } from '../../main/ts/index.ts'
+import { complete, convert, enrich, modify, parse, stringify } from '../../main/ts/index.ts'
+import { adapterMutationLineageOf } from '../../main/ts/api/mutation-lineage.ts'
+import { refurbish, type TarballSource } from '../../main/ts/enrich/refurbish.ts'
+import { optimize } from '../../main/ts/optimize/optimize.ts'
+import { pruneOrphans } from '../../main/ts/optimize/prune.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (rel: string): string =>
@@ -162,6 +166,65 @@ describe('recipe/patch — yarn-berry-v9 parse extracts canonical hash from patc
     const lodash = graph.getNode(patchedNodeId('lodash', '4.17.21', EXPECTED_PATCH_HASH))
     expect(lodash?.patch).toBe(EXPECTED_PATCH_HASH)
     expect(isCanonicalHash(lodash!.patch!)).toBe(true)
+  })
+
+  it('strict stringify reparses project-local patches under the original cwd', () => {
+    const input = fixture('patch-yarn/yarn-berry-v9.lock')
+    const graph = parse(input, 'yarn-berry-v9', { cwd: templateDir('patch-yarn') })
+
+    expect(stringify(graph, 'yarn-berry-v9')).toBe(input)
+  })
+
+  it('preserves the parse root through every graph-producing public operation', async () => {
+    const input = fixture('patch-yarn/yarn-berry-v9.lock')
+    const workspaceRoot = templateDir('patch-yarn')
+    const parseFresh = () => parse('yarn-berry-v9', input, { cwd: workspaceRoot })
+    const assertContext = (label: string, graph: ReturnType<typeof parse>): void => {
+      expect(adapterMutationLineageOf(graph)?.workspaceRoot, label).toBe(workspaceRoot)
+      expect(() => stringify('yarn-berry-v9', graph, { strict: true }), label).not.toThrow()
+    }
+
+    const modified = await modify(parseFresh(), {
+      kind: 'removeDependency',
+      parent: 'case-patch-yarn@0.0.0-use.local',
+      name: 'lodash',
+    }, { target: 'yarn-berry-v9' })
+    assertContext('modify', modified.graph)
+
+    const completionInput = parseFresh()
+    const lodashId = [...completionInput.byName('lodash')][0]!
+    const completed = await complete(completionInput, {
+      target: 'yarn-berry-v9',
+      seed: { added: new Set([lodashId]), orphaned: new Set() },
+      pruneOrphans: true,
+    })
+    assertContext('complete + pruneOrphans', completed.graph)
+
+    assertContext('optimize', optimize(parseFresh()).graph)
+    assertContext('pruneOrphans', pruneOrphans(parseFresh(), { seed: new Set() }).graph)
+
+    const noTarballs: TarballSource = {
+      async tarball() { return undefined },
+    }
+    const refurbished = await refurbish(parseFresh(), 'yarn-berry-v9', noTarballs)
+    assertContext('refurbish', refurbished.graph)
+
+    const enriched = await enrich(parseFresh(), {
+      target: 'yarn-berry-v9',
+      contract: 'snapshot',
+    })
+    assertContext('enrich', enriched.graph)
+
+    await expect(convert(input, {
+      from: 'yarn-berry-v9',
+      to: 'yarn-berry-v9',
+      workspaceRoot,
+      // The conversion assessment still requires external registry/artifact
+      // evidence for a strict snapshot. The intermediate graph itself runs
+      // through the same enrich/rebind path asserted above; non-strict here
+      // isolates its byte-preserving emit from that independent evidence gate.
+      strict: false,
+    })).resolves.toBe(input)
   })
 })
 

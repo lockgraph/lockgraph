@@ -3,6 +3,7 @@
 import {
   toTarballKey,
   type Diagnostic,
+  type EdgeKind,
   type Graph,
   type GraphResult,
   type Node,
@@ -16,6 +17,8 @@ export interface UnreachableOptimizationOptions {
   readonly edgeSeparator: string
   readonly tarballInputs: (node: Node) => TarballKeyInputs
   readonly skipMissingTarballs: boolean
+  /** Edge kinds that may carry reachability from a seed. Omit for all kinds. */
+  readonly walkKinds?: readonly EdgeKind[]
 }
 
 type UnreachableOptimizationResult = GraphResult & {
@@ -32,7 +35,10 @@ export function optimizeUnreachable(
   graph: Graph,
   options: UnreachableOptimizationOptions,
 ): UnreachableOptimizationResult {
-  const reachable = new Set(graph.walk(Array.from(options.seeds)))
+  const reachable = new Set(graph.walk(
+    Array.from(options.seeds),
+    options.walkKinds === undefined ? undefined : { kinds: options.walkKinds },
+  ))
   const unreachableNodes = Array.from(graph.nodes(), node => node.id)
     .filter(nodeId => !reachable.has(nodeId))
     .sort(options.compare)
@@ -47,10 +53,9 @@ export function optimizeUnreachable(
   const unreachable = new Set(unreachableNodes)
   const referencedTarballs = new Set<string>()
   const tarballsToRemove = new Map<string, TarballKeyInputs>()
-  const internalEdges = unreachableNodes
-    .flatMap(src =>
-      graph.out(src)
-        .filter(edge => unreachable.has(edge.dst))
+  const incomingEdges = unreachableNodes
+    .flatMap(dst =>
+      graph.in(dst)
         .map(edge => ({ src: edge.src, dst: edge.dst, kind: edge.kind })),
     )
     .sort((left, right) => options.compare(
@@ -69,7 +74,7 @@ export function optimizeUnreachable(
   }
 
   const result = graph.mutate(mutator => {
-    for (const edge of internalEdges) {
+    for (const edge of incomingEdges) {
       mutator.removeEdge(edge.src, edge.dst, edge.kind)
     }
     for (const nodeId of unreachableNodes) {

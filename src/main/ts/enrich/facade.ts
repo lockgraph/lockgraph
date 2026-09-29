@@ -20,6 +20,10 @@ import {
 import { rebindFormatAdapterState } from '../api/format-registry.ts'
 import { completeTransitives } from '../complete/tree-complete.ts'
 import {
+  descriptorBindingsForTarget,
+  packageVariantBindingsForTarget,
+} from '../complete/descriptor-bindings.ts'
+import {
   deriveEnrichedEvidence,
   evidenceOf,
   internalEvidenceOf,
@@ -693,6 +697,8 @@ async function settleRegistryCompletion(
   if (registry !== undefined && policy.status === 'known') {
     const completed = await completeTransitives(working, registry.adapter, {
       overrides: policy.overrides,
+      descriptorBindings: descriptorBindingsForTarget(working, targetRequest.format),
+      packageVariants: packageVariantBindingsForTarget(working, targetRequest.format),
     })
     const conflictAssessment = await resolutionConflicts(
       completed.graph,

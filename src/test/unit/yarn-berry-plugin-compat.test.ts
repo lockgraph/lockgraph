@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  complete,
   LockfileError,
   parse,
   stringify,
@@ -244,6 +245,126 @@ describe('Yarn Berry plugin-compat registry view', () => {
 })
 
 describe('Yarn Berry plugin-compat materializer', () => {
+  it.each([
+    familyProfiles[1],
+    familyProfiles[2],
+    familyProfiles[3],
+  ])('routes descriptor reuse and fresh resolution through the $name builtin patch', async profile => {
+    const boundRange = `~${profile.version}`
+    const patchDescriptor = `${profile.name}@patch:${profile.name}@npm%3A${boundRange}#${profile.source}`
+    const lock = `__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"consumer@npm:1.0.0":
+  version: 1.0.0
+  resolution: "consumer@npm:1.0.0"
+  languageName: node
+  linkType: hard
+
+"${profile.name}@npm:${boundRange}":
+  version: ${profile.version}
+  resolution: "${profile.name}@npm:${profile.version}"
+  languageName: node
+  linkType: hard
+
+"${patchDescriptor}":
+  version: ${profile.version}
+  resolution: "${compatResolution(profile)}"
+  languageName: node
+  linkType: hard
+`
+    const base = parse('yarn-berry-v8', lock)
+    const patchId = [...base.nodes()].find(node =>
+      node.name === profile.name && node.patch !== undefined)!.id
+    const registryFor = (range: string): RegistryAdapter => ({
+      async packument(name) {
+        if (name === 'consumer') {
+          return {
+            name,
+            distTags: { latest: '1.0.0' },
+            versions: {
+              '1.0.0': {
+                name,
+                version: '1.0.0',
+                dependencies: { [profile.name]: range },
+              },
+            },
+          }
+        }
+        if (name === profile.name) {
+          return {
+            name,
+            distTags: { latest: profile.version },
+            versions: {
+              [profile.version]: { name, version: profile.version },
+            },
+          }
+        }
+        return undefined
+      },
+      async resolve(name) {
+        return name === profile.name
+          ? { name, version: profile.version }
+          : undefined
+      },
+    })
+
+    for (const range of [boundRange, `>=${profile.version}`]) {
+      const completed = await complete(base, {
+        target: 'yarn-berry-v8',
+        sources: { packuments: [registryFor(range)] },
+        seed: { added: new Set(['consumer@1.0.0']), orphaned: new Set() },
+      })
+      const targetEdges = completed.graph.out('consumer@1.0.0')
+        .filter(edge => completed.graph.getNode(edge.dst)?.name === profile.name)
+      expect(targetEdges.map(edge => edge.dst), range).toEqual([patchId])
+    }
+  })
+
+  it('mirrors a completion-added plain descriptor onto an existing builtin patch entry', () => {
+    const lock = `__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"fsevents@npm:^2.3.2":
+  version: 2.3.2
+  resolution: "fsevents@npm:2.3.2"
+  languageName: node
+  linkType: hard
+
+"fsevents@patch:fsevents@npm%3A^2.3.2#optional!builtin<compat/fsevents>":
+  version: 2.3.2
+  resolution: "fsevents@patch:fsevents@npm%3A2.3.2#optional!builtin<compat/fsevents>::version=2.3.2&hash=18f3a7"
+  languageName: node
+  linkType: hard
+
+"playwright@npm:1.55.1":
+  version: 1.55.1
+  resolution: "playwright@npm:1.55.1"
+  languageName: node
+  linkType: hard
+`
+    const graph = parseV8(lock)
+    const patchId = [...graph.nodes()].find(node =>
+      node.name === 'fsevents' && node.patch !== undefined)!.id
+    const completed = graph.mutate(mutation => mutation.addEdge(
+      'playwright@1.55.1',
+      patchId,
+      'optional',
+      { range: '2.3.2' },
+    )).graph
+    const output = stringifyV8(completed)
+
+    expect(output).toContain(
+      '"fsevents@npm:2.3.2, fsevents@npm:^2.3.2":',
+    )
+    expect(output).toContain(
+      'fsevents@patch:fsevents@npm%3A2.3.2#optional!builtin<compat/fsevents>, '
+      + 'fsevents@patch:fsevents@npm%3A^2.3.2#optional!builtin<compat/fsevents>',
+    )
+  })
+
   it('materializes the package-keyed family with row-owned injection and checksum policy', () => {
     const graph = familySeed()
     const result = materializeYarnBerryPluginCompat(graph, target)

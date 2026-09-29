@@ -231,6 +231,48 @@ real yarn 1 workspace converts to a `package-lock.json` that passes `npm ci`
 byte-clean. A synthesized member is a `directory`-resolved node, so a yarn→yarn
 round-trip re-emits it as a `file:` entry and `enrich` is idempotent.
 
+### Root descriptor anchors (classic-specific)
+
+A yarn 1 lock has no entry for the root or its workspaces, so an entry-key
+descriptor that no other entry requests is either declared by a `package.json`
+or left behind by an earlier edit. The lockfile alone cannot tell the two apart;
+the manifests can.
+
+- **With `manifests`**, every root and workspace declaration in
+  `dependencies`, `devDependencies` and `optionalDependencies` anchors the
+  descriptor it declares. `peerDependencies` anchor nothing: Yarn 1 does not
+  install peers, so a peer range never becomes an entry key, never keeps one, and
+  never keeps a package reachable.
+- An entry-key descriptor is kept while an anchor or a live dependency edge
+  requests it. An edge governed by a `resolutions` pin requests the descriptor its
+  consumer declared, which is the key Yarn keeps.
+- Parse then drops everything unreachable from the anchors, packages and entries
+  alike, so the parsed graph is what Yarn would keep. Each dropped descriptor is
+  itemized as a `YARN_CLASSIC_ROOT_DESCRIPTOR_UNREQUESTED` warning whose
+  `data.requestedBy` is `none` when nothing requested it, or
+  `unreachable-entry-only` when only a dropped entry did. A manifest set that
+  omits a workspace therefore prunes that workspace's closure, visibly.
+- **Without `manifests`**, every descriptor is kept verbatim, and a
+  `YARN_CLASSIC_ROOT_DESCRIPTORS_UNANCHORED` warning states that root requests
+  and stale descriptors cannot be told apart. An empty manifest map anchors
+  nothing and prunes nothing.
+
+Anchor edges are internal. yarn-classic writes no root or workspace entry, so an
+anchor of kind `dev` never meets the target's edge-kind capability.
+
+A root manifest without `name` or `version` still anchors: the missing fields
+synthesize the identity `.` and `0.0.0`. A workspace manifest without `version`
+synthesizes `0.0.0-use.local`. yarn-classic never writes a synthesized identity.
+
+> **Measured** · Yarn 1.22.22 · 2026-09-29 · a real project lock parsed with its
+> own root `package.json` as read (dependencies, devDependencies) re-emits
+> byte-identically, and a plain `yarn install` on the result leaves it unchanged.
+> With one devDependency removed from that `package.json`, parse drops 36 of 361
+> packages, and a plain `yarn install` of the original lock writes a lock
+> byte-identical to lockgraph's output. A root `peerDependencies` range next to a
+> `devDependencies` range for the same package produces only the dev key, and a
+> root declaring the package only as a peer gets no entry at all.
+
 ### Descriptor→node resolution (shared)
 
 yarn-classic records **ranges**, not resolved versions: a
@@ -360,6 +402,16 @@ and therefore the [NodeId](./_common.md#41-nodeid) name — is `<target>`, **not
   `<alias>@npm:<target>@<range>` descriptor for each aliased incoming edge, and
   the consumer's dependency line re-keys under `<alias>` with the
   `npm:<target>@<range>` value.
+- Emit keeps the entry grouping it parsed: both a merged entry
+  (`"string-width-cjs@npm:string-width@^4.2.0", string-width@^4.1.0:`) and
+  separate alias and plain entries of one package occur in Yarn-written locks,
+  and a plain install leaves either form unchanged. A descriptor added after
+  parse joins the entry that already holds its requested name; otherwise it gets
+  an entry of its own, so a fresh alias and a fresh plain request of one package
+  produce two entries with the same body. Every entry key lists its descriptors
+  sorted by UTF-16 code units, the unquoted descriptor text compared, and the
+  entry sits in the file by its smallest descriptor, so a joining descriptor is
+  sorted in, not appended.
 - Manifest enrichment follows the same rule for synthesized root and workspace
   edges. When a declaration key binds an npm-alias descriptor to a canonical
   target whose name differs, the edge retains the declaration key in

@@ -826,6 +826,11 @@ function edgeBearingPeerContext(node: Node): NodeId[] {
 }
 
 function validatePeerContext(s: State, id: NodeId, node: Node): void {
+  // Workspace/root `peer` edges are manifest declaration anchors. They keep a
+  // project-held descriptor live, but do not virtualize the project identity:
+  // unlike a registry package's resolved peer environment, they therefore do
+  // not belong in `peerContext` or in the serialized NodeId suffix.
+  if (node.workspacePath !== undefined) return
   // Peer-edge ↔ peerContext coherence is checked by BASE-KEY PROJECTION
   // (NodeId stripped of its `(...)` peer-context suffix), not full-NodeId
   // string equality. pnpm's suffix grammar is one-level: a

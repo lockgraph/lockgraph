@@ -17,6 +17,7 @@ import {
   linkTypeOfResolution,
   yarnBerryChecksumFreeNodes,
 } from '../formats/_yarn-berry-core.ts'
+import { hasRootDescriptorAnchors } from '../formats/yarn-classic.ts'
 
 // === PROJECTION MODEL =======================================================
 
@@ -51,6 +52,10 @@ const yarnMetadataDropTargets = Object.freeze(new Set<FormatId>([
   'yarn-berry-v10',
 ]))
 
+const yarnClassicMetadataDropTargets = Object.freeze(new Set<FormatId>([
+  'yarn-classic',
+]))
+
 /** Frozen-clean metadata drops verified per (field, target) pair. This is an
  * explicit allowlist, not the complement of the target capability table. */
 const structuralExpectedMetadataDrops: ReadonlyMap<PackageMetadataField, ReadonlySet<FormatId>> =
@@ -59,7 +64,14 @@ const structuralExpectedMetadataDrops: ReadonlyMap<PackageMetadataField, Readonl
     ['funding', yarnMetadataDropTargets],
     ['license', yarnMetadataDropTargets],
     ['deprecated', yarnMetadataDropTargets],
-    ['bin', Object.freeze(new Set<FormatId>(['yarn-classic']))],
+    ['bin', yarnClassicMetadataDropTargets],
+    ['cpu', yarnClassicMetadataDropTargets],
+    ['os', yarnClassicMetadataDropTargets],
+    ['libc', yarnClassicMetadataDropTargets],
+    ['hasInstallScript', yarnClassicMetadataDropTargets],
+    ['bundledDependencies', yarnClassicMetadataDropTargets],
+    ['peerDependencies', yarnClassicMetadataDropTargets],
+    ['peerDependenciesMeta', yarnClassicMetadataDropTargets],
   ])
 
 export function isStructuralExpectedDrop(
@@ -229,14 +241,56 @@ function workspaceFeaturePresent(graph: Graph): boolean {
   return false
 }
 
-function unsupportedEdgeKinds(graph: Graph, supported: ReadonlySet<EdgeKind>): EdgeKind[] {
+function unsupportedEdgeKinds(
+  graph: Graph,
+  supported: ReadonlySet<EdgeKind>,
+  target: FormatId,
+): EdgeKind[] {
   const unsupported = new Set<EdgeKind>()
+  const internalClassicAnchors = target === 'yarn-classic' && hasRootDescriptorAnchors(graph)
   for (const node of graph.nodes()) {
     for (const edge of graph.out(node.id)) {
+      if (internalClassicAnchors && node.workspacePath !== undefined) continue
       if (!supported.has(edge.kind)) unsupported.add(edge.kind)
     }
   }
   return [...unsupported].sort()
+}
+
+function pendingReplaceRangePreflight(
+  graph: Graph,
+  target: ReturnType<typeof targetProfileOf>,
+): ProjectionLoss[] {
+  const losses: ProjectionLoss[] = []
+  for (const diagnostic of graph.diagnostics()) {
+    if (diagnostic.code !== 'MODIFY_RANGE_PENDING') continue
+    const parent = diagnostic.data?.parent
+    const name = diagnostic.data?.name
+    const declaredRange = diagnostic.data?.declaredRange
+    const pendingTarget = diagnostic.data?.target
+    const edgeKind = diagnostic.data?.edgeKind
+    if (typeof parent !== 'string'
+      || typeof name !== 'string'
+      || typeof declaredRange !== 'string'
+      || typeof pendingTarget !== 'string'
+      || typeof edgeKind !== 'string') continue
+    const stillPending = graph.out(parent).some(edge => {
+      if (edge.dst !== pendingTarget
+        || edge.kind !== edgeKind
+        || edge.attrs?.range !== declaredRange) return false
+      const node = graph.getNode(edge.dst)
+      return node !== undefined && (edge.attrs?.alias ?? node.name) === name
+    })
+    if (!stillPending) continue
+    losses.push(loss(
+      'inherent-meaningful',
+      'modify:replace-range-pending',
+      target.format,
+      diagnostic,
+      allowLoss(),
+    ))
+  }
+  return losses
 }
 
 function metadataPreflight(
@@ -325,8 +379,9 @@ function integrityPreflight(
       // so for those entries the field's absence is what the producer authored
       // and there is no authority to lose. Gated on holding NO digest at all:
       // a held-but-unemittable digest, or one the parser had to drop, is a real
-      // loss and still blocks (`yarnBerryChecksumFreeNodes` needs a verbatim
-      // parsed `conditions:`, so a converted graph is never excused).
+      // loss and still blocks. `yarnBerryChecksumFreeNodes` uses the same
+      // effective condition scalar the emitter writes, including graph-derived
+      // conditions on completion-added nodes.
       if (payload?.integrity === undefined && authoredWithoutChecksum(node.id)) continue
       const remedy = supply('artifacts', node.id)
       const diagnostic = projectionDiagnostic(
@@ -493,7 +548,7 @@ export function projectionPreflightLosses(
   const losses: ProjectionLoss[] = []
 
   if (!target.ambiguousCapabilities.has('edgeKinds')) {
-    for (const kind of unsupportedEdgeKinds(graph, target.capabilities.edgeKinds)) {
+    for (const kind of unsupportedEdgeKinds(graph, target.capabilities.edgeKinds, target.format)) {
       losses.push(inherentFeature(`edge:${kind}`, target.format))
     }
   }
@@ -549,6 +604,7 @@ export function projectionPreflightLosses(
   losses.push(...npm4PatchCarrierPreflight(graph, target))
   losses.push(...manifestExtensionProvenancePreflight(graph, target))
   losses.push(...npm4BunGraphShapePreflight(graph, target))
+  losses.push(...pendingReplaceRangePreflight(graph, target))
   return dedupeProjectionLosses(losses)
 }
 

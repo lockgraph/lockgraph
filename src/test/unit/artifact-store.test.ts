@@ -273,7 +273,7 @@ function walkFiles(root: string): string[] {
   return found.sort()
 }
 
-function berryGraph(bytes: Uint8Array, cacheKey = '9'): Graph {
+function berryGraph(bytes: Uint8Array, cacheKey = '8'): Graph {
   return parse('yarn-berry-v8', `__metadata:
   version: 8
   cacheKey: ${cacheKey}
@@ -378,9 +378,9 @@ describe('artifact store — verified persistence boundary', () => {
   it('creates a Berry source-domain alias only after source checksum verification', async () => {
     const root = freshDir()
     const bytes = tarballOf()
-    const source = computeBerryChecksum(bytes, 'pkg', '9')
+    const source = computeBerryChecksum(bytes, 'pkg', '8')
     await runSource(berryGraph(bytes), [storeEntry(root), remote(bytes).entry])
-    expect(readFileSync(aliasPath(root, 'berry-zip', 'sha512', source, '9'), 'utf8').trim())
+    expect(readFileSync(aliasPath(root, 'berry-zip', 'sha512', source, '8'), 'utf8').trim())
       .toBe(digest(bytes))
   })
 
@@ -435,8 +435,8 @@ describe('artifact store — hit re-verification and fallback', () => {
     const root = freshDir()
     const bytes = tarballOf()
     const canonical = seedObject(root, bytes)
-    const source = computeBerryChecksum(bytes, 'pkg', '9')
-    seedAlias(aliasPath(root, 'berry-zip', 'sha512', source, '9'), canonical)
+    const source = computeBerryChecksum(bytes, 'pkg', '8')
+    seedAlias(aliasPath(root, 'berry-zip', 'sha512', source, '8'), canonical)
     const route = remote(bytes)
     const result = await runSource(berryGraph(bytes), [
       storeEntry(root),

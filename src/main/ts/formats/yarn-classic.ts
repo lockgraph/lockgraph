@@ -21,6 +21,7 @@ import {
   type TarballKey,
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
+import { inheritMutationLineage } from '../api/mutation-lineage.ts'
 import { optimizeUnreachable } from './_optimize.ts'
 import {
   parseSri,
@@ -145,6 +146,14 @@ interface UnresolvedDepRef {
 
 interface YarnClassicSidecar {
   entrySpecs: Map<string, string[]>
+  /** Original entry-head groups for a node. Yarn 1 preserves whether alias and
+   * plain descriptors were parsed together or in separate canonical entries. */
+  entryGroups?: Map<string, string[][]>
+  /** Parsed source had no final line terminator. */
+  endsWithNewline?: false
+  /** Manifests supplied the complete root/workspace request set, so entry keys
+   * are projected from live graph edges instead of preserving unowned specs. */
+  rootDescriptorsAnchored?: true
   /** Per-NodeId verbatim unknown entry-field lines (see YarnClassicEntry.extras),
    *  for round-trip re-emit. */
   entryExtras?: Map<string, string[]>
@@ -200,9 +209,7 @@ export interface YarnClassicStringifyOptions {
   registryFor?: (name: string) => string | undefined
 }
 
-type YarnClassicDependencyManifest = Omit<DependencyManifest, 'peerDependencies'>
-
-export interface YarnClassicManifest extends YarnClassicDependencyManifest {}
+export interface YarnClassicManifest extends DependencyManifest {}
 
 export interface YarnClassicEnrichOptions {
   manifests?: Record<string, YarnClassicManifest>
@@ -220,6 +227,7 @@ interface ClassicParseContext {
   diagnostics: Diagnostic[]
   specIndex: Map<string, string>
   sidecar: Map<string, string[]>
+  entryGroups: Map<string, string[][]>
   entryExtras: Map<string, string[]>
   unresolvedDeps: Map<string, UnresolvedDepRef[]>
   unknownFields: Set<string>
@@ -228,6 +236,7 @@ interface ClassicParseContext {
   semverCandidatesByName: Map<string, SemverCandidate[]>
   options: YarnClassicParseOptions
   globalDirectives: YarnClassicGlobalDirective[]
+  endsWithNewline: boolean
 }
 
 interface ClassicStringifyContext {
@@ -282,10 +291,34 @@ export function adapterStateSubjects(graph: Graph): readonly string[] {
     .sort(cmpUtf16)
 }
 
+/** Verbatim on-disk descriptors bound to one parsed Classic node. */
+export function entryKeyDescriptorsOfNode(graph: Graph, nodeId: string): readonly string[] {
+  return sidecarByGraph.get(graph)?.entrySpecs.get(nodeId) ?? []
+}
+
+/** Whether manifest-owned root/workspace declarations govern emitted keys. */
+export function hasRootDescriptorAnchors(graph: Graph): boolean {
+  return sidecarByGraph.get(graph)?.rootDescriptorsAnchored === true
+}
+
 // === Mutation ===============================================================
 
 function rememberSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
   if (isEmptySidecar(sidecar)) return
+  sidecarByGraph.set(graph, sidecar)
+}
+
+/**
+ * Bind the sidecar a transformation carried forward, even when nothing survived.
+ * Parse binds only non-empty state, so a binding on a parsed graph means the
+ * state is load-bearing. After a transformation, a binding means this adapter
+ * accounted for its state: a version bump outside every recorded descriptor
+ * legitimately empties the sidecar, and strict stringify must not read that as
+ * a public mutation that detached it. An empty result never displaces a
+ * binding the target already carries.
+ */
+function rebindSidecar(graph: Graph, sidecar: YarnClassicSidecar): void {
+  if (isEmptySidecar(sidecar) && sidecarByGraph.has(graph)) return
   sidecarByGraph.set(graph, sidecar)
 }
 
@@ -296,7 +329,7 @@ export function rebindAdapterState(
   const sidecar = sidecarByGraph.get(source)
   if (sidecar === undefined) return { graph: target, invalidated: [] }
   const pruned = pruneSidecar(sidecar, target)
-  rememberSidecar(target, pruned)
+  rebindSidecar(target, pruned)
   const invalidated = [...new Set([
     ...sidecar.entrySpecs.keys(),
     ...(sidecar.entryExtras?.keys() ?? []),
@@ -327,7 +360,7 @@ export function check(input: string): boolean {
 export function parse(input: string, options: YarnClassicParseOptions = {}): Graph {
   const normalized = stripBom(normalizeLineEndings(input))
   ensureClassicHeader(normalized)
-  const context = createClassicParseContext(options)
+  const context = createClassicParseContext(options, normalized.endsWith('\n'))
   addClassicEntryNodes(context, parseEntries(normalized, context.globalDirectives))
   reportClassicUnknownFields(context)
   addClassicEntryEdges(context)
@@ -337,14 +370,17 @@ export function parse(input: string, options: YarnClassicParseOptions = {}): Gra
 export function stringify(graph: Graph, options: YarnClassicStringifyOptions = {}): string {
   const context = createClassicStringifyContext(graph, options)
   const entries = dedupeClassicNodes(context)
-    .map(node => buildClassicEntry(context, node))
+    .flatMap(node => buildClassicEntries(context, node))
     .sort((a, b) => cmpUtf16(a.entrySortKey, b.entrySortKey))
   const body = entries.length === 0 ? '' : `${entries.map(entry => entry.text).join('\n\n')}\n`
   const directives = context.emitSidecar?.globalDirectives
     ?.map(directive => directive.raw)
     .join('\n') ?? ''
   const output = HEADER + (directives === '' ? '' : `${directives}\n\n`) + body
-  return options.lineEnding === 'crlf' ? output.replace(/\n/g, '\r\n') : output
+  const terminated = context.emitSidecar?.endsWithNewline === false
+    ? output.replace(/\n+$/u, '')
+    : output
+  return options.lineEnding === 'crlf' ? terminated.replace(/\n/g, '\r\n') : terminated
 }
 
 export function enrich(
@@ -355,15 +391,83 @@ export function enrich(
   if (options.manifests === undefined) return classicMissingManifestsResult(graph)
   const memberManifests = memberManifestsByName(options.manifests)
   const rootManifest = options.manifests['']
-  const rootNodeId = rootManifest?.name !== undefined && rootManifest.version !== undefined
-    ? `${rootManifest.name}@${rootManifest.version}`
-    : undefined
+  const rootNodeId = rootManifest === undefined
+    ? undefined
+    : serializeNodeId(
+        rootManifest.name ?? '.',
+        rootManifest.version ?? '0.0.0',
+        [],
+      )
   const specIndex = specIndexOfGraph(graph, sidecar)
   const plan = planClassicEnrich(graph, rootNodeId, rootManifest, memberManifests, specIndex, options.overrides ?? [])
-  if (isClassicEnrichPlanEmpty(plan)) return { graph, diagnostics: [] }
-  const enriched = applyClassicEnrichPlan(graph, plan)
-  rememberSidecar(enriched, sidecar ?? { entrySpecs: new Map() })
-  return { graph: enriched, diagnostics: [] }
+  const enriched = isClassicEnrichPlanEmpty(plan) ? graph : applyClassicEnrichPlan(graph, plan)
+  const anchoredSidecar: YarnClassicSidecar = {
+    ...(sidecar ?? { entrySpecs: new Map() }),
+    rootDescriptorsAnchored: true,
+  }
+  const anchored = withSidecarPropagation(enriched, anchoredSidecar)
+  const seeds = Array.from(anchored.nodes())
+    .filter(node => node.workspacePath !== undefined)
+    .map(node => node.id)
+  // An empty manifest map supplies no reachability authority. Match generic
+  // optimize's rootless guard: without at least one materialised root/member,
+  // retaining the parsed graph is safer than treating every entry as stale.
+  const pruned = seeds.length === 0 ? anchored : optimizeUnreachable(anchored, {
+    // A parsed Classic lock has no root/member entries of its own. Once
+    // manifests have materialised those nodes, they are the only authoritative
+    // liveness seeds: a zero-incoming package entry is not a root, it is either
+    // a manifest declaration or stale lock residue.
+    seeds,
+    compare: cmpUtf16,
+    edgeSeparator: '\u0000',
+    tarballInputs: node => ({
+      name: node.name,
+      version: node.version,
+      patch: node.patch,
+      source: node.source,
+    }),
+    skipMissingTarballs: true,
+    // Yarn 1 records peer declarations as metadata only; it never installs a
+    // package merely because a root or workspace manifest names it as a peer.
+    walkKinds: ['dep', 'dev', 'optional', 'bundled'],
+  }).graph
+  const diagnostics = unrequestedRootDescriptorDiagnostics(sidecar, anchored, pruned)
+  return { graph: pruned, diagnostics }
+}
+
+function unrequestedRootDescriptorDiagnostics(
+  parsedSidecar: YarnClassicSidecar | undefined,
+  anchoredGraph: Graph,
+  prunedGraph: Graph,
+): Diagnostic[] {
+  if (parsedSidecar === undefined) return []
+  const diagnostics: Diagnostic[] = []
+  for (const [nodeId, parsedSpecs] of parsedSidecar.entrySpecs) {
+    const node = anchoredGraph.getNode(nodeId)
+    if (node === undefined) continue
+    const anchoredLiveSpecs = new Set(entrySpecsOfNode(anchoredGraph, node))
+    const prunedNode = prunedGraph.getNode(nodeId)
+    const prunedLiveSpecs = prunedNode === undefined
+      ? new Set<string>()
+      : new Set(entrySpecsOfNode(prunedGraph, prunedNode))
+    for (const descriptor of parsedSpecs) {
+      if (prunedLiveSpecs.has(descriptor)) continue
+      const requestedBy = anchoredLiveSpecs.has(descriptor)
+        ? 'unreachable-entry-only'
+        : 'none'
+      diagnostics.push({
+        code: 'YARN_CLASSIC_ROOT_DESCRIPTOR_UNREQUESTED',
+        severity: 'warning',
+        subject: descriptor,
+        message: requestedBy === 'none'
+          ? `manifest set does not request yarn-classic descriptor ${JSON.stringify(descriptor)}; dropping it from the emitted entry key`
+          : `yarn-classic descriptor ${JSON.stringify(descriptor)} is requested only by an unreachable entry; dropping its unreachable closure`,
+        data: { requestedBy },
+      })
+    }
+  }
+  return diagnostics.sort((left, right) =>
+    cmpUtf16(JSON.stringify(left.subject ?? ''), JSON.stringify(right.subject ?? '')))
 }
 
 export function optimize(
@@ -385,7 +489,7 @@ export function optimize(
   })
 
   if (result.graph !== graph && sidecar !== undefined) {
-    rememberSidecar(result.graph, pruneSidecar(sidecar, result.graph))
+    rebindSidecar(result.graph, pruneSidecar(sidecar, result.graph))
   }
   return result
 }
@@ -639,12 +743,16 @@ export function parseResolution(input: string): string {
   throw parseFailed(`unsupported resolved URL ${JSON.stringify(input)}`)
 }
 
-function createClassicParseContext(options: YarnClassicParseOptions): ClassicParseContext {
+function createClassicParseContext(
+  options: YarnClassicParseOptions,
+  endsWithNewline: boolean,
+): ClassicParseContext {
   return {
     builder: newBuilder(),
     diagnostics: [],
     specIndex: new Map(),
     sidecar: new Map(),
+    entryGroups: new Map(),
     entryExtras: new Map(),
     // F8 — Rung-4-dropped refs are re-emitted from the matching inner block.
     unresolvedDeps: new Map(),
@@ -655,6 +763,7 @@ function createClassicParseContext(options: YarnClassicParseOptions): ClassicPar
     semverCandidatesByName: new Map(),
     options,
     globalDirectives: [],
+    endsWithNewline,
   }
 }
 
@@ -735,6 +844,20 @@ function mergeClassicDuplicateEntry(
     context.specIndex.set(spec, id)
   }
   context.sidecar.set(id, merged)
+  const groups = context.entryGroups.get(id) ?? []
+  const requestedNames = new Set(descriptors.map(patternNameOf))
+  const matchingGroup = groups.find(group =>
+    group.some(spec => requestedNames.has(patternNameOf(spec))),
+  )
+  if (matchingGroup === undefined) {
+    groups.push(descriptors.slice())
+  } else {
+    for (const spec of descriptors) {
+      if (!matchingGroup.includes(spec)) matchingGroup.push(spec)
+    }
+    matchingGroup.sort(cmpUtf16)
+  }
+  context.entryGroups.set(id, groups)
   return true
 }
 
@@ -783,6 +906,7 @@ function recordClassicEntrySidecars(
   descriptors: readonly string[],
 ): void {
   context.sidecar.set(node.id, descriptors.slice())
+  context.entryGroups.set(node.id, [descriptors.slice()])
   if (entry.extras !== undefined && entry.extras.length > 0) {
     context.entryExtras.set(node.id, entry.extras)
     for (const raw of entry.extras) context.unknownFields.add(raw.split(' ', 1)[0] ?? raw)
@@ -822,6 +946,9 @@ function sealClassicParse(context: ClassicParseContext): Graph {
       context.entryExtras,
       context.unresolvedDeps,
       context.globalDirectives,
+      undefined,
+      context.entryGroups,
+      context.endsWithNewline ? undefined : false,
     )
     rememberSidecar(graph, parsedSidecar)
     return isEmptySidecar(parsedSidecar) ? graph : withSidecarPropagation(graph, parsedSidecar)
@@ -854,6 +981,18 @@ function remapSidecar(
   }
   const identityStr = (s: string): string => s
   const entrySpecs = remap(sidecar.entrySpecs, identityStr)
+  const entryGroups = sidecar.entryGroups === undefined
+    ? undefined
+    : (() => {
+        const next = new Map<string, string[][]>()
+        for (const [oldId, groups] of sidecar.entryGroups) {
+          const nextId = nextNodes.get(oldId)?.id ?? oldId
+          if (graph.getNode(nextId) !== undefined) {
+            next.set(nextId, groups.map(group => group.slice()))
+          }
+        }
+        return next
+      })()
   // Carry entry-key DESCRIPTORS across a same-name version BUMP when the range still
   // SATISFIES the new version. A caret/tilde range applies to a RANGE of versions
   // (`lodash@^4.17.0` survives 4.17.11→4.18.0), so dropping it ORPHANS the consumer's
@@ -868,12 +1007,31 @@ function remapSidecar(
     const merged = new Set(entrySpecs.get(newNode.id) ?? [])
     for (const d of carried) merged.add(d)
     entrySpecs.set(newNode.id, [...merged])
+    if (entryGroups !== undefined) {
+      const carriedGroups = (sidecar.entryGroups?.get(oldId) ?? [])
+        .map(group => group.filter(d => descriptorSatisfies(d, newNode.version)))
+        .filter(group => group.length > 0)
+      if (carriedGroups.length > 0) {
+        entryGroups.set(newNode.id, [
+          ...(entryGroups.get(newNode.id) ?? []),
+          ...carriedGroups.map(group => group.slice()),
+        ])
+      }
+    }
   }
   const entryExtras = sidecar.entryExtras !== undefined ? remap(sidecar.entryExtras, identityStr) : undefined
   const unresolvedDeps = sidecar.unresolvedDeps !== undefined
     ? remap(sidecar.unresolvedDeps, (r: UnresolvedDepRef) => ({ ...r }))
     : undefined
-  return buildSidecar(entrySpecs, entryExtras, unresolvedDeps, sidecar.globalDirectives)
+  return buildSidecar(
+    entrySpecs,
+    entryExtras,
+    unresolvedDeps,
+    sidecar.globalDirectives,
+    sidecar.rootDescriptorsAnchored,
+    entryGroups,
+    sidecar.endsWithNewline,
+  )
 }
 
 /**
@@ -934,10 +1092,15 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
     layoutHints: ()        => graph.layoutHints(),
     mutate(transaction: (m: Mutator) => void): MutateResult {
       const result = graph.mutate(transaction)
-      // Empty-sidecar fast-path (mirrors berry's `withSidecarPropagation`): with
-      // nothing to carry there is no point remapping or re-wrapping — return the
-      // bare mutate result and skip the proxy allocation entirely.
-      if (isEmptySidecar(sidecar)) return result
+      // `parse()` attaches project-root lineage to this proxy (the public graph),
+      // not to the private graph it delegates to. Carry that context across the
+      // delegated mutation before wrapping the result again; otherwise public
+      // operations such as complete/optimize lose the root required by strict
+      // patch reparse verification.
+      inheritMutationLineage(proxy, result.graph)
+      // No empty-sidecar fast path: a sidecar emptied by an earlier mutation
+      // still has to be rebound and re-wrapped, or the next mutation in the
+      // chain returns a bare graph that strict stringify reads as detached.
       // Identity-preserving NodeId re-key from the applied ChangeRecords for
       // IDENTITY-PRESERVING renames only (`name@version[+…]` base unchanged — a
       // peerContext shift). A genuine version/identity change is left UNMAPPED so
@@ -960,15 +1123,16 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnClassicSidecar): Grap
         // else: a genuine name/identity change — the old descriptors do not apply; drop.
       }
       const nextSidecar = remapSidecar(sidecar, nextNodes, bumpedNodes, result.graph)
-      rememberSidecar(result.graph, nextSidecar)
+      rebindSidecar(result.graph, nextSidecar)
       // Re-wrap the new graph so a SUBSEQUENT mutate propagates the sidecar too
       // (the modify primitives chain several mutate calls).
       return { ...result, graph: withSidecarPropagation(result.graph, nextSidecar) }
     },
   }
+  inheritMutationLineage(graph, proxy)
   // Register the sidecar on the proxy instance too so stringify works when
   // called with the proxy directly (not just with the underlying graph).
-  rememberSidecar(proxy, sidecar)
+  rebindSidecar(proxy, sidecar)
   return proxy
 }
 
@@ -1492,6 +1656,9 @@ function dedupeClassicNodes(context: ClassicStringifyContext): Node[] {
   const identities = new Set<string>()
   const nodes: Node[] = []
   for (const node of sorted) {
+    if (node.workspacePath !== undefined && context.emitSidecar?.rootDescriptorsAnchored === true) {
+      continue
+    }
     if (node.workspacePath !== undefined) {
       nodes.push(node)
       continue
@@ -1509,20 +1676,69 @@ function dedupeClassicNodes(context: ClassicStringifyContext): Node[] {
   return nodes
 }
 
-function buildClassicEntry(
+// The name a pattern requests: `sw` for `sw@npm:string-width@^4.2.0`, `@scope/x` for
+// `@scope/x@^1`. Never throws — a spec yarn could not have written (a nameless root's
+// `@0.0.0`) is its own group, which is what it was before entries were split by name.
+function patternNameOf(spec: string): string {
+  const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+  return at <= 0 ? spec : spec.slice(0, at)
+}
+
+function entrySpecGroupsOfNode(graph: Graph, node: Node): string[][] {
+  const finalSpecs = entrySpecsOfNode(graph, node)
+  const finalSet = new Set(finalSpecs)
+  const assigned = new Set<string>()
+  const groups: string[][] = []
+
+  // Retain the source entry-head partition. Filtering is descriptor-local: an
+  // anchored stale descriptor may disappear without merging or splitting the
+  // remaining members of its parsed entry.
+  for (const parsedGroup of sidecarByGraph.get(graph)?.entryGroups?.get(node.id) ?? []) {
+    const kept = parsedGroup.filter(spec => finalSet.has(spec))
+    if (kept.length === 0) continue
+    groups.push(kept)
+    for (const spec of kept) assigned.add(spec)
+  }
+
+  // New descriptors have no parsed partition. Yarn joins one to an existing
+  // entry that already holds its requested name; otherwise the first such
+  // descriptor starts a fresh per-name entry and later additions join it.
+  for (const spec of finalSpecs) {
+    if (assigned.has(spec)) continue
+    const requestedName = patternNameOf(spec)
+    const group = groups.find(candidate =>
+      candidate.some(member => patternNameOf(member) === requestedName),
+    )
+    if (group === undefined) groups.push([spec])
+    else group.push(spec)
+  }
+
+  return groups
+}
+
+// Yarn 1 preserves the entry partition it parsed, including canonical locks that
+// group an npm alias with plain descriptors and canonical locks that keep them
+// separate. Only descriptors with no parsed provenance use the per-requested-name
+// grouping Yarn creates for fresh entries.
+function buildClassicEntries(
   context: ClassicStringifyContext,
   node: Node,
-): { key: string; text: string; entrySortKey: string } {
+): { key: string; text: string; entrySortKey: string }[] {
   reportPatchDrop(node, context.warnedPatches, context.emitDiagnostic)
   reportPeerContextFlatten(node, context.warnedPeerContexts, context.emitDiagnostic)
   reportDroppedPeerEdges(context.graph, node.id, context.warnedPeerEdges, context.emitDiagnostic)
-  const specs = entrySpecsOfNode(context.graph, node)
-  const key = stringifyEntryKey(specs)
-  const lines = [`${key}:`, `  version "${escapeQuoted(node.version)}"`]
-  appendClassicResolutionFields(context, node, lines)
-  appendClassicEntryExtras(context, node, lines)
-  appendClassicDependencyBlocks(context, node, lines)
-  return { key, text: lines.join('\n'), entrySortKey: specs[0] ?? key }
+  const body = [`  version "${escapeQuoted(node.version)}"`]
+  appendClassicResolutionFields(context, node, body)
+  appendClassicEntryExtras(context, node, body)
+  appendClassicDependencyBlocks(context, node, body)
+  // Yarn sorts the descriptors of every entry key (`sortAlpha`, UTF-16 code
+  // units) and places the entry by its smallest descriptor, so a descriptor
+  // that joins a parsed group is sorted in rather than appended.
+  return entrySpecGroupsOfNode(context.graph, node).map(group => {
+    const specs = [...group].sort(cmpUtf16)
+    const key = stringifyEntryKey(specs)
+    return { key, text: [`${key}:`, ...body].join('\n'), entrySortKey: specs[0] ?? key }
+  })
 }
 
 function appendClassicResolutionFields(
@@ -1611,14 +1827,16 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   // range already carries the `npm:<target>@…` locator. A canonical edge keys
   // under the node's own name. Mirrors the berry `entryKeyOfNode` alias branch.
   const liveSpecs = Array.from(graph.in(node.id))
-    .filter(edge => edge.kind === 'dep' || edge.kind === 'optional')
+    .filter(edge => edge.kind === 'dep'
+      || edge.kind === 'dev'
+      || edge.kind === 'optional')
     .filter(edge => edge.attrs?.range !== undefined)
     // A `workspace:` edge range (workspace:* / workspace:^) is NOT a yarn-classic
     // entry-key descriptor — yarn 1 has no workspace protocol; a member keys by its
     // own `file:` resolution + version. Emitting `<name>@workspace:*` as a key
     // reparses with MISSING_ENTRY/RESOLUTION_PIN diagnostics (breaking round-trip).
     .filter(edge => edge.attrs?.workspace !== true)
-    .map(edge => {
+    .flatMap(edge => {
       // A completed/mutated edge governed by an override carries the pin as
       // `overrideRange`; key by it so yarn's collapse dedups (`foo@^1` + `foo@1.0` →
       // the pin), not the raw declared range (else `--immutable` YN0028). But that
@@ -1629,12 +1847,22 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
       // `<name> "<declared>"` finds no matching entry and dangles (CASE-B). The entry
       // version is the pin either way. Non-aliased only.
       const declared = edge.attrs!.range!
-      const range = edge.attrs!.alias !== undefined
+      const anchored = sidecarByGraph.get(graph)?.rootDescriptorsAnchored === true
+      const range = anchored || edge.attrs!.alias !== undefined
         ? declared
         : (edge.attrs!.overrideRange !== undefined && satisfiesSafe(node.version, declared)
             ? edge.attrs!.overrideRange
             : declared)
-      return `${edge.attrs!.alias ?? node.name}@${range}`
+      const descriptor = `${edge.attrs!.alias ?? node.name}@${range}`
+      if (!anchored || edge.attrs!.alias !== undefined || edge.attrs!.overrideRange === undefined) {
+        return [descriptor]
+      }
+      // A matching `resolutions` rule is itself a root-level Yarn request. Yarn
+      // therefore keeps BOTH the consumer-declared descriptor and the rule's
+      // effective target on the governed entry (`foo@^1, foo@1.2.3`). The
+      // declared range prevents a dangling consumer; the override range keeps
+      // the resolution anchor that a plain Yarn install preserves.
+      return [descriptor, `${node.name}@${edge.attrs!.overrideRange}`]
     })
 
   // Union live-edge descriptors with verbatim orphan ranges from the
@@ -1657,7 +1885,11 @@ function entrySpecsOfNode(graph: Graph, node: Node): string[] {
   // (optimize). A descriptor in the entry KEY creates only a `specIndex` lookup
   // on reparse — never an edge — so re-emitting a verbatim orphan descriptor
   // cannot resurrect a removed dependency edge.
-  const sidecarSpecs = sidecarByGraph.get(graph)?.entrySpecs.get(node.id) ?? []
+  const sidecar = sidecarByGraph.get(graph)
+  if (sidecar?.rootDescriptorsAnchored === true) {
+    return Array.from(new Set(liveSpecs)).sort(cmpUtf16)
+  }
+  const sidecarSpecs = sidecar?.entrySpecs.get(node.id) ?? []
   const union = new Set<string>(liveSpecs)
   for (const spec of sidecarSpecs) union.add(spec)
   if (union.size > 0) {
@@ -1920,20 +2152,18 @@ function createClassicEnrichPlan(
   const existingRootNode = rootNodeId === undefined ? undefined : graph.getNode(rootNodeId)
   const rootNode = rootNodeId !== undefined
     && existingRootNode === undefined
-    && rootManifest?.name !== undefined
-    && rootManifest.version !== undefined
+    && rootManifest !== undefined
     ? {
       id: rootNodeId,
-      name: rootManifest.name,
-      version: rootManifest.version,
+      name: rootManifest.name ?? '.',
+      version: rootManifest.version ?? '0.0.0',
       peerContext: [],
       workspacePath: '',
     }
     : undefined
   const rootNodeReplacement = existingRootNode !== undefined
     && existingRootNode.workspacePath === undefined
-    && rootManifest?.name !== undefined
-    && rootManifest.version !== undefined
+    && rootManifest !== undefined
     ? { ...existingRootNode, workspacePath: '' }
     : undefined
   return {
@@ -1957,7 +2187,8 @@ function planExistingClassicMembers(
     if (node.workspacePath !== undefined) continue
     const member = memberManifests.get(node.name)
     if (member === undefined) continue
-    if (node.version !== '0.0.0-use.local' && node.version !== member.manifest.version) continue
+    const memberVersion = classicWorkspaceVersion(member.manifest)
+    if (node.version !== '0.0.0-use.local' && node.version !== memberVersion) continue
     const tarball = graph.tarballOf(node.id)
     if (tarball !== undefined && tarball.resolution?.type !== 'directory') continue
     plan.memberNodeReplacements.push({ ...node, workspacePath: member.path })
@@ -1981,19 +2212,23 @@ function planMissingClassicMembers(
 ): void {
   const membersAlreadyInLock = classicMembersAlreadyInLock(graph, plan)
   for (const [name, { path, manifest }] of memberManifests) {
-    if (manifest.version === undefined) continue
     if (membersAlreadyInLock.has(name)) continue
-    const memberId = `${name}@${manifest.version}`
+    const memberVersion = classicWorkspaceVersion(manifest)
+    const memberId = serializeNodeId(name, memberVersion, [])
     plan.addMemberNodes.push({
       id: memberId,
       name,
-      version: manifest.version,
+      version: memberVersion,
       peerContext: [],
       workspacePath: path,
     })
     for (const edge of desiredManifestEdges(
       graph, memberId, manifest, memberManifests, specIndex, overrides,
     )) {
+      // Yarn 1 doesn't resolve a workspace member's peerDependencies into
+      // lock entries. Keep root peers as declaration anchors, but never let a
+      // synthesized member peer create reachability or an entry-key request.
+      if (edge.kind === 'peer') continue
       plan.addMemberEdges.push(edge)
     }
   }
@@ -2123,6 +2358,7 @@ function desiredManifestEdges(
     ['dep', manifest.dependencies],
     ['dev', manifest.devDependencies],
     ['optional', manifest.optionalDependencies],
+    ['peer', manifest.peerDependencies],
   ] as const) {
     if (deps === undefined) continue
     for (const [name, range] of Object.entries(deps).sort((a, b) => cmpUtf16(a[0], b[0]))) {
@@ -2133,7 +2369,9 @@ function desiredManifestEdges(
         // its version from the manifest — otherwise the first enrich omits
         // `resolvedVersion` while a lock round-trip re-adds it, breaking enrich
         // idempotency (the workspace edge's attrs would differ).
-        const resolvedVersion = graph.getNode(dstId)?.version ?? memberManifests.get(name)?.manifest.version
+        const memberManifest = memberManifests.get(name)?.manifest
+        const resolvedVersion = graph.getNode(dstId)?.version
+          ?? (memberManifest === undefined ? undefined : classicWorkspaceVersion(memberManifest))
         const workspaceRange = resolvedVersion !== undefined && resolvedVersion !== ''
           ? { specifier: range, resolvedVersion }
           : { specifier: range }
@@ -2186,8 +2424,8 @@ function resolveManifestTarget(
   // declared range admits the member version (exact, or a satisfied semver range).
   // Guard on `byName` being empty so an on-disk lock entry always wins.
   const member = memberManifests.get(name)
-  if (member?.manifest.version !== undefined && graph.byName(name).length === 0) {
-    const v = member.manifest.version
+  if (member !== undefined && graph.byName(name).length === 0) {
+    const v = classicWorkspaceVersion(member.manifest)
     if (range === v || semver.satisfies(v, range)) return `${name}@${v}`
   }
 
@@ -2202,15 +2440,20 @@ function resolveWorkspaceMemberNodeId(
   manifestVersion: string | undefined,
 ): string | undefined {
   const candidates = graph.byName(name)
+  const effectiveVersion = manifestVersion ?? '0.0.0-use.local'
   const found = candidates.find(id => graph.getNode(id)?.version === '0.0.0-use.local')
-    ?? (manifestVersion === undefined ? undefined : candidates.find(id => graph.getNode(id)?.version === manifestVersion))
+    ?? candidates.find(id => graph.getNode(id)?.version === effectiveVersion)
     ?? candidates[0]
   if (found !== undefined) return found
   // The member is being SYNTHESIZED in this same enrich pass (no lock entry yet),
   // so it is not visible via `byName`. Resolve to its known id — `name@version`
   // from the member manifest — so the root's `workspace:` edge binds to it now
   // rather than only after a lock round-trip re-materialises the node.
-  return manifestVersion === undefined ? undefined : `${name}@${manifestVersion}`
+  return serializeNodeId(name, effectiveVersion, [])
+}
+
+function classicWorkspaceVersion(manifest: YarnClassicManifest): string {
+  return manifest.version ?? '0.0.0-use.local'
 }
 
 function rootEdgeMatches(left: Edge, right: Edge): boolean {
@@ -2234,6 +2477,15 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
       entrySpecs.set(nodeId, specs.slice())
     }
   }
+  let entryGroups: Map<string, string[][]> | undefined
+  if (sidecar.entryGroups !== undefined) {
+    entryGroups = new Map<string, string[][]>()
+    for (const [nodeId, groups] of sidecar.entryGroups) {
+      if (reachableIds.has(nodeId)) {
+        entryGroups.set(nodeId, groups.map(group => group.slice()))
+      }
+    }
+  }
   let entryExtras: Map<string, string[]> | undefined
   if (sidecar.entryExtras !== undefined) {
     entryExtras = new Map<string, string[]>()
@@ -2248,7 +2500,15 @@ function pruneSidecar(sidecar: YarnClassicSidecar, graph: Graph): YarnClassicSid
       if (reachableIds.has(nodeId)) unresolvedDeps.set(nodeId, refs.map(r => ({ ...r })))
     }
   }
-  return buildSidecar(entrySpecs, entryExtras, unresolvedDeps, sidecar.globalDirectives)
+  return buildSidecar(
+    entrySpecs,
+    entryExtras,
+    unresolvedDeps,
+    sidecar.globalDirectives,
+    sidecar.rootDescriptorsAnchored,
+    entryGroups,
+    sidecar.endsWithNewline,
+  )
 }
 
 // === HELPERS ================================================================
@@ -2430,8 +2690,14 @@ function buildSidecar(
   entryExtras: Map<string, string[]> | undefined,
   unresolvedDeps: Map<string, UnresolvedDepRef[]> | undefined,
   globalDirectives: YarnClassicGlobalDirective[] | undefined = undefined,
+  rootDescriptorsAnchored: true | undefined = undefined,
+  entryGroups: Map<string, string[][]> | undefined = undefined,
+  endsWithNewline: false | undefined = undefined,
 ): YarnClassicSidecar {
   const sidecar: YarnClassicSidecar = { entrySpecs }
+  if (rootDescriptorsAnchored === true) sidecar.rootDescriptorsAnchored = true
+  if (entryGroups !== undefined && entryGroups.size > 0) sidecar.entryGroups = entryGroups
+  if (endsWithNewline === false) sidecar.endsWithNewline = false
   if (entryExtras !== undefined && entryExtras.size > 0) sidecar.entryExtras = entryExtras
   if (unresolvedDeps !== undefined && unresolvedDeps.size > 0) sidecar.unresolvedDeps = unresolvedDeps
   if (globalDirectives !== undefined && globalDirectives.length > 0) {
@@ -2442,9 +2708,12 @@ function buildSidecar(
 
 function isEmptySidecar(sidecar: YarnClassicSidecar): boolean {
   return sidecar.entrySpecs.size === 0
+    && (sidecar.entryGroups?.size ?? 0) === 0
+    && sidecar.endsWithNewline !== false
     && (sidecar.entryExtras?.size ?? 0) === 0
     && (sidecar.unresolvedDeps?.size ?? 0) === 0
     && (sidecar.globalDirectives?.length ?? 0) === 0
+    && sidecar.rootDescriptorsAnchored !== true
 }
 
 function parseGlobalDirective(line: string): YarnClassicGlobalDirective {

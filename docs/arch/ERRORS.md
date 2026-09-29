@@ -150,9 +150,12 @@ so runtime output remains directly searchable.
 | `YARN_CLASSIC_UNKNOWN_FIELD` | info | An unrecognised Classic entry field was preserved/ignored. | Usually none; inspect when exact fidelity is required. |
 | `YARN_CLASSIC_MISSING_ENTRY` | warning | A dependency descriptor has no matching Classic lock entry. | Restore the entry or supply resolution manifests. |
 | `YARN_CLASSIC_NO_MANIFESTS` | warning | Classic resolution/peer reconstruction lacks manifests. | Pass complete manifests. |
+| `YARN_CLASSIC_ROOT_DESCRIPTORS_UNANCHORED` | warning | Parse ran without manifests, so entry-key descriptors that only the root or a workspace requests cannot be told from stale ones; all are kept verbatim. | Pass `ParseOptions.manifests` to anchor them. |
+| `YARN_CLASSIC_ROOT_DESCRIPTOR_UNREQUESTED` | warning | Parse with manifests dropped an entry-key descriptor that no root or workspace declaration and no reachable dependency edge requests, together with everything only it reached; one diagnostic per descriptor. `data.requestedBy` is `none` or `unreachable-entry-only`. | Expected for a stale descriptor. Otherwise pass the complete manifest set, including every workspace, or omit `manifests`. |
 | `YARN_CLASSIC_PEER_DROPPED` | warning | Classic cannot faithfully encode a peer edge. | Choose a capable target or accept the loss. |
 | `YARN_CLASSIC_PEER_VIRT_FLATTENED` | warning | Peer-virtual identity was flattened for Classic. | Use Berry/pnpm or accept the loss. |
 | `YARN_BERRY_BAD_ENTRY` | warning | A Berry entry is malformed or lacks canonical identity. | Regenerate `yarn.lock` or repair the entry. |
+| `YARN_BERRY_DUPLICATE_ENTRY_MERGED` | info | Two entries with identical resolution and content were merged into one entry whose key lists both descriptor sets. | No action; entries that differ in resolution or content are never merged. |
 | `YARN_BERRY_PATCH_UNRESOLVED` | warning | A Berry patch locator cannot be connected to its base package/bytes. | Supply the patch file and base entry. |
 | `YARN_BERRY_UNRESOLVED_DEP` | warning | A Berry dependency descriptor could not be resolved through the ladder. | Supply manifests/overrides or restore the missing entry. |
 | `YARN_BERRY_V{4..10}_INVALID_INTEGRITY` | warning | A Berry checksum is malformed and was dropped. | Regenerate with Yarn or provide verified cache bytes. |
@@ -249,6 +252,7 @@ output, and receipt failures use `error`.
 | `MODIFY_LICENSE_FLAGGED` | warning | Package license matched a flag policy. | Review caller policy. |
 | `MODIFY_LICENSE_BLOCKED` | warning | A blocked-license package is workspace-rooted and cannot be removed safely. | Change policy/dependency roots manually. |
 | `MODIFY_RESOLVE_FAILED` | warning | Registry resolution returned no version. | Check range, registry, and resolver evidence. |
+| `MODIFY_RANGE_PENDING` | warning | A `'replaceRange'` edit moved a declaration whose new range nothing in the graph satisfies yet; the edge keeps its previous target. `data` carries `parent`, `name`, `declaredRange`, `target` and `edgeKind`. Strict `stringify` refuses the graph until a `'replaceVersion'` edit or `complete` rebinds that edge. | Run the `'replaceRange'` edit after the `'replaceVersion'` it accompanies, or `complete` with registry sources. |
 | `MODIFY_SENTINEL_REFUSED` | warning | Byte-changing mutation was refused for a sentinel-keyed source. | Materialise a normal source identity first. |
 | `COMPLETION_NODE_ADDED` | info | Tree completion added a registry node. | No action. |
 | `COMPLETION_EDGE_RESOLVED` | info | Completion wired an edge through find-up reuse. | No action. |

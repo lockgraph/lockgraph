@@ -88,9 +88,15 @@ export async function computeBerryChecksumViaLibzip(
       const zipFs = new ZipFS(null, { level })
       const prefix = `/node_modules/${ident}`
       for (const f of parseTar(tar, limits)) {
-        const rel = f.name.split('/').slice(1).join('/') // stripComponents:1
+        const rel = f.name.replace(/\/+$/u, '').split('/').slice(1).join('/') // stripComponents:1
         if (rel === '') continue
         const full = `${prefix}/${rel}`
+        if (f.dir) {
+          // yarn creates a listed directory where the archive lists it, not when its
+          // first file arrives — the order that decides the zip bytes.
+          zipFs.mkdirpSync(full, { chmod: 0o755, utimes: [SAFE_TIME, SAFE_TIME] })
+          continue
+        }
         zipFs.mkdirpSync(full.slice(0, full.lastIndexOf('/')), { chmod: 0o755, utimes: [SAFE_TIME, SAFE_TIME] })
         // yarn NORMALIZES the entry mode — 0o755 if any execute bit, else 0o644 — it
         // does NOT preserve the raw tar mode. Passing `f.mode` verbatim diverges the

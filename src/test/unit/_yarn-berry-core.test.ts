@@ -315,7 +315,7 @@ describe('yarnBerryChecksumFreeNodes', () => {
     expect(free.size).toBe(1)
   })
 
-  it('holds nothing for a graph with no parsed yarn-berry conditions', () => {
+  it('holds a completion-added conditioned package reached only through an optional edge', () => {
     const b = newBuilder()
     const root = serializeNodeId('root', '0.0.0', [])
     const dep = serializeNodeId('dep', '1.0.0', [])
@@ -326,7 +326,7 @@ describe('yarnBerryChecksumFreeNodes', () => {
       os: ['darwin'],
       resolution: { type: 'tarball', url: 'https://registry.npmjs.org/dep/-/dep-1.0.0.tgz' },
     })
-    expect(yarnBerryChecksumFreeNodes(b.seal(), 'yarn-berry-v9').size).toBe(0)
+    expect([...yarnBerryChecksumFreeNodes(b.seal(), 'yarn-berry-v9')]).toEqual(['dep@1.0.0'])
   })
 })
 
@@ -344,18 +344,43 @@ describe('parse', () => {
     )).toThrow(/missing 'version'/)
   })
 
-  it('throws IRREDUCIBLE_LOSS when two separate entry blocks collapse onto one NodeId', () => {
-    // Berry has no merge path, unlike classic: two distinct entry blocks that
-    // serialize to the same NodeId (same name@version, both plain npm registry,
-    // no discriminator) are an irreducible collision and throw with the hint.
+  it('merges identical duplicate-resolution entries and unions their descriptors', () => {
+    const graph = parseV9(
+      BERRY_V9_HEAD +
+      '"lodash@npm:4.17.21":\n' +
+      '  version: 4.17.21\n' +
+      '  resolution: "lodash@npm:4.17.21"\n' +
+      '  languageName: node\n' +
+      '  linkType: hard\n\n' +
+      '"lodash@npm:^4.0.0":\n' +
+      '  version: 4.17.21\n' +
+      '  resolution: "lodash@npm:4.17.21"\n' +
+      '  languageName: node\n' +
+      '  linkType: hard\n',
+    )
+
+    expect(graph.byName('lodash')).toEqual(['lodash@4.17.21'])
+    expect(graph.diagnostics()).toContainEqual(expect.objectContaining({
+      code: 'YARN_BERRY_DUPLICATE_ENTRY_MERGED',
+      severity: 'info',
+      subject: 'lodash@4.17.21',
+    }))
+    const output = stringifyV9(graph)
+    expect(output).toContain('"lodash@npm:4.17.21, lodash@npm:^4.0.0":')
+    expect(output.match(/resolution: "lodash@npm:4\.17\.21"/g)).toHaveLength(1)
+  })
+
+  it('throws IRREDUCIBLE_LOSS when same-resolution entries differ in content', () => {
     expect(() => parseV9(
       BERRY_V9_HEAD +
       '"lodash@npm:4.17.21":\n' +
       '  version: 4.17.21\n' +
-      '  resolution: "lodash@npm:4.17.21"\n\n' +
+      '  resolution: "lodash@npm:4.17.21"\n' +
+      '  linkType: hard\n\n' +
       '"lodash@npm:^4.0.0":\n' +
       '  version: 4.17.21\n' +
-      '  resolution: "lodash@npm:4.17.21"\n',
+      '  resolution: "lodash@npm:4.17.21"\n' +
+      '  linkType: soft\n',
     )).toThrow(/two entries collapse onto NodeId lodash@4\.17\.21/)
   })
 

@@ -1,4 +1,5 @@
 import type {
+  EdgeKind,
   Mutator,
   PackageMetadataField,
   TarballKeyInputs,
@@ -24,6 +25,43 @@ export const PACKAGE_METADATA_FIELDS = Object.freeze([
 ] as const)
 
 export type PackageMetadataPayload = Pick<TarballPayload, PackageMetadataField>
+
+export interface PackumentDependencyDeclaration {
+  readonly name: string
+  readonly range: string
+  readonly kind: Extract<EdgeKind, 'dep' | 'optional' | 'peer'>
+}
+
+/** Install-time dependency declarations in deterministic order.
+ *
+ * npm packuments may repeat an optional dependency in `dependencies`. npm's
+ * manifest rule is that `optionalDependencies` overrides the same-name
+ * `dependencies` entry, including its range. Normalize that producer shape at
+ * the registry boundary so every graph-edge consumer sees one optional
+ * declaration rather than contradictory dep + optional edges. */
+export function dependencyDeclarationsOfPackumentVersion(
+  pv: PackumentVersion,
+): readonly PackumentDependencyDeclaration[] {
+  const optional = pv.optionalDependencies
+  const buckets: readonly [
+    Readonly<Record<string, string>> | undefined,
+    PackumentDependencyDeclaration['kind'],
+  ][] = [
+    [pv.dependencies, 'dep'],
+    [optional, 'optional'],
+    [pv.peerDependencies, 'peer'],
+  ]
+  const declarations: PackumentDependencyDeclaration[] = []
+  for (const [dependencies, kind] of buckets) {
+    if (dependencies === undefined) continue
+    for (const name of Object.keys(dependencies).sort()) {
+      if (kind === 'dep' && optional !== undefined
+        && Object.prototype.hasOwnProperty.call(optional, name)) continue
+      declarations.push({ name, range: dependencies[name]!, kind })
+    }
+  }
+  return Object.freeze(declarations)
+}
 
 function isRuntimeHash(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false

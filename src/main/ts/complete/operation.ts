@@ -22,6 +22,11 @@ import {
   type ResolutionStrategy,
 } from './tree-complete.ts'
 import type { CompletionBudget } from './backtrack.ts'
+import { targetRequestOf } from '../completeness/targets.ts'
+import {
+  descriptorBindingsForTarget,
+  packageVariantBindingsForTarget,
+} from './descriptor-bindings.ts'
 
 export type Awaitable<Value> = Value | Promise<Value>
 
@@ -176,6 +181,7 @@ export async function complete(
   options: CompleteOptions,
 ): Promise<CompleteResult> {
   const registry = operationRegistry(graph, options)
+  const target = targetRequestOf(options.target)
   const result = await completeTransitives(graph, registry, {
     ...(options.seed === undefined ? {} : {
       seed: {
@@ -189,6 +195,8 @@ export async function complete(
     constraints: options.constraints?.map(legacyCondition),
     onUnevaluable: options.onUnevaluable,
     budget: options.budget,
+    descriptorBindings: descriptorBindingsForTarget(graph, target.format),
+    packageVariants: packageVariantBindingsForTarget(graph, target.format),
   })
   let completed = result.graph
   const diagnostics = [...result.unresolved]

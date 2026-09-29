@@ -441,24 +441,22 @@ describe('enrich/refurbish ( + )', () => {
     ])
   })
 
-  it('fills a `mixed` cacheKey 9 (yarn 3.6+) via the pure-JS nodejs-hash port — NO libzip', async () => {
-    // cacheKey 9 `mixed` is pure-JS reproducible: pako's "nodejs-compatible" match-hash
-    // (`legacyHash:false`), the ONLY delta from cacheKey 7/8. Verified byte-exact over
-    // the real yarn-3.6+ cache (40/40). No `@yarnpkg/libzip` involved.
+  it('defers a `mixed` cacheKey 9 gap — the builds that write it differ in zlib', async () => {
+    // yarn 4.0.0-rc.14 writes cacheKey 9 and diverges from pako on large inputs (e.g.
+    // ua-parser-js@0.7.33) while matching on small ones, so no recipe is safe to trust.
     const graph = graphOf(b => { addPackage(b, { name: 'ms', version: '2.1.3' }) })
     const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({ 'ms@2.1.3': tgz('ms-2.1.3.tgz') }), { cacheKey: '9' })
 
-    expect(r.enriched).toEqual(['ms@2.1.3'])
-    expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
-      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '9'),
-    )
+    expect(r.enriched).toEqual([])
+    expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()
+    expect(r.unresolved.map(d => d.data)).toEqual([{ reason: 'recipe-unreproducible' }])
   })
 
-  it('CALIBRATES the pure-JS port — a reproducible sibling gates the fills (mixed 9)', async () => {
+  it('CALIBRATES the pure-JS port — a reproducible sibling gates the fills (mixed 8)', async () => {
     // A real sibling checksum the port reproduces PROVES pako matches this lock's yarn
-    // zlib → trust the fills. `is-buffer` is the anchor (real cacheKey-9 checksum),
+    // zlib → trust the fills. `is-buffer` is the anchor (a cacheKey-8 checksum),
     // `ms` the gap.
-    const anchor = computeBerryChecksum(tgz('is-buffer-2.0.5.tgz'), 'is-buffer', '9')
+    const anchor = computeBerryChecksum(tgz('is-buffer-2.0.5.tgz'), 'is-buffer', '8')
     const graph = graphOf(b => {
       addPackage(b, { name: 'is-buffer', version: '2.0.5' })
       addPackage(b, { name: 'ms',        version: '2.1.3' })
@@ -467,11 +465,11 @@ describe('enrich/refurbish ( + )', () => {
     const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
       'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
       'ms@2.1.3':        tgz('ms-2.1.3.tgz'),
-    }), { cacheKey: '9' })
+    }), { cacheKey: '8' })
 
     expect(r.enriched).toEqual(['ms@2.1.3'])
     expect(emitBerryChecksum(r.graph.tarballOf('ms@2.1.3')!.integrity!)).toBe(
-      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '9'),
+      computeBerryChecksum(tgz('ms-2.1.3.tgz'), 'ms', '8'),
     )
   })
 
@@ -489,7 +487,7 @@ describe('enrich/refurbish ( + )', () => {
     const r = await refurbish(graph, 'yarn-berry-v6', sourceOf({
       'is-buffer@2.0.5': tgz('is-buffer-2.0.5.tgz'),
       'ms@2.1.3':        tgz('ms-2.1.3.tgz'),
-    }), { cacheKey: '9' })
+    }), { cacheKey: '8' })
 
     expect(r.enriched).toEqual([])
     expect(r.graph.tarballOf('ms@2.1.3')?.integrity).toBeUndefined()

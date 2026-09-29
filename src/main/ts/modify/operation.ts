@@ -7,7 +7,9 @@ import type {
   TarballKey,
 } from '../graph.ts'
 import type { OperationOptions } from '../api/operation.ts'
+import type { FormatId } from '../api/format-contract.ts'
 import { frozenRegistry } from '../registry/frozen.ts'
+import { targetRequestOf } from '../completeness/targets.ts'
 import type { RegistryAdapter } from '../registry/types.ts'
 import { addDependency, type AddableEdgeKind } from './add-dependency.ts'
 import { applyPatch, type ApplyPatchSpec } from './apply-patch.ts'
@@ -18,9 +20,11 @@ import {
   replaceVersion,
   type ReplaceVersionSelector,
 } from './replace-version.ts'
+import { replaceRange, type ReplaceRangeEdgeKind } from './replace-range.ts'
 
 export type { ApplyPatchSpec } from './apply-patch.ts'
 export type { ReplaceVersionSelector } from './replace-version.ts'
+export type { ReplaceRangeEdgeKind } from './replace-range.ts'
 
 export type Modification =
   | Readonly<{
@@ -32,6 +36,14 @@ export type Modification =
       kind: 'pinOverride'
       name: string
       to: string
+    }>
+  | Readonly<{
+      kind: 'replaceRange'
+      parent: NodeId
+      name: string
+      to: string
+      from?: string
+      edge?: ReplaceRangeEdgeKind
     }>
   | Readonly<{
       kind: 'addDependency'
@@ -148,7 +160,13 @@ export async function modify(
 
   for (const modification of changes) {
     const before = current
-    const result = await applyModification(current, modification, context, options.onDiagnostic)
+    const result = await applyModification(
+      current,
+      modification,
+      targetRequestOf(options.target).format,
+      context,
+      options.onDiagnostic,
+    )
     current = result.graph
     diagnostics.push(...result.diagnostics)
     for (const id of result.added) added.add(id)
@@ -174,6 +192,7 @@ interface ModificationStepResult {
 async function applyModification(
   graph: Graph,
   modification: Modification,
+  format: FormatId,
   context: Readonly<{ registry: RegistryAdapter }>,
   onDiagnostic: ModifyOptions['onDiagnostic'],
 ): Promise<ModificationStepResult> {
@@ -193,6 +212,16 @@ async function applyModification(
         graph,
         modification.name,
         modification.to,
+        context,
+        { onDiagnostic },
+      )
+      return step(result)
+    }
+    case 'replaceRange': {
+      const result = await replaceRange(
+        graph,
+        modification,
+        format,
         context,
         { onDiagnostic },
       )

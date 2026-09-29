@@ -93,6 +93,7 @@ workspace and override material from the project, controlled by `cwd` and
 | `format` | `FormatId` | no | detected | Source format. |
 | `options.cwd` | `string` | no | `process.cwd()` | Discovery start for workspace and policy material, and for the registry the project's own configuration declares. |
 | `options.registry` | `string` | no | | The registry a lock does not record. Absolute `http(s)`, no query, fragment or credentials. |
+| `options.manifests` | `Record<string, object>` | no | | The project's `package.json` objects, keyed by workspace path. Requires `format`. |
 | `options.sources.policy` | `PmConfigEvidence` | no | discovered | Package-manager configuration evidence. |
 | `options.onDiagnostic` | `DiagnosticObserver` | no | | Non-fatal findings, in emission order. |
 
@@ -104,6 +105,29 @@ undetermined — and no public default is substituted. Pass `registry`, or `cwd`
 configuration can be read, to determine it. A target that cannot express an undetermined host says
 so: npm omits `resolved`, pnpm keeps the integrity-only spelling, berry writes the plain `npm:`
 locator, and yarn-classic refuses, naming the package and the two options.
+
+**Manifests tell a root request from a stale one.** A yarn v1 lock has no entry for the root
+or its workspaces, so a descriptor no entry requests is either held by a `package.json` or left
+behind by an earlier edit — and only the manifest can say which. Pass the objects as read:
+
+- The key is the node's `workspacePath` exactly — `''` for the root, a POSIX relative path such
+  as `packages/a` for a member. A key with a backslash, a leading `/`, or an empty, `.` or `..`
+  segment is rejected with a `TypeError`, so on Windows convert a `path.relative` result to `/`
+  separators first.
+- Fields lockgraph does not use (`private`, `scripts`, `engines`, …) are ignored, not rejected.
+- Pass every workspace. A descriptor that only a missing manifest declares is dropped.
+- Keep declarations and entry keys in step. In any lock Yarn wrote, each root or workspace
+  declaration is an entry-key descriptor of the lock; a hand-made fixture must keep that property.
+
+The graph keeps them; `modify`, `complete` and `stringify` need nothing more. With manifests, a
+yarn-classic entry keeps a descriptor only while a root/workspace declaration in dependencies,
+devDependencies or optionalDependencies, or a live dependency edge, asks for it; peer declarations
+anchor nothing, since Yarn 1 does not install peers. Parse drops whatever those requests do not
+reach, and reports each dropped descriptor as a `YARN_CLASSIC_ROOT_DESCRIPTOR_UNREQUESTED`
+warning. The root and workspace nodes are never written as entries, and a root manifest that
+lacks a name or version still anchors. Without manifests the lock's own descriptors are kept
+verbatim and a `YARN_CLASSIC_ROOT_DESCRIPTORS_UNANCHORED` warning says the two cases cannot be told
+apart.
 
 **Returns** `Graph`.
 
@@ -226,10 +250,26 @@ are collected once for the whole batch.
 |---|---|
 | `replaceVersion` | `selector: ReplaceVersionSelector`, `to: string` |
 | `pinOverride` | `name: string`, `to: string` |
+| `replaceRange` | `parent: NodeId`, `name: string`, `to: string`, `from?: string`, `edge?: 'dep' \| 'dev' \| 'optional'` |
 | `addDependency` | `parent: NodeId`, `name: string`, `range: string`, `edge: EdgeKind` |
 | `removeDependency` | `parent: NodeId`, `name: string` |
 | `applyPatch` | `ApplyPatchSpec` |
 | `filterLicense` | allow / deny sets |
+
+`'replaceRange'` changes a declared range — the edit a `package.json` receives — where
+`'replaceVersion'` changes a resolved version. `parent` is one root or workspace node, so a
+workspace can be retargeted while its siblings keep their ranges. `from`, when given, must equal
+the current range, ignoring an optional `npm:` prefix on either side, or the edit fails; `edge`
+picks the declaration when one name is listed under more than one kind. The old descriptor stays
+in the lock only while something else still requests it. Supported for yarn-classic and
+yarn-berry; other targets report `CAPABILITY_LACK`.
+
+The new range resolves against the graph it is given, so run the edit after the
+`'replaceVersion'` it accompanies: it then binds to the version already in the graph. When nothing
+in the graph satisfies the range yet, the declaration still moves but keeps its previous target,
+and a `MODIFY_RANGE_PENDING` warning names the pair. Strict `stringify` refuses the graph until a
+later `'replaceVersion'` or `complete` rebinds that declaration, since the lock would otherwise map
+a range to a version outside it.
 
 **Returns** `ModifyResult`
 
@@ -1035,5 +1075,6 @@ checksum is superseded with the target-domain digest.
 
 | Cache key | Requirement |
 |---|---|
-| STORE, 7, 8, 9 | pure-JS pako path, always available |
+| STORE (8 and later), 7, 8 | pure-JS pako path, always available |
+| 9 | not reproducible — the Yarn-4 RC builds that write it differ in zlib; the gap defers |
 | 10 | optional `@yarnpkg/libzip`; when absent and required, `ENRICH_ARTIFACT_INTEGRITY_UNSUPPORTED` names the remedy |

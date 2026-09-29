@@ -66,14 +66,13 @@ describe('enrich/refurbish — optional @yarnpkg/libzip backend (cacheKey 10 mix
     expect(r.graph.tarballOf('is-buffer@2.0.5')?.integrity).toBeUndefined()
   })
 
-  it.skipIf(!hasLibzip)('a pako-reproducible cacheKey (9) NEVER falls through to libzip — pako refuses ⇒ defer', async () => {
-    // Regression for the adversary's Finding A. cacheKey 9 is pako's lane. When pako
-    // REFUSES a lock (a sibling foreign to its zlib/order), refurbish must DEFER — NOT
-    // consult libzip. libzip 3.x is zlib-ng / cacheKey-10; it would license itself off
-    // this very sibling (its `mixed` digest is version-independent) and write a
-    // cacheKey-10 digest into a cacheKey-9 lock → the exact YN0018 the gate prevents.
-    // Here `ms` carries libzip's OWN digest (a value pako cannot produce), so pako's
-    // calibration refuses; the gap `is-buffer` must stay unfilled.
+  it.skipIf(!hasLibzip)('a cacheKey older than libzip\'s generation (9) NEVER falls through to libzip — defers', async () => {
+    // Regression for the adversary's Finding A. Neither pako nor libzip reproduces
+    // cacheKey 9, and refurbish must DEFER rather than consult libzip. libzip 3.x is
+    // zlib-ng / cacheKey-10; it would license itself off this very sibling (its `mixed`
+    // digest is version-independent) and write a cacheKey-10 digest into a cacheKey-9
+    // lock → the exact YN0018 the gate prevents. Here `ms` carries libzip's OWN digest,
+    // so a libzip calibration WOULD match; the gap `is-buffer` must still stay unfilled.
     const libzipDigest = await computeBerryChecksumViaLibzip(tgz('ms-2.1.3.tgz'), 'ms', '9')
     const graph = graphOf(b => {
       addPackage(b, { name: 'ms',        version: '2.1.3' })

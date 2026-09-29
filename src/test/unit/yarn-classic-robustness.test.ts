@@ -111,7 +111,8 @@ describe('yarn-classic robustness — duplicate descriptors that should merge', 
     const out = stringify('yarn-classic', parse('yarn-classic', dupBlocks(REG, REG)))
     expect(out).toContain('ansi-styles@^4.0.0')
     expect(out).toContain('ansi-styles@^4.1.0')
-    // one entry block, not two: the version line appears once.
+    // Same requested-name entries are duplicate blocks rather than distinct
+    // alias/plain groups, so they collapse with the node.
     expect(out.match(/version "4\.3\.0"/g)).toHaveLength(1)
   })
 

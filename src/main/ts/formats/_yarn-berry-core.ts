@@ -25,6 +25,7 @@ import {
   type OverrideConstraint,
 } from '../graph.ts'
 import { LockfileError } from '../api/errors.ts'
+import { inheritMutationLineage } from '../api/mutation-lineage.ts'
 import { optimizeUnreachable } from './_optimize.ts'
 import { readWorkspaceFileBytes } from './_path.ts'
 import {
@@ -423,6 +424,11 @@ export function adapterStateSubjects(graph: Graph): readonly string[] {
     .map(key => `__metadata.${key}`)
 }
 
+/** Verbatim on-disk descriptors bound to one parsed Berry node. */
+export function entryKeyDescriptorsOfNode(graph: Graph, nodeId: NodeId): readonly string[] {
+  return sidecarByGraph.get(graph)?.entryKeyDescriptors?.get(nodeId) ?? []
+}
+
 /** The lock's own `__metadata.cacheKey`, when the graph was parsed from a Berry
  *  lock that recorded one. Observed provenance, not a default: it names the cache
  *  generation Yarn used to write that lock's checksums. */
@@ -515,6 +521,7 @@ export function parseFamily(
 ): { graph: Graph; sidecar: YarnBerryFamilySidecar } {
   const context = createYarnBerryParseContext(input, options, config)
   collectYarnBerryParseEntries(context)
+  mergeIdenticalYarnBerryParseEntries(context)
   addYarnBerryPackageNodes(context)
   addYarnBerryDependencyEdges(context)
   addYarnBerryParseDiagnostics(context)
@@ -785,17 +792,16 @@ function resolutionDependencyNodes(graph: Graph): ReadonlySet<NodeId> {
  * `conditions ∩ optionalBuilds − resolutionDependencies` (see the section
  * header above). `format` selects the generation's traversal.
  *
- * SOURCE-AUTHORITATIVE ONLY. Membership needs a VERBATIM `conditions:` scalar
- * captured while parsing a yarn-berry lock, not one composed from `os`/`cpu`
- * metadata: a graph converted from npm/pnpm carries no such capture, so no node
- * is ever excused on evidence the producer did not write.
+ * Conditions use the same effective scalar as the emitter: parsed nodes keep
+ * their verbatim sidecar value, while completion-added nodes derive the scalar
+ * from their graph/payload condition metadata.
  */
 export function yarnBerryChecksumFreeNodes(
   graph: Graph,
   format: string,
 ): ReadonlySet<NodeId> {
   const conditioned = [...graph.nodes()]
-    .filter(node => rawConditionsScalarOfNode(graph, node.id) !== undefined)
+    .filter(node => effectiveConditionsOfNode(graph, node, graph.tarballOf(node.id)) !== undefined)
   if (conditioned.length === 0) return new Set()
   const ordinaryRequired = ordinaryRequiredNodes(graph, format)
   const resolutionDependencies = resolutionDependencyNodes(graph)
@@ -1016,6 +1022,66 @@ function collectYarnBerryParseEntries(context: YarnBerryParseContext): void {
     }
     context.entries.push({ key, value: valueMap, specs: parseEntryKey(key) })
   }
+}
+
+/** Coalesce Dependabot-style duplicate blocks that Yarn itself normalizes.
+ *
+ * Two blocks may use different descriptors while naming the same resolution.
+ * They are one package entry only when every value byte represented by the
+ * parsed SYML tree is equal; any content difference remains an identity
+ * collision and fails closed in the ordinary node materializer. */
+function mergeIdenticalYarnBerryParseEntries(context: YarnBerryParseContext): void {
+  const unique: YarnBerryParseEntry[] = []
+  const byId = new Map<string, { entry: YarnBerryParseEntry; index: number; resolution: string }>()
+
+  for (const entry of context.entries) {
+    const identity = parseYarnBerryNodeIdentity(context, entry)
+    const prior = byId.get(identity.id)
+    if (prior === undefined) {
+      unique.push(entry)
+      if (identity.resolution !== undefined) {
+        byId.set(identity.id, { entry, index: unique.length - 1, resolution: identity.resolution })
+      }
+      continue
+    }
+    if (identity.resolution !== prior.resolution || !sameSymlMap(entry.value, prior.entry.value)) {
+      unique.push(entry)
+      continue
+    }
+
+    const descriptors = [...new Set([
+      ...prior.entry.key.split(', '),
+      ...entry.key.split(', '),
+    ])].sort(cmpStr)
+    const mergedKey = descriptors.join(', ')
+    const merged = { key: mergedKey, value: prior.entry.value, specs: parseEntryKey(mergedKey) }
+    unique[prior.index] = merged
+    byId.set(identity.id, { entry: merged, index: prior.index, resolution: prior.resolution })
+    context.diagnostics.push({
+      code: 'YARN_BERRY_DUPLICATE_ENTRY_MERGED',
+      severity: 'info',
+      subject: identity.id,
+      message: `merged identical entries ${JSON.stringify(prior.entry.key)} and ${JSON.stringify(entry.key)} into ${JSON.stringify(mergedKey)}`,
+    })
+  }
+
+  context.entries.splice(0, context.entries.length, ...unique)
+}
+
+function sameSymlMap(left: SymlMap, right: SymlMap): boolean {
+  const leftKeys = Object.keys(left).sort(cmpStr)
+  const rightKeys = Object.keys(right).sort(cmpStr)
+  if (leftKeys.length !== rightKeys.length) return false
+  for (let index = 0; index < leftKeys.length; index++) {
+    const key = leftKeys[index]!
+    if (key !== rightKeys[index]) return false
+    const leftValue = left[key]!
+    const rightValue = right[key]!
+    if (typeof leftValue === 'string' || typeof rightValue === 'string') {
+      if (leftValue !== rightValue) return false
+    } else if (!sameSymlMap(leftValue, rightValue)) return false
+  }
+  return true
 }
 
 /** Derive canonical graph identity before materialising one berry entry. */
@@ -1401,8 +1467,19 @@ function withSidecarPropagation(graph: Graph, sidecar: YarnBerryFamilySidecar): 
     registryPackages: () => accessGraphRegistryPackages(proxy),
     diagnostics:  ()        => graph.diagnostics(),
     layoutHints:  ()        => graph.layoutHints(),
-    mutate: transaction => mutateWithSidecar(graph, sidecar, transaction),
+    mutate(transaction) {
+      const result = mutateWithSidecar(graph, sidecar, transaction)
+      // `parse()` records the effective workspace root on the public proxy,
+      // while `mutateWithSidecar` necessarily delegates through its private
+      // graph. Reattach that lineage to the returned graph so every graph-
+      // producing public operation preserves the context strict stringify
+      // needs to resolve project-local patch files during its verification
+      // reparse.
+      inheritMutationLineage(proxy, result.graph)
+      return result
+    },
   }
+  inheritMutationLineage(graph, proxy)
   // Register the sidecar on the proxy instance too so that stringify works
   // when called with the proxy directly (not just with the underlying graph).
   sidecarByGraph.set(proxy, sidecar)
@@ -2190,16 +2267,124 @@ function maintainEntryKeyDescriptors(
 
   let next: Map<string, string[]> | undefined
   for (const dst of touchedDst) {
-    const current = ekd.get(dst)
-    if (current === undefined) continue
+    const oldDstNode = oldGraph.getNode(dst)
     const dstNode = newGraph.getNode(dst)
-    if (dstNode === undefined) continue
+    const familyBaseId = builtinCompatFamilyBaseId(oldGraph, oldDstNode)
+      ?? builtinCompatFamilyBaseId(newGraph, dstNode)
+    if (familyBaseId !== undefined) {
+      next = maintainBuiltinCompatFamilyDescriptors(
+        next ?? ekd,
+        oldGraph,
+        newGraph,
+        familyBaseId,
+      ) ?? next
+      continue
+    }
+
+    const current = ekd.get(dst)
+    if (current === undefined || dstNode === undefined) continue
     const updated = updatedEntryKeyDescriptors(current, oldGraph, newGraph, dst, dstNode.name)
-    if (updated === current) continue
-    next ??= new Map(ekd)
-    next.set(dst, updated.slice().sort(cmpStr))
+    if (updated !== current) {
+      next ??= new Map(ekd)
+      next.set(dst, updated.slice().sort(cmpStr))
+    }
   }
   return next === undefined ? sidecar : { ...sidecar, entryKeyDescriptors: next }
+}
+
+/** A builtin patch and its bare npm source form one descriptor family. Yarn
+ * keeps the plain descriptor on the source entry and its projected `patch:`
+ * descriptor on the compat entry even though completion routes the consumer
+ * edge to the patched node. Synchronise both sides from the union of live
+ * consumers so a later orphan-prune cannot restore the pre-completion keys. */
+function maintainBuiltinCompatFamilyDescriptors(
+  current: Map<string, string[]>,
+  oldGraph: Graph,
+  newGraph: Graph,
+  baseId: NodeId,
+): Map<string, string[]> | undefined {
+  const base = newGraph.getNode(baseId) ?? oldGraph.getNode(baseId)
+  if (base === undefined) return undefined
+  const before = builtinCompatFamilyPlainDescriptors(oldGraph, baseId, base.name, base.version)
+  const after = builtinCompatFamilyPlainDescriptors(newGraph, baseId, base.name, base.version)
+  let next: Map<string, string[]> | undefined
+  const update = (
+    nodeId: NodeId,
+    beforeDescriptors: ReadonlySet<string>,
+    afterDescriptors: ReadonlySet<string>,
+  ): void => {
+    const descriptors = (next ?? current).get(nodeId)
+    if (descriptors === undefined) return
+    const updated = applyEntryKeyDescriptorChanges(descriptors, beforeDescriptors, afterDescriptors)
+    if (updated === descriptors) return
+    next ??= new Map(current)
+    next.set(nodeId, updated.slice().sort(cmpStr))
+  }
+
+  if (newGraph.getNode(baseId) !== undefined) update(baseId, before, after)
+  for (const siblingId of newGraph.byName(base.name)) {
+    const sibling = newGraph.getNode(siblingId)
+    if (sibling === undefined || sibling.patch === undefined
+      || sibling.version !== base.version
+      || serializeNodeId(sibling.name, sibling.version, sibling.peerContext) !== baseId) continue
+    const nativeResolution = newGraph.tarballOf(sibling.id)?.nativeResolution
+    if (nativeResolution === undefined
+      || yarnBerryBuiltinCompatIdentityOfResolution(nativeResolution) === undefined) continue
+    const project = (descriptors: ReadonlySet<string>): Set<string> =>
+      new Set([...descriptors].flatMap(descriptor => {
+        const projected = builtinCompatPatchDescriptor(descriptor, base.name, nativeResolution)
+        return projected === undefined ? [] : [projected]
+      }))
+    update(sibling.id, project(before), project(after))
+  }
+  return next
+}
+
+function builtinCompatFamilyBaseId(
+  graph: Graph,
+  node: Node | undefined,
+): NodeId | undefined {
+  if (node === undefined || node.source !== undefined) return undefined
+  const baseId = serializeNodeId(node.name, node.version, node.peerContext)
+  if (node.patch !== undefined) {
+    const resolution = graph.tarballOf(node.id)?.nativeResolution
+    return resolution !== undefined
+      && yarnBerryBuiltinCompatIdentityOfResolution(resolution) !== undefined
+      ? baseId
+      : undefined
+  }
+  for (const siblingId of graph.byName(node.name)) {
+    const sibling = graph.getNode(siblingId)
+    if (sibling === undefined || sibling.patch === undefined
+      || sibling.version !== node.version
+      || serializeNodeId(sibling.name, sibling.version, sibling.peerContext) !== baseId) continue
+    const resolution = graph.tarballOf(sibling.id)?.nativeResolution
+    if (resolution !== undefined
+      && yarnBerryBuiltinCompatIdentityOfResolution(resolution) !== undefined) return baseId
+  }
+  return undefined
+}
+
+function builtinCompatFamilyPlainDescriptors(
+  graph: Graph,
+  baseId: NodeId,
+  name: string,
+  version: string,
+): Set<string> {
+  const descriptors = incomingPlainKeyDescriptors(graph, baseId, name)
+  for (const siblingId of graph.byName(name)) {
+    const sibling = graph.getNode(siblingId)
+    if (sibling === undefined || sibling.patch === undefined
+      || sibling.version !== version
+      || serializeNodeId(sibling.name, sibling.version, sibling.peerContext) !== baseId) continue
+    const resolution = graph.tarballOf(sibling.id)?.nativeResolution
+    if (resolution === undefined
+      || yarnBerryBuiltinCompatIdentityOfResolution(resolution) === undefined) continue
+    for (const descriptor of incomingPlainKeyDescriptors(graph, sibling.id, name)) {
+      descriptors.add(descriptor)
+    }
+  }
+  return descriptors
 }
 
 function touchedEntryKeyDestinations(
@@ -2229,6 +2414,14 @@ function updatedEntryKeyDescriptors(
 ): string[] {
   const before = incomingKeyDescriptors(oldGraph, dst, dstName)
   const after = incomingKeyDescriptors(newGraph, dst, dstName)
+  return applyEntryKeyDescriptorChanges(current, before, after)
+}
+
+function applyEntryKeyDescriptorChanges(
+  current: string[],
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>,
+): string[] {
   let updated = current
   for (const descriptor of before) {
     if (!after.has(descriptor)) updated = updated.filter(value => value !== descriptor)
@@ -2242,6 +2435,17 @@ function updatedEntryKeyDescriptors(
 /** The set of entry-key descriptors a node's non-peer INCOMING edges contribute
  *  (`<alias|name>@<entry-key range>`) — the live half of its key. */
 function incomingKeyDescriptors(graph: Graph, dst: NodeId, dstName: string): Set<string> {
+  const out = incomingPlainKeyDescriptors(graph, dst, dstName)
+  const nativeResolution = graph.tarballOf(dst)?.nativeResolution
+  if (nativeResolution === undefined
+    || yarnBerryBuiltinCompatIdentityOfResolution(nativeResolution) === undefined) return out
+  return new Set([...out].flatMap(descriptor => {
+    const projected = builtinCompatPatchDescriptor(descriptor, dstName, nativeResolution)
+    return projected === undefined ? [] : [projected]
+  }))
+}
+
+function incomingPlainKeyDescriptors(graph: Graph, dst: NodeId, dstName: string): Set<string> {
   const out = new Set<string>()
   for (const e of graph.in(dst)) {
     if (e.kind === 'peer' || e.attrs?.range === undefined) continue
@@ -2252,6 +2456,28 @@ function incomingKeyDescriptors(graph: Graph, dst: NodeId, dstName: string): Set
     out.add(`${e.attrs.alias ?? dstName}@${entryKeyRangeOf(keyRange)}`)
   }
   return out
+}
+
+function builtinCompatPatchDescriptor(
+  plainDescriptor: string,
+  packageName: string,
+  nativeResolution: string,
+): string | undefined {
+  const prefix = `${packageName}@`
+  if (!plainDescriptor.startsWith(prefix)) return undefined
+  const identity = yarnBerryBuiltinCompatIdentityOfResolution(nativeResolution)
+  if (identity === undefined) return undefined
+  const locator = identity.locator
+  const hashAt = locator.indexOf('#')
+  if (hashAt < 0) return undefined
+  const paramsAt = locator.indexOf('::', hashAt + 1)
+  const source = locator.slice(hashAt + 1, paramsAt < 0 ? undefined : paramsAt)
+  const base = locator.slice('patch:'.length, hashAt)
+  const range = plainDescriptor.slice(prefix.length)
+  const inner = base.includes('@npm%3A')
+    ? range.replace(':', '%3A')
+    : range.replace(/^npm:/, '')
+  return `${packageName}@patch:${packageName}@${inner}#${source}`
 }
 
 // === SERIALIZE ==============================================================

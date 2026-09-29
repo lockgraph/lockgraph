@@ -138,6 +138,29 @@ Checksum presence is therefore a row-owned policy. It is not correct to copy
 the `fsevents` bare-patch rule to every builtin patch, or to synthesize a cache
 checksum from registry SRI.
 
+### 2.4 Dependent routing
+
+Yarn rewrites a dependent's descriptor for a builtin-compat package into the
+matching `patch:` descriptor, so every dependent installs the derived patch
+entry. The plain registry entry stays in the lock as the patch's base.
+
+Completion follows the same rule. When the graph already holds a builtin-compat
+variant for a version, a dependent's descriptor binds to that variant, both when
+it reuses an existing entry-key descriptor and when it resolves the version
+afresh.
+
+A version with no variant in the graph and no evidence-backed profile (§2.2) is
+emitted as a plain registry entry. Yarn adds the derived patch entry on the next
+install, so that output is not yet canonical.
+
+> **Measured** · Yarn 3.5.1 · 2026-09-29 · a real project lock: after `rollup`
+> 2.79.1 → 2.80.0 and completion, the new `rollup`'s `fsevents ~2.3.2` edge binds
+> to the existing `fsevents@2.3.3` compat variant, and a plain `yarn install`
+> changes only an expected checksum line. A completion that adds `typescript@5.6.2`
+> with no variant in the lock is rewritten by a plain `yarn install`, which adds
+> `typescript@patch:typescript@5.6.2#~builtin<compat/typescript>` with locator
+> hash `77c9e2`.
+
 ## 3. Source-derived `node-gyp` edges
 
 Yarn's `NpmSemverResolver` adds `node-gyp: npm:latest` when a published

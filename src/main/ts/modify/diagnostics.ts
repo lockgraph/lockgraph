@@ -15,6 +15,7 @@ export type ModifyDiagnosticCode =
   | 'MODIFY_LICENSE_FLAGGED'
   | 'MODIFY_LICENSE_BLOCKED'
   | 'MODIFY_RESOLVE_FAILED'
+  | 'MODIFY_RANGE_PENDING'
   | 'MODIFY_SENTINEL_REFUSED'
   | 'MODIFY_OVERRIDE_PINNED'
 
@@ -91,6 +92,22 @@ export function modifyResolveFailed(name: string, range: string): ModifyDiagnost
     severity: 'warning',
     subject:  'graph',
     message:  `registry.resolve(${name}, ${range}) returned undefined`,
+  }
+}
+
+export function modifyRangePending(
+  parent: NodeId,
+  name: string,
+  range: string,
+  target: NodeId,
+  kind: EdgeTriple['kind'],
+): ModifyDiagnostic {
+  return {
+    code:     'MODIFY_RANGE_PENDING',
+    severity: 'warning',
+    subject:  { src: parent, dst: target, kind },
+    message:  `replaceRange pending: ${parent} declares ${name}@${range}, but its current target is ${target}`,
+    data:     { parent, name, declaredRange: range, target, edgeKind: kind },
   }
 }
 

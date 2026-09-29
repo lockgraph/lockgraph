@@ -8,18 +8,17 @@
 // byte-for-byte (so the SHA-512 matches) is deterministic for two of yarn's
 // `compressionLevel` modes:
 //   • `0` = STORE (Yarn-4 default, cacheKey `…c0`) — no deflate stream.
-//   • `mixed` (cacheKey with NO `cN` suffix) — each file is DEFLATE'd iff that
-//     shrinks it, else STORE'd. The DEFLATE stream is reproduced byte-exact by
-//     `pako` (pure-JS, portable — NOT `node:zlib`, whose bundled zlib varies
-//     across our Node 14–24 floor) at `{ level: 9, strategy: 0, memLevel: 9 }`
-//     (raw deflate) for cacheKey VERSIONS 7, 8 AND 9 — the ONLY variable across
-//     these three generations is pako's match-finding hash (spec/formats/_common.md
-//     §1.7 checksum matrix):
-//       – cacheKey 7/8 (yarn 2.4 / 3.1–3.8): pako's LEGACY hash (`legacyHash:true`),
-// proven over real cache archives.
-//       – cacheKey 9  (yarn 4.0.0-rc.27…4.0.0 — the Yarn-4 RC window, lockfile v7):
-//         pako's "nodejs-compatible" hash (`legacyHash:false`) — verified byte-exact
-//         over the real v7 cache archive.
+//   • `mixed` (cacheKey with NO `cN` suffix) — each file is DEFLATE'd when that
+//     shrinks it, and also when its stream reached libzip's 8192-byte first read
+//     before a STORE fallback was possible (`LIBZIP_STORE_FALLBACK_LIMIT`); otherwise
+//     STORE'd. The DEFLATE stream is reproduced byte-exact by `pako` (pure-JS,
+//     portable — NOT `node:zlib`, whose bundled zlib varies across our Node 14–24
+//     floor) at `{ level: 9, strategy: 0, memLevel: 9 }` (raw deflate) for cacheKey
+//     VERSIONS 7 AND 8 with pako's LEGACY match-finding hash (`legacyHash:true`),
+//     proven over real cache archives (spec/formats/_common.md §1.7 checksum matrix).
+//     cacheKey 9 (the Yarn-4 RC window, lockfile v7) is NOT reproduced: RC builds
+//     differ in zlib, and rc.14 diverges from pako on large inputs
+//     (`PAKO_MIXED_CACHE_VERSIONS`), so a v9 digest defers.
 //     cacheKey 10 (yarn-4 stable `mixed`) is built by yarn's zlib-ng, whose DEFLATE pako
 //     matches at NEITHER hash — so v10-`mixed` throws and the caller soft-falls-back
 //     to the OPTIONAL `@yarnpkg/libzip` backend (when installed — yarn's OWN packer,
@@ -27,10 +26,14 @@
 //     `.yarn/cache`), else defers (a wrong checksum hard-fails `--immutable`,
 //     strictly worse than a missing one). An explicit `cN` (N>=1) level likewise throws.
 //
-// Entry ORDER also varies across yarn builds (NOT encoded in the cacheKey): some
-// emit each directory lazily before its first file (tar order), others emit ALL
-// directories first then all files. `dirsFirst` selects it; the caller (refurbish)
-// CALIBRATES which one a lock used against a discriminating sibling checksum.
+// Entry ORDER follows the archive: yarn creates a directory where the archive lists
+// it, and a file's missing parents just before the file — so an archive that lists
+// its directories (diff@4.0.4) places them ahead of files they would otherwise follow.
+// The order also varies across yarn builds (NOT encoded in the cacheKey): some emit
+// each directory lazily as above, others emit ALL directories first then all files.
+// `dirsFirst` selects it; the caller (refurbish) CALIBRATES which one a lock used
+// against a discriminating sibling checksum. No build at hand shows how the dirs-first
+// order treats LISTED directories, so an archive that has any refuses that order.
 //
 // The container is emitted with libzip's exact conventions, proven byte-
 // identical to yarn's own output: entries under
@@ -75,6 +78,14 @@ const EPOCH_DOS_DATE = 0x0021
 const MADE_BY  = 0x033f                      // Unix (3) << 8 | ZIP spec 6.3 (0x3F)
 const EMPTY    = Buffer.alloc(0)
 
+// libzip's `mixed` mode can fall back to STORE only while the entry's whole deflate
+// stream fits in its first 8192-byte read. An incompressible entry whose stream reaches
+// 8192 bytes therefore stays DEFLATE even though it grew. Measured on yarn 2.4.3
+// (cacheKey 7) and 3.8.7 (cacheKey 8): 8186 random bytes (stream 8191) are STORED,
+// 8187 (stream 8192) are DEFLATED — node-forge@1.4.0's 21162-byte `SocketPool.swf`
+// ships as a 21167-byte DEFLATE entry.
+const LIBZIP_STORE_FALLBACK_LIMIT = 8192
+
 // ── CRC-32 (IEEE). Native `zlib.crc32` (Node >=22) when present, else the table
 // fallback below — our floor is Node 14.18, and CI on Node 20 exercises the
 // fallback. Both yield identical IEEE CRC-32 (locked by a test).
@@ -100,7 +111,7 @@ const nativeCrc32 = (zlib as { crc32?: (data: Uint8Array, value?: number) => num
 const crc32: (buf: Buffer) => number =
   typeof nativeCrc32 === 'function' ? (buf) => nativeCrc32(buf) >>> 0 : crc32Table
 
-export interface TarFile { name: string; mode: number; data: Buffer }
+export interface TarFile { name: string; mode: number; data: Buffer; dir: boolean }
 
 const tarField = (b: Buffer, off: number, len: number): string => {
   const slice = b.subarray(off, off + len)
@@ -108,14 +119,17 @@ const tarField = (b: Buffer, off: number, len: number): string => {
   return slice.toString('latin1', 0, nul === -1 ? len : nul)
 }
 
-// Minimal ustar reader: regular files (`typeflag` '0'/''), honouring the `prefix`
-// long-path field. Directory ('5') and PAX/global ('x'/'g') entries are skipped —
-// dirs are synthesised by mkdirp (§zip below) and PAX metadata is carried by the
-// ustar fields for these tarballs. Any OTHER type — symlink ('2'), hardlink ('1'),
-// device, GNU-long-name — carries content/naming yarn PUTS IN the cache zip that we
-// do NOT reproduce; SILENTLY skipping it would mis-hash (a wrong checksum hard-fails
-// `--immutable`, worse than a miss), so we THROW and the packer DEFERS. Exported so
-// a test can exercise the unsupported-entry guard directly.
+// Minimal ustar reader: regular files (`typeflag` '0'/'') and directories ('5'), in
+// archive order, honouring the `prefix` long-path field. Directories are returned
+// because yarn creates each one WHERE the archive lists it — an explicit directory
+// entry moves that directory ahead of files it would otherwise follow (§zip below).
+// PAX/global ('x'/'g') headers are skipped unless they carry `path`, `linkpath` or
+// `size`: those rename or resize the next entry, which this reader does not apply.
+// Any OTHER type — symlink ('2'), hardlink ('1'), device, GNU-long-name — carries
+// content/naming yarn PUTS IN the cache zip that we do NOT reproduce. SILENTLY
+// skipping either would mis-hash (a wrong checksum hard-fails `--immutable`, worse
+// than a miss), so we THROW and the packer DEFERS. Exported so a test can exercise
+// the unsupported-entry guard directly.
 export function parseTar(
   tar: Buffer,
   limits?: EffectiveArtifactResourceLimits,
@@ -139,8 +153,15 @@ export function parseTar(
       if (limits !== undefined) {
         assertArtifactRepresentation('tar-content', contentBytes, limits)
       }
-      out.push({ name, mode, data: tar.subarray(o, o + size) })
-    } else if (type !== '5' && type !== 'x' && type !== 'g') {
+      out.push({ name, mode, data: tar.subarray(o, o + size), dir: false })
+    } else if (type === '5') {
+      out.push({ name, mode, data: EMPTY, dir: true })
+    } else if (type === 'x' || type === 'g') {
+      const overrides = /^\d+ (?:path|linkpath|size)=/mu
+      if (overrides.test(tar.toString('utf8', o, o + size))) {
+        throw new Error(`berry-checksum: PAX header overrides the next entry's path or size near '${name}'`)
+      }
+    } else {
       // symlink / hardlink / device / GNU-long — not reproduced; defer, never mis-hash.
       throw new Error(`berry-checksum: unsupported tar entry type '${type}' for '${name}'`)
     }
@@ -181,7 +202,9 @@ function buildZip(
     let stored = raw
     if (compress && !e.dir && raw.length > 0) {
       const def = Buffer.from(deflateRaw(raw, { level: 9, strategy: 0, memLevel: 9, legacyHash } as DeflateOpts))
-      if (def.length < raw.length) { method = 8; gp = 2; vn = 20; stored = def }  // DEFLATE iff it shrinks
+      if (def.length < raw.length || def.length >= LIBZIP_STORE_FALLBACK_LIMIT) {  // shrinks, or too late to STORE
+        method = 8; gp = 2; vn = 20; stored = def
+      }
     }
     const ext = e.dir ? 0x41ed0000                             // 0o40755 << 16
       : (e.mode & 0o111) !== 0 ? 0x81ed0000                    // 0o100755 << 16 (exec)
@@ -237,11 +260,17 @@ function parseCacheKey(cacheKey: string): { version: number; level: number } | n
 }
 
 /** cacheKey VERSIONS whose `mixed` DEFLATE stream `pako` reproduces byte-exact:
- *  7/8 (yarn 2.4 / 3.1–3.8) via the LEGACY match-hash, 9 (yarn 4.0.0-rc window,
- *  lockfile v7) via the "nodejs-compatible" hash (`berryLegacyHash` selects per
- *  version — both pure pako, portable). v10 (yarn-4 stable) vendors a zlib-ng pako
- *  matches at neither hash. */
-const PAKO_MIXED_CACHE_VERSIONS: ReadonlySet<number> = new Set([7, 8, 9])
+ *  7/8 (yarn 2.4 / 3.1–3.8) via the LEGACY match-hash. v10 (yarn-4 stable) vendors a
+ *  zlib-ng pako matches at neither hash.
+ *
+ *  v9 is NOT in the set. The Yarn-4 RC window writes it from builds whose zlib differ:
+ *  yarn 4.0.0-rc.14's streams diverge from pako's "nodejs-compatible" hash — and from
+ *  `node:zlib` — on large inputs, while matching on small ones. Measured on
+ *  ua-parser-js@0.7.33 (`src/ua-parser.js`, 45063 bytes: rc.14 11474 bytes, pako 11473),
+ *  ajv@6.14.0, joi@17.13.6 and terser@5.14.2. The lock does not record which RC wrote it,
+ *  and per-lock calibration cannot see an input-dependent divergence, so a v9 gap defers.
+ *  `berryLegacyHash` keeps the v9 hash selectable for callers that verify each digest. */
+const PAKO_MIXED_CACHE_VERSIONS: ReadonlySet<number> = new Set([7, 8])
 
 /** pako's match-finding hash for a `mixed` cacheKey VERSION: the LEGACY hash for
  *  yarn 2.4–3.8 (cacheKey 7/8), the "nodejs-compatible" hash for the Yarn-4 RC
@@ -265,6 +294,20 @@ export function berryCacheKeyReproducible(cacheKey: string): boolean {
   if (p.level === 0)  return p.version >= STORE_MIN_CACHE_VERSION      // STORE — SAFE_TIME, proven v8+
   if (p.level === -1) return PAKO_MIXED_CACHE_VERSIONS.has(p.version)  // mixed — pako, v7/v8
   return false                                                        // explicit cN (N>=1)
+}
+
+/** First cacheKey VERSION the optional `@yarnpkg/libzip` backend can reproduce: its
+ *  3.x line is yarn-4's zlib-ng generation (cacheKey 10). Below it, libzip would
+ *  license itself off a sibling whose digest is generation-independent (STORE, or a
+ *  tiny entry) and write cacheKey-10 bytes into an older lock, which yarn rejects
+ *  (YN0018) — so an older cacheKey pako cannot reproduce defers instead. */
+const LIBZIP_MIN_CACHE_VERSION = 10
+
+/** Whether `cacheKey` belongs to the generation the libzip backend may be calibrated
+ *  for. A malformed key never does. */
+export function berryCacheKeyLibzipGeneration(cacheKey: string): boolean {
+  const p = parseCacheKey(cacheKey)
+  return p !== null && p.version >= LIBZIP_MIN_CACHE_VERSION
 }
 
 /**
@@ -305,19 +348,29 @@ export function computeBerryChecksum(
     const entries: ZipEntry[] = []
     const seen = new Set<string>()
     const parsed = parseTar(tar, limits)
-      .map(f => ({ full: prefix + f.name.split('/').slice(1).join('/'), mode: f.mode, data: f.data }))  // stripComponents:1
-      .filter(f => f.full !== prefix)                            // drop the bare 'package/' root
-    const mkdirp = (full: string): void => {                     // synthesise parent dirs in first-encounter order
-      const segs = full.split('/'); segs.pop()
+      .map(f => ({ ...f, full: prefix + f.name.replace(/\/+$/u, '').split('/').slice(1).join('/') }))  // stripComponents:1
+      .filter(f => f.full !== prefix)                            // drop the archive's own top directory
+    const mkdirp = (dir: string): void => {                      // create `dir` and its missing ancestors, in order
       let cur = ''
-      for (const s of segs) { cur += `${s}/`; if (!seen.has(cur)) { seen.add(cur); entries.push({ name: cur, dir: true, mode: 0o755, data: EMPTY }) } }
+      for (const s of dir.split('/')) { cur += `${s}/`; if (!seen.has(cur)) { seen.add(cur); entries.push({ name: cur, dir: true, mode: 0o755, data: EMPTY }) } }
     }
+    const parentOf = (full: string): string => full.slice(0, full.lastIndexOf('/'))
     const pushFile = (f: { full: string; mode: number; data: Buffer }): void => { entries.push({ name: f.full, dir: false, mode: f.mode, data: f.data }) }
     if (dirsFirst) {
-      for (const f of parsed) mkdirp(f.full)                     // ALL directories first (discovery order)…
+      // No yarn build at hand orders EXPLICIT directory entries under this profile, so an
+      // archive that lists any is refused rather than guessed (the caller defers).
+      if (parsed.some(f => f.dir)) throw new Error('berry-checksum: dirs-first order is unverified for explicit directory entries')
+      for (const f of parsed) mkdirp(parentOf(f.full))           // ALL directories first (discovery order)…
       for (const f of parsed) pushFile(f)                        // …then all files
     } else {
-      for (const f of parsed) { mkdirp(f.full); pushFile(f) }    // lazy: each file preceded by its new ancestor dirs
+      // yarn walks the archive in order: a directory entry creates that directory where it
+      // appears, a file creates its missing parents just before itself. An archive that
+      // lists its directories (diff@4.0.4, jake@10.9.4) therefore places them ahead of
+      // files they would otherwise follow; one that lists none gets the lazy order.
+      for (const f of parsed) {
+        if (f.dir) mkdirp(f.full)
+        else { mkdirp(parentOf(f.full)); pushFile(f) }
+      }
     }
     const zip = buildZip(entries, compress, dosTime, dosDate, legacyHash, limits)
     const releaseZip = liveMeter?.acquire(zip.byteLength)
